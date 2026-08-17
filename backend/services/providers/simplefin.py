@@ -55,6 +55,8 @@ import base64
 import binascii
 import hashlib
 import json
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -152,9 +154,18 @@ WINDOWS_PER_PAGE = 1
 # there would silently truncate the backfill.
 EMPTY_WINDOWS_END_HISTORY = 2
 
-# Marker on `update_status` when the walk stopped on its request budget rather than at the end of history.
-# Carried for diagnostics and display; the machine-readable signal is `resume_later`.
+# Markers on `update_status` when the pull stopped short of the end of history. Carried for diagnostics
+# and display; the machine-readable signal for both is `resume_later`.
+#
+# The two are kept apart because they are opposite failures wearing the same outcome. `BUDGET_PAUSED` is
+# *this* client declining to ask — the local bucket is empty, nothing was refused, and the remedy is to
+# wait for it to refill. `RATE_LIMITED` is the server refusing a request we were willing to make, which
+# means the local accounting disagrees with the server's, and the remedy is to find out why. Collapsing
+# them left the log unable to distinguish "working as designed" from "our model of the limit is wrong" —
+# and the penalty for the latter, on this provider, is a disabled token the user cannot re-issue without
+# re-linking at the Bridge.
 BUDGET_PAUSED = "BUDGET_PAUSED"
+RATE_LIMITED = "RATE_LIMITED"
 
 _HTTP_TIMEOUT_SECONDS = 60
 _ACCOUNT_ID_PREFIX = "simplefin:"
@@ -178,6 +189,44 @@ def _clip(text: str) -> str:
     return text if len(text) <= _MAX_MESSAGE_CHARS else text[:_MAX_MESSAGE_CHARS - 1].rstrip() + "…"
 
 
+# The **second** limit this provider enforces, and the one the request budget says nothing about.
+#
+# The published 24/day allowance bounds how many requests are made; the CDN in front of the Bridge bounds
+# how *fast*. Bursting a walk's windows back-to-back — around twenty requests in two or three seconds,
+# comfortably inside the daily allowance — is answered with `429 error code: 1015`, Cloudflare's rate
+# limiter, the same layer that rejects unnamed user agents (see `_http`).
+#
+# Paced process-wide rather than per connection, because the limiter keys on the caller, not on which
+# access URL it happens to be using: two connections syncing at once are one client to it.
+#
+# One second rather than something tighter because the choice is nearly free. The daily budget already
+# caps a walk at `REQUEST_BUDGET_CAPACITY` requests, so halving the interval saves about eleven seconds a
+# day, while guessing too fast costs a wasted burst against a limit whose exact threshold is not published.
+#
+# **Not yet confirmed against the live Bridge** (chosen 2026-08-16, after a burst of ~20 requests in two or
+# three seconds was refused). The threshold is unpublished, so this is an estimate on the safe side of one
+# observation. If a 429 shows up again despite the pacing, the next move is a backoff on refusal — remember
+# the moment and widen the interval for a while — rather than a smaller constant chosen by guesswork.
+_MIN_REQUEST_INTERVAL_SECONDS = 1.0
+_pace_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _pace_request() -> None:
+    """Hold off until `_MIN_REQUEST_INTERVAL_SECONDS` has passed since the previous request.
+
+    A minimum *interval* rather than a fixed sleep, so time already spent on the network and on processing
+    the last response counts toward it — a request that took 800ms waits 200ms, not a further second.
+    The lock is held across the wait on purpose: that is what makes the spacing hold when two connections
+    sync concurrently, which is exactly when a per-caller limiter is most likely to fire."""
+    global _last_request_at
+    with _pace_lock:
+        wait = _MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - _last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
+
+
 class SimpleFinError(RuntimeError):
     """A SimpleFIN call failed, carrying a message fit to show the user. The Bridge returns institution
     level problems as text meant for display (an expired bank login, an account needing re-auth), so those
@@ -190,6 +239,15 @@ class SimpleFinError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None):
         super().__init__(message)
         self.status = status
+
+
+class SimpleFinRateLimited(SimpleFinError):
+    """The CDN in front of the Bridge is refusing requests for now (HTTP 429).
+
+    Its own class because it is the one failure that is neither the user's to fix nor a reason to stop: the
+    walk is resumable, so the right response is to record what arrived, pause, and come back — not to mark
+    the connection broken. Distinguished from running out of the *daily* allowance, which blocks one account
+    while its siblings carry on; this blocks the caller entirely, for a while."""
 
 
 def _split_access_url(access_url: str) -> tuple[str, str, str]:
@@ -217,6 +275,9 @@ def _http(url: str, *, method: str = "GET", headers: dict | None = None) -> byte
     # CDN in front of the SimpleFIN Bridge, which answers 403 `error code: 1010` — a browser-signature
     # ban, with nothing in it to suggest the User-Agent is the problem. Any named agent passes.
     request.add_header("User-Agent", _USER_AGENT)
+    # Every call the adapter makes passes through here, which is the only place that can hold the whole
+    # client to one request per interval — the limiter this protects against counts requests, not walks.
+    _pace_request()
     try:
         with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
             return response.read()
@@ -232,6 +293,15 @@ def _http(url: str, *, method: str = "GET", headers: dict | None = None) -> byte
         # the reader off to fix something that was never broken. What a 403 *means* depends on which call
         # made it, so both readings are the callers' to add (`connect` and `_get_accounts`), and `status`
         # is carried so neither has to recognize it by parsing this string.
+        # 429 is the one status worth interpreting here rather than leaving to the callers, because every
+        # caller wants the same thing from it and none of them wants a failure: it is the CDN saying "too
+        # fast", not the Bridge saying anything about the data or the credential. `_pace_request` above
+        # exists to prevent it; this is what happens when the pacing is still not conservative enough.
+        if exc.code == 429:
+            raise SimpleFinRateLimited(
+                _clip("SimpleFIN is rate-limiting requests; the sync will continue on a later run."),
+                status=exc.code,
+            ) from exc
         raise SimpleFinError(
             _clip(f"SimpleFIN returned {exc.code}{f': {detail}' if detail else ''}."), status=exc.code,
         ) from exc
@@ -412,6 +482,32 @@ def _take_request(budget: dict, key: str, now: float, checkpoint=None) -> bool:
     if checkpoint is not None:
         checkpoint()
     return True
+
+
+def _allowance_snapshot(budget: dict, now: float) -> dict:
+    """What the allowance looks like at the end of a pull, in the neutral shape the page contract defines.
+
+    This is the one piece of a metered pull that no other record keeps. The buckets live in
+    `connection.provider_request_budget`, which the *next* sync overwrites, so a log row that omits them can
+    say a pull paused and never how close it was to the limit, which bucket ran dry, or when it could
+    resume. That is the difference between a record of what happened and a record someone can diagnose
+    from — and for a resource that empties and refills, the level is the whole story.
+
+    Reported after `_prune_full_pools`, so an absent pool means a full one rather than an unknown one; the
+    capacity and refill rate travel alongside so a reader never has to know this module's constants to
+    interpret the numbers. Called once per page, and the caller keeps the last, which is the state the pull
+    actually left behind.
+    """
+    return {
+        "capacity": REQUEST_BUDGET_CAPACITY,
+        "refill_per_hour": REQUEST_BUDGET_REFILL_PER_HOUR,
+        # Rounded because these are fractional token counts whose precision is meaningless to a reader and
+        # whose full float repr would dominate the row.
+        "pools": {
+            key: round(_refill(dict(pool), now)["tokens"], 2)
+            for key, pool in (budget.get("pools") or {}).items()
+        },
+    }
 
 
 def _prune_full_pools(budget: dict) -> None:
@@ -701,7 +797,7 @@ class SimpleFinAdapter(ProviderAdapter):
     def _fetch_window(self, credential: str, start: date, end: date,
                       account_ids: list[str] | None = None,
                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
-                      *, end_of_day: bool, requested: list | None = None,
+                      *, end_of_day: bool, pool: str, requested: list | None = None,
                       ) -> tuple[list[dict], list[str], list[dict], dict[str, str]]:
         """One request: transactions in one window, the non-fatal problems reported alongside them split
         into `(warnings, advisories)`, and the accounts whose rows were discarded for being in another
@@ -712,7 +808,10 @@ class SimpleFinAdapter(ProviderAdapter):
         Its value is that catching one account up does not have to re-deliver every sibling's history.
 
         `end_of_day` says whether this window carries the pull's newest bound; it is keyword-only and has no
-        default so a new call site has to answer the question rather than inherit an answer."""
+        default so a new call site has to answer the question rather than inherit an answer. `pool` is the
+        allowance this request is charged against, and follows the same rule for the same reason — it is
+        passed rather than inferred from `account_ids` because narrowing the payload and charging an
+        account's own bucket are two independent decisions that merely happen to coincide today."""
         # The bounds are *instants*, not dates — **confirmed against the live server**, not inferred: the
         # same 30-day window requested with a midnight end and a 23:59:59 end returned 56 and 58
         # transactions respectively. The two rows in the gap are why the long bound exists at all.
@@ -734,8 +833,14 @@ class SimpleFinAdapter(ProviderAdapter):
         # checkpoint alone cannot answer it — the checkpoint says where the pull *ended up*, not what it
         # asked for on the way. The two differ exactly when it matters, since a pull that stops on its
         # budget moves its frontier less far than the requests it spent would suggest.
+        #
+        # The pool travels with the window because a bare count of requests cannot be reconciled against
+        # any one allowance: a walk narrow enough to filter charges each account's own bucket, a wide one
+        # charges the shared bucket, and "21 requests" spanning both says nothing about how close either
+        # came to running out. Which bucket paid is the difference between "one account is exhausted" and
+        # "the whole connection is", which are different problems with different remedies.
         if requested is not None:
-            requested.append({"start": start.isoformat(), "end": end.isoformat()})
+            requested.append({"start": start.isoformat(), "end": end.isoformat(), "pool": pool})
         end_time = datetime.max.time() if end_of_day else datetime.min.time()
         params = {
             "start-date": int(datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).timestamp()),
@@ -820,7 +925,8 @@ class SimpleFinAdapter(ProviderAdapter):
             credential, window_start, today, ledger_currency=ledger_currency,
             # The top-up is always the newest bound there is, so its end runs to the close of today —
             # otherwise every sync would miss whatever posted since midnight and never come back for it.
-            end_of_day=True, requested=requested)
+            # Charged to the shared bucket: the top-up is unfiltered, covering every account at once.
+            end_of_day=True, pool=_SHARED_POOL, requested=requested)
         warnings.update(dict.fromkeys(window_warnings))
         _merge_advisories(advisories, window_advisories)
         dropped.update(window_dropped)
@@ -870,6 +976,11 @@ class SimpleFinAdapter(ProviderAdapter):
         coverage: dict[str, dict] = {}
         added: list[dict] = []
         resume_later = False
+        # Set when the CDN starts refusing. Kept apart from `resume_later` because they bound different
+        # things: an account out of its daily allowance stops *that account* while its siblings carry on,
+        # whereas being rate-limited stops the whole client — so this one also has to suppress `has_more`,
+        # or the caller would come straight back for the next page and be refused again.
+        rate_limited = False
         # Windows fetched in this call, against `WINDOWS_PER_PAGE`. Reaching the limit ends the page, not
         # the walk — the difference is what `more_to_walk` below reports, and it is the difference between
         # the caller committing and coming straight back versus concluding the history is finished.
@@ -932,12 +1043,20 @@ class SimpleFinAdapter(ProviderAdapter):
                         continue
                     window_end = frontier[account]
                     window_start = window_end - timedelta(days=WINDOW_DAYS)
-                    delivered = absorb(self._fetch_window(
-                        credential, window_start, window_end, [account], ledger_currency=ledger_currency,
-                        end_of_day=window_end == today, requested=requested,
-                    ))
+                    try:
+                        delivered = absorb(self._fetch_window(
+                            credential, window_start, window_end, [account], ledger_currency=ledger_currency,
+                            end_of_day=window_end == today, pool=account, requested=requested,
+                        ))
+                    except SimpleFinRateLimited:
+                        # Everything absorbed before this stands, and this account has not advanced — so
+                        # the next run asks for exactly the window that was refused.
+                        rate_limited = resume_later = True
+                        break
                     windows_fetched += 1
                     advance(account, window_start, delivered)
+                if rate_limited:
+                    break
                 continue
             if not _take_request(budget, _SHARED_POOL, now, checkpoint):
                 # Out of allowance with history still to walk. Stopping here is what keeps the token from
@@ -968,10 +1087,14 @@ class SimpleFinAdapter(ProviderAdapter):
                 break
             window_end = max(frontier[a] for a in active)
             window_start = window_end - timedelta(days=WINDOW_DAYS)
-            delivered = absorb(self._fetch_window(
-                credential, window_start, window_end, None, ledger_currency=ledger_currency,
-                end_of_day=window_end == today, requested=requested,
-            ))
+            try:
+                delivered = absorb(self._fetch_window(
+                    credential, window_start, window_end, None, ledger_currency=ledger_currency,
+                    end_of_day=window_end == today, pool=_SHARED_POOL, requested=requested,
+                ))
+            except SimpleFinRateLimited:
+                rate_limited = resume_later = True
+                break
             windows_fetched += 1
             for account in active:
                 if frontier[account] != window_end:
@@ -979,7 +1102,11 @@ class SimpleFinAdapter(ProviderAdapter):
                 advance(account, window_start, delivered)
         # Whether anything is still owed data. Distinct from `resume_later`: this says "come straight back
         # for another page", that says "stop asking until the allowance refills".
-        return added, coverage, resume_later, bool(still_walking())
+        #
+        # `rate_limited` is returned rather than folded into the two flags above because it is the *reason*,
+        # and the reason is the half a reader needs: a refusal by the server and an empty local bucket
+        # produce the same pause and call for opposite responses.
+        return added, coverage, resume_later, bool(still_walking()) and not rate_limited, rate_limited
 
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
@@ -1009,6 +1136,9 @@ class SimpleFinAdapter(ProviderAdapter):
         resume_later = False
         # Whether this call left history still to walk. False for a routine top-up, which has no walk.
         more_to_walk = False
+        # Whether the CDN refused us partway through. Suppresses `has_more` below: the daily allowance is
+        # per account, but this limit is on the client, so coming straight back is refused again.
+        rate_limited = False
         # Deduplicated in order: the same bank reports the same problem in every window the walk touches,
         # and a user reading the connection card needs the distinct problems, not one per request.
         warnings: dict[str, None] = {}
@@ -1045,9 +1175,14 @@ class SimpleFinAdapter(ProviderAdapter):
                 # Charged to the shared pool because it is an unfiltered window: it covers every account at
                 # once, which is exactly what makes it worth one request instead of one per account.
                 if _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
-                    added.extend(self._fetch_recent(
-                        credential, state, today, warnings, advisories, dropped_currency,
-                        ledger_currency, requested_windows))
+                    try:
+                        added.extend(self._fetch_recent(
+                            credential, state, today, warnings, advisories, dropped_currency,
+                            ledger_currency, requested_windows))
+                    except SimpleFinRateLimited:
+                        # Refused before the walk even started, so there is nothing to walk with either.
+                        # `through` is untouched, so the next run re-asks for this same window.
+                        rate_limited = resume_later = True
                 else:
                     resume_later = True
             else:
@@ -1055,16 +1190,21 @@ class SimpleFinAdapter(ProviderAdapter):
                 # a separate top-up would re-fetch a subset of it for nothing.
                 state["through"] = today.isoformat()
 
-            walk_added, coverage, walk_resume, more_to_walk = self._walk_history(
-                credential, budget, account_targets, today, now, warnings, advisories, dropped_currency,
-                ledger_currency, requested_windows, budget_checkpoint,
-            )
-            added.extend(walk_added)
-            resume_later = resume_later or walk_resume
+            if not rate_limited:
+                walk_added, coverage, walk_resume, more_to_walk, walk_rate_limited = self._walk_history(
+                    credential, budget, account_targets, today, now, warnings, advisories,
+                    dropped_currency, ledger_currency, requested_windows, budget_checkpoint,
+                )
+                added.extend(walk_added)
+                resume_later = resume_later or walk_resume
+                rate_limited = rate_limited or walk_rate_limited
         elif _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
-            added.extend(self._fetch_recent(
-                credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
-                requested_windows))
+            try:
+                added.extend(self._fetch_recent(
+                    credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
+                    requested_windows))
+            except SimpleFinRateLimited:
+                rate_limited = resume_later = True
         else:
             resume_later = True
         _prune_full_pools(budget)
@@ -1097,11 +1237,22 @@ class SimpleFinAdapter(ProviderAdapter):
             # straight back for the next one. That is what makes each window's rows durable as they arrive
             # and releases the write lock between requests.
             #
-            # A walk stopped by its *allowance* reports `has_more: False` even with history outstanding:
-            # the provider has just declined to serve us, so polling it again is the opposite of what it
-            # asked for. `resume_later` is what carries that case, and a later sync picks it up.
-            "has_more":      more_to_walk and not resume_later,
-            "update_status": BUDGET_PAUSED if resume_later else None,
+            # `more_to_walk` **already excludes** accounts that ran out of allowance, so it means exactly
+            # "there is work I can still do right now" — which is the only question this field asks.
+            #
+            # It must not also be gated on `resume_later`. Allowances are per account, so one exhausted
+            # account sets `resume_later` while its siblings still have plenty; conjoining the two stopped
+            # the whole drain on the first account to run dry, leaving a connection creeping forward one
+            # window per manual sync with its shared pool almost untouched. `resume_later` answers a
+            # different question — whether the *client* should poll again later — and the sync layer reads
+            # it separately for exactly that.
+            "has_more":      more_to_walk,
+            # Which of the two stops this was, not merely that one happened — see the constants.
+            "update_status": (RATE_LIMITED if rate_limited else BUDGET_PAUSED) if resume_later else None,
+            # The allowance this pull left behind. Reported on every page rather than only a paused one: a
+            # pull that finished comfortably and one that stopped a single request short look identical
+            # without it, and which of the two happened is what says whether the next sync will complete.
+            "request_allowance": _allowance_snapshot(budget, now),
             "backfill_complete": bool(backfill_complete),
             "resume_later":  resume_later,
             # Per account, and only what this pull actually reached — never what it set out to reach.

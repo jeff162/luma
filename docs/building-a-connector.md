@@ -185,6 +185,34 @@ night after night does. Where the refill rate is inferred rather than stated, in
 too slowly costs a request that could have been made, while crediting too fast spends one the provider has
 not granted.
 
+**Check for a second limit on *rate*.** A published "N per day" bounds how many requests are made; it says
+nothing about how fast, and a provider fronted by a CDN usually enforces both. SimpleFIN's answers a burst
+with `429 error code: 1015` — Cloudflare, the same layer that rejects unnamed user agents — while the
+request count is still comfortably inside the daily allowance. So a metered adapter needs a **minimum
+interval between requests** as well as a budget, paced process-wide rather than per connection (the limiter
+keys on the caller, so two connections syncing at once are one client to it).
+
+Being rate-limited is **not a failure**: it is neither the user's to fix nor a reason to stop. Treat it as a
+pause — keep what arrived, report `resume_later`, and suppress `has_more` so the caller does not come
+straight back into another refusal. Note that this is a different shape from running out of the daily
+allowance, which blocks one account while its siblings carry on; a rate limit blocks the whole client.
+
+**Report the two pauses under different names, and report the level, not just the effect.** `resume_later`
+says a pull stopped; it cannot say which limit stopped it, and the two are opposite findings. Declining to
+ask because the local bucket is empty means the accounting worked; being refused a request means the
+provider's count and this app's disagree, which is a bug with a real penalty behind it. Distinguish them on
+`update_status` (`BUDGET_PAUSED` vs `RATE_LIMITED`).
+
+Then report the allowance itself, via the optional `request_allowance` field on the page dict
+(`{capacity, refill_per_hour, pools:{pool key: tokens left}}`). This is easy to skip and the omission is
+invisible until someone has to diagnose a stuck connection: the budget lives in a column the next sync
+overwrites, so without a per-call snapshot the log names a cause nobody can check and cannot say when the
+pull could resume. **A resource that empties and refills has to have its level recorded wherever its
+effects are recorded** — the same reasoning applies to any per-account position, which is why the sync log
+also keeps each account's reach per call rather than trusting the live coverage columns. For the same
+reason, charge attribution belongs on each requested window (`pool`): a bare request count cannot be
+reconciled against any one allowance when a walk spends several.
+
 **Check whether the limit is one allowance or several.** SimpleFIN grants an unfiltered `/accounts` call
 and each `?account=` call their own, which changes what an account-filtered request is *for*: not a
 bandwidth saving but a different pool to spend from. It also bounds how a filtered request may be shaped —

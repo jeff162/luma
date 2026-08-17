@@ -38,6 +38,21 @@ instruction and fix the drift rather than silently choosing the looser version.
   queries are for verification, stale-doc cleanup, and live-state diagnosis that the docs cannot
   answer.
 
+- **Open the thing before reasoning about it.** The most expensive mistakes in this repo have not
+  been hard problems reasoned about badly; they have been easy facts inferred from a name instead of
+  read. Four in one session: using the shared `Spinner` in a status row without noticing it is a
+  page-level block ("Loading…" with 40px of padding); diagnosing live budget state against
+  `luma-data.db` when `.env` points the app at `testing/luma-data.db`, then reporting a confident
+  and entirely wrong conclusion from it; writing a "is anything else syncing?" predicate without
+  checking that callers already mark their own provider syncing before delegating; and reporting a
+  UI change done without re-reading the sentence that asked for it. Each cost a user round trip that
+  reading for thirty seconds would have saved.
+
+- **Check which database the app is actually pointed at before querying live state.** `.env` carries
+  `DB_PATH` / `CONTROL_DB_PATH`, and they routinely differ from the repo-root defaults. A live-state
+  answer from the wrong file is worse than no answer: it looks authoritative and sends the next few
+  decisions in the wrong direction.
+
 - For reproducible runtime or persisted-state bugs, prefer targeted instrumentation plus a user
   repro over long static tracing. A confirmed repro usually localizes the issue faster and more
   reliably.
@@ -105,6 +120,25 @@ instruction and fix the drift rather than silently choosing the looser version.
 - Keep user-facing wording generic and impersonal. Avoid brand-specific flavor text unless the
   brand is the technical fact, and avoid pronoun-heavy help copy where a cleaner impersonal phrasing
   will do.
+
+- **On surfaces you cannot verify yourself, work in small checkable steps.** Every defect in UI work
+  costs a full round trip through the user, because the hard rule puts the browser off limits. A
+  large single pass therefore front-loads the user with a pile of defects to find one at a time. The
+  same amount of code delivered in pieces the user can exercise as they land costs the same effort
+  and far less of theirs. Backend work does not have this constraint — tests close the loop — which
+  is exactly why the two halves of a change deserve different pacing.
+
+- **Before reporting a change done, re-read the sentence that asked for it.** Reporting completion
+  on a paraphrase, and worse, following it with proposals for further changes, reads as not having
+  listened — and hides the omission behind new material. If a follow-on improvement seems worth
+  making, it goes after a plain confirmation of what was actually asked, not instead of it.
+
+- **When removing something that was accidentally load-bearing, ask what else it was doing.** A
+  wrong-looking condition can be holding up more than its stated purpose: the SimpleFIN drain's
+  `has_more and not resume_later` was genuinely incorrect (one account out of allowance stalled its
+  siblings), but it had also been throttling request *rate*, and removing it immediately tripped a
+  CDN limit nothing in the code modelled. Fixing the stated bug was right; not asking what the
+  accident was covering is what turned it into a live outage.
 
 ## Verification And Tests
 

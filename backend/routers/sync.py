@@ -292,8 +292,9 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 (id, connection_id, provider, institution, started_at, finished_at, mode, days_requested,
                  cursor_before, cursor_after, pages, added, updated, removed, skipped, status_sequence,
                  final_status, became_complete, error, warnings, advisories,
-                 skipped_no_account, skipped_already_held, account_counts, card_counts, requested_windows)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 skipped_no_account, skipped_already_held, account_counts, card_counts, requested_windows,
+                 request_allowance)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], r["started_at"],
@@ -310,6 +311,7 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 json.dumps(r["account_counts"]) if r.get("account_counts") else None,
                 json.dumps(r["card_counts"]) if r.get("card_counts") else None,
                 json.dumps(r["requested_windows"]) if r.get("requested_windows") else None,
+                json.dumps(r["request_allowance"]) if r.get("request_allowance") else None,
             ),
         )
     conn.execute(
@@ -1070,6 +1072,16 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             cursor_before = connection["transactions_cursor"]
             status_sequence: list = []
             requested_windows: list = []
+            # The metered allowance the pull left behind, from whichever page reported last — see
+            # `request_allowance` in the adapter contract. The buckets themselves live on `connection` and
+            # are overwritten by the next sync, so without this snapshot a paused row can never say how
+            # close to the limit it was or when it could resume.
+            request_allowance: dict | None = None
+            # How far back each account actually reached on THIS call, accumulated across pages. The same
+            # figures go to `connection_account`, but that row holds only the current position: it is
+            # overwritten every sync, so it can answer "where is this account now" and never "what did that
+            # pull achieve". A per-call record needs its own copy.
+            account_reach: dict[str, dict] = {}
             pages = 0
             added0, updated0, removed0, skipped0 = added, updated, removed, skipped
             # The card tallies are call-wide and accumulate across connections, so this row's share of them
@@ -1105,7 +1117,17 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # what names *which* account received nothing.
                     "skipped_no_account":   sum(c.get("skipped_no_account", 0) for c in account_tally.values()),
                     "skipped_already_held": sum(c.get("skipped_already_held", 0) for c in account_tally.values()),
-                    "account_counts": {a: dict(c) for a, c in account_tally.items()},
+                    # Row counts per account, merged with the depth each one reached on this call. They are
+                    # kept in one structure because they answer one question together: an account with no
+                    # rows and no advance is idle, one with no rows but a moved frontier genuinely had
+                    # nothing in the window, and telling those apart is the whole point of a per-account
+                    # breakdown. Accounts appear here if they had either.
+                    "account_counts": {
+                        a: {**dict(account_tally.get(a) or {}), **(account_reach.get(a) or {})}
+                        for a in {*account_tally, *account_reach}
+                    },
+                    # See the declaration: the level of a consumable, which nothing else retains.
+                    "request_allowance": request_allowance,
                     # Where the rows went, and what was asked for to get them — the two facts a reader needs
                     # to reconcile this row against the history page and against the provider's own limits.
                     "card_counts":      _card_counts(conn, card_added, card_added0),
@@ -1221,6 +1243,20 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # requested depth for a walking provider whenever its accounts had all finished, since
                     # a pull with no history left to fetch reports exactly `{}`.
                     account_coverage = page.get("account_coverage")
+                    # Last page wins: the allowance is cumulative state, so the final page's reading is
+                    # what the pull actually left. An adapter that meters nothing omits the key, and the
+                    # row then stores nothing rather than an empty structure that would read as "measured,
+                    # and the answer is none".
+                    if page.get("request_allowance"):
+                        request_allowance = page["request_allowance"]
+                    # Merged rather than replaced, because coverage describes only the accounts the page in
+                    # hand touched — a walk that spends its last page on one account would otherwise erase
+                    # what the earlier pages recorded for its siblings.
+                    for external_account_id, reported in (account_coverage or {}).items():
+                        account_reach[external_account_id] = {
+                            "reached": reported.get("reached"),
+                            "history_complete": bool(reported.get("complete")),
+                        }
                     for w in page.get("warnings") or []:
                         if w not in connection_warnings:
                             connection_warnings.append(w)
@@ -1475,6 +1511,13 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
             return []
         return parsed if isinstance(parsed, list) else []
 
+    def _json_obj(value):
+        try:
+            parsed = json.loads(value) if value else None
+        except (TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
     def _entry(r):
         d = dict(r)
         d["status_sequence"] = _json_list(r["status_sequence"])
@@ -1483,6 +1526,11 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         d["advisories"] = _json_list(d.get("advisories"))
         d["card_counts"] = _json_list(d.get("card_counts"))
         d["requested_windows"] = _json_list(d.get("requested_windows"))
+        # Objects rather than lists, and parsed here so the browser is never handed a JSON string to
+        # re-parse. A row predating either column, or one from an adapter that reports neither, reads as
+        # `None` — which the UI must distinguish from an empty structure.
+        d["request_allowance"] = _json_obj(d.get("request_allowance"))
+        d["account_counts"] = _json_obj(d.get("account_counts"))
         d["became_complete"] = bool(r["became_complete"])
         return d
 

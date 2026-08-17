@@ -169,11 +169,6 @@ delete the backlog file.
   before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms
   on a 60 MB DB; note the former does **not** cover foreign keys). The larger half is an invariant
   checker for the semantic inconsistencies those pragmas call "ok" — kept deliberately separate.
-- [sync-status-surface.md](sync-status-surface.md) — **designed, not built (2026-08-16).** The UI half of
-  the sync-responsiveness work: a status panel that minimizes to a nav chip, showing a running sync's
-  progress from anywhere and offering Cancel (= stop polling; the walk is already resumable). The backend
-  half shipped — the app stays usable during a sync and publishes live progress. Carries the reasoning for
-  three shapes rejected on the way: a blocking modal, producer/consumer threading, and a raw staging table.
 - [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file;
   currently the unwritten CHANGELOG entry for the category-owner → tag migration.
 

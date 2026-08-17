@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import io
 import json
+import time
+import urllib.error
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
@@ -29,7 +31,9 @@ from unittest import mock
 
 from backend.services.providers import get_adapter
 from backend.services.providers.simplefin import (
+    BUDGET_PAUSED,
     EMPTY_WINDOWS_END_HISTORY,
+    RATE_LIMITED,
     _merge_advisories,
     FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
@@ -38,6 +42,7 @@ from backend.services.providers.simplefin import (
     WINDOW_DAYS,
     SimpleFinAdapter,
     SimpleFinError,
+    SimpleFinRateLimited,
 )
 
 ACCESS_URL = "https://user-abc:pass-xyz@beta-bridge.simplefin.org/simplefin"
@@ -95,10 +100,15 @@ def drain_pull(fetch_page, targets):
     and "how many of this *pull's* requests drew it" is the caller's sum.
     """
     added, coverage, advisories, warnings, page = [], {}, {}, {}, None
+    # Accumulated for the same reason `run_sync` accumulates it: a window belongs to the *pull*, and the
+    # last page of a paused walk is routinely the one that requested nothing. Reading the final page's list
+    # would report a walk that spent twenty requests as having asked for nothing at all.
+    windows: list = []
     targets = [dict(t) for t in targets]
     for _ in range(200):
         page = fetch_page(targets)
         added.extend(page["added"])
+        windows.extend(page.get("requested_windows") or [])
         coverage.update(page.get("account_coverage") or {})
         _merge_advisories(advisories, page.get("advisories") or [])
         warnings.update(dict.fromkeys(page.get("warnings") or []))
@@ -112,8 +122,26 @@ def drain_pull(fetch_page, targets):
             for t in targets
             if not coverage.get(t["external_account_id"], {}).get("complete")
         ]
-    return {**page, "added": added, "account_coverage": coverage,
+    return {**page, "added": added, "account_coverage": coverage, "requested_windows": windows,
             "advisories": list(advisories.values()), "warnings": list(warnings)}
+
+
+class _RateLimitedAfter:
+    """Wraps a server so it starts answering 429 after N requests — the CDN in front of the Bridge deciding
+    a walk is going too fast, which is a limit entirely separate from the published daily allowance."""
+
+    def __init__(self, inner, after):
+        self.inner, self.after = inner, after
+
+    def __call__(self, url, *, method="GET", headers=None):
+        if len(self.inner.calls) >= self.after:
+            # What `_http` raises for a 429; the conversion from the raw urllib error is held by
+            # `SimpleFinTransportTests`, since every test here patches `_http` away.
+            raise SimpleFinRateLimited("SimpleFIN is rate-limiting requests.", status=429)
+        return self.inner(url, method=method, headers=headers)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)   # requested_windows / calls read through to the real server
 
 
 class _Server:
@@ -437,6 +465,46 @@ class SimpleFinTransportTests(unittest.TestCase):
             return _Response()
 
         return captured, _urlopen
+
+    def test_consecutive_requests_are_spaced_apart(self):
+        """The limit the request budget does not model.
+
+        The published allowance bounds how *many* requests are made per day; the CDN in front of the Bridge
+        bounds how *fast*. A walk that fires its windows back-to-back stays well inside the daily budget and
+        is still refused — which is exactly what happened once the drain stopped being throttled by
+        accident. Asserted on the interval rather than on a sleep call so it holds however the wait is
+        implemented, and run at a small interval so the test costs milliseconds.
+        """
+        import backend.services.providers.simplefin as sfin
+        _, urlopen = self._capture_request()
+        stamps = []
+
+        with mock.patch.object(sfin, "_MIN_REQUEST_INTERVAL_SECONDS", 0.05), \
+                mock.patch.object(sfin, "_last_request_at", 0.0), \
+                mock.patch("urllib.request.urlopen", urlopen):
+            for _ in range(3):
+                sfin._http("https://bridge.example/accounts")
+                stamps.append(time.monotonic())
+
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        for gap in gaps:
+            self.assertGreaterEqual(round(gap, 3), 0.05,
+                                    f"requests were {gap:.3f}s apart — the CDN limit is on rate, not count")
+
+    def test_a_429_becomes_a_rate_limit_pause_not_a_generic_failure(self):
+        # The CDN's "too fast" is not the Bridge's "something is wrong", and the two must not read alike:
+        # a walk is resumable, so a refusal should record what arrived and pause. Left generic, a burst
+        # that merely arrived too quickly marks a perfectly good connection as failing.
+        from backend.services.providers.simplefin import _http
+
+        def _urlopen(request, timeout=None):
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {},
+                                         io.BytesIO(b"error code: 1015"))
+
+        with mock.patch("urllib.request.urlopen", _urlopen):
+            with self.assertRaises(SimpleFinRateLimited) as caught:
+                _http("https://bridge.example/accounts")
+        self.assertEqual(caught.exception.status, 429)
 
     def test_every_request_names_the_client(self):
         from backend.services.providers.simplefin import _http
@@ -840,6 +908,47 @@ class SimpleFinWalkTests(unittest.TestCase):
         self.assertFalse(result["backfill_complete"])
         self.assertFalse(result["has_more"], "the client must stop polling a provider that just cut it off")
 
+    def test_a_paused_walk_reports_the_allowance_it_left_behind(self):
+        # The gap this closes: the buckets live on `connection`, which the next sync overwrites, so a row
+        # that omits them names a cause ("paused on the limit") the reader has no way to check, and cannot
+        # say when the pull could resume.
+        server = self._busy()
+        result = self._drain(server, self._targets("simplefin:2930002"))
+        allowance = result["request_allowance"]
+        self.assertEqual(allowance["capacity"], REQUEST_BUDGET_CAPACITY)
+        self.assertEqual(allowance["refill_per_hour"], REQUEST_BUDGET_REFILL_PER_HOUR)
+        spent = [t for t in allowance["pools"].values() if t < 1]
+        self.assertTrue(spent, "a pull that paused on the allowance must show a bucket with nothing in it")
+
+    def test_the_allowance_is_reported_even_when_nothing_ran_out(self):
+        # Otherwise a pull that finished comfortably and one that stopped a single request short look
+        # identical, and which of the two happened is what says whether the next sync will complete.
+        server = self._busy(count=1)
+        result = self._drain(server, self._targets("simplefin:2930002"))
+        self.assertFalse(result["resume_later"])
+        self.assertIsNotNone(result["request_allowance"])
+
+    def test_the_pause_names_which_of_the_two_limits_stopped_it(self):
+        # A refusal by the server and an empty local bucket are opposite failures: the first means our
+        # accounting disagrees with the provider's, the second means it agreed and we stopped ourselves.
+        budget_stop = self._drain(self._busy(), self._targets("simplefin:2930002"))
+        self.assertEqual(budget_stop["update_status"], BUDGET_PAUSED)
+
+        # Its own allowance: sharing `self.budget` with the pull above would leave this one empty before
+        # it could reach the refusal, and it would pass by asserting the wrong mechanism.
+        refused = self._drain(_RateLimitedAfter(self._busy(count=200), after=3),
+                              self._targets("simplefin:2930002"), budget={})
+        self.assertEqual(refused["update_status"], RATE_LIMITED)
+
+    def test_every_request_records_which_allowance_paid_for_it(self):
+        # A bare count reconciles against neither bucket: a narrow walk spends each account's own, a wide
+        # one spends the shared bucket, and the difference is "one account is stuck" vs. "the connection is".
+        server = self._busy(count=200)
+        result = self._drain(server, self._targets("simplefin:2930002"))
+        pools = [w.get("pool") for w in result["requested_windows"]]
+        self.assertTrue(all(pools), "no window may be recorded without the allowance it was charged to")
+        self.assertIn("simplefin:2930002", pools, "a lone walking account is charged its own bucket")
+
     def test_a_paused_walk_claims_only_what_it_actually_reached(self):
         # The regression that motivated the per-account model: coverage that overstates itself makes
         # duplicate detection hard-reject genuine transactions in a range nothing ever fetched.
@@ -859,6 +968,37 @@ class SimpleFinWalkTests(unittest.TestCase):
         # The next day opens with the recent top-up, then the walk continues from where it stopped.
         resumed = server.requested_windows[REQUEST_BUDGET_CAPACITY + 1]
         self.assertEqual(resumed[1].isoformat(), reached)
+
+    def test_being_rate_limited_pauses_the_pull_instead_of_failing_it(self):
+        # The provider enforces two limits, and only one of them is the published daily allowance. Bursting
+        # a walk's windows back-to-back — well inside the daily budget — is answered by the CDN with a 429,
+        # and treating that as a failure marks a working connection broken over a request that was merely
+        # too early. The walk is resumable, so the honest response is to keep what arrived and stop.
+        server = _RateLimitedAfter(self._busy(count=200), after=3)
+        result = self._drain(server, self._targets("simplefin:2930002"))
+
+        self.assertTrue(result["resume_later"], "a refusal must ask to be resumed, not raise")
+        self.assertFalse(result["has_more"],
+                         "and must not invite the caller straight back into another refusal")
+        self.assertTrue(result["added"], "everything fetched before the refusal is kept")
+        # Coverage stops where the fetching did — the refused window is not claimed.
+        reached = result["account_coverage"]["simplefin:2930002"]["reached"]
+        self.assertEqual(reached, min(w[0] for w in server.requested_windows).isoformat())
+
+    def test_one_account_running_dry_does_not_stall_the_others(self):
+        # Allowances are per account, so "this account is out" and "this pull is finished" are different
+        # facts. Conjoining them stopped the entire drain at the first account to run dry — a connection
+        # then crept forward one window per *manual* sync while its shared pool and its other accounts'
+        # allowances sat nearly full, which reads to the user as a sync that imports a trickle and stops.
+        server = self._busy(count=200)
+        drained = self._drained("simplefin:2930002")   # this one has nothing left
+        result = self._drain(server, self._targets("simplefin:2930002", "simplefin:b"), budget=drained)
+
+        self.assertTrue(result["resume_later"], "the exhausted account must still ask to be resumed later")
+        # The one with an allowance kept going: far more than the single window the conjoined test allowed.
+        for_b = [u for u in server.calls if "account=b" in u]
+        self.assertGreater(len(for_b), 1,
+                           "a sibling with budget must keep walking after another account runs dry")
 
     def test_an_exhausted_allowance_is_not_spent_again_before_it_refills(self):
         server = self._busy()

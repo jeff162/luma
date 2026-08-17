@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -825,7 +826,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [transport, setTransport] = useState(null)
   const [vault, setVault] = useState({ configured: false, hasPassphrase: false, unlocked: false })
   const [loading, setLoading] = useState(true)
-  const [syncState, setSyncState] = useState({})       // provider -> { syncing, result }
+  // Lifted to `SyncStatusContext`: a sync outlives this page. While the driver lived here, navigating
+  // away mid-backfill left its poll loop running in a detached closure writing to an unmounted component —
+  // the work carried on invisibly and its results landed nowhere. The cards below still read the same
+  // shape, they just no longer own it.
+  const { syncState, setSyncState, runSync: syncUntilComplete } = useSyncStatus()
   const [configTarget, setConfigTarget] = useState(null)
   const [connectTarget, setConnectTarget] = useState(null)  // provider whose token-connect dialog is open
   // Every action needing an open vault goes through this gate: it prompts and the action then continues
@@ -1220,37 +1225,6 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     plaidHandlerRef.current = null
     exchangingRef.current = false
     setLinkInProgress(false)
-  }
-
-  // Client-driven poll: call /sync repeatedly until the provider reports the historical backfill is
-  // complete (the response's update_status, which carries the same signal as the transactions webhook), so
-  // the async backfill is pulled to completion without needing a webhook endpoint. Each call drains the
-  // pages available right now; between calls we wait for the provider to backfill more. Running totals +
-  // status are surfaced on syncState[provider] so the UI can show "Importing history… N so far".
-  async function syncUntilComplete(provider, { days, connectionId, fullHistory = false }) {
-    const MAX_POLLS = 45  // ~3 min at the 4s cadence below — comfortably covers Plaid's historical backfill
-    const totals = { added: 0, updated: 0, removed: 0, skipped: 0 }
-    for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-      const res = await api.runSync(days, connectionId, { provider, fullHistory })
-      totals.added += res.added || 0
-      totals.updated += res.updated || 0
-      totals.removed += res.removed || 0
-      totals.skipped += res.skipped || 0
-      if (res.historical_complete) {
-        // A paused connection also reports nothing-more-right-now, so the loop ends either way; `paused`
-        // is what distinguishes "finished" from "stopped, with more to come on a later sync".
-        setSyncState(prev => ({
-          ...prev,
-          [provider]: { syncing: false, result: { ...totals }, paused: res.paused || [] },
-        }))
-        return totals
-      }
-      setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null, progress: { ...totals }, status: res.update_status } }))
-      await new Promise(resolve => setTimeout(resolve, 4000))
-    }
-    // Backfill not signaled complete within the poll budget — keep what arrived and let the user re-sync.
-    setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: { ...totals }, incomplete: true } }))
-    return totals
   }
 
   async function sync(provider) {

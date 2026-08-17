@@ -31,6 +31,11 @@ import {
   MinimizedAmazonImportDetailNavItem,
 } from './contexts/AmazonImportDetailViewerContext.jsx'
 import {
+  SyncStatusProvider,
+  SyncStatusRenderer,
+  MinimizedSyncNavItem,
+} from './contexts/SyncStatusContext.jsx'
+import {
   ImportedCategoryWorkspaceProvider,
   ImportedCategoryWorkspaceRenderer,
   MinimizedImportedCategoryWorkspaceNavItem,
@@ -1592,11 +1597,13 @@ export default function App() {
                   <AmazonReconciliationViewerProvider>
                   <AmazonImportDetailViewerProvider>
                   <ImportedCategoryWorkspaceProvider>
+                  <SyncStatusProvider>
                     <ThemeController />
                     <UnifiedDuplicatesViewerRenderer />
                     <AmazonReconciliationViewerRenderer />
                     <AmazonImportDetailViewerRenderer />
                     <ImportedCategoryWorkspaceRenderer />
+                    <SyncStatusRenderer />
                     <style>{GLOBAL_SCROLLBAR_STYLES}</style>
                     {pendingDemoClear ? (
                       <AppConfirmDialog
@@ -1655,6 +1662,7 @@ export default function App() {
                         <MinimizedAmazonReconciliationNavItem />
                         <MinimizedAmazonImportDetailNavItem />
                         <MinimizedImportedCategoryWorkspaceNavItem />
+                        <MinimizedSyncNavItem />
                         <div style={s.navFooter}>
                           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                             {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
@@ -1849,6 +1857,7 @@ export default function App() {
                         </button>
                       </div>
                     )}
+                  </SyncStatusProvider>
                   </ImportedCategoryWorkspaceProvider>
                   </AmazonImportDetailViewerProvider>
                   </AmazonReconciliationViewerProvider>

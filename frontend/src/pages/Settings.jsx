@@ -14,10 +14,14 @@ import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
+import { OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 import { invalidateTags } from '../lib/useTags.js'
 import { DEFAULT_LEDGER_CURRENCY, applyLedgerCurrency, currencySymbolFor } from '../lib/moneyDisplay.js'
-import { cardSummary, checkpointSummary, windowSummary } from '../lib/syncLogSummary.js'
+import {
+  allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
+  requestPoolSummary, skippedBreakdown, syncLogDate, windowSummary,
+} from '../lib/syncLogSummary.js'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 // Stable default so the preference value keeps a constant identity when nothing is saved yet.
@@ -2094,21 +2098,53 @@ function SyncLogRow({ entry }) {
   // string rather than "Invalid Date".
   const parsedWhen = entry.started_at ? new Date(entry.started_at) : null
   const when = parsedWhen && !isNaN(parsedWhen) ? parsedWhen.toLocaleString() : (entry.started_at || '—')
-  // The provider's backfill-readiness signal, one entry per page drained — Plaid's
-  // `transactions_update_status`. A provider with no such concept reports nothing (SimpleFIN sends one
-  // only when its walk pauses on the request budget), so absent entries are dropped rather than rendered:
-  // this is a user-facing log, and a row reading `status: null` says "something is broken" when it in fact
-  // means "this provider does not report one". With none left, the row itself is omitted.
-  const statuses = (entry.status_sequence || []).filter(s => s != null)
+  // The provider's backfill-readiness signal — Plaid's `transactions_update_status`, or SimpleFIN's
+  // budget-pause marker. Read from `final_status` rather than the per-page `status_sequence`: the sequence
+  // is one entry per drained page, so a walking adapter fills it with one identical value per request, and
+  // where a call *ended up* is the question a reader has. The raw sequence is still recorded and still
+  // travels in the pasteable support text, where a mid-drain anomaly would be the finding.
+  //
+  // A provider with no such concept reports nothing, so an absent status renders nothing rather than a row
+  // reading `status: null` — which says "something is broken" when it in fact means "this provider does not
+  // report one". An unrecognized value falls back to the raw string, kept monospace to read as the
+  // uninterpreted token it is.
+  const statusPhrase = finalStatusSummary(entry.final_status)
   // How many requests the pull actually spent, which for a walking adapter is the number that answers
   // "why did this take so long" — `pages` is a cursor provider's notion and reads 1 for every walk, however
   // many requests it made. Kept as the fallback for the providers where it is the true figure.
   const requests = entry.requested_windows?.length || null
   const cards = cardSummary(entry.card_counts, entry.institution)
+  const skipped = skippedBreakdown(entry)
+  // What the call covered: the span it actually fetched, reconciled against the depth it set out for. Two
+  // separate facts, joined on one line because either alone invites the wrong conclusion — a span with no
+  // target reads as complete, and a target with no span reads as achieved.
+  const coverage = [windowSummary(entry.requested_windows),
+    historyDepthSummary(entry.days_requested, entry.requested_windows)].filter(Boolean).join(' · ')
+  // The consumable this pull spent. Always visible rather than filed under Details, because for a metered
+  // provider it is the reason the row looks the way it does — a pull that stopped early and a pull that had
+  // nothing left to fetch are indistinguishable without it.
+  const allowance = allowanceSummary(entry.request_allowance)
+  const pools = requestPoolSummary(entry.requested_windows)
+  // How far back each account got on THIS call. `connection_account` holds only where each one stands now,
+  // overwritten every sync, so this is the only place a past pull's reach survives — and on a walk that
+  // pauses per account, "which ones actually moved" is the question the row exists to answer.
+  // The provider prefix is dropped the same way the card summary drops the institution: it namespaces the
+  // id and is already the row's own title, so it is the one part that identifies nothing here.
+  const accountPrefix = entry.provider ? `${entry.provider}:` : null
+  const reachRows = Object.entries(entry.account_counts || {})
+    .filter(([, c]) => c?.reached)
+    .map(([account, c]) => {
+      const name = accountPrefix && account.startsWith(accountPrefix)
+        ? account.slice(accountPrefix.length) : account
+      return `${name} → ${syncLogDate(c.reached)}${c.history_complete ? ' (end of history)' : ''}`
+    })
   // The raw fingerprints stay as the fallback: a provider whose checkpoint this cannot interpret must still
   // show *something*, since whether the token advanced is the first question a stalled sync raises.
-  const checkpoint = [windowSummary(entry.requested_windows), checkpointSummary(entry.cursor_before, entry.cursor_after)]
-    .filter(Boolean).join(' · ')
+  const checkpoint = checkpointSummary(entry.cursor_before, entry.cursor_after)
+  // Collapsed always, never opened by default — including for an error row. What an error row owes the
+  // reader is the error, which sits in the always-visible half; the tier below it is the provider's own
+  // bookkeeping, and a row that springs open is a row that has decided the reader is debugging.
+  const [showDetails, setShowDetails] = useState(false)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2122,18 +2158,45 @@ function SyncLogRow({ entry }) {
         ) : null}
         <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{when}</span>
       </div>
+      {/* What the sync did, in the effect vocabulary the connection card uses. First because it is the one
+          line that answers "what happened", which every other line on the row only elaborates on. */}
+      {statusPhrase ? (
+        <div style={{ color: 'var(--text)' }}>{statusPhrase}</div>
+      ) : entry.final_status ? (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: 'var(--muted)' }}>status:</span>
+          <span style={{ fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--surface2)' }}>{entry.final_status}</span>
+        </div>
+      ) : null}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--muted)' }}>
         <span>added <b style={{ color: 'var(--text)' }}>{entry.added}</b></span>
         <span>updated <b style={{ color: 'var(--text)' }}>{entry.updated}</b></span>
         <span>removed <b style={{ color: 'var(--text)' }}>{entry.removed}</b></span>
         <span>skipped <b style={{ color: 'var(--text)' }}>{entry.skipped}</b></span>
+        {/* Label first, like every other count on this row. The old `21 requests` put the number first,
+            which read as a different kind of fact than the four figures beside it. */}
         {requests
-          ? <span><b style={{ color: 'var(--text)' }}>{requests}</b> request{requests === 1 ? '' : 's'}</span>
+          ? <span>requests <b style={{ color: 'var(--text)' }}>{requests}</b></span>
           : <span>pages <b style={{ color: 'var(--text)' }}>{entry.pages}</b></span>}
-        {entry.days_requested != null
-          ? <span>asked for <b style={{ color: 'var(--text)' }}>{entry.days_requested}</b> days</span>
-          : null}
       </div>
+      {/* The skip total split into the three unrelated events it folds together, as the same `OutcomeChip`s
+          the connection card uses for these facts — the card deep-links here, so the two must not drift in
+          wording or in which of them reads as a problem. */}
+      {skipped ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {skipped.map(b => (
+            <OutcomeChip key={b.key} label={b.label} count={b.count} tone={b.tone} title={b.title} />
+          ))}
+        </div>
+      ) : null}
+      {coverage ? (
+        <div style={{ color: 'var(--muted)' }}>{coverage}</div>
+      ) : null}
+      {allowance ? (
+        <div style={{ color: 'var(--muted)' }}>
+          allowance: <span style={{ color: 'var(--text)' }}>{allowance}</span>
+        </div>
+      ) : null}
       {/* Where the rows went. A sync files each row under its own transaction month, so one pull lands on
           as many cards as it spans — and the Import/Export page shows one card at a time, which makes an
           `added` total that matches no visible card read as rows having gone missing. */}
@@ -2142,42 +2205,60 @@ function SyncLogRow({ entry }) {
           rows filed on <span style={{ color: 'var(--text)' }}>{cards}</span>
         </div>
       ) : null}
-      {statuses.length ? (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ color: 'var(--muted)' }}>status:</span>
-          {statuses.map((s, i) => (
-            <span key={i} style={{ fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--surface2)' }}>{s}</span>
-          ))}
-        </div>
-      ) : null}
-      {checkpoint ? (
-        <div style={{ color: 'var(--muted)', fontSize: 11 }}>{checkpoint}</div>
-      ) : (
-        <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
-          cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
-        </div>
-      )}
       {entry.error ? (
         <div style={{ color: 'var(--danger)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{entry.error}</div>
       ) : null}
-      {/* Warnings are the bank-level ones the connection card also shows; advisories are the ones nobody
-          can act on (what the provider said about our request, and rows that had nowhere to be imported),
-          which is why this log is their only home. `×N` is how many of the call's requests drew the same
-          remark — on a windowed history walk, "every one of them" reads very differently from "one". */}
+      {/* Warnings are the bank-level ones the connection card also shows, so they stay in the always-visible
+          half: they are the reader's to act on. Advisories are the ones nobody can act on (what the provider
+          said about our request shape, and rows that had nowhere to be imported) — this log is still their
+          only home, but that home is the tier below. */}
       {(entry.warnings || []).map((w, i) => (
         <div key={`w${i}`} style={{ color: 'var(--warning)', fontSize: 11, wordBreak: 'break-word' }}>⚠ {w}</div>
       ))}
-      {(entry.advisories || []).map((a, i) => (
-        <div key={`a${i}`} style={{ color: 'var(--muted)', fontSize: 11, wordBreak: 'break-word' }}>
-          {a.message}{a.count > 1 ? <b style={{ color: 'var(--text)' }}> ×{a.count}</b> : null}
-          {/* The request that drew it. Kept out of the message so the same remark from every window of a
-              walk stays one counted entry; shown as "first:" alongside a count, since with several
-              occurrences this names one of them rather than all. */}
-          {a.context ? (
-            <span style={{ opacity: 0.75 }}> ({a.count > 1 ? 'first: ' : ''}{a.context})</span>
+      {/* The provider's own bookkeeping, behind a toggle. Everything above answers a question about the
+          user's data; everything below answers one about the sync machinery, and mixing the two at one
+          visual weight is what made a routine budget-paused walk read as a wall of alarming output. */}
+      <div>
+        <button
+          onClick={() => setShowDetails(v => !v)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 11, fontWeight: 600, padding: '2px 0', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ fontSize: 9 }}>{showDetails ? '▾' : '▸'}</span>
+          Details
+        </button>
+      </div>
+      {showDetails ? (
+        <div style={{ display: 'grid', gap: 6, paddingLeft: 15 }}>
+          {/* Which bucket paid for each request. Below the fold because the headline figure is how many
+              requests the pull spent; this answers the follow-up, which only a stuck connection asks. */}
+          {pools ? <div style={{ color: 'var(--muted)', fontSize: 11 }}>requests: {pools}</div> : null}
+          {reachRows.length ? (
+            <div style={{ color: 'var(--muted)', fontSize: 11 }}>
+              reached: {reachRows.join(' · ')}
+            </div>
           ) : null}
+          {checkpoint ? (
+            <div style={{ color: 'var(--muted)', fontSize: 11 }}>{checkpoint}</div>
+          ) : (
+            <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
+              cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
+            </div>
+          )}
+          {/* `×N` is how many of the call's requests drew the same remark — on a windowed history walk,
+              "every one of them" reads very differently from "one". */}
+          {(entry.advisories || []).map((a, i) => (
+            <div key={`a${i}`} style={{ color: 'var(--muted)', fontSize: 11, wordBreak: 'break-word' }}>
+              {a.message}{a.count > 1 ? <b style={{ color: 'var(--text)' }}> ×{a.count}</b> : null}
+              {/* The request that drew it. Kept out of the message so the same remark from every window of a
+                  walk stays one counted entry; shown as "first:" alongside a count, since with several
+                  occurrences this names one of them rather than all. */}
+              {a.context ? (
+                <span style={{ opacity: 0.75 }}> ({a.count > 1 ? 'first: ' : ''}{a.context})</span>
+              ) : null}
+            </div>
+          ))}
         </div>
-      ))}
+      ) : null}
     </div>
   )
 }
@@ -2191,12 +2272,20 @@ function syncLogAsText(entries, scopeLabel) {
   for (const e of entries) {
     lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
     const requests = e.requested_windows?.length
+    // Raw throughout, including the skip split and the day count the rendered row states as a duration:
+    // this is the artifact someone debugs from, and a derived figure is a worse starting point than the
+    // value it came from.
     lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped}`
+      + ` (no_account ${e.skipped_no_account ?? 0}, already_held ${e.skipped_already_held ?? 0})`
       + ` · ${requests ? `${requests} request(s)` : `pages ${e.pages}`} · asked for ${e.days_requested ?? '—'} days`)
     const cards = cardSummary(e.card_counts, e.institution)
     if (cards) lines.push(`  rows filed on ${cards}`)
-    // Same reasoning as the rendered row: drop statuses the provider never reported. The completion
-    // marker shared this line, so it is kept on its own rather than lost along with them.
+    // The *full* per-page sequence, unlike the rendered row, which shows only where the call ended up. This
+    // text exists to be read by someone debugging, and the one thing the sequence holds over `final_status`
+    // is a mid-drain anomaly — a status regressing, or a value nobody expected — which is visible only with
+    // every page's entry in order. Statuses the provider never reported are still dropped: a walking adapter
+    // emits `null` on most pages, and rendering those would bury the transitions this line exists to show.
+    // The completion marker shared this line, so it is kept on its own rather than lost along with them.
     const statuses = (e.status_sequence || []).filter(s => s != null)
     const state = [
       statuses.length ? `status ${statuses.join(' → ')}` : null,
@@ -2206,6 +2295,17 @@ function syncLogAsText(entries, scopeLabel) {
     const checkpoint = [windowSummary(e.requested_windows), checkpointSummary(e.cursor_before, e.cursor_after)]
       .filter(Boolean).join(' · ')
     if (checkpoint) lines.push(`  ${checkpoint}`)
+    // Raw pool levels, not the interpreted line: whoever reads this is checking our accounting against the
+    // provider's, and the fractional token counts are the thing being checked.
+    if (e.request_allowance?.pools) {
+      const pools = Object.entries(e.request_allowance.pools).map(([k, v]) => `${k}=${v}`).join(', ')
+      lines.push(`  allowance: capacity ${e.request_allowance.capacity}`
+        + ` · +${e.request_allowance.refill_per_hour}/hr · pools {${pools}}`)
+    }
+    for (const [account, c] of Object.entries(e.account_counts || {})) {
+      if (!c?.reached) continue
+      lines.push(`  reached ${account} → ${c.reached}${c.history_complete ? ' (complete)' : ''}`)
+    }
     // The raw fingerprints stay in the pasteable copy even when the line above interpreted them: this text
     // exists to be read by someone debugging, for whom "the token did not advance" is the finding, and an
     // interpretation is a worse artifact than the value it was derived from.

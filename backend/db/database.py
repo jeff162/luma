@@ -140,7 +140,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 36
+CURRENT_VERSION = 37
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1047,6 +1047,17 @@ def _connection_sync_progress(conn):
     conn.execute("ALTER TABLE connection ADD COLUMN sync_progress TEXT")
 
 
+@migration(37)
+def _sync_log_request_allowance(conn):
+    # The level of the metered allowance a pull left behind — see the baseline CREATE. Existing rows stay
+    # NULL, which reads correctly: those syncs did not record their allowance, as distinct from having had
+    # none. The UI has to keep the two apart, so the column carries no default.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}
+    if not cols or "request_allowance" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection_sync_log ADD COLUMN request_allowance TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1413,7 +1424,14 @@ def init_db(db_path: str | None = None):
                 -- adapter makes many requests per call and can stop partway, so neither the rows returned
                 -- nor the resume checkpoint can reconstruct what was looked at. Empty for a cursor
                 -- provider, which asks for "everything since this token" and names no window.
-                requested_windows TEXT
+                requested_windows TEXT,
+                -- {capacity, refill_per_hour, pools:{pool key: tokens left}} — the metered allowance the
+                -- pull left behind, for a provider that has one. The buckets themselves live on
+                -- `connection.provider_request_budget`, which the *next* sync overwrites, so without a
+                -- per-call copy a paused row records that it paused and never how close to the limit it
+                -- was, which bucket ran dry, or when it could resume. NULL for an unmetered provider,
+                -- which is not the same as a measured zero.
+                request_allowance TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started
                 ON connection_sync_log(started_at);

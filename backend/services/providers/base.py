@@ -192,6 +192,18 @@ class ProviderAdapter(ABC):
           sync resumes it. Marking such a connection complete strands the un-fetched history permanently
           behind a short routine look-back.
 
+        `request_allowance` is the optional companion to `resume_later`, and the reason it exists is that
+        the flag alone is not diagnosable. A metered adapter spends a resource that empties and refills,
+        and that resource lives outside the log — so a paused pull records *that* it paused and never how
+        close to the limit it was, which bucket ran dry, or when it could resume. Shape:
+
+            {capacity: int, refill_per_hour: float, pools: {pool key: tokens remaining}}
+
+        `pools` is whatever the adapter meters separately (one shared bucket, one per account, or both);
+        an absent pool is a full one. A provider with no metering omits the key entirely. Nothing decides
+        anything from this — it is recorded for the sync log, which is the only place the level of a
+        consumable is visible after the pull that spent it.
+
         `next_cursor` is an **opaque provider resume token**, not necessarily a cursor: a provider with no
         change feed stores whatever checkpoint its own resume needs (see the SimpleFIN adapter). `cursor=None`
         starts an initial pull; `days_requested` bounds how far back to fetch.
