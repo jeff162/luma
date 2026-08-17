@@ -163,6 +163,15 @@ try {
   Write-Host "Checking/installing backend dependencies. This can take a minute on first run..."
   & $venvPython -m pip install -r backend/requirements.txt
   Write-Host "Starting backend on port $backendPort"
+  # This intentionally does not match the Linux launcher, which sets WATCHFILES_FORCE_POLLING=false.
+  # watchfiles force-enables stat-polling only when the kernel release contains "microsoft-standard"
+  # AND the platform is Linux, i.e. on WSL, where it costs a measured ~28% of a core polling the whole
+  # --reload-dir. On Windows the platform test fails, so watchfiles uses ReadDirectoryChangesW and
+  # there is nothing to disable. Setting it here anyway would be inert rather than harmful — it is
+  # simply not needed.
+  #
+  # The exception is running this script under PowerShell on Linux or WSL, which it is not written for.
+  # If that ever happens, add:  $env:WATCHFILES_FORCE_POLLING = 'false'
   & $venvPython -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port $backendPort
 } finally {
   Pop-Location

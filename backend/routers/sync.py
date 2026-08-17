@@ -1528,7 +1528,9 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         d["requested_windows"] = _json_list(d.get("requested_windows"))
         # Objects rather than lists, and parsed here so the browser is never handed a JSON string to
         # re-parse. A row predating either column, or one from an adapter that reports neither, reads as
-        # `None` — which the UI must distinguish from an empty structure.
+        # `None`, which is a different fact from an empty structure: `None` is "nothing was recorded",
+        # `{}` is "measured, and the answer is none". Collapsing them renders an unmetered provider as a
+        # connection with no allowance left, which is the opposite of what it means.
         d["request_allowance"] = _json_obj(d.get("request_allowance"))
         d["account_counts"] = _json_obj(d.get("account_counts"))
         d["became_complete"] = bool(r["became_complete"])

@@ -198,6 +198,17 @@ cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r backend/requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
+# watchfiles (uvicorn's reloader) force-enables stat-polling whenever the kernel release contains
+# "microsoft-standard" — i.e. on all of WSL, keyed on the kernel string rather than on the path being
+# watched. The heuristic exists because inotify does not fire for edits made from Windows to a /mnt/c
+# DrvFs mount; it is a false positive for a checkout on the WSL2 ext4 filesystem, where inotify works.
+# Polling here meant stat()-ing every file under --reload-dir (backend/, which contains the ~7.5k-file
+# venv) every 300ms — a measured 28% of a core, burned continuously by the reloader while idle.
+#
+# Only "false", "disable", and "disabled" turn it off. "0", "no", and "off" are all read as ENABLED.
+#
+# Move this checkout onto /mnt/c and reload will silently stop working: drop this line if that happens.
+export WATCHFILES_FORCE_POLLING=false
 # --proxy-headers lets request.url.scheme reflect X-Forwarded-Proto from a trusted reverse proxy
 # (Caddy terminating TLS in the client-server topology). It defaults to trusting only a loopback
 # proxy, so it is safe/inert for the direct-access dev case here.

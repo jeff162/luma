@@ -8,6 +8,7 @@ changing the application.
 - [Goals](#goals)
 - [Local development](#local-development)
 - [Useful checks](#useful-checks)
+- [Hooks and lint](#hooks-and-lint)
 - [Project conventions](#project-conventions)
 - [Important product invariants](#important-product-invariants)
 - [Documentation expectations](#documentation-expectations)
@@ -24,26 +25,32 @@ changing the application.
 For the shortest local startup path, use the launcher scripts documented in
 [README.md](README.md).
 
-For manual development:
+For manual development, the backend requires **Python 3.12 or newer** (`backend/pyproject.toml` declares
+`requires-python = ">=3.12"`). The venv belongs at `backend/venv/` — that is where every script in
+`scripts/` looks for it.
 
 ```bash
 # backend
 cd backend
-python -m venv venv
-venv\Scripts\activate    # Windows
-source venv/bin/activate # Unix-like shells
+python3.12 -m venv venv       # or `py -3.12 -m venv venv` on Windows
+venv\Scripts\activate         # Windows
+source venv/bin/activate      # Unix-like shells
 pip install -r requirements.txt
 ```
 
-```bash
-scripts\start_luma[.sh] #start the frontend and backend 
-  
-  
-  # - or start them individually with:
-#backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+Start both halves together:
 
-#and
+```bash
+bash ./scripts/start_luma.sh                                        # macOS / Linux / WSL
+scripts\start_luma.bat                                              # Windows
+powershell -ExecutionPolicy Bypass -File .\scripts\start_luma.ps1   # Windows PowerShell
+```
+
+Or start them individually:
+
+```bash
+# backend — from the REPO ROOT, not from backend/, since the app is imported as backend.main
+uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8000
 
 # frontend
 cd frontend
@@ -51,7 +58,44 @@ npm install
 npm run dev
 ```
 
+Ports come from the repo-root `.env` (`BACKEND_PORT`, `FRONTEND_PORT`); the launcher scripts read them
+and fall back to 8000 and 5173. A hand-run `uvicorn` does not read `.env` for its port, so pass the same
+value `.env` sets or the frontend will call a backend that is not there.
+
 Many contributors may use WSL on Windows, so shell examples and local tooling should stay WSL-friendly where practical.
+
+### Working with an AI assistant
+
+The repo carries its own agent instructions, and they are worth pointing an assistant at explicitly
+before it starts editing — most of the avoidable rework on this project has come from an agent
+reconstructing the design from source instead of reading the file that already explains it.
+
+A reasonable opening instruction:
+
+> Check `CLAUDE.md`, your memory, and the relevant `docs/` before diving in.
+
+**Give that instruction even though the files are meant to be automatic.** Claude Code loads
+`CLAUDE.md` into context on its own and still benefits from being told to act on it — an instruction
+that arrives as ambient background gets treated as background. Naming the files in the prompt is what
+turns them from context into a step.
+
+- **[CLAUDE.md](CLAUDE.md)** is the one Claude Code picks up automatically. It carries the hard rules
+  and a routing index into `docs/`.
+- **[AGENTS.md](AGENTS.md)** is the same guidance in the tool-agnostic open-standard file, for
+  assistants that read it. Claude Code does **not** load it automatically, so name whichever your
+  assistant actually reads — the two are written to agree, and each points at the other.
+- **Your assistant's memory** is worth naming even though it is empty on a first clone. It accumulates
+  the things a repo cannot record — what was tried and rejected, and how a particular contributor
+  prefers to work — and once there is anything in it, an assistant that was never told to consult it
+  will not.
+- **`docs/`** holds the *why*. [docs/collaboration-notes.md](docs/collaboration-notes.md) covers
+  decision principles and working habits, and [docs/agent-profile.md](docs/agent-profile.md) collects
+  the operational footguns that recur across sessions. These live in the repo rather than in any one
+  developer's assistant memory, so every contributor and every agent starts from the same guidance.
+
+The rule most likely to be getting violated when work goes wrong: **read the relevant doc before
+changing — or answering questions about — shared systems, persistence, invariants, or shared UI.**
+"I'm only investigating" is not an exemption.
 
 ### Developer flag
 
@@ -72,10 +116,14 @@ npm run build
 ```
 
 ```bash
-# backend syntax sanity check
-cd backend
-py -3.12 -m py_compile main.py
+# backend test suite — wraps `python -m unittest` using backend/venv
+scripts/run_tests.sh                                            # everything
+scripts/run_tests.sh backend.tests.test_suspect_duplicates      # one module
 ```
+
+Tests use isolated SQLite files under `tempfile.TemporaryDirectory()`, so they never touch the live
+database and are safe to run with the backend still up. If a new dependency lands, re-run
+`start_backend.sh` once to refresh the venv first.
 
 For larger backend changes, also start the app and exercise the affected flow
 manually.
