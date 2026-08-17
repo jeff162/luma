@@ -203,10 +203,15 @@ export default function ConnectionAccountMapDialog({
           </p>
         ) : (
           <div style={{ display: 'grid', gap: 0 }}>
+            {/* Sticky, and opaque so rows cannot show through it — both because the dialog body scrolls
+                now (see `AppDialog`). With thirteen provider accounts the column labels would otherwise
+                scroll away and leave a bare checkbox column with nothing naming it. The background also
+                closes a cosmetic gap with the CSV grid's header, which has had one all along. */}
             <div style={{
               display: 'grid', gridTemplateColumns: GRID,
               gap: 12, padding: '6px 4px', fontSize: 11, fontWeight: 600, color: 'var(--muted)',
               borderBottom: '1px solid var(--border)',
+              position: 'sticky', top: 0, zIndex: 1, background: 'var(--surface)',
             }}>
               <span>Account from data source</span>
               <span />
@@ -227,9 +232,13 @@ export default function ConnectionAccountMapDialog({
                 : null
 
               return (
+                // Vertical padding matches the CSV grid's row; the horizontal 4 deliberately does not
+                // (that grid uses 14). This one sits inside the dialog's own 20px body padding, so 4
+                // here reads at 24 against the panel edge — copying the 14 would indent it further from
+                // the surface than the CSV grid is from its card, not align the two.
                 <div key={externalId} style={{
                   display: 'grid', gridTemplateColumns: GRID,
-                  gap: 12, padding: '9px 4px', alignItems: 'center',
+                  gap: 12, padding: '7px 4px', alignItems: 'center',
                   borderBottom: '1px solid var(--border)',
                   opacity: entry.skip ? 0.45 : 1,
                 }}>

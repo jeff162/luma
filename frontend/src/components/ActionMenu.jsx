@@ -1,8 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import React, { useRef } from 'react'
+import React, { useLayoutEffect, useRef, useState } from 'react'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+
+// Breathing room kept between the menu and the viewport edge, and between the menu and its anchor.
+const VIEWPORT_MARGIN = 8
+const ANCHOR_GAP = 4
 
 /*
  * The shared "⋯" overflow menu: a small popover of actions anchored under the control that opened it.
@@ -19,20 +23,49 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
  * actually does the thing lives. Spending the color on recoverable actions would leave nothing to
  * distinguish the permanent ones.
  *
- * Items render in order; `separatorBefore` draws a rule above one to group them. Positioning is
- * viewport-clamped from the anchor's rect, and dismissal (outside click / Escape) is the shared
- * `useDismissibleLayer`.
+ * Items render in order; `separatorBefore` draws a rule above one to group them. Dismissal (outside
+ * click / Escape) is the shared `useDismissibleLayer`.
+ *
+ * Positioning is viewport-clamped on both axes, which they do differently. Horizontally the menu is
+ * right-aligned to the anchor and clamped against a known `minWidth`, so no measurement is needed.
+ * Vertically it has to be measured after render — height follows the caller's item count — and the
+ * menu flips above the anchor when it would otherwise run off the bottom. Clamping only the axis that
+ * needed no measurement was the original bug: a trigger near the bottom of a long list of connection
+ * cards opened its menu off-screen.
  */
 export function ActionMenu({ anchorRect, items = [], onClose, minWidth = 180, align = 'end' }) {
   const ref = useRef(null)
   useDismissibleLayer({ open: true, onClose, refs: [ref] })
+  // Below the anchor until measured. The horizontal axis needs no measurement — right-aligning to a
+  // known `minWidth` is enough — but the vertical one does: how tall the menu is depends on how many
+  // items the caller passed, so whether it fits below the trigger cannot be known before it renders.
+  const [top, setTop] = useState(() => (anchorRect ? anchorRect.bottom + ANCHOR_GAP : 0))
+
+  // Measured and corrected before paint, so the flip is never visible. `position: fixed` means the
+  // adjustment is a single style write with no reflow of anything else.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || !anchorRect) return
+    const height = el.offsetHeight
+    const below = anchorRect.bottom + ANCHOR_GAP
+    if (below + height + VIEWPORT_MARGIN <= window.innerHeight) {
+      setTop(below)
+      return
+    }
+    // Flip above the anchor — the standard behavior for a trigger near the bottom of the screen. If it
+    // does not fit there either (a long menu on a short window), sit against the bottom edge and let
+    // the menu's own `overflowY` handle the rest, which still beats rendering it off-screen.
+    const above = anchorRect.top - ANCHOR_GAP - height
+    setTop(above >= VIEWPORT_MARGIN
+      ? above
+      : Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN))
+  }, [anchorRect, items.length])
 
   if (!anchorRect) return null
   // Right-aligned to the anchor by default: the trigger sits at a card's trailing edge, so growing
   // leftward keeps the menu on screen without measuring its width.
   const rawLeft = align === 'end' ? anchorRect.right - minWidth : anchorRect.left
-  const left = Math.max(8, Math.min(rawLeft, window.innerWidth - minWidth - 8))
-  const top = anchorRect.bottom + 4
+  const left = Math.max(VIEWPORT_MARGIN, Math.min(rawLeft, window.innerWidth - minWidth - VIEWPORT_MARGIN))
 
   return (
     <div
@@ -45,6 +78,9 @@ export function ActionMenu({ anchorRect, items = [], onClose, minWidth = 180, al
         borderRadius: 8,
         padding: 4,
         boxShadow: '0 12px 36px rgba(15, 23, 42, 0.32)',
+        // Last resort for a menu taller than the window: scroll it rather than clip items away.
+        maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`,
+        overflowY: 'auto',
       }}
     >
       {items.filter(Boolean).map((item, index) => (

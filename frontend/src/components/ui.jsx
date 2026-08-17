@@ -468,12 +468,23 @@ export function AppDialog({
       pointerEvents={draggable ? 'none' : 'auto'}
       onClick={dismissOnBackdrop ? onClose : undefined}
     >
+      {/* The panel is bounded by the viewport and scrolls its BODY, never the page. Three things made a
+          tall dialog unusable before this: the backdrop is `position: fixed`, so the page behind cannot
+          scroll to reveal anything; `FloatingPanel` clips its overflow (it has to, for the rounded
+          corners); and the body had no height cap. Content taller than the screen was therefore cut off
+          with no scrollbar anywhere — silently, and only past a row count no dialog had reached yet.
+          Scrolling the body rather than the panel is what keeps the title and the action buttons pinned;
+          a dialog whose Continue button scrolls out of reach is the same bug wearing a scrollbar.
+          The 48 is `OverlayBackdrop`'s default 24px padding, top and bottom. */}
       <FloatingPanel
         ref={panelRef}
         onClick={event => event.stopPropagation()}
         style={{
           width,
           border: `1px solid ${borderColor}`,
+          maxHeight: 'calc(100vh - 48px)',
+          display: 'flex',
+          flexDirection: 'column',
           ...(draggable ? { pointerEvents: 'auto', transform: `translate(${drag.x}px, ${drag.y}px)` } : null),
           ...panelStyle,
         }}
@@ -481,7 +492,7 @@ export function AppDialog({
         {(title || description) ? (
           <FloatingPanelHeader
             onMouseDown={draggable ? startDrag : undefined}
-            style={{ padding: headerPadding, ...(draggable ? { cursor: 'move', userSelect: 'none' } : null) }}
+            style={{ padding: headerPadding, flexShrink: 0, ...(draggable ? { cursor: 'move', userSelect: 'none' } : null) }}
           >
             <div>
               {title ? <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div> : null}
@@ -494,12 +505,18 @@ export function AppDialog({
           </FloatingPanelHeader>
         ) : null}
         {children ? (
-          <div style={{ padding: bodyPadding, display: 'grid', gap: 12, ...bodyStyle }}>
+          // `minHeight: 0` is load-bearing, not defensive: a flex child's default `min-height: auto`
+          // refuses to shrink below its content, so without it the panel's maxHeight is overridden by
+          // the body and nothing scrolls at all.
+          <div style={{
+            padding: bodyPadding, display: 'grid', gap: 12,
+            overflowY: 'auto', minHeight: 0, ...bodyStyle,
+          }}>
             {children}
           </div>
         ) : null}
         {actions ? (
-          <DialogActions align={footerAlign}>
+          <DialogActions align={footerAlign} style={{ flexShrink: 0 }}>
             {actions}
           </DialogActions>
         ) : null}
