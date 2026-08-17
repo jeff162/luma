@@ -154,6 +154,12 @@ If unsure whether a comment adds value, **skip it**.
 * Keep wording direct and high-signal
 * Avoid redundancy across comments
 * Do not duplicate the same explanation in multiple places
+* **"Must" and "shall" are strong words — earn them or drop them.** In software documentation these read
+  as hard requirements, and a reader expects the consequence of breaking one to be stated. Use them where
+  something genuinely goes wrong and say what ("must not be re-offered to the loop *or it would spin on an
+  account it can no longer fetch*"). Where nothing bad happens and a thing is merely unnecessary, say that
+  instead — "intentionally does not match", "is simply not needed". Overstating turns a real constraint
+  into background noise, because a reader who finds one unearned `must` starts discounting the rest.
 
 ---
 

@@ -53,9 +53,20 @@ instruction and fix the drift rather than silently choosing the looser version.
   answer from the wrong file is worse than no answer: it looks authoritative and sends the next few
   decisions in the wrong direction.
 
-- For reproducible runtime or persisted-state bugs, prefer targeted instrumentation plus a user
-  repro over long static tracing. A confirmed repro usually localizes the issue faster and more
-  reliably.
+- **When a reporting surface reads badly, ask what it fails to record before asking how it renders.**
+  Asked why the connection sync log was "not all that useful", the first pass audited the presentation
+  of the fields already there — collapsing a repeated status, splitting a folded count, reconciling two
+  numbers. All real, and all beside the point: the log named a cause (`BUDGET_PAUSED`) whose *level*
+  lived only in a column the next sync overwrote, so no amount of formatting could make it diagnosable.
+  The rule that fell out, now in `data-model.md`: a consumable's level belongs in the record wherever its
+  effects are recorded. The habit that fell out is broader — for any diagnostic surface, enumerate what
+  the underlying record holds against what a reader needs to reconstruct the event, *then* lay it out.
+
+- **Do the systematic pass up front; drip-feeding findings is its own failure.** The cost of the above
+  was not the wrong first answer, it was surfacing one more gap per turn across four exchanges, each
+  landing as "why is this only coming up now?". If a question implies an audit, do the whole audit before
+  answering — a complete list with a recommendation is worth more than a correct partial answer, even
+  when the partial answer arrives sooner.
 
 - Never use a browser, launch the app, or run a browser-driven test (Playwright / E2E) to confirm
   your own work — hard rule in `CLAUDE.md` / `AGENTS.md`. The browser is only for diagnosing a
