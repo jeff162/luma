@@ -66,3 +66,27 @@ literal 90 would trip the cap on every request; (2) validate the returned range 
 one before recording any coverage, so a cap becomes a visible short-fetch rather than a false claim.
 Worth doing only if the request saving matters — 45 days already reaches further back than the Bridge's
 upstreams actually hold.
+
+## Timestamps are always absolute, never relative — is that right?
+
+**Raised 2026-08-17, not decided.** `formatTimestamp` (`frontend/src/lib/utils.js`) is a bare
+`toLocaleString` with numeric date + 2-digit time, so every timestamp it renders looks the same at one
+minute old and one year old:
+
+```
+1 connection · last synced 8/17/2026, 02:52 PM
+```
+
+It never becomes "2 hours ago" or "3 days ago". The user asked whether it switched to a relative form
+under 24h and to a date beyond — it does not, and the question is a fair one, because the thing a reader
+usually wants from a *freshness* line is staleness, which an absolute stamp makes them compute.
+
+**The trade.** Absolute is unambiguous and stable — it never changes under the reader, and it is the right
+form for an audit or a support paste. Relative answers the question actually being asked but goes stale on
+screen and reads badly past a few days. The common resolution is a hybrid: relative under ~24h, absolute
+beyond, with the full stamp on the `title` either way.
+
+**Why it was left alone.** `formatTimestamp` has callers beyond the connection card, and some of them
+(diagnostics, log rows, export metadata) want the absolute form unconditionally. Changing the shared
+function would change all of them at once. If picked up: survey the call sites first, and expect the
+answer to be a *second* formatter for freshness lines rather than a change to this one.

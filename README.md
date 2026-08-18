@@ -229,17 +229,20 @@ Then launch the backend and frontend together with the script for your platform:
 
 The helper scripts:
 
-- create `.env` from `.env_example` if needed
-
-- generate secure first-run values for `SESSION_SECRET`, `APP_MASTER_KEY`, and `SESSION_COOKIE_NAME`
-
 - create the backend virtual environment if needed (and rebuild it automatically if it is incomplete)
 
 - install backend and frontend dependencies
 
 - open separate backend and frontend windows
 
-After startup, review `.env` as needed to customize ports, Plaid settings, logging, or other advanced options.
+No configuration file is needed to start. Every setting has a working default, and the values that must
+persist — the session signing secret and the session cookie name — are generated on first run and kept
+in the control database. Everything relevant to everyday use is configured in the app under **Settings**,
+including data-source credentials, which are stored in the encrypted vault.
+
+An optional `.env` file overrides the handful of values that are resolved before the app is running:
+the ports, the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy `.env_example` to `.env` to use it, and
+see **Settings → Configuration** for the effective value of every setting and which layer supplied it.
 
 ## Testing
 

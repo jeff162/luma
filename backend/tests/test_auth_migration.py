@@ -29,18 +29,16 @@ def _isolated_stack():
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
-    tenant_root = Path(tmp.name) / "tenants"
-    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT)
+    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH)
     database.DB_PATH = data_path
     cdb.DB_PATH = data_path
     cdb.CONTROL_DB_PATH = control_path
-    cdb.TENANT_DATA_ROOT = tenant_root
     database.init_db(data_path)
     cdb.init_control_db()
     try:
         yield data_path
     finally:
-        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT = originals
+        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH = originals
         tmp.cleanup()
 
 
@@ -226,7 +224,7 @@ class IdentityModelTests(unittest.TestCase):
 
     def test_unset_sentinel_never_verifies(self):
         cdb.enable_auth_mode()
-        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin", use_legacy_db_if_present=True)
+        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin")
         member = cdb._create_user_with_tenant(
             "Blank", "", role="member", tenant_id=admin["tenant_id"], must_change_password=True,
         )
@@ -239,7 +237,7 @@ class IdentityModelTests(unittest.TestCase):
 
     def test_update_user_password_and_flag_semantics(self):
         cdb.enable_auth_mode()
-        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin", use_legacy_db_if_present=True)
+        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin")
         user = cdb._create_user_with_tenant("Member", "password123", role="member", tenant_id=admin["tenant_id"])
 
         cdb.update_user(user["id"], password="")
@@ -265,7 +263,7 @@ class IdentityModelTests(unittest.TestCase):
 
     def test_totp_setup_includes_qr_svg(self):
         cdb.enable_auth_mode()
-        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin", use_legacy_db_if_present=True)
+        admin = cdb._create_user_with_tenant("Admin", "password123", role="admin")
         setup = cdb.begin_totp_setup(admin["id"])
         self.assertTrue(setup["otpauth_uri"].startswith("otpauth://totp/"))
         self.assertTrue(setup["qr_svg"].startswith("data:image/svg+xml"))
@@ -280,20 +278,19 @@ class IdentityModelTests(unittest.TestCase):
 
 @contextmanager
 def _client_stack():
-    """Full-stack TestClient with both DBs isolated, tenant paths consistent, and a valid
-    SESSION_SECRET so the runtime-config gate on the auth endpoints passes."""
+    """Full-stack TestClient with both DBs isolated and tenant paths consistent. The session secret is
+    pinned rather than left to the resolver so the signing key does not depend on which temp control DB
+    happened to exist when `backend.main` was first imported."""
     from fastapi.testclient import TestClient
 
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
-    tenant_root = Path(tmp.name) / "tenants"
-    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT)
+    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH)
     prior_secret = os.environ.get("SESSION_SECRET")
     database.DB_PATH = data_path
     cdb.DB_PATH = data_path
     cdb.CONTROL_DB_PATH = control_path
-    cdb.TENANT_DATA_ROOT = tenant_root
     os.environ["SESSION_SECRET"] = "test-session-secret-that-is-long-enough-xyz"
     database.init_db(data_path)
     cdb.init_control_db()
@@ -302,7 +299,7 @@ def _client_stack():
         with TestClient(app) as client:
             yield client
     finally:
-        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT = originals
+        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH = originals
         if prior_secret is None:
             os.environ.pop("SESSION_SECRET", None)
         else:

@@ -2,160 +2,82 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Runtime environment setup and validation.
+Environment-layer primitives for application configuration.
 
-This module backs the frontend's first-run setup flow by treating `.env` as part
-of the application's persisted state: it can generate safe defaults, detect when
-a restart is still required, and separate bootstrap-critical secrets from ordinary
-environment settings like Plaid credentials.
+The environment is the outermost of three configuration layers — the layered resolver itself lives in
+`app_config.py` (hardcoded default < control-DB `app_setting` row < environment variable). This module
+carries only the pieces that layer needs *before* a database is reachable: value coercion, the built-in
+defaults, secret generation, and where the optional `.env` file is. Keeping them here rather than in the
+resolver is what lets `db/` import them without a cycle back through the control database.
+
+Nothing here writes `.env`. The file is an optional override; an install that has none is the normal
+case, and the values that must persist across restarts are stored in the control DB instead.
 """
 
 import os
 import secrets
-import shutil
 from pathlib import Path
 
-from dotenv import dotenv_values, set_key
+
+DEFAULT_APP_NAME = "Luma"
+
+# Built-in defaults, stated once. The database modules resolve their own location at import time (before
+# anything else runs, so they cannot wait for the resolver), and `app_config`'s registry reads the same
+# constants — so the default a running instance uses and the default its configuration report claims can
+# never drift apart. The database *filenames* are fixed rather than configurable: the location is what
+# distinguishes one installation's data from another's.
+DEFAULT_DATA_DIR = "."
+CONTROL_DB_FILENAME = "luma-control.db"
+DB_FILENAME = "luma-data.db"
+DEFAULT_BACKEND_PORT = "8000"
+DEFAULT_FRONTEND_PORT = "5173"
+DEFAULT_FRONTEND_DOCKER_PORT = "3000"
+DEFAULT_BACKEND_READY_TIMEOUT = "180"
+
+# Session secrets that mean "no secret". Two were shipped as placeholders in earlier `.env` templates
+# and one was the old in-code fallback; an install still carrying any of them is treated as unconfigured
+# so a real secret gets generated, rather than signing cookies with a value that is public knowledge.
+PLACEHOLDER_SESSION_SECRETS = frozenset({
+    "dev-session-secret-change-me",
+    "change_me_to_a_long_random_value",
+})
 
 
-# Display name for the application, surfaced in user-facing backend strings (the FastAPI title, the
-# Plaid Link client name, the TOTP issuer, setup messages). Overridable by env for white-labelling;
-# mirrors the frontend's build-time VITE_APP_NAME so the two stay in step.
-APP_NAME = (os.getenv("APP_NAME") or "Luma").strip() or "Luma"
+def data_dir() -> Path:
+    """Directory holding both databases, under fixed filenames. One setting rather than a path per file:
+    the databases always travel together, so a second installation wants a second directory, not two
+    renamed files.
 
-DEFAULT_SESSION_SECRET = "dev-session-secret-change-me"
-PLACEHOLDER_SESSION_SECRET = "change_me_to_a_long_random_value"
-
-
-def developer_options_enabled() -> bool:
-    """Whether the developer-options surface (extra reset tools, the connection sync diagnostics log) is
-    enabled, via the `LUMA_DEVELOPER_OPTIONS` env flag. Off by default. This is a durable operator/developer
-    surface for diagnosing data-connection behavior, not a throwaway — it just stays behind the flag so it is
-    invisible in an ordinary install. The auth status endpoint and import_export/core have their own local
-    readers of the same flag; this is the shared helper new code should use."""
-    return str(os.getenv("LUMA_DEVELOPER_OPTIONS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    `DB_PATH` / `CONTROL_DB_PATH` stay honored and still win for their own file, because fixing the
+    filenames makes a database that does *not* use the default name reachable only that way — including
+    an install carrying databases named before a rename. Dropping the per-file overrides would not
+    inconvenience such an install; it would silently create empty databases beside data that still
+    exists, which reads as total data loss. That is why this fallback is not a deprecation to clean up
+    later."""
+    return Path(os.getenv("DATA_DIR") or DEFAULT_DATA_DIR)
 
 
-def project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+def resolve_db_path() -> str:
+    explicit = (os.getenv("DB_PATH") or "").strip()
+    return str(Path(explicit)) if explicit else str(data_dir() / DB_FILENAME)
 
 
-def env_file_path() -> Path:
-    return project_root() / ".env"
+def resolve_control_db_path() -> str:
+    explicit = (os.getenv("CONTROL_DB_PATH") or "").strip()
+    return str(Path(explicit)) if explicit else str(data_dir() / CONTROL_DB_FILENAME)
 
 
-def env_example_path() -> Path:
-    return project_root() / ".env_example"
+def app_name() -> str:
+    """Display name for the application, surfaced in user-facing backend strings (the API title, the
+    provider link client name, the sign-in issuer). Overridable by env for white-labelling; mirrors the
+    frontend's build-time VITE_APP_NAME so the two stay in step.
+
+    Read at call time rather than captured at import: this module is imported during bootstrap to locate
+    the optional `.env` file, which is necessarily *before* that file has been loaded."""
+    return (os.getenv("APP_NAME") or DEFAULT_APP_NAME).strip() or DEFAULT_APP_NAME
 
 
-def default_session_cookie_name() -> str:
-    base = "".join(ch.lower() if ch.isalnum() else "_" for ch in project_root().name).strip("_")
-    return f"{base or 'luma'}_session"
-
-
-def _invalid_session_secret(value: str | None) -> bool:
-    normalized = (value or "").strip()
-    return normalized in {DEFAULT_SESSION_SECRET, PLACEHOLDER_SESSION_SECRET, ""}
-
-
-def generate_session_secret() -> str:
-    return secrets.token_urlsafe(48)
-
-
-def runtime_config_defaults() -> dict:
-    return {
-        "session_secret": generate_session_secret(),
-        "session_cookie_name": default_session_cookie_name(),
-    }
-
-
-def runtime_config_status() -> dict:
-    env_path = env_file_path()
-    configured_secret = os.getenv("SESSION_SECRET", DEFAULT_SESSION_SECRET).strip()
-    env_exists = env_path.exists()
-    env_values = dotenv_values(str(env_path)) if env_exists else {}
-    env_secret = (env_values.get("SESSION_SECRET") or "").strip()
-    # The backend can already see a valid secret written to `.env` while still running
-    # with the old placeholder in memory, which is why setup needs an explicit restart state.
-    pending_restart = _invalid_session_secret(configured_secret) and not _invalid_session_secret(env_secret)
-
-    if _invalid_session_secret(configured_secret):
-        return {
-            "ok": False,
-            "code": "session_secret_not_configured",
-            "title": "Finish environment setup",
-            "message": (
-                f"{APP_NAME} needs a unique SESSION_SECRET before this instance should be used. "
-                + (
-                    "Restart the backend to load the new settings from .env."
-                    if pending_restart else
-                    ("Create the .env file from .env.example and set SESSION_SECRET." if not env_exists else "Update SESSION_SECRET in .env to a long random value.")
-                )
-            ),
-            "env_file_present": env_exists,
-            "env_file_path": str(env_path),
-            "pending_restart": pending_restart,
-        }
-
-    return {
-        "ok": True,
-        "env_file_present": env_exists,
-        "env_file_path": str(env_path),
-        "pending_restart": False,
-    }
-
-
-def write_runtime_env(
-    *,
-    session_secret: str | None,
-    session_cookie_name: str | None = None,
-) -> dict:
-    env_path = env_file_path()
-    if not env_path.exists():
-        # First-run setup prefers copying the example file so any non-secret defaults and
-        # documentation comments survive instead of starting from an empty `.env`.
-        example_path = env_example_path()
-        if example_path.exists():
-            shutil.copyfile(example_path, env_path)
-        else:
-            env_path.write_text("", encoding="utf-8")
-
-    existing = dotenv_values(str(env_path))
-
-    existing_session_secret = (existing.get("SESSION_SECRET") or "").strip()
-    final_session_secret = (session_secret or "").strip() or existing_session_secret or generate_session_secret()
-    if _invalid_session_secret(final_session_secret):
-        raise ValueError("SESSION_SECRET must not be blank or use the example placeholder")
-
-    existing_session_cookie_name = (existing.get("SESSION_COOKIE_NAME") or "").strip()
-    final_session_cookie_name = (
-        (session_cookie_name or "").strip()
-        or existing_session_cookie_name
-        or default_session_cookie_name()
-    )
-
-    set_key(str(env_path), "SESSION_SECRET", final_session_secret)
-    set_key(str(env_path), "SESSION_COOKIE_NAME", final_session_cookie_name)
-
-    return {
-        "ok": True,
-        "env_file_path": str(env_path),
-        "restart_required": True,
-    }
-
-
-def _ensure_env_file_exists() -> Path:
-    env_path = env_file_path()
-    if not env_path.exists():
-        example_path = env_example_path()
-        if example_path.exists():
-            shutil.copyfile(example_path, env_path)
-        else:
-            env_path.write_text("", encoding="utf-8")
-    return env_path
-
-
-def _truthy_env(value: str | None, default: bool = False) -> bool:
+def truthy(value: str | None, default: bool = False) -> bool:
     normalized = (value or "").strip().lower()
     if not normalized:
         return default
@@ -166,34 +88,20 @@ def _truthy_env(value: str | None, default: bool = False) -> bool:
     return default
 
 
-def read_environment_settings() -> dict:
-    # Provider (Plaid) credentials moved to the vaulted per-provider config (services/providers/config.py,
-    # security phase 6b); the `.env` PLAID_* values survive only as a resolver bootstrap fallback and are
-    # no longer surfaced here. This endpoint now carries only the remaining `.env`-backed toggles.
-    env_path = env_file_path()
-    values = dotenv_values(str(env_path)) if env_path.exists() else {}
-
-    log_value = values.get("LUMA_USE_LOG_FILES")
-    if log_value is None:
-        log_value = os.getenv("LUMA_USE_LOG_FILES")
-
-    return {
-        "luma_use_log_files": _truthy_env(log_value, default=False),
-        "env_file_present": env_path.exists(),
-        "env_file_path": str(env_path),
-    }
+def project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
 
-def write_environment_settings(
-    *,
-    luma_use_log_files: bool | None,
-) -> dict:
-    env_path = _ensure_env_file_exists()
+def env_file_path() -> Path:
+    """The optional override file. `LUMA_ENV_FILE` redirects it — the Playwright E2E harness points it at
+    an isolated file so its throwaway database paths take effect without touching the real one."""
+    override = os.getenv("LUMA_ENV_FILE")
+    return Path(override) if override else project_root() / ".env"
 
-    if luma_use_log_files is not None:
-        set_key(str(env_path), "LUMA_USE_LOG_FILES", "true" if luma_use_log_files else "false")
 
-    return {
-        "settings": read_environment_settings(),
-        "restart_required": True,
-    }
+def generate_session_secret() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def is_placeholder_session_secret(value: str | None) -> bool:
+    return (value or "").strip() in PLACEHOLDER_SESSION_SECRETS

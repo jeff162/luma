@@ -3,7 +3,7 @@ App-level provider credentials in the vault (phase 6b-1): the Plaid client_id/se
 `.env` into the vaulted `provider_config` table.
 
 Pins the edges: only the secret is vaulted (client_id/env plaintext, secret never returned by status);
-the resolver prefers a saved row and falls back to the `.env` bootstrap; saving a secret needs an
+the saved row is the only source, so environment credentials are ignored; saving a secret needs an
 unlocked vault while client_id/env alone do not; the Configure endpoints round-trip; the Production gate
 holds; and app credentials ride the credentials backup.
 """
@@ -32,18 +32,16 @@ def _isolated_stack():
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
-    tenant_root = Path(tmp.name) / "tenants"
-    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT)
+    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH)
     database.DB_PATH = data_path
     cdb.DB_PATH = data_path
     cdb.CONTROL_DB_PATH = control_path
-    cdb.TENANT_DATA_ROOT = tenant_root
     database.init_db(data_path)
     cdb.init_control_db()
     try:
         yield data_path
     finally:
-        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT = originals
+        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH = originals
         tmp.cleanup()
 
 
@@ -88,12 +86,8 @@ class ProviderConfigServiceTests(unittest.TestCase):
         self.alice = cdb.create_local_identity("alice")["id"]
         cs.set_passphrase(self.alice, STRONG_PASSPHRASE)  # configures + unlocks
         self.user = {"id": self.alice}
-        # Neutralize any PLAID_* the developer may have exported, so DB-vs-fallback is deterministic.
-        self._noenv = mock.patch.object(provider_config, "_env_fallback", return_value=None)
-        self._noenv.start()
 
     def tearDown(self):
-        self._noenv.stop()
         cs.lock_all()
         self._stack.__exit__(None, None, None)
 
@@ -125,36 +119,25 @@ class ProviderConfigServiceTests(unittest.TestCase):
         with self.assertRaises(cs.VaultLocked):
             provider_config.set_provider_config(self.user, "plaid", secret="sek")
 
-    def test_env_fallback_when_no_db_row(self):
-        self._noenv.stop()  # exercise the real _env_fallback
-        try:
-            with mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek", "PLAID_ENV": "sandbox"}):
-                self.assertEqual(
-                    resolve_app_config(self.user, "plaid"),
-                    {"client_id": "envcid", "secret": "envsek", "env": "sandbox"},
-                )
-                self.assertEqual(provider_config.get_provider_config_status("plaid")["source"], "env")
-        finally:
-            self._noenv.start()
+    def test_the_saved_row_is_the_only_source(self):
+        # The `.env` bootstrap (PLAID_*) is gone: environment credentials are ignored outright, so a
+        # plaintext secret sitting in a file can never stand in for the vaulted one.
+        with mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek", "PLAID_ENV": "sandbox"}):
+            self.assertIsNone(resolve_app_config(self.user, "plaid"))
+            status = provider_config.get_provider_config_status("plaid")
+            self.assertFalse(status["configured"])
+            self.assertIsNone(status["source"])
 
-    def test_db_row_wins_over_env(self):
-        self._noenv.stop()
-        try:
             provider_config.set_provider_config(self.user, "plaid", client_id="dbcid", secret="dbsek", env="sandbox")
-            with mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek"}):
-                self.assertEqual(resolve_app_config(self.user, "plaid")["secret"], "dbsek")
-        finally:
-            self._noenv.start()
+            self.assertEqual(resolve_app_config(self.user, "plaid")["secret"], "dbsek")
+            self.assertEqual(provider_config.get_provider_config_status("plaid")["source"], "vault")
 
 
 class ProviderConfigEndpointTests(unittest.TestCase):
     def setUp(self):
         cs.lock_all()
-        self._noenv = mock.patch.object(provider_config, "_env_fallback", return_value=None)
-        self._noenv.start()
 
     def tearDown(self):
-        self._noenv.stop()
         cs.lock_all()
 
     def test_list_and_get_unconfigured(self):
@@ -229,20 +212,15 @@ class ProviderConfigEndpointTests(unittest.TestCase):
             self.assertEqual(r.status_code, 409)
             self.assertEqual(r.json()["detail"]["code"], "no_secret")
 
-    def test_reveal_of_an_env_secret_needs_no_unlock(self):
-        # Nothing is encrypted in the `.env` bootstrap case, and the value is already readable by anyone
-        # who can read the file — so requiring an unlock here would gate nothing.
-        self._noenv.stop()
-        try:
-            with api_client() as (client, _), \
-                    mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek"}):
-                cs.lock_all()
-                r = client.get("/api/providers/plaid/secret")
-                self.assertEqual(r.status_code, 200, r.text)
-                self.assertEqual(r.json()["secret"], "envsek")
-                self.assertEqual(r.json()["source"], "env")
-        finally:
-            self._noenv.start()
+    def test_reveal_ignores_environment_credentials(self):
+        # There is no unlock-free path to a secret any more: with the bootstrap gone, a locked vault has
+        # nothing to fall back to, so PLAID_* in the environment cannot produce one.
+        with api_client() as (client, _), \
+                mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek"}):
+            cs.lock_all()
+            r = client.get("/api/providers/plaid/secret")
+            self.assertEqual(r.status_code, 409)
+            self.assertEqual(r.json()["detail"]["code"], "no_secret")
 
     def test_reveal_of_an_unknown_provider_is_404(self):
         with api_client() as (client, _):

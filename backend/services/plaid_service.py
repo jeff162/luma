@@ -26,7 +26,7 @@ from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 
-from backend.runtime_config import APP_NAME
+from backend.runtime_config import app_name
 
 
 _ENV_MAP = {
@@ -61,7 +61,7 @@ def create_link_token(app_config: dict, user_id: str = "local-user") -> str:
     client  = _get_client(app_config)
     request = LinkTokenCreateRequest(
         products=[Products("transactions")],
-        client_name=APP_NAME,
+        client_name=app_name(),
         country_codes=[CountryCode("US")],
         language="en",
         user=LinkTokenCreateRequestUser(client_user_id=user_id),

@@ -102,12 +102,8 @@ export const api = {
   loadDemoData: () => request('/auth/demo-data', { method: 'POST' }),
   getDemoDataStatus: () => request('/auth/demo-data'),
   clearDemoData: () => request('/auth/demo-data/clear', { method: 'POST' }),
-  getRuntimeConfigDefaults: () => request('/auth/runtime-config/defaults'),
-  saveRuntimeConfig: (data) =>
-    request('/auth/runtime-config', { method: 'POST', body: JSON.stringify(data) }),
-  getEnvironmentSettings: () => request('/auth/environment'),
-  saveEnvironmentSettings: (data) =>
-    request('/auth/environment', { method: 'POST', body: JSON.stringify(data) }),
+  getEffectiveConfig: () => request('/auth/config'),
+  resetConfigValue: (key) => request(`/auth/config/${encodeURIComponent(key)}/reset`, { method: 'POST' }),
   savePasswordPolicy: (policy) =>
     request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveSecurityProfile: (profile) =>

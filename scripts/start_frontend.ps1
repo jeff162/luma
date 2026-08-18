@@ -9,7 +9,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 $frontendDir = Join-Path $rootDir 'frontend'
 $envPath = Join-Path $rootDir '.env'
-$envExamplePath = Join-Path $rootDir '.env_example'
 
 function Get-EnvValue([string]$Path, [string]$Key) {
   if (-not (Test-Path $Path)) { return $null }
@@ -43,11 +42,6 @@ if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
     Remove-Item -LiteralPath $LogPath -Force
   }
   Start-Transcript -Path $LogPath -Force | Out-Null
-}
-
-if (-not (Test-Path $envPath) -and (Test-Path $envExamplePath)) {
-  Copy-Item -LiteralPath $envExamplePath -Destination $envPath
-  Write-Host "Created .env from .env_example"
 }
 
 $frontendPort = Get-EnvValue $envPath 'FRONTEND_PORT'

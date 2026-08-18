@@ -296,8 +296,7 @@ def get_secret(provider: str, request: Request):
     in a response the user explicitly asked for.
 
     Reuses `resolve_app_config` — the same decryption path a sync takes — so there is one way to turn a
-    stored credential back into plaintext. A `.env`-sourced secret needs no unlock: nothing is encrypted,
-    and it is already readable by anyone who can read the file.
+    stored credential back into plaintext, and the vault gate cannot be bypassed by asking here.
     """
     _require_admin_or_local(request)
     _validate_provider(provider)

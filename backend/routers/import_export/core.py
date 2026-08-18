@@ -48,6 +48,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Req
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from backend import app_config
 from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
@@ -167,12 +168,8 @@ IMPORT_EVIDENCE_HEADER_KEYWORDS = (
 )
 
 
-def _developer_options_enabled() -> bool:
-    return str(os.getenv("LUMA_DEVELOPER_OPTIONS", "")).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _require_developer_access(request: Request):
-    if not _developer_options_enabled():
+    if not app_config.developer_options_enabled():
         raise HTTPException(status_code=404, detail="Developer options are not enabled")
     # Identity is uniform in both modes now: the middleware resolves the session identity onto
     # request.state.user (perimeter on or off), so there is no separate local-profile header path.

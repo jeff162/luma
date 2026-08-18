@@ -25,11 +25,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import DB_PATH, get_db, init_db
-from backend.runtime_config import APP_NAME
+from backend.runtime_config import app_name, resolve_control_db_path
 
 
-CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "luma-control.db")))
-TENANT_DATA_ROOT = Path(os.getenv("TENANT_DATA_ROOT", "data"))
+CONTROL_DB_PATH = resolve_control_db_path()
 PASSWORD_ITERATIONS = 600_000
 TOTP_PERIOD = 30
 RECOVERY_CODE_COUNT = 8
@@ -150,7 +149,8 @@ def verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
     return False
 
 
-def build_totp_uri(username: str, secret: str, issuer: str = APP_NAME) -> str:
+def build_totp_uri(username: str, secret: str, issuer: str | None = None) -> str:
+    issuer = issuer or app_name()
     label = urllib.parse.quote(f"{issuer}:{username}")
     issuer_q = urllib.parse.quote(issuer)
     return f"otpauth://totp/{label}?secret={secret}&issuer={issuer_q}&algorithm=SHA1&digits=6&period={TOTP_PERIOD}"
@@ -314,6 +314,11 @@ def set_app_setting(key: str, value: str):
         )
 
 
+def delete_app_setting(key: str):
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM app_setting WHERE key = ?", (key,))
+
+
 def _existing_shared_tenant_id() -> str | None:
     """The one shared workspace tenant, if any exists. There is a single workspace, so a new identity
     must adopt it rather than mint a second tenant (which would collide on the unique `tenant.db_path`).
@@ -373,7 +378,6 @@ def _unify_local_profiles_into_users():
             display_name=name,
             role="member",
             allow_unset_password=True,
-            use_legacy_db_if_present=(shared_tenant_id is None),
             tenant_id=shared_tenant_id,
         )
         if shared_tenant_id is None:
@@ -413,7 +417,6 @@ def create_local_identity(name: str) -> dict:
         display_name=normalized,
         role="member",
         allow_unset_password=True,
-        use_legacy_db_if_present=(shared_tenant_id is None),
         tenant_id=shared_tenant_id,
     )
 
@@ -478,12 +481,12 @@ def security_profile_guidance(profile: str | None = None) -> dict:
     normalized = profile or get_security_profile()
     if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
         return {
-            "summary": f"The {APP_NAME} backend runs on a computer on your network, and you and anyone you allow reach it from a browser on another device.",
+            "summary": f"The {app_name()} backend runs on a computer on your network, and you and anyone you allow reach it from a browser on another device.",
             "recommended_auth": True,
             "suggested_password_policy": PASSWORD_POLICY_MIN_8,
         }
     return {
-        "summary": f"{APP_NAME} runs on this one computer and you use it right here. Nothing else connects to it.",
+        "summary": f"{app_name()} runs on this one computer and you use it right here. Nothing else connects to it.",
         "recommended_auth": False,
         "suggested_password_policy": PASSWORD_POLICY_NONE,
     }
@@ -554,23 +557,12 @@ def disable_auth_mode():
     set_app_setting("auth_enabled", "0")
 
 
-def _legacy_db_path() -> str:
+def _workspace_db_path() -> str:
+    """The one financial database every identity shares. There is a single workspace: identities are rows
+    in the control DB and all adopt the configured database, so creating the tenant record resolves to the
+    configured path rather than minting a file per identity. Enabling sign-in therefore adopts the
+    existing data in place instead of stranding it in an unused file."""
     return str(Path(DB_PATH))
-
-
-def _tenant_db_filename() -> str:
-    return Path(DB_PATH).name or "luma-data.db"
-
-
-def _default_tenant_db_path(tenant_id: str) -> str:
-    legacy_path = Path(_legacy_db_path())
-    if legacy_path.exists():
-        # Bootstrap can adopt the pre-auth single-user database in place so enabling auth
-        # does not strand the user's existing data in an unused legacy file.
-        return str(legacy_path)
-    tenant_root = TENANT_DATA_ROOT / tenant_id
-    tenant_root.mkdir(parents=True, exist_ok=True)
-    return str(tenant_root / _tenant_db_filename())
 
 
 def _create_user_with_tenant(
@@ -578,7 +570,6 @@ def _create_user_with_tenant(
     password: str,
     display_name: str | None = None,
     role: str = "member",
-    use_legacy_db_if_present: bool = False,
     tenant_id: str | None = None,
     must_change_password: bool = False,
     allow_unset_password: bool = False,
@@ -618,12 +609,12 @@ def _create_user_with_tenant(
             if not tenant:
                 raise ValueError("tenant not found")
         else:
-            # Creating a user without an explicit tenant usually means bootstrap or the admin
-            # is provisioning a new isolated workspace, so the tenant record and DB are created together.
+            # No tenant yet: this is the first identity on this control DB (bootstrap, or the first
+            # local profile). It gets the tenant record pointing at the one workspace database.
             resolved_tenant_id = str(uuid.uuid4())
             tenant_name = user_display_name
             base_slug = _tenant_slug(clean_username)
-            db_path = _default_tenant_db_path(resolved_tenant_id) if use_legacy_db_if_present else str(TENANT_DATA_ROOT / resolved_tenant_id / _tenant_db_filename())
+            db_path = _workspace_db_path()
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             init_db(db_path)
             slug = _unique_tenant_slug(conn, base_slug)
@@ -663,7 +654,6 @@ def create_initial_user(username: str, password: str, display_name: str | None =
         password=password,
         display_name=display_name,
         role="admin",
-        use_legacy_db_if_present=True,
     )
 
 
@@ -1181,7 +1171,6 @@ def create_user(
         password=password,
         display_name=display_name,
         role=role,
-        use_legacy_db_if_present=False,
         tenant_id=tenant_id,
     )
 

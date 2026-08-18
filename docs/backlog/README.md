@@ -145,13 +145,13 @@ delete the backlog file.
   *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a **single-user desktop**
   shape (pywebview / Tauri / Electron / browser-launcher), the shared `StaticFiles` SPA-serving addition,
   and the pywebview Python/OS-webview install requirements (WebKitGTK on Linux is the wrinkle).
-- [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **parked, not started
-  (2026-08-01).** Make `.env` **optional** via layered precedence (defaults < DB-backed settings < env
-  override) — a plain single-user install needs no `.env`. Most settings move into `app_setting`; the
-  irreducible env core is DB paths / bind port / shell-launcher knobs (the "two instances on one host"
-  case). `SESSION_SECRET` auto-generates+persists (startup-ordering wrinkle in `main.py`);
-  `SESSION_COOKIE_SECURE` stays env-first; `LUMA_DEVELOPER_OPTIONS` stays env-only by design;
-  `LUMA_EXPERIMENTAL_*` likely retires with the security project. Independent of phases 4–6.
+- [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
+  `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
+  secret generated and stored in the control DB on first run, the blocking first-run setup screen and the
+  `.env`-writing endpoints removed, and the launchers no longer creating the file. The irreducible env
+  core is DB paths / ports / launcher knobs / the developer gate (the "two installations on one host"
+  case). Settings → Configuration reports every effective value and its layer. The doc keeps the
+  decisions and one deliberate follow-up (an mDNS service name, env-only like the ports).
 - [i18n-display-formatting.md](i18n-display-formatting.md) — **deferred.** Tier-1 currency-symbol +
   number/date **formatting** (not translation): a display bucket (cosmetic) and a free-text-parse bucket
   (the quick-filter date/amount ambiguity — the only correctness risk).

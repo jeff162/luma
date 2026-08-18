@@ -151,6 +151,25 @@ Shared controls should be treated as finished product surfaces, not reused snip
 
 - Transaction troubleshooting can temporarily repurpose a less-critical column, such as Category, for debug context like the import-file source, but it should not displace the primary merchant label. Prefer a tucked-away header action such as a context menu over a persistent page-level button for these uncommon views, and reuse the same file-detail drill-in wherever an import file source is shown.
 
+- **A rare action must not outweigh the state it sits beside.** Where a row carries both a status and an
+  action, the status is what every row has and the reason the row is read at all; the action is often one
+  most installations will never take. Give the action *less* visual weight than the status — same shape,
+  smaller — rather than reaching for the shared `Button`, whose default size makes the rarest thing in the
+  row the loudest. Two things follow. A control taller than the status chip beside it also sets the row's
+  baseline, so an action added to some rows and not others silently knocks those rows' text out of
+  alignment with the rest. And a verb alone (**Reset**, **Regenerate**) rarely says *when* someone would
+  want it, so carry the reason in a hint rather than in the label. The Settings → Configuration rows are
+  the reference.
+
+- **Columns only line up across rows if the rows share a track definition.** A list of independently
+  styled row "cards" — each its own `display: grid` so it can carry its own background, padding, and
+  indent — computes `max-content` per row, so every row places its second column wherever *its* label
+  happens to end, and the list reads as ragged. Either give the rows one shared width (a named constant,
+  sized for the longest label, with `minmax(0, …)` so a narrow container shrinks them together) or use
+  the content-sized template only where a single grid spans every row (the tag rows on Settings). An
+  indented child row must give back exactly its indent from the label column, or everything to its right
+  sits one indent off the lines the rest of the list shares.
+
 ## Page structure
 
 Most pages should follow this structure:

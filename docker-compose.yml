@@ -5,11 +5,12 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./data:/data
+    # Optional: an override file is honored when present, but the app runs on defaults without one.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      DB_PATH: /data/luma-data.db
-      CONTROL_DB_PATH: /data/luma-control.db
+      DATA_DIR: /data
     restart: unless-stopped
 
   frontend:

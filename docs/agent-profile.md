@@ -48,10 +48,12 @@ instruction and fix the drift rather than silently choosing the looser version.
   UI change done without re-reading the sentence that asked for it. Each cost a user round trip that
   reading for thirty seconds would have saved.
 
-- **Check which database the app is actually pointed at before querying live state.** `.env` carries
-  `DB_PATH` / `CONTROL_DB_PATH`, and they routinely differ from the repo-root defaults. A live-state
-  answer from the wrong file is worse than no answer: it looks authoritative and sends the next few
-  decisions in the wrong direction.
+- **Check which database the app is actually pointed at before querying live state.** The defaults put
+  both databases in the working directory, but `.env` is an *override* file that may or may not exist —
+  and where it does, `DB_PATH` / `CONTROL_DB_PATH` routinely differ from those defaults. Read the file
+  (or Settings → Configuration) rather than assuming either shape. A live-state answer from the wrong
+  file is worse than no answer: it looks authoritative and sends the next few decisions in the wrong
+  direction.
 
 - **When a reporting surface reads badly, ask what it fails to record before asking how it renders.**
   Asked why the connection sync log was "not all that useful", the first pass audited the presentation
@@ -202,8 +204,10 @@ instruction and fix the drift rather than silently choosing the looser version.
   the HTTP layer.
 
 - **A test that depends on an env flag must pin it, never inherit it.** Any test importing
-  `backend.main` runs `load_dotenv()`, which puts the developer's own `.env` into `os.environ` for the
-  whole session — so a flag set locally silently reaches every test that runs after it. The failure
+  `backend.main` runs `load_dotenv()`, which puts whatever the developer's own `.env` holds into
+  `os.environ` for the whole session — so a value set locally silently reaches every test that runs
+  after it. This bites assertions about *absence* just as hard: "no override is set" has to be made
+  true by clearing the variable, not assumed from a clean-looking default. The failure
   shape is nasty: the test passes in isolation, fails only in a full-suite run, and in between has been
   asserting the *opposite* of what it claims. Wrap the flag with `mock.patch.dict(os.environ, ...)` in
   `setUp` and assert both directions where the behavior is supposed to be flag-independent.

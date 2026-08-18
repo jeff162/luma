@@ -58,9 +58,20 @@ npm install
 npm run dev
 ```
 
-Ports come from the repo-root `.env` (`BACKEND_PORT`, `FRONTEND_PORT`); the launcher scripts read them
-and fall back to 8000 and 5173. A hand-run `uvicorn` does not read `.env` for its port, so pass the same
-value `.env` sets or the frontend will call a backend that is not there.
+No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the
+working directory), and the session secret is generated on first run into the control database. A
+repo-root `.env` is the override mechanism, and is what most contributors will want for a second
+checkout: `BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
+and `DATA_DIR` keeps the two checkouts off each other's data. A hand-run `uvicorn`
+does not read `.env` for its port, so pass the same value `.env` sets or the frontend will call a
+backend that is not there. **Settings → Configuration** lists every effective value and its source.
+
+`LUMA_ENV_FILE` points the backend at a different override file, and is set in the environment rather
+than in one (it chooses which file is read, so it cannot live inside the file). It redirects **the backend
+only** — `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly
+for their ports — so it is the right tool for pointing a backend at a throwaway database, which is exactly
+what `scripts/run-e2e-backend.sh` uses it for, and the wrong one for switching between whole
+configurations. Switching those means choosing which file *is* `.env`.
 
 Many contributors may use WSL on Windows, so shell examples and local tooling should stay WSL-friendly where practical.
 
@@ -99,7 +110,8 @@ changing — or answering questions about — shared systems, persistence, invar
 
 ### Developer flag
 
-Set in `.env` to expose Developer options on the main Settings page:
+Environment-only by design — it gates destructive reset tooling, so it is not an in-app toggle. Set it
+in `.env` (or the shell) to expose Developer options on the main Settings page:
 
 ```bash
 LUMA_DEVELOPER_OPTIONS=true
@@ -146,9 +158,10 @@ browser accessibility audits. Run `npm run ui:test:a11y` when you want the
 focused form-label/id sweep, or `npm run ui:test:all` to run both lanes
 together.
 
-The Playwright config reads the frontend dev-server port from the repo-root
-`.env` via `FRONTEND_PORT`. If needed, `PLAYWRIGHT_BASE_URL` can override the
-target URL explicitly for one run.
+The Playwright config pins its own ports (frontend 5199, backend 8099) and
+runs against an isolated backend with throwaway databases, so it is unaffected
+by a local `.env`. If needed, `PLAYWRIGHT_BASE_URL` can override the target URL
+explicitly for one run.
 
 ## Hooks and lint
 

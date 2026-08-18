@@ -67,18 +67,16 @@ def _isolated_stack():
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
-    tenant_root = Path(tmp.name) / "tenants"
-    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT)
+    originals = (database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH)
     database.DB_PATH = data_path
     cdb.DB_PATH = data_path
     cdb.CONTROL_DB_PATH = control_path
-    cdb.TENANT_DATA_ROOT = tenant_root
     database.init_db(data_path)
     cdb.init_control_db()
     try:
         yield
     finally:
-        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH, cdb.TENANT_DATA_ROOT = originals
+        database.DB_PATH, cdb.DB_PATH, cdb.CONTROL_DB_PATH = originals
         tmp.cleanup()
 
 

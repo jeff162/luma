@@ -13,7 +13,6 @@ CURRENT_VERSION); future schema changes register migrations from there.
 """
 
 import json
-import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -21,8 +20,9 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from backend.app_logging import log_info
+from backend.runtime_config import resolve_db_path
 
-DB_PATH = os.getenv("DB_PATH", "luma-data.db")
+DB_PATH = resolve_db_path()
 _current_db_path: ContextVar[str | None] = ContextVar("luma_current_db_path", default=None)
 SHARED_OWNER_ID = "shared-owner"
 SHARED_OWNER_NAME = "shared"

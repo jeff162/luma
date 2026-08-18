@@ -30,9 +30,10 @@ path. Pick-up-cold summary below; build phases at the end.
   profile" below. The `security_profile` app-setting (`local_private`/`network_private`) is demoted to a
   stopgap until per-request detection (phase 3) lands.
 - **One shared workspace, multiple login identities.** This is already the shape of the code — members
-  are provisioned into the one admin tenant and share one data DB. Per-tenant DB routing
-  (`set_current_db_path`, `TENANT_DATA_ROOT/<tenant_id>/`) stays as **dormant plumbing**; we stop
-  offering to spin up new tenants but don't rip the routing out (excising it is risky, low-value).
+  are provisioned into the one admin tenant and share one data DB. Per-request DB routing
+  (`set_current_db_path`, driven by the tenant row's `db_path`) stays as **dormant plumbing**; we stop
+  offering to spin up new tenants but don't rip the routing out (excising it is risky, low-value). The
+  per-tenant *directory* it once implied is gone — see `optional-env-and-layered-config.md`.
 - **What the three concepts are actually *for* (they have unrelated causes — don't couple them):**
   *multiple users* exist to scope **per-user app preferences**, nothing more; *inviting* someone exists
   so each account holder personally authorizes **their own banks** (Plaid Link) into the shared vault;
@@ -799,7 +800,8 @@ premise was wrong.
 6b-1. **[DONE]** **App-level provider credentials into the vault (backend).** New data-DB `provider_config`
    table (`provider` PK, `client_id`/`env` plaintext, `secret_enc` vault-encrypted under an
    `app_credential|<provider>|secret` AAD). `crypto_service.encrypt/decrypt_app_credential`; a
-   `providers.config` service with `resolve_app_config` (a saved row wins, else the `.env` `PLAID_*`
+   `providers.config` service with `resolve_app_config` (a saved row wins, and — until the fallback was
+   retired on 2026-08-18 — else the `.env` `PLAID_*`
    **bootstrap fallback**, so pre-6b installs keep working untouched) + `set_provider_config`/
    `get_provider_config_status` (secret is **write-only** — status never returns it). Every adapter method
    now takes the resolved `app_config` (no adapter reads `os.environ`); `plaid_service` builds its client

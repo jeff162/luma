@@ -9,18 +9,12 @@ This router serves one frontend in two modes:
 """
 
 import json
-import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.runtime_config import (
-    read_environment_settings,
-    runtime_config_defaults,
-    runtime_config_status,
-    write_environment_settings,
-    write_runtime_env,
-)
+from backend import app_config
+from backend.runtime_config import env_file_path
 from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
@@ -69,17 +63,6 @@ from backend import transport
 
 
 router = APIRouter()
-
-
-def _truthy_env(value: str | None, default: bool = False) -> bool:
-    normalized = (value or "").strip().lower()
-    if not normalized:
-        return default
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 class LoginRequest(BaseModel):
@@ -154,17 +137,6 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
-class RuntimeConfigRequest(BaseModel):
-    session_secret: str | None = None
-    session_cookie_name: str | None = None
-
-
-class EnvironmentSettingsRequest(BaseModel):
-    # Provider (Plaid) credentials moved to the vaulted per-provider config (see routers/providers.py,
-    # security phase 6b); this endpoint now carries only the remaining `.env`-backed toggles.
-    luma_use_log_files: bool | None = None
-
-
 class PasswordPolicyRequest(BaseModel):
     policy: str
 
@@ -199,13 +171,6 @@ def _require_admin(request: Request):
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
-
-
-def _ensure_runtime_config_ok():
-    status = runtime_config_status()
-    if not status["ok"]:
-        raise HTTPException(status_code=503, detail=status["message"])
-    return status
 
 
 def _require_admin_or_local(request: Request):
@@ -270,18 +235,10 @@ def _auth_status_payload(request: Request | None = None) -> dict:
     security_guidance = security_profile_guidance(security_profile)
     with get_db() as conn:
         db_instance_id = get_db_instance_id(conn)
-    experimental_security_settings = _truthy_env(
-        os.getenv("LUMA_EXPERIMENTAL_SECURITY_SETTINGS"),
-        default=False,
-    )
-    developer_options_enabled = _truthy_env(
-        os.getenv("LUMA_DEVELOPER_OPTIONS"),
-        default=False,
-    )
+    developer_options_enabled = app_config.developer_options_enabled()
     payload = {
         "auth_enabled": enabled,
         "needs_bootstrap": enabled and bootstrap_required(),
-        "runtime_config": runtime_config_status(),
         "password_policy": password_policy,
         "password_policy_label": password_policy_label(password_policy),
         "security_profile": security_profile,
@@ -290,7 +247,6 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "security_profile_summary": security_guidance["summary"],
         "security_profile_recommended_auth": security_guidance["recommended_auth"],
         "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
-        "experimental_security_settings": experimental_security_settings,
         "developer_options_enabled": developer_options_enabled,
         "db_instance_id": db_instance_id,
     }
@@ -468,45 +424,32 @@ def clear_demo_data_endpoint():
     return {"ok": True}
 
 
-@router.post("/runtime-config")
-def configure_runtime_config(body: RuntimeConfigRequest):
-    if runtime_config_status()["ok"]:
-        raise HTTPException(status_code=403, detail="Runtime config is already initialized")
-    try:
-        result = write_runtime_env(
-            session_secret=body.session_secret,
-            session_cookie_name=body.session_cookie_name,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return result
-
-
-@router.get("/runtime-config/defaults")
-def get_runtime_config_defaults():
-    if runtime_config_status()["ok"]:
-        raise HTTPException(status_code=403, detail="Runtime config is already initialized")
-    return runtime_config_defaults()
-
-
-@router.get("/environment")
-def get_environment_settings(request: Request):
+@router.post("/config/{key}/reset")
+def reset_config_value(key: str, request: Request):
+    """Forget a stored configuration value so its default applies again after a restart. Both settings
+    this can reach (the session secret, the session cookie name) generate or derive themselves, so this
+    is a reset rather than an edit."""
     _require_admin_or_local(request)
-    return read_environment_settings()
-
-
-@router.post("/environment")
-def save_environment_settings(body: EnvironmentSettingsRequest, request: Request):
-    _require_admin_or_local(request)
-    # Provider credentials + the Production vault gate moved to the per-provider Configure card
-    # (POST /api/providers/{provider}/config); this endpoint now carries only the `.env`-backed toggles.
     try:
-        result = write_environment_settings(
-            luma_use_log_files=body.luma_use_log_files,
-        )
+        return app_config.clear_stored_value(key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown setting")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return result
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/config")
+def get_effective_config(request: Request):
+    """The resolved configuration and, for each value, which layer supplied it. Read-only by design:
+    the settings that can be changed in the app have their own endpoints, and the rest are consumed
+    before the app exists (ports, database locations), so this exists to answer "what is in effect and
+    where did it come from" rather than to edit anything."""
+    _require_admin_or_local(request)
+    return {
+        "settings": app_config.effective_config(),
+        "env_file_path": str(env_file_path()),
+        "env_file_present": env_file_path().exists(),
+    }
 
 
 @router.post("/password-policy")
@@ -559,7 +502,6 @@ def suppress_https_warning(body: HttpsWarningSuppressRequest, request: Request):
 
 @router.post("/enable")
 def enable_auth(body: EnableAuthRequest, request: Request):
-    _ensure_runtime_config_ok()
     if not body.enabled:
         raise HTTPException(status_code=400, detail="Use /auth/disable to turn sign-in protection off")
     if auth_required():
@@ -599,7 +541,6 @@ def disable_auth(request: Request):
     # Turning the perimeter off reopens network access and drops sign-in, so it is admin-gated. Identities
     # and their password hashes are preserved (dormant), so re-enabling is seamless. The acting admin
     # stays signed in as a now-perimeter-off (pwless) identity.
-    _ensure_runtime_config_ok()
     if not auth_required():
         return _auth_status_payload(request)
     _require_admin(request)
@@ -612,7 +553,6 @@ def disable_auth(request: Request):
 
 @router.post("/bootstrap")
 def bootstrap(body: BootstrapRequest, request: Request):
-    _ensure_runtime_config_ok()
     if not auth_required():
         raise HTTPException(status_code=400, detail="Auth is not enabled for this instance")
     try:
@@ -627,7 +567,6 @@ def bootstrap(body: BootstrapRequest, request: Request):
 
 @router.post("/login")
 def login(body: LoginRequest, request: Request):
-    _ensure_runtime_config_ok()
     if not auth_required():
         # Perimeter off: there is no password login — identities are chosen via /auth/select-identity.
         raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
@@ -664,7 +603,6 @@ def change_password(body: PasswordChangeRequest, request: Request):
     # Completes a forced password change begun at login (must_change_password / claim). The pending user
     # is held in the session between the two calls; setting a valid password clears the flag and either
     # continues to 2FA or completes sign-in.
-    _ensure_runtime_config_ok()
     pending_user_id = request.session.get("pending_password_change_user_id")
     if not pending_user_id:
         raise HTTPException(status_code=400, detail="No pending password change")
@@ -700,7 +638,6 @@ def logout(request: Request):
 
 @router.post("/2fa/verify")
 def verify_2fa(body: TotpVerifyRequest, request: Request):
-    _ensure_runtime_config_ok()
     if not auth_required():
         raise HTTPException(status_code=400, detail="Auth is not enabled for this instance")
     pending_user_id = request.session.get("pending_user_id")

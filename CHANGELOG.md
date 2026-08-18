@@ -13,7 +13,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Auth system — optional multi-user mode with session-based login and 2FA
 - Docker support via `docker-compose.yml`
-- Nightly sync via `scripts/sync.sh` (cron-compatible)
 
 ### Removed
 

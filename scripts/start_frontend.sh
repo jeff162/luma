@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 ENV_PATH="$ROOT_DIR/.env"
-ENV_EXAMPLE_PATH="$ROOT_DIR/.env_example"
 LOG_PATH="${LUMA_LOG_PATH:-}"
 SYSTEM_PYTHON=""
 
@@ -24,11 +23,6 @@ elif command -v python >/dev/null 2>&1; then
 else
   echo "Python was not found. Install Python 3.12+ and try again."
   exit 1
-fi
-
-if [[ ! -f "$ENV_PATH" && -f "$ENV_EXAMPLE_PATH" ]]; then
-  cp "$ENV_EXAMPLE_PATH" "$ENV_PATH"
-  echo "Created .env from .env_example"
 fi
 
 get_env_value() {

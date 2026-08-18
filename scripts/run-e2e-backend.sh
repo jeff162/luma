@@ -15,19 +15,19 @@ E2E_DIR="$ROOT_DIR/backend/.e2e-tmp"
 PORT="${E2E_BACKEND_PORT:-8099}"
 
 rm -rf "$E2E_DIR"
-mkdir -p "$E2E_DIR/tenants"
+mkdir -p "$E2E_DIR"
 
-# main.py loads its .env with override=True, so the repo .env's CONTROL_DB_PATH / TENANT_DATA_ROOT
-# would otherwise clobber any env vars we export here. Instead we hand main.py an ISOLATED env file
-# (via LUMA_ENV_FILE) whose throwaway paths win, fully isolating every DB from the real data.
+# main.py loads its .env with override=True, so a repo .env's DATA_DIR would otherwise clobber any env
+# vars we export here. Instead we hand main.py an ISOLATED env file (via LUMA_ENV_FILE) whose throwaway
+# data directory wins, fully isolating every DB from the real data.
 cat > "$E2E_DIR/.env" <<EOF
-DB_PATH=$E2E_DIR/data.db
-CONTROL_DB_PATH=$E2E_DIR/control.db
-TENANT_DATA_ROOT=$E2E_DIR/tenants
+DATA_DIR=$E2E_DIR
 SESSION_SECRET=e2e-playwright-secret
 EOF
 
 cd "$ROOT_DIR"
-exec env \
+# DB_PATH / CONTROL_DB_PATH are per-file overrides that outrank DATA_DIR, so a stale one exported in the
+# caller's shell would silently point this "isolated" stack at real data. Clear them explicitly.
+exec env -u DB_PATH -u CONTROL_DB_PATH \
   LUMA_ENV_FILE="$E2E_DIR/.env" \
   "$ROOT_DIR/backend/venv/bin/python" -m uvicorn backend.main:app --host 127.0.0.1 --port "$PORT"

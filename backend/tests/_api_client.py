@@ -33,17 +33,14 @@ def api_client():
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
-    tenant_root = Path(tmp.name) / "tenants"
     originals = (
         database.DB_PATH,
         control_database.DB_PATH,
         control_database.CONTROL_DB_PATH,
-        control_database.TENANT_DATA_ROOT,
     )
     database.DB_PATH = data_path
     control_database.DB_PATH = data_path
     control_database.CONTROL_DB_PATH = control_path
-    control_database.TENANT_DATA_ROOT = tenant_root
     database.init_db(data_path)
     control_database.init_control_db()
     from backend.main import app
@@ -59,6 +56,5 @@ def api_client():
             database.DB_PATH,
             control_database.DB_PATH,
             control_database.CONTROL_DB_PATH,
-            control_database.TENANT_DATA_ROOT,
         ) = originals
         tmp.cleanup()

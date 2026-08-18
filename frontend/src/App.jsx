@@ -8,7 +8,6 @@ import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-d
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
-import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import { api } from './lib/api.js'
 import { applyLedgerCurrency } from './lib/moneyDisplay.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
@@ -386,7 +385,6 @@ function LocalPreferenceProfileScreen({
   creating,
   error,
   onClearError,
-  showModePill,
   showCancel = false,
   onCancel,
 }) {
@@ -463,23 +461,23 @@ function LocalPreferenceProfileScreen({
       }}>
         <div style={{ marginBottom: 18 }}>
           <div>
-            {showModePill ? (
-              <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                padding: '5px 11px',
-                borderRadius: 999,
-                background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-                color: 'var(--accent2)',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                marginBottom: 14,
-              }}>
-                Local access mode
-              </div>
-            ) : null}
+            {/* This screen only renders with the sign-in perimeter off, so the label is always accurate
+                — it is here to explain why no password was asked for. */}
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '5px 11px',
+              borderRadius: 999,
+              background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
+              color: 'var(--accent2)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              marginBottom: 14,
+            }}>
+              Local access mode
+            </div>
             <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 6, letterSpacing: '-0.02em', lineHeight: 1.1 }}>
               {hasProfiles ? 'User profiles' : `Getting Started`}
             </div>
@@ -917,9 +915,9 @@ function ThemeController() {
 
 export default function App() {
   /*
-   * App boots through one of three gates before the main shell exists: runtime-config recovery, authenticated
-   * sign-in/bootstrap, or local preference-profile selection. After that, the active user/profile becomes the
-   * identity boundary for preference providers and startup-route persistence.
+   * App boots through one of two gates before the main shell exists: authenticated sign-in/bootstrap, or local
+   * preference-profile selection. After that, the active user/profile becomes the identity boundary for
+   * preference providers and startup-route persistence.
    */
   const location = useLocation()
   const navigate = useNavigate()
@@ -932,11 +930,9 @@ export default function App() {
   const [needsBootstrap, setNeedsBootstrap] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [authError, setAuthError] = useState(null)
-  const [runtimeConfig, setRuntimeConfig] = useState({ ok: true })
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [dataProviderIntended, setDataProviderIntended] = useState(false)
-  const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
   const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [localProfiles, setLocalProfiles] = useState([])
@@ -975,7 +971,6 @@ export default function App() {
     passwordPolicy,
     securityProfile,
     dataProviderIntended,
-    experimentalSecuritySettings,
     developerOptionsEnabled,
     dbInstanceId,
     activeLocalProfile,
@@ -991,7 +986,6 @@ export default function App() {
     passwordPolicy,
     securityProfile,
     dataProviderIntended,
-    experimentalSecuritySettings,
     developerOptionsEnabled,
     dbInstanceId,
     activeLocalProfile,
@@ -1036,13 +1030,11 @@ export default function App() {
       try {
         const status = await api.getAuthStatus()
         if (cancelled) return
-        setRuntimeConfig(status.runtime_config || { ok: true })
         setAuthEnabled(!!status.auth_enabled)
         setNeedsBootstrap(!!status.needs_bootstrap)
         setPasswordPolicy(status.password_policy || 'min_8')
         setSecurityProfile(status.security_profile || 'local_private')
         setDataProviderIntended(!!status.data_provider_intended)
-        setExperimentalSecuritySettings(!!status.experimental_security_settings)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDbInstanceId(status.db_instance_id || '')
         // Drop a theme cache left over from a different/previous database (e.g. a recreated DB) so the
@@ -1141,7 +1133,6 @@ export default function App() {
   ])
 
   useEffect(() => {
-    if (runtimeConfig && runtimeConfig.ok === false) return
     if (authEnabled && !currentUser) return
     if (!authEnabled && !activeLocalProfile) return
 
@@ -1167,20 +1158,19 @@ export default function App() {
     // activeLocalProfile is gated by the !authEnabled guard above — without it in deps the effect
     // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
     // even when /tasks itself is showing pending items.
-  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile, location.pathname])
+  }, [authEnabled, currentUser, activeLocalProfile, location.pathname])
 
   // Recurring-detection catch-up: once the data scope is active, ask the backend to scan if one is due
   // (never scanned — e.g. a database migrated from a pre-recurring schema — or stale). The backend gates
   // on a watermark, so this is a cheap no-op when a recent import/sync already scanned. Keyed to the
   // active scope (not navigation) so it fires once per session, and again after a profile switch.
   useEffect(() => {
-    if (runtimeConfig && runtimeConfig.ok === false) return
     if (authEnabled && !currentUser) return
     if (!authEnabled && !activeLocalProfile) return
     if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
     recurringAutoScanScopeRef.current = preferenceSubjectId
     api.autoScanRecurring().catch(() => { })
-  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile, preferenceSubjectId])
+  }, [authEnabled, currentUser, activeLocalProfile, preferenceSubjectId])
 
   useEffect(() => {
     if (!startupRouteApplied) return
@@ -1511,10 +1501,6 @@ export default function App() {
     throw authError
   }
 
-  if (runtimeConfig && runtimeConfig.ok === false) {
-    return <RuntimeConfigScreen runtimeConfig={runtimeConfig} />
-  }
-
   if (authEnabled && !currentUser) {
     return (
       <AppErrorBoundary>
@@ -1551,7 +1537,6 @@ export default function App() {
           onCompleteWelcome={handleCompleteWelcomeSetup}
           onRename={handleRenameLocalProfile}
           onDelete={handleDeleteLocalProfile}
-          showModePill={experimentalSecuritySettings}
           showCancel={localProfilePickerDismissible && localProfiles.length > 0}
           onCancel={cancelLocalProfilePicker}
         />

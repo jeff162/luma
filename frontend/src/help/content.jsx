@@ -1446,6 +1446,57 @@ export const HELP_TOPICS = [
       </>
     ),
   },
+  {
+    id: 'configuration',
+    section: 'access-safety',
+    title: 'Configuration: what is set where',
+    surfaces: ['Configuration (Settings)'],
+    summary: `No configuration file is required -- every setting has a working default, and the few that must persist are generated on first run. An optional .env file overrides the handful of values that are read before the app starts, such as ports and where the databases live.`,
+    body: () => (
+      <>
+        <p>
+          Nothing has to be configured before {APP_NAME} runs. Every setting falls back to a working
+          default, and the two values that must survive a restart &mdash; the key that signs session
+          cookies, and the session cookie&rsquo;s name &mdash; are generated on first run and kept in the
+          database. A plain installation needs <strong>no configuration file at all</strong>.
+        </p>
+        <p>
+          The settings that matter day to day are not on this panel at all &mdash; they live beside the
+          feature they belong to, and take effect immediately. What remains here is the small set read{' '}
+          <strong>once, at startup</strong>, before the app is running, which is exactly why the panel
+          reports values rather than offering fields to edit. A control that accepted a value and changed
+          nothing until the next restart would read as broken.
+        </p>
+        <p>
+          Three of them are worth knowing about. <strong>Data directory</strong> is where both database
+          files live &mdash; the one setting to change to move an installation&rsquo;s data, or to run a
+          second installation on the same machine. The two database rows beneath it are shown for
+          confirmation and follow it automatically. <strong>Backend port</strong> and{' '}
+          <strong>frontend port</strong> are read before the server binds. Everything else sits under{' '}
+          <strong>Advanced</strong>: naming, launcher behavior, and deployment details most installations
+          never touch. A setting that has actually been overridden is shown in the main list either way,
+          since overriding it is a sign it matters here.
+        </p>
+        <p>
+          Each row names where its value came from. <strong>Default</strong> is the built-in value.{' '}
+          <strong>Stored</strong> means it was generated once and kept in the database.{' '}
+          <strong>Derived</strong> means it follows another setting. <strong>Set in .env</strong> or{' '}
+          <strong>Set in environment</strong> means an override is in force &mdash; an override always
+          wins, and always takes effect at the next restart. The optional file lives beside the
+          application; the panel says where, and whether one is present.
+        </p>
+        <p>
+          Stored values can be cleared but not typed. <strong>Reset</strong> forgets a stored value so the
+          current default applies again, and <strong>Regenerate</strong> replaces the session signing key
+          &mdash; worth doing if it may have been exposed, such as in a shared backup. Both take effect at
+          the next restart, and both end every active session, so everyone signs in again. Neither is
+          offered while an override is in force, because the override would still win. Where the data
+          itself lives, and how to move it safely, is covered in{' '}
+          <HelpLink to="/help/data-and-backups">your data on disk</HelpLink>.
+        </p>
+      </>
+    ),
+  },
 ]
 
 export const HELP_TOPICS_BY_ID = Object.fromEntries(HELP_TOPICS.map(t => [t.id, t]))

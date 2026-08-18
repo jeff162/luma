@@ -4,27 +4,26 @@
 """
 Application bootstrap and request wiring for the backend.
 
-This file ties together startup checks, middleware, and router registration. Its
-main guarantee is that each API request runs against the correct tenant database
-for the authenticated user or local-mode session before any router code executes.
-"""
+This file ties together startup configuration, middleware, and router registration. Its main guarantee
+is that each API request runs against the correct database for the authenticated user or local-mode
+session before any router code executes.
 
-import os
-from pathlib import Path
+Configuration is resolved *before* the app object exists, because the session secret and cookie name are
+constructor arguments to `SessionMiddleware` rather than something a request can look up later. That is
+why the control database is initialized here at import rather than in the lifespan hook — the stored
+half of the configuration lives in it. See `app_config.py` for the layering.
+"""
 
 from dotenv import load_dotenv
 
-# Allow the dotenv path to be redirected: the Playwright E2E harness points LUMA_ENV_FILE at an
-# isolated env file so its throwaway DB paths take effect. override=True still keeps the chosen .env
-# authoritative over a stale shell environment — unchanged for the default repo .env.
-load_dotenv(
-    dotenv_path=os.getenv("LUMA_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"),
-    override=True,
-)
+from backend.runtime_config import env_file_path
+
+# The `.env` file is optional — an install without one runs on defaults plus stored settings. When one
+# is present it stays authoritative over a stale shell environment (override=True), which is also what
+# lets the Playwright harness redirect LUMA_ENV_FILE at an isolated file and get its throwaway DB paths.
+load_dotenv(dotenv_path=env_file_path(), override=True)
 
 from contextlib import asynccontextmanager
-
-from backend.app_logging import log_warning
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,42 +31,10 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from backend import app_config
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, connections, auth, categories, currency, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
-from backend.runtime_config import APP_NAME, runtime_config_status
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name, "") or "").strip()
-    try:
-        return int(raw) if raw else default
-    except ValueError:
-        return default
-
-
-def _truthy_env(value: str | None, default: bool = False) -> bool:
-    normalized = (value or "").strip().lower()
-    if not normalized:
-        return default
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _cors_origins() -> list[str]:
-    configured = os.getenv("CORS_ORIGINS", "").strip()
-    if configured:
-        return [origin.strip() for origin in configured.split(",") if origin.strip()]
-    frontend_port = _env_int("FRONTEND_PORT", 5173)
-    frontend_docker_port = _env_int("FRONTEND_DOCKER_PORT", 3000)
-    origins = [
-        f"http://localhost:{frontend_port}",
-        f"http://localhost:{frontend_docker_port}",
-    ]
-    return list(dict.fromkeys(origins))
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
@@ -77,8 +44,6 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
         public_paths = {
             "/api/health",
             "/api/auth/status",
-            "/api/auth/runtime-config",
-            "/api/auth/runtime-config/defaults",
             "/api/auth/bootstrap-status",
             "/api/auth/bootstrap",
             "/api/auth/enable",
@@ -123,33 +88,41 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup initializes both databases before any request handling so auth/session
-    # decisions and tenant DB routing are never running against partial state.
+    # The control DB is already initialized (configuration was resolved from it below); this readies the
+    # financial database so no request handling starts against partial state.
     init_db()
-    init_control_db()
-    config_status = runtime_config_status()
-    if not config_status["ok"]:
-        log_warning(f"[config] {config_status['message']}")
     yield
 
 
-app = FastAPI(title=APP_NAME, version="0.2.0", lifespan=lifespan)
+# The control database has to exist before configuration can be resolved out of it, and configuration
+# has to be resolved before the middleware stack is built.
+init_control_db()
+config = app_config.resolve()
+
+app = FastAPI(title=config.app_name, version="0.2.0", lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", "dev-session-secret-change-me"),
-    session_cookie=os.getenv("SESSION_COOKIE_NAME", "session"),
+    # Generated and stored on first run rather than required up front, so a fresh install needs no
+    # configuration file. It has to persist: a secret regenerated per boot would sign every session out.
+    secret_key=config.session_secret,
+    session_cookie=config.session_cookie_name,
     # Mark the cookie Secure on a TLS-terminated (client-server) deployment so it never crosses the
     # network in cleartext. Driven by an explicit env the install sets — NOT derived from the security
     # profile (that is a recommendation, not a transport guarantee; deriving Secure from it would lock
     # out a network-profile install running plain HTTP) and NOT hardcoded (that breaks the loopback
     # desktop default). Left false for the loopback default where the cookie never leaves the machine.
-    https_only=_truthy_env(os.getenv("SESSION_COOKIE_SECURE"), default=False),
+    https_only=config.session_cookie_secure,
 )
 
+# Empty by default, which disables cross-origin access entirely: every shipped topology serves the SPA
+# and the API on one origin (the Vite dev server and the Docker frontend both proxy `/api`), so the
+# browser never makes a cross-origin call. Since the grant is credentialed, a standing default would let
+# any page on a listed origin call this API with the session cookie attached and read the response — a
+# surface bought for nothing. `CORS_ORIGINS` is the escape hatch for a split-origin deployment.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins(),
+    allow_origins=list(config.cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

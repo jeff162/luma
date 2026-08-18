@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 ENV_PATH="$ROOT_DIR/.env"
-ENV_EXAMPLE_PATH="$ROOT_DIR/.env_example"
 VENV_DIR="$BACKEND_DIR/venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 LOG_PATH="${LUMA_LOG_PATH:-}"
@@ -53,91 +52,9 @@ finally:
 PY
 }
 
-set_env_value() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  if [[ -f "$file" ]] && grep -Eq "^${key}=" "$file"; then
-    "$SYSTEM_PYTHON" - "$file" "$key" "$value" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-key = sys.argv[2]
-value = sys.argv[3]
-lines = path.read_text(encoding="utf-8").splitlines()
-updated = False
-for i, line in enumerate(lines):
-    if line.startswith(f"{key}="):
-        lines[i] = f"{key}={value}"
-        updated = True
-        break
-if not updated:
-    if lines and lines[-1] != "":
-        lines.append("")
-    lines.append(f"{key}={value}")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-  else
-    [[ -f "$file" ]] || : > "$file"
-    if [[ -s "$file" ]]; then
-      printf '\n' >> "$file"
-    fi
-    printf '%s=%s\n' "$key" "$value" >> "$file"
-  fi
-}
-
-generate_session_secret() {
-  "$SYSTEM_PYTHON" - <<'PY'
-import base64
-import secrets
-print(base64.urlsafe_b64encode(secrets.token_bytes(36)).decode().rstrip('='))
-PY
-}
-
-default_session_cookie_name() {
-  "$SYSTEM_PYTHON" - "$ROOT_DIR" <<'PY'
-from pathlib import Path
-import sys
-
-name = Path(sys.argv[1]).name.lower()
-sanitized = ''.join(ch if ch.isalnum() else '_' for ch in name).strip('_') or 'luma'
-print(f"{sanitized}_session")
-PY
-}
-
-invalid_session_secret() {
-  local value="${1:-}"
-  [[ -z "${value// }" || "$value" == "change_me_to_a_long_random_value" || "$value" == "dev-session-secret-change-me" ]]
-}
-
-if [[ ! -f "$ENV_PATH" && -f "$ENV_EXAMPLE_PATH" ]]; then
-  cp "$ENV_EXAMPLE_PATH" "$ENV_PATH"
-  echo "Created .env from .env_example"
-fi
-
-if [[ -f "$ENV_PATH" ]]; then
-  if [[ -z "$SYSTEM_PYTHON" ]]; then
-    echo "Python was not found. Install Python 3.12+ and try again."
-    exit 1
-  fi
-  SESSION_SECRET_VALUE="$(get_env_value "$ENV_PATH" SESSION_SECRET)"
-  SESSION_COOKIE_NAME_VALUE="$(get_env_value "$ENV_PATH" SESSION_COOKIE_NAME)"
-  UPDATED_ENV=0
-
-  if invalid_session_secret "$SESSION_SECRET_VALUE"; then
-    set_env_value "$ENV_PATH" SESSION_SECRET "$(generate_session_secret)"
-    UPDATED_ENV=1
-  fi
-  if [[ -z "${SESSION_COOKIE_NAME_VALUE// }" || "$SESSION_COOKIE_NAME_VALUE" == "session" ]]; then
-    set_env_value "$ENV_PATH" SESSION_COOKIE_NAME "$(default_session_cookie_name)"
-    UPDATED_ENV=1
-  fi
-
-  if [[ "$UPDATED_ENV" -eq 1 ]]; then
-    echo "Updated .env with secure startup defaults"
-  fi
-fi
+# No .env is created here, and no secrets are written into one. The backend generates its session
+# secret on first run and stores it in the control database; .env is only an optional override file
+# for values that must be known before the app starts (ports, database locations).
 
 # A venv is only usable if its python can import pip. A bin/python symlink alone is not enough:
 # on Debian/Ubuntu/Mint, `python3 -m venv` without the python3-venv package produces a broken venv

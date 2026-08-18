@@ -6,16 +6,14 @@ App-level provider credentials: the aggregator's own app secret (Plaid's client_
 one per provider, moved out of `.env` into the vaulted DB (security-and-deployment-model phase 6b).
 
 Only the secret is sensitive — it is vault-encrypted under the workspace DEK; client_id/env are
-semi-public and stored plaintext. A saved `provider_config` row is authoritative; until one exists the
-resolver falls back to the `.env` bootstrap, so a fresh install with `.env` creds still connects, and
-re-entering the credential once via the Configure card is all the migration there is (decided
-2026-08-01, no `.env` -> DB copy).
+semi-public and stored plaintext. The saved `provider_config` row is the only source: the Configure card
+writes it, and there is no migration from anywhere else (decided 2026-08-01 — re-entering the credential
+once is the whole of it).
 """
 
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 
 from backend.db.database import get_db
@@ -24,12 +22,6 @@ from backend.services import crypto_service
 
 VALID_ENVS = {"sandbox", "development", "production"}
 
-# Per-provider `.env` bootstrap fallback — consulted only until the app credential is saved into the DB.
-_ENV_FALLBACK = {
-    "plaid": {"client_id": "PLAID_CLIENT_ID", "secret": "PLAID_SECRET", "env": "PLAID_ENV"},
-}
-
-
 def _row(conn, provider: str):
     return conn.execute(
         "SELECT provider, client_id, secret, secret_enc, env FROM provider_config WHERE provider = ?",
@@ -37,20 +29,9 @@ def _row(conn, provider: str):
     ).fetchone()
 
 
-def _env_fallback(provider: str) -> dict | None:
-    keys = _ENV_FALLBACK.get(provider)
-    if not keys:
-        return None
-    return {
-        "client_id": (os.getenv(keys["client_id"]) or "").strip(),
-        "secret":    (os.getenv(keys["secret"]) or "").strip(),
-        "env":       (os.getenv(keys["env"]) or "sandbox").strip() or "sandbox",
-    }
-
-
 def get_provider_config_status(provider: str) -> dict:
-    """Non-secret view for the Configure UI: whether the app credential is set and from where (vaulted DB
-    vs. `.env` bootstrap), the client_id and env, and whether a secret is on file — never the secret itself.
+    """Non-secret view for the Configure UI: whether the app credential is set, the client_id and env, and
+    whether a secret is on file — never the secret itself.
     Revealing it is a separate, explicit call (`GET /api/providers/{provider}/secret`), so a plaintext
     secret never rides along in a payload the caller did not ask for it in.
 
@@ -84,16 +65,6 @@ def get_provider_config_status(provider: str) -> dict:
             "client_id":  row["client_id"],
             "env":        row["env"],
             "has_secret": bool(row["secret_enc"] or row["secret"]),
-        }
-    env = _env_fallback(provider)
-    if env and (env["client_id"] or env["secret"]):
-        return {
-            "provider":   provider,
-            "configured": True,
-            "source":     "env",
-            "client_id":  env["client_id"],
-            "env":        env["env"],
-            "has_secret": bool(env["secret"]),
         }
     return {"provider": provider, "configured": False, "source": None,
             "client_id": "", "env": "sandbox", "has_secret": False}
@@ -292,16 +263,18 @@ def _last_sync_summary(connection_row) -> dict | None:
 
 def resolve_app_config(user: dict, provider: str) -> dict | None:
     """The decrypted app credential the adapter needs to call the provider: {client_id, secret, env}.
-    A saved `provider_config` row is authoritative — its secret decrypts under the vault (raises
-    VaultLocked if locked) — otherwise fall back to the `.env` bootstrap. None when neither has creds."""
+    The saved `provider_config` row is the only source — its secret decrypts under the vault (raises
+    VaultLocked if locked). None when nothing is saved.
+
+    There was once a `.env` bootstrap (`PLAID_*`) consulted when no row existed, carried over from before
+    app credentials moved into the vault. It is gone: it kept a plaintext secret readable in a file for a
+    credential the vault exists to protect, and the Configure card has been the way to enter one for long
+    enough that the fallback only served installs that had never opened it."""
     with get_db() as conn:
         row = _row(conn, provider)
     if row and (row["secret_enc"] or row["secret"] or row["client_id"]):
         secret = crypto_service.decrypt_app_credential(user, provider, row["secret"], row["secret_enc"])
         return {"client_id": row["client_id"], "secret": secret, "env": row["env"]}
-    env = _env_fallback(provider)
-    if env and (env["client_id"] or env["secret"]):
-        return env
     return None
 
 

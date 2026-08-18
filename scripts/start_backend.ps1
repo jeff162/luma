@@ -9,7 +9,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Split-Path -Parent $scriptDir
 $backendDir = Join-Path $rootDir 'backend'
 $envPath = Join-Path $rootDir '.env'
-$envExamplePath = Join-Path $rootDir '.env_example'
 $venvDir = Join-Path $backendDir 'venv'
 $venvPython = Join-Path $venvDir 'Scripts\python.exe'
 
@@ -47,90 +46,9 @@ function Test-PortInUse([int]$Port) {
   }
 }
 
-function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
-  $escapedKey = [regex]::Escape($Key)
-  $lines = if (Test-Path $Path) { Get-Content $Path } else { @() }
-  $updated = $false
-
-  for ($i = 0; $i -lt $lines.Count; $i++) {
-    if ($lines[$i] -match "^\s*$escapedKey=") {
-      $lines[$i] = "$Key=$Value"
-      $updated = $true
-      break
-    }
-  }
-
-  if (-not $updated) {
-    if ($lines.Count -gt 0 -and $lines[-1] -ne '') {
-      $lines += ''
-    }
-    $lines += "$Key=$Value"
-  }
-
-  Set-Content -LiteralPath $Path -Value $lines
-}
-
-function New-SessionSecret() {
-  $bytes = New-Object byte[] 36
-  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-  return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
-function New-AppMasterKey() {
-  $bytes = New-Object byte[] 32
-  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-  return [Convert]::ToBase64String($bytes)
-}
-
-function Get-DefaultSessionCookieName([string]$RootPath) {
-  $name = Split-Path $RootPath -Leaf
-  $sanitized = ($name.ToLowerInvariant().ToCharArray() | ForEach-Object {
-    if ([char]::IsLetterOrDigit($_)) { $_ } else { '_' }
-  }) -join ''
-  $sanitized = $sanitized.Trim('_')
-  if ([string]::IsNullOrWhiteSpace($sanitized)) {
-    $sanitized = 'luma'
-  }
-  return "${sanitized}_session"
-}
-
-function Test-InvalidSessionSecret([string]$Value) {
-  $normalized = if ($null -eq $Value) { '' } else { $Value.Trim() }
-  return [string]::IsNullOrWhiteSpace($normalized) -or
-    $normalized -eq 'change_me_to_a_long_random_value' -or
-    $normalized -eq 'dev-session-secret-change-me'
-}
-
-if (-not (Test-Path $envPath) -and (Test-Path $envExamplePath)) {
-  Copy-Item -LiteralPath $envExamplePath -Destination $envPath
-  Write-Host "Created .env from .env_example"
-}
-
-if (Test-Path $envPath) {
-  $sessionSecret = Get-EnvValue $envPath 'SESSION_SECRET'
-  $appMasterKey = Get-EnvValue $envPath 'APP_MASTER_KEY'
-  $sessionCookieName = Get-EnvValue $envPath 'SESSION_COOKIE_NAME'
-  $updatedEnv = $false
-
-  if (Test-InvalidSessionSecret $sessionSecret) {
-    Set-EnvValue $envPath 'SESSION_SECRET' (New-SessionSecret)
-    $updatedEnv = $true
-  }
-  $appMasterKeyNormalized = if ($null -eq $appMasterKey) { '' } else { $appMasterKey.Trim() }
-  if ([string]::IsNullOrWhiteSpace($appMasterKeyNormalized)) {
-    Set-EnvValue $envPath 'APP_MASTER_KEY' (New-AppMasterKey)
-    $updatedEnv = $true
-  }
-  $sessionCookieNameNormalized = if ($null -eq $sessionCookieName) { '' } else { $sessionCookieName.Trim() }
-  if ([string]::IsNullOrWhiteSpace($sessionCookieNameNormalized) -or $sessionCookieNameNormalized -eq 'session') {
-    Set-EnvValue $envPath 'SESSION_COOKIE_NAME' (Get-DefaultSessionCookieName $rootDir)
-    $updatedEnv = $true
-  }
-
-  if ($updatedEnv) {
-    Write-Host "Updated .env with secure startup defaults"
-  }
-}
+# No .env is created here, and no secrets are written into one. The backend generates its session
+# secret on first run and stores it in the control database; .env is only an optional override file
+# for values that must be known before the app starts (ports, database locations).
 
 if (-not (Test-Path $venvPython)) {
   Write-Host "Creating backend virtual environment (first run only)..."

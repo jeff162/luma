@@ -1651,9 +1651,6 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
                   + Connect {providerLabel(p.provider)}
                 </Button>
-                {p.source === 'env' ? (
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>credentials from <code>.env</code></span>
-                ) : null}
                 {/* "Sync now" lives in the card header, not here — it is the routine action, so it has to
                     stay reachable while the card is collapsed. */}
               </div>

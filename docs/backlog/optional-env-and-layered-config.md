@@ -1,117 +1,129 @@
 # Optional `.env` & layered configuration
 
-**Status: parked, not started (2026-08-01). Independent of the security phases; not blocking.** Make
-the `.env` file **optional** for the common case by moving most settings into DB-backed app settings
-with sensible defaults, leaving `.env` as an *override/advanced* mechanism (custom DB paths, running two
-instances on one host, custom ports, the TLS cookie flag). A plain single-user install should need **no
-`.env` at all**.
+**Status: done (2026-08-18).** The `.env` file is optional: a plain single-user install needs none. The
+system is described in [`architecture.md`](../architecture.md) → *Configuration layers*; this file keeps
+the decisions and the rejected alternatives, plus the one follow-up that was deliberately left out.
 
 ## Principle: layered precedence
 
-Three layers, highest wins:
-
-```
-hardcoded defaults  <  DB-backed app settings (admin-editable)  <  environment variable override
+```text
+hardcoded defaults  <  DB-backed app settings  <  environment variable
 ```
 
 - **Defaults** make `.env` unnecessary out of the box (loopback, port 8000, `./luma-control.db`,
   `./data/`, an auto-generated session secret).
-- **DB-backed settings** (the existing `app_setting` table + the Settings UI) become the normal home for
-  user-facing config — no file editing.
-- **Env** always wins, so an operator can still force any value. When an env override is present, the
-  corresponding DB setting in the UI should render as **overridden/locked** (with the effective value and
-  a note), so an admin isn't confused when toggling it does nothing.
+- **DB-backed settings** (`app_setting` in the control DB) hold the values that must persist across
+  restarts.
+- **Env** always wins, so an operator can force any value from outside the app. Because an override is
+  invisible from inside, Settings → Configuration reports the layer each effective value came from.
 
-## What must stay env-only (the irreducible core)
+## Decisions
 
-These are the "someone doing something special / two instances on one host" survivors — they *cannot*
-move into the DB because they are needed before, or to find, the DB:
+**The session secret lives in a control-DB row** (decided 2026-08-18; the alternative was a sibling
+secret file next to the control DB). One artifact to back up and no second file-permission story to get
+right on three platforms outweighed the cost — reading the control DB during bootstrap, before
+`SessionMiddleware` is constructed. That reordering is why `init_control_db()` runs at import in
+`backend/main.py` rather than in the lifespan hook.
 
-- **DB locations** — `CONTROL_DB_PATH`, `TENANT_DATA_ROOT`, `DB_PATH`. Chicken/egg: you can't store *where
-  the database is* inside the database. This is the mechanism for running two separate instances on one
-  host (distinct control/data paths + port + cookie name per instance).
-- **Bind `BACKEND_PORT`** — must be known before the server binds.
-- **Shell-launcher-time knobs** — read by `scripts/start_backend.sh` before Python starts:
-  `LUMA_BACKEND_READY_TIMEOUT`, and `LUMA_USE_LOG_FILES` (partly — the launcher writes its own logs).
+An install still carrying a **placeholder** secret from an old `.env` template is treated as having none,
+so it generates a real one instead of signing cookies with a value that is public knowledge.
 
-## What can move to DB-backed settings (env optional)
+**`LUMA_USE_LOG_FILES` stays a launcher knob, not an in-app toggle** (decided 2026-08-18). It was the
+only user-facing setting still living in `.env`, but its sole consumer is the shell launcher, which reads
+it before Python starts; moving it into the DB would have meant teaching two launcher dialects to query
+SQLite in order to preserve a toggle that only takes effect on the next restart anyway. The in-app toggle
+and the `.env`-writing endpoint behind it were removed rather than migrated.
 
-- `SESSION_COOKIE_NAME` — default/derived from the install directory (as today), env overrides.
-- `CORS_ORIGINS` — derive from the configured ports; env overrides for exotic setups.
-- Provider (Plaid) `client_id`/`secret`/`env` — move into the **vaulted DB** as part of security phase 6.
-  **No migration** (decided 2026-08-01): the phase-6 "Configure" card just writes them going forward;
-  re-entering once is acceptable (single Plaid user). `.env` remains a bootstrap/override only.
+**The launchers no longer create `.env` or write secrets into it** (decided 2026-08-18). Four scripts
+used to materialize it from `.env_example` before anything ran, which is what made the file feel
+mandatory. An existing `.env` still works and still overrides everything.
 
-### `SESSION_SECRET` — movable, with two wrinkles
+**`SESSION_COOKIE_SECURE` stays env-first** with a `false` default — a transport guarantee set at the
+deployment edge (the install sets it; the desktop launcher leaves it false), deliberately not derived
+from app state and therefore not an in-app toggle either.
 
-It can stop being a required `.env` field, but:
+**`LUMA_DEVELOPER_OPTIONS` stays env-only — deliberately.** It is a *gate* that unlocks destructive dev
+reset tools, not a user preference. The one legitimate in-app need that appeared (2026-08-08) was the
+connection sync log, and it was met by taking that read-only surface *out* from behind the gate, not by
+softening the gate. The precedent is narrow: anything destructive still belongs behind it.
 
-1. **Persistence.** It must be **auto-generated and persisted** on first run (control DB, or a sibling
-   secret file next to the control DB) so restarts don't invalidate every session. Today
-   `start_backend.sh` generates it into `.env`; this just relocates that behavior. Env still overrides.
-2. **Startup ordering.** It is read at **app-construction time** from `os.getenv` — `SessionMiddleware`
-   is added before the lifespan runs. DB-sourcing it means reading the control DB during bootstrap
-   *before* middleware is wired: a real but contained restructure of `backend/main.py` (resolve config
-   first, then build the app). The same applies to any other setting consumed at middleware-construction
-   time (e.g. the cookie flags).
+**`LUMA_EXPERIMENTAL_SECURITY_SETTINGS` is gone** (2026-08-18). By the time the flag was reviewed it
+gated exactly one thing — a "Local access mode" label on the identity chooser — because the Settings
+sections it was created to hide now render unconditionally. A flag whose name promises "experimental
+work in progress" but whose effect is one label is worse than no flag, so it was removed and the label
+kept: that screen only appears with the perimeter off, so it is always accurate.
 
-### `SESSION_COOKIE_SECURE` — keep env-first
+**Three path settings collapsed into `DATA_DIR`** (2026-08-18). Both databases live in one directory
+under fixed filenames, so moving or duplicating an installation is one setting rather than two or three.
+The repo's own `docker-compose.yml` and the Playwright harness moved to it.
 
-Leave this an env value (with a `false` default), **not** a DB setting. It is a transport guarantee set
-at the deployment edge (the Caddy/systemd install sets it; the desktop launcher leaves it false) — per
-the phase-3 transport policy it is deliberately *not* derived from app state, so it shouldn't become an
-in-app toggle either.
+**The per-file overrides are permanent, not a deprecation.** `DB_PATH` / `CONTROL_DB_PATH` still win for
+their own file, and fixing the filenames is exactly what makes them load-bearing: a database that does
+not use the default name — an install carrying files named before a rename, for instance — is reachable
+*only* through them. Removing them would not force such an install to rename anything; it would silently
+create empty databases beside data that still exists, which presents as total data loss. So they are
+documented as "for a database that is not on the default filename" rather than as legacy syntax awaiting
+cleanup, and `.env_example` mentions them without offering them as a setting to copy.
 
-## The two developer/experimental flags (decided 2026-08-01)
+**`TENANT_DATA_ROOT` is gone** (2026-08-18) — multi-tenant leftover. Every identity-creating path passes
+the one existing tenant, so only the first identity can create a tenant record, and it always resolved to
+the configured `DB_PATH`. The per-tenant directory branch was unreachable in a running app.
 
-- **`LUMA_DEVELOPER_OPTIONS` stays env-only — deliberately.** It is a *gate* that unlocks destructive dev
-  reset tools, not a user preference; it should not be toggleable from the UI (not something to invite
-  people to flip). A deliberate exception to the "move preferences into the DB" default.
-  - **Resolved 2026-08-08 — the flag is unchanged, but the connection sync log left it.** The open
-    question below ("revisit if a legitimate in-app need appears") turned up one: `connection_sync_log`
-    was gated on the flag *including its writes*, so a user with connection trouble who found the flag
-    got an empty table and had to reproduce the failure — while the log is the only in-app answer to "why
-    did this connection import nothing?" and the thing they would attach to a help request. It had
-    inherited the gate by being added as a neighbouring Settings card, not by needing one. It is now
-    always written and always readable; the destructive reset tools keep the gate exactly as described
-    above. **The precedent is narrow:** decoupling a read-only surface that was mis-filed behind the gate,
-    *not* softening the gate. Anything destructive still belongs behind it.
-- **`LUMA_EXPERIMENTAL_SECURITY_SETTINGS` is expected to go away** once the security project (phases 4–6)
-  completes. If it survives, it does **not** become a normal DB setting either: keep it env-only if it
-  must be defined early, **or** fold it under the developer-options card (gated by
-  `LUMA_DEVELOPER_OPTIONS`). Never a plain admin-facing toggle.
+**`CORS_ORIGINS` defaults to empty** (2026-08-18). It had defaulted to the two localhost frontend ports
+with `allow_credentials=True`, which is a standing credentialed grant to any page served on those ports —
+and unused, because the browser never makes a cross-origin call in any shipped topology. The setting
+survives as the escape hatch for a split-origin deployment.
 
-## Net effect
+**Reset, not edit** (2026-08-18). Whether the panel should allow editing the settings that do not need
+`.env` was asked and mostly answered "no": after the collapse, the only settings with a control-DB row are
+the session secret and the cookie name, and neither wants a text field. What was missing was a way to
+*undo* a stored value — write-once with no UI meant a cookie name stored under the old install-directory
+derivation could never pick up the current one. So each stored row offers a single reset (labelled
+"Regenerate" for the secret), confirmed, taking effect at the next start. Rows under an environment
+override are not offered it, and the endpoint enforces the same rule rather than trusting the client.
 
-A plain single-user install needs **zero `.env`**: loopback bind, port 8000, `./luma-control.db`,
-`./data/`, an auto-generated+persisted session secret, defaults for the rest. `.env` survives only for:
-custom DB paths, multiple instances on one host, custom ports, the TLS cookie flag, and the developer
-gate.
+**The Plaid `.env` bootstrap is gone** (2026-08-18). `PLAID_CLIENT_ID` / `_SECRET` / `_ENV` were still
+consulted when no `provider_config` row existed — the migration path from before app credentials moved
+into the vault. It was retired once nothing depended on it: it kept a plaintext app secret readable in a
+file for exactly the credential the vault exists to protect, and it handed a *locked* vault an
+unlock-free path to a secret (the reveal endpoint deliberately skipped the gate for env-sourced values).
+The Configure card is now the only way in, and re-entering a credential once is the whole of the setup.
 
-## Scope / touch points
+**`LUMA_ENV_FILE` stays, under that name** (2026-08-18). It points the backend at a different override
+file and exists because `load_dotenv(override=True)` would otherwise let a repo `.env` clobber exported
+variables — which is precisely what the Playwright harness needs defeated to run against throwaway
+databases. Two things were considered and rejected: **removing it** (nothing else defeats the override,
+so the E2E isolation would have to be rebuilt or the precedence flipped — a separate decision), and
+**renaming it to something `TEST_`-prefixed** (it selects an override file; being test-only is a fact
+about its current caller, not about the variable, and the name would then look wrong for a systemd unit
+or a packaged build pointing at a config file elsewhere). Its real limitation is documented instead: it
+redirects the **backend only**, since the launchers and `vite.config.js` each read the repo-root `.env`
+for their ports — so it isolates a database rather than switching between whole configurations.
 
-- `backend/runtime_config.py` — today the `.env`-centric config layer (`read/write_environment_settings`,
-  `write_runtime_env`, the runtime-config-status gate). Reshape into the layered resolver.
-- `backend/main.py` — bootstrap ordering so DB-backed config is resolved before middleware construction.
-- `backend/db/control_database.py` — `app_setting` getters/setters already exist; add the ones that move.
-- Settings UI — surface the now-DB-backed settings; show env-overridden ones as locked with their
-  effective value.
-- `scripts/start_backend.sh` / `.env_example` — stop auto-writing required secrets into `.env`; document
-  `.env` as optional/override; keep the launcher-time knobs.
+## The irreducible env core
 
-## Open questions
+Needed before, or in order to find, the database — so there is nowhere earlier to read them from:
 
-- ~~**`LUMA_DEVELOPER_OPTIONS`** — confirmed env-only for now, but flagged as "somewhat undecided"; revisit
-  if a legitimate in-app need appears (kept out deliberately for now).~~ **Settled 2026-08-08:** the need
-  appeared (the connection sync log) and was met by taking that one surface *out* from behind the gate
-  rather than by making the gate toggleable — see the decision above. The flag itself stays env-only.
-- Where auto-generated `SESSION_SECRET` should live — control DB row vs. a sibling secret file (backup and
-  file-permission implications differ).
+- **Data location** — `DATA_DIR` (with `CONTROL_DB_PATH` / `DB_PATH` honored as legacy per-file
+  overrides). This is also the mechanism for running two installations on one host (distinct directory +
+  port per instance; the cookie name follows the control DB path on its own).
+- **Ports** — `BACKEND_PORT` (before the server binds), `FRONTEND_PORT` / `FRONTEND_DOCKER_PORT` /
+  `VITE_API_PROXY_TARGET` (before or outside the app process).
+- **Launcher knobs** — `LUMA_BACKEND_READY_TIMEOUT`, `LUMA_USE_LOG_FILES`.
+- **Deployment/gate flags** — `SESSION_COOKIE_SECURE`, `LUMA_DEVELOPER_OPTIONS`.
+
+## Follow-up: mDNS service name
+
+**Raised 2026-08-17, not built.** A discoverable mDNS name (default `luma`, or a `luma-<something>`
+variant) for reaching the app on a LAN without an IP address. The name is needed before the app is
+serving, so it belongs in the env-only core alongside the ports — one `Setting(...)` row in
+`backend/app_config.py`'s registry with `stored=False`, after which it appears in the configuration
+report automatically. The open part is the *default name* when two installations share a network, not the
+plumbing.
 
 ## Cross-refs
 
-- [`security-and-deployment-model.md`](security-and-deployment-model.md) — phase 6 moves provider creds
-  out of `.env` into the vault (no migration); the `SESSION_COOKIE_SECURE`/transport reasoning is settled
-  there. Retiring `LUMA_EXPERIMENTAL_SECURITY_SETTINGS` is tied to that project completing.
+- [`security-and-deployment-model.md`](security-and-deployment-model.md) — phase 6 moved provider creds
+  out of `.env` into the vault; the `SESSION_COOKIE_SECURE`/transport reasoning is settled there.
 - [`deployment-topologies.md`](deployment-topologies.md) — the packaged desktop build and LAN-server
-  install are the concrete consumers of "no `.env` needed by default" vs. "install sets a few env values."
+  install are the concrete consumers of "no `.env` needed by default" vs. "install sets a few env values".

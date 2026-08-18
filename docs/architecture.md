@@ -258,14 +258,88 @@ That core concentration is intentional. Import behavior is one of the places whe
 
 - **Back navigation:** the popover stamps `state={{ from: <pathname> }}` onto the Read-more `<Link>`; the Help page reads it back to render a labeled "Back to `<page>`" button. `<HelpLink>` is used for cross-topic links inside content bodies so the original source survives multiple hops within the Help section
 
+### Configuration layers
+
+Every setting resolves through three layers, highest wins:
+
+```text
+hardcoded default  <  control-DB `app_setting` row  <  environment variable
+```
+
+The shape follows from one goal: **an ordinary install needs no configuration file.** Defaults cover the
+common case, so `.env` is an override mechanism rather than a prerequisite — nothing creates it, and its
+absence is the normal state. The registry in `backend/app_config.py` is the single declaration of each
+setting (environment variable, default, whether it is stored, whether it is redacted); the resolver, the
+`GET /api/auth/config` report the Settings page renders, and any setting added later all read from it.
+
+**Why the environment layer still wins.** An operator has to be able to force a value from outside the
+app — a broken stored setting would otherwise be unreachable, and the two-installations-on-one-host case
+is configured entirely from outside. `.env` is loaded with `override=True`, so within that layer the file
+beats a stale shell environment; that is also what lets the Playwright harness point `LUMA_ENV_FILE` at
+an isolated file and get its throwaway databases. Because an override is invisible from inside the app,
+the Settings → Configuration report names the layer each effective value came from rather than showing a
+form that silently would not take effect.
+
+The panel leads with the three settings an ordinary install might change (the data directory and the two
+ports) and files the rest under a collapsed **Advanced** group. Placement is declared per setting rather
+than inferred from whether a value currently equals its default — placement that moved with the value
+would make a row someone saw last week vanish this week — but a setting actually overridden in the
+environment is surfaced regardless, since overriding it is direct evidence this installation cares about
+it. A `FeatureExplainer` on the section header opens the `configuration` help topic, which carries the
+narrative; the panel itself stays a report.
+
+The panel offers exactly one write: **clearing** a stored value (`POST /api/auth/config/{key}/reset`), so
+its default applies again at the next start. It is a reset rather than an edit because the only two
+stored settings derive or generate themselves — there is no value worth typing — and because everything
+here is consumed at startup, so a field that accepts input and changes nothing until a restart reads as
+broken. It exists because a stored value is otherwise permanent: a cookie name stored under an earlier
+derivation would never pick up the current one, and a leaked secret could not be rotated without editing
+the database by hand. Clearing is refused, on both sides, while an environment override is in force — the
+write would succeed and change nothing, since the environment still wins.
+
+**What is stored rather than defaulted.** Only values that must *persist*: the session signing secret and
+the session cookie name. The secret is generated on first run and written to the control DB — regenerating
+it per boot would invalidate every session, and requiring the user to supply one was the last thing
+forcing a configuration file to exist. The cookie name is derived from the **control database path** (a
+readable label from its directory plus a digest of the full path) and then stored. Deriving it from the
+install directory instead would miss the case that directory cannot distinguish — one checkout run
+against two databases by swapping `.env` files — where a shared cookie name signs the user out on every
+swap, because each database signs with its own secret and rejects the other's cookie.
+
+**What can only be environment.** The data location (`DATA_DIR`) — where the database is cannot be read
+out of the database. One directory setting rather than a path per file, with fixed filenames: the two
+databases always travel together, so a second installation wants a second directory. `DB_PATH` /
+`CONTROL_DB_PATH` remain honored and still win for their own file, which fixing the filenames makes
+necessary rather than merely polite: a database not on the default filename is reachable only that way,
+and dropping the overrides would create empty databases beside data that still exists. All of this is resolved at import and then held as module state, so the
+report reads the value in force from the module that owns it rather than re-deriving it — it cannot name
+a database the process never opened. The bind port and the frontend/Vite ports, which
+are consumed before the server binds or before the app process exists. The launcher knobs
+(`LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT`), read by the start scripts before Python runs.
+`SESSION_COOKIE_SECURE`, a transport guarantee set at the deployment edge and deliberately not derived
+from app state. `CORS_ORIGINS` names other web origins allowed to call the API from a browser *with
+cookies*; it defaults to empty because every topology serves the app and the API on one origin (the dev
+server and the Docker frontend both proxy `/api`), so a standing grant would be credentialed access
+bought for nothing. And `LUMA_DEVELOPER_OPTIONS`, which gates destructive reset tooling — a gate, not a
+preference, so it is intentionally not something the UI invites anyone to flip.
+
+**Bootstrap ordering.** The session secret and cookie name are constructor arguments to
+`SessionMiddleware`, not values a request can look up later, so `backend/main.py` initializes the control
+database and resolves configuration *before* the app object is built. That is why `init_control_db()` runs
+at import rather than in the lifespan hook. Settings a user actually changes — sign-in, security profile,
+password policy, currency, data-source credentials — are not in this system at all: they have their own
+endpoints and their own storage (see the storage-layers section and the token vault).
+
 ### Identity, access & deployment model
 
 The settled shape (see `docs/backlog/security-and-deployment-model.md` for the full decision record) is
 **one shared workspace with multiple login identities** — not multi-tenant hosting. Every member is
 provisioned into the single admin tenant and shares one data DB; there is no per-tenant data isolation
-and no hosted multi-tenant target. Per-tenant DB routing (`set_current_db_path`, `TENANT_DATA_ROOT/<id>/`)
-is retained as **dormant plumbing** — the code no longer offers to spin up new tenants, but excising the
-routing would be risky and low-value, so it stays wired and unused.
+and no hosted multi-tenant target. Per-request DB routing (`set_current_db_path`, driven by the tenant
+row's `db_path`) is retained as **dormant plumbing** — excising it would be risky and low-value, so it
+stays wired, resolving every identity to the one configured database. The per-tenant *directory* layout
+it once implied is gone: creating a tenant record points it at `DB_PATH`, so there is no second location
+for data to land in.
 
 - **Login is an authentication *perimeter*, not an authorization system.** Its only job is to keep
   *non-users* out. Once inside, every user sees and edits the **same** data with no row- or scope-level
@@ -545,13 +619,15 @@ came of leaving it unstated, in `docs/data-model.md`.
   `env` — one per provider, distinct from the per-bank connection credential) lives in the vaulted DB
   `provider_config` table: only `secret` is vault-encrypted (`secret_enc`, AAD `app_credential|<provider>|
   secret`); `client_id`/`env` are semi-public plaintext. `providers.config.resolve_app_config(user, provider)`
-  returns the decrypted `{client_id, secret, env}` the adapter needs — a saved row is authoritative,
-  else it falls back to the **`.env` bootstrap** (`PLAID_*`), so pre-6b installs keep working with no
-  action. Every adapter method takes this resolved `app_config` (never reads the environment itself).
+  returns the decrypted `{client_id, secret, env}` the adapter needs — the saved row is the **only**
+  source. A `.env` bootstrap (`PLAID_*`) carried pre-6b installs through the move and was retired once it
+  had nothing left to carry (2026-08-18): it kept a plaintext app secret readable in a file for exactly
+  the credential the vault exists to protect, and it gave a locked vault an unlock-free path to a secret.
+  Entering the credential once in the Configure card is the whole of the setup. Every adapter method takes
+  this resolved `app_config` (never reads the environment itself).
   A provider that has **no** app-level credential (`requires_app_config = False`, e.g. SimpleFIN) receives
   `{}`: for it, "nothing configured" is the permanent normal state rather than setup left undone, so it
-  reports itself *configured* once it has a connection, offers no Configure action and no environment
-  badge, and — having no sandbox — is gated on a Production-strength vault at **connect** time, there
+  reports itself *configured* once it has a connection, offers no Configure action, and — having no sandbox — is gated on a Production-strength vault at **connect** time, there
   being no later moment at which to ask.
   Admin-gated CRUD is `GET/POST /api/providers/{provider}/config` (`routers/providers.py`); saving the
   secret needs the vault unlocked (`423`), and switching a provider to Production still runs the all-slots
@@ -687,21 +763,28 @@ Luma uses several distinct storage layers for working state.
 
 - **Key files:** `frontend/src/lib/UserPreferencesContext.jsx`, `frontend/src/lib/api.js`
 
-#### Preference storage in the control database
+#### The two databases, and what separates them
 
-- **Lives in:** `backend/luma-control.db`
+The split is by **whose data it is**, not by how sensitive it is. Everything the user puts into the app —
+transactions, accounts, owners, categories, rules, tags, import history, and their UI preferences — lives
+in the **data** database, so a data backup carries the whole of it and restoring one restores the user's
+work intact. What the *application* needs in order to run — identities, the vault key slots — lives in the
+**control** database, which is why it is not part of a data backup and why a fresh one can be created
+beside existing data without disturbing it.
 
-- **Lifespan:** durable until explicitly changed or cleared
+The one deliberate crossing is worth knowing: **data-connection secrets sit in the data database**, even
+though they read as application state. They are stored encrypted (`provider_config.secret_enc`,
+`plaid_item.access_token_enc`), and the key that opens them — the vault-wrapped DEK — stays in the
+control database. That separation is the point: both files have to be brought together to reach a live
+credential, so a copy of either one alone does not.
 
-- **Contains:** UI preferences keyed to the current identity's `user_id`, and other small JSON-friendly UI preference values that follow the active identity
-
-- **Scope:** always keyed to `user_id` — the same key whether the perimeter is on or off (the middleware resolves the identity from the session in both modes), so there is no profile-id ⇄ user-id re-keying
-
-- **Key files:** `backend/db/control\_database.py`, `backend/routers/auth.py`, `frontend/src/lib/UserPreferencesContext.jsx`
+Enumerating each table here is not worth it — contents move (preferences did, precisely so that backups
+would carry them) and a stale list is worse than none. `data-model.md` is authoritative on what any
+particular field means.
 
 #### Identity records in the control database
 
-- **Lives in:** `backend/luma-control.db`
+- **Lives in:** the control database (`luma-control.db` in the configured data directory)
 
 - **Lifespan:** durable until explicitly deleted
 
@@ -711,11 +794,11 @@ Luma uses several distinct storage layers for working state.
 
 #### Application data database
 
-- **Lives in:** `backend/luma-data.db`
+- **Lives in:** the data database (`luma-data.db` in the configured data directory)
 
 - **Lifespan:** durable application data until changed, deleted, restored, or replaced
 
-- **Contains:** transactions, categories, rules, accounts, owners, saved import profiles, import batches, snapshots, and other import/export data
+- **Contains:** everything the user enters or imports (see the separation above), plus the lifecycle rules below
 
 - **Account lifecycle note:** account rows can participate in a parent/child merge model for reissued account numbers, and child accounts can move through a recoverable trash state before permanent cleanup folds their references into the parent
 
