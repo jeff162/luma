@@ -13,6 +13,7 @@
 // back each account has reached — and leaves the ending open.
 
 import { AppDialog, Button } from './ui.jsx'
+import { providerLabel } from '../lib/importSourceFields.js'
 
 // A row-sized "still working" mark. The shared `Spinner` is a page-level block — 40px of padding around
 // the word "Loading…" — so dropping it into a status line both dwarfed the line and said the wrong thing:
@@ -71,7 +72,15 @@ export function SyncStatusPanel({ running = [], syncState = {}, runProviders = [
   const finished = runProviders
     .map(p => [p, syncState[p]])
     .filter(([, s]) => s && !s.syncing && s.result)
-  const active = running.length > 0
+  // Providers this tab has started that the backend has not reported back as running yet. `runSync` marks
+  // its provider syncing before the panel is even opened, while `running` cannot list a connection until
+  // the pull is underway and its first progress committed — seconds later for a provider that has a
+  // session to establish first. Without this the panel spent that window in its genuine-idle state,
+  // titled "Sync finished" over the words "No sync is running", which is the opposite of what is
+  // happening.
+  const serverReported = new Set(running.map(r => r.provider))
+  const starting = runProviders.filter(p => syncState[p]?.syncing && !serverReported.has(p))
+  const active = running.length > 0 || starting.length > 0
   return (
     <AppDialog
       draggable
@@ -103,10 +112,16 @@ export function SyncStatusPanel({ running = [], syncState = {}, runProviders = [
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <style>{PULSE_KEYFRAMES}</style>
         {running.map(entry => <ProgressRow key={entry.connectionId} entry={entry} />)}
+        {/* Deliberately the same row a server-backed connection gets, rather than a sentence of its own:
+            `ProgressRow` already says "starting…" while a real connection has no counts yet, so the panel
+            neither changes shape nor swaps vocabulary when the first poll lands — the numbers just fill in. */}
+        {starting.map(p => (
+          <ProgressRow key={`starting-${p}`} entry={{ institution: providerLabel(p) }} />
+        ))}
         {finished.map(([provider, state]) => (
           <FinishedRow key={provider} provider={provider} state={state} />
         ))}
-        {!running.length && !finished.length ? (
+        {!running.length && !starting.length && !finished.length ? (
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>No sync is running.</div>
         ) : null}
       </div>

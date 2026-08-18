@@ -211,16 +211,23 @@ export function MinimizedSyncNavItem() {
   const running = viewer.data?.running || []
   const added = running.reduce((n, r) => n + (r.progress?.added || 0), 0)
     || runProviders.reduce((n, p) => n + (syncState[p]?.progress?.added || 0), 0)
+  // Same starting window the panel accounts for: between pressing Sync and the backend reporting the
+  // connection as running, `running` is empty while this tab knows perfectly well that a sync is being
+  // driven. Reading that gap off `syncState` keeps a pill stashed during it from claiming the sync had
+  // already finished.
+  const driving = runProviders.some(p => syncState[p]?.syncing)
   // The label carries the status, not just a name — the whole point of stashing it is to glance at the
   // chip rather than restore the panel to find out whether anything is still happening.
-  const label = running.length ? `Syncing — ${added} imported` : 'Sync finished'
+  const label = running.length || driving
+    ? (added ? `Syncing — ${added} imported` : 'Syncing…')
+    : 'Sync finished'
   return (
     <MinimizedReportPill
       label={label}
-      tone={running.length ? 'var(--accent)' : 'var(--success)'}
-      icon={running.length ? '↻' : '✓'}
-      title={running.length
-        ? `${running.length} connection(s) syncing — ${added} transaction(s) imported so far`
+      tone={running.length || driving ? 'var(--accent)' : 'var(--success)'}
+      icon={running.length || driving ? '↻' : '✓'}
+      title={running.length || driving
+        ? `${running.length || runProviders.length} connection(s) syncing — ${added} transaction(s) imported so far`
         : 'The sync has finished — restore for the summary'}
       onRestore={restore}
     />
