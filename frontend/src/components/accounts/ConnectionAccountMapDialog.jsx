@@ -108,6 +108,7 @@ export default function ConnectionAccountMapDialog({
       createNew: true,
       groupWithAccountId: '',
       skip: false,
+      distinctFromAccountId: '',
     }
     if (choice === 'map_existing') {
       update(pending.externalId, {
@@ -120,7 +121,11 @@ export default function ConnectionAccountMapDialog({
     } else if (choice === 'group_with_existing') {
       update(pending.externalId, { ...base, groupWithAccountId: target.id })
     } else {
-      update(pending.externalId, base)  // keep_separate — a plain new account, no relationship
+      // keep_separate — a plain new account, and the one branch that carries an answer rather than a
+      // relationship. "These are not the same account" is exactly the assertion the duplicate sweep
+      // needs; discarding it was why a user who had just said so, looking at both names, was asked
+      // again per flagged transaction once the data arrived.
+      update(pending.externalId, { ...base, distinctFromAccountId: target.id })
     }
   }
 

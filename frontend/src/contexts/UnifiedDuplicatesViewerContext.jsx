@@ -39,8 +39,15 @@ export function useUnifiedDuplicatesViewer() {
   return ctx
 }
 
-// The report-specific fetch + payload shape. `version` advances each reload (from the prior data)
-// so ImportExport can watch it and refresh its file-card pill counts.
+// The report-specific fetch + payload shape. `version` advances on every load — including the first — so
+// ImportExport can watch it and refresh its file-card pill counts.
+//
+// **Counting from 1 matters.** It used to start at 0, and the page's watcher skips 0 as "no report has
+// loaded", so opening the report was the one load that refreshed nothing. That was invisible until a pill
+// went stale by some other route: the user would click a "42 duplicates" pill, read "all duplicates
+// resolved" in the dialog the click had just loaded, close it, and find the pill still saying 42 — the
+// page holding a count the very same click had already disproved. Now any load reconciles the two, so the
+// counts self-correct on the gesture a user naturally reaches for.
 async function loadDuplicates(params, prev) {
   const result = await api.getBatchDuplicatesUnified(params.batchId)
   return {
@@ -48,9 +55,14 @@ async function loadDuplicates(params, prev) {
     hardRejectCount: Number(result.hard_reject_count || 0),
     softFlagCount: Number(result.soft_flag_count || 0),
     ruleBreakdown: Array.isArray(result.rule_breakdown) ? result.rule_breakdown : [],
-    version: (prev?.version ?? -1) + 1,
+    // The account pairs the unresolved cross-account flags span — what lets the dialog ask the one
+    // question that settles a whole pile of them at once.
+    accountPairs: Array.isArray(result.account_pairs) ? result.account_pairs : [],
+    version: (prev?.version ?? 0) + 1,
   }
 }
+
+export const __testing = { loadDuplicates }
 
 export function UnifiedDuplicatesViewerProvider({ children }) {
   const { viewer, setViewer, open: openViewer, reload, close, minimize, restore } = useDetachedReportViewer(loadDuplicates)
@@ -145,6 +157,7 @@ export function UnifiedDuplicatesViewerRenderer() {
         hardRejectCount={data?.hardRejectCount || 0}
         softFlagCount={data?.softFlagCount || 0}
         ruleBreakdown={data?.ruleBreakdown || []}
+        accountPairs={data?.accountPairs || []}
         title={params?.title}
         batchId={params?.batchId}
         accountFilter={params?.accountFilter || null}

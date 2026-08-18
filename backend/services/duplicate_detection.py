@@ -1217,38 +1217,61 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     return out
 
 
+# Best explanation first. Ranks the three text tiers, with everything unjudged behind them; ties keep the
+# order they were collected in, which is closest-day-first.
+_TEXT_RELATION_RANK = {"exact": 0, "fuzzy": 1, "weak": 2}
+
+
 def _display_candidates(candidates: list[dict]) -> list[dict]:
-    """The subset of a coverage hit's candidates worth showing as "this is what the row duplicates".
+    """The subset of a coverage hit's candidates worth showing as "this is what the row duplicates",
+    strongest explanation first.
 
-    The lookup finds candidates by amount and date alone, and past ±1 that is thin evidence: on a real
-    ledger a week-wide window around any common amount picks up unrelated charges, and the report then
-    presents a coincidence with the same confidence as the actual twin. So a candidate found by the
-    *widened* reach has to also agree textually — exact, fuzzy, or the weak shared-token tier, the same
-    ladder `scan_scope_for_cross_account_duplicates` uses to decide what is worth a human's attention.
+    The lookup finds candidates by amount and date alone, and that is thin evidence on its own: on a real
+    ledger a window around any common amount picks up unrelated charges, and the report then presents a
+    coincidence with the same confidence as the actual twin. So a candidate has to also agree textually —
+    exact, fuzzy, or the weak shared-token tier, the same ladder
+    `scan_scope_for_cross_account_duplicates` uses to decide what is worth a human's attention.
 
-    Two deliberate exemptions:
+    **The date exemption is relative, not absolute, and that distinction is the whole rule.** Exact-date
+    and ±1 candidates are kept without any text agreement *only while nothing else in the list has any* —
+    because that is the case the exemption exists for: two sources routinely describe one charge with no
+    shared text whatsoever (a bank's terminal string against an aggregator's cleaned merchant name), and
+    filtering on text there would drop correct matches. But once some candidate for the same row *does*
+    agree textually, a better explanation is already present, and the wordless neighbours stop being that
+    case and become the coincidence the filter exists to remove. As an absolute rule it could not tell the
+    two apart: three same-amount charges on adjacent days each listed all three as equally likely, with
+    each row's real twin — identical wording, matching amount, a day away — buried among them.
 
-      * **Exact date and ±1 are kept regardless of wording.** That band is not a guess — a same-amount
-        row a day either side of a covered date is the case this lookup was built for, and two sources
-        routinely describe one charge with no shared text whatsoever (a bank's terminal string against
-        an aggregator's cleaned merchant name). Filtering it would drop correct matches to fix noise
-        that only occurs further out.
-      * **A pair with no text on one side is never hidden** (`_text_comparable`). A nameless
-        money-movement leg matches nothing by design, and silence is not disagreement.
+    One exemption stays unconditional: **a pair with no text on one side is never hidden**
+    (`_text_comparable`). A nameless money-movement leg matches nothing by design, and silence is not
+    disagreement — there is no evidence to be outranked by.
 
-    Display-only: callers pass the full list to the verdict logic first (see `_coverage_reject_verdict`).
-    Order is preserved — closest-day-first, as collected.
+    Display-only, and applied last: the verdict logic sees the complete list (see
+    `_coverage_reject_verdict`), so nothing here can change which rows were rejected or why — only what
+    the report names as the thing a row duplicates.
     """
+    # Whether any candidate for THIS row agrees textually. Computed over the whole list rather than per
+    # candidate, since it is precisely the comparison between candidates that decides the wordless ones.
+    has_agreement = any(candidate.get("text_relation") for candidate in candidates)
+
     def _keep(candidate: dict) -> bool:
         if candidate.get("text_relation"):
             return True
         if not candidate.get("_text_comparable"):
             return True
+        # Judged, and it agrees with nothing. Worth showing only while no candidate does better.
+        if has_agreement:
+            return False
         return abs(candidate.get("day_offset") or 0) < 2
 
+    kept = sorted(
+        (candidate for candidate in candidates if _keep(candidate)),
+        key=lambda candidate: (_TEXT_RELATION_RANK.get(candidate.get("text_relation"), 3),
+                               abs(candidate.get("day_offset") or 0)),
+    )
     return [
         {key: value for key, value in candidate.items() if key != "_text_comparable"}
-        for candidate in candidates if _keep(candidate)
+        for candidate in kept
     ]
 
 
@@ -1947,9 +1970,136 @@ def _sorted_pair(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a < b else (b, a)
 
 
+def record_account_pair_distinct(conn: sqlite3.Connection, account_id_a: str, account_id_b: str) -> dict:
+    """Record "these two accounts are different physical accounts", and clear every cross-account
+    suspect flag the assertion has just made meaningless.
+
+    **The two halves are one operation and must not be separated.** The assertion suppresses *future*
+    detection between the pair; if the flags already raised were left standing, the same evidence would
+    read as a problem before the assertion and as nothing after it, and the user would be staring at rows
+    that can never be flagged again. So resolving them is not a convenience — it is what makes the
+    assertion consistent with itself.
+
+    That is deliberately the opposite of what a **merge** does with the same rows. "Different accounts"
+    makes every cross-account flag between them a false positive *by definition*, whatever tier the
+    evidence was, so clearing all of them destroys nothing. "Same account" only makes the *exact* matches
+    duplicates — a near-miss within one account is a genuinely different question (two similar real
+    transactions, or one recorded twice?) — which is why `promote_in_group_suspects_to_confirmed` leaves
+    the review-only tiers alone. Same rows, opposite answers, and both are right.
+
+    A same-account pair is refused rather than recorded: a `(X, X)` row would be matched by the sweep's
+    own MIN/MAX filter for every future candidate on that account, switching detection off there
+    permanently. Returns the pair and how many flags the assertion resolved.
+    """
+    if not account_id_a or not account_id_b or str(account_id_a) == str(account_id_b):
+        return {"recorded": False, "resolved": 0}
+    low, high = _sorted_pair(account_id_a, account_id_b)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO account_pair_distinct (account_id_low, account_id_high, asserted_at)
+        VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        """,
+        (low, high),
+    )
+    cursor = conn.execute(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = NULL,
+               suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  id IN (
+            SELECT t1.id
+            FROM   txn t1
+            JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
+            WHERE  t1.suspect_duplicate_of IS NOT NULL
+              AND  t1.suspect_resolved_at IS NULL
+              AND  t1.trashed_at IS NULL
+              AND  ((t1.account_id = ? AND t2.account_id = ?)
+                 OR (t1.account_id = ? AND t2.account_id = ?))
+        )
+        """,
+        (low, high, high, low),
+    )
+    return {"recorded": True, "resolved": cursor.rowcount or 0,
+            "account_id_low": low, "account_id_high": high}
+
+
+def unresolved_account_pairs(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+    """The account pairs this batch's still-unresolved cross-account flags span, with counts and names.
+
+    What the duplicate report needs to ask the only question that actually settles such a pile: are these
+    two accounts the same account or not? Both answers are terminal — merge them, or record them as
+    distinct — and each resolves every flag between them, so N coincidences between one pair are one
+    decision rather than N. That decision used to ride along invisibly on Keep; asking it needs the pairs
+    named, which is what this returns.
+
+    `can_merge` is decided here rather than in the browser because it is a *rule*, and the merge rule
+    already exists on the account side (`attach_account`): both accounts need a type and an owner, the
+    types must match, the owners must be compatible (identical, or either one shared), and neither may
+    already be a child — grouping is one level deep. A second copy of that in the report is exactly how
+    the two would come to disagree about whether a merge is offerable.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            MIN(a1.id, a2.id) AS account_id_low,
+            MAX(a1.id, a2.id) AS account_id_high,
+            COUNT(*)          AS flag_count,
+            MIN(a1.id, a2.id) = a1.id AS low_is_incoming,
+            a1.id AS incoming_id,
+            COALESCE(NULLIF(a1.display_name, ''), a1.name) AS incoming_name,
+            a1.mask AS incoming_mask, a1.type AS incoming_type,
+            a1.owner_id AS incoming_owner_id, a1.parent_account_id AS incoming_parent,
+            a2.id AS matched_id,
+            COALESCE(NULLIF(a2.display_name, ''), a2.name) AS matched_name,
+            a2.mask AS matched_mask, a2.type AS matched_type,
+            a2.owner_id AS matched_owner_id, a2.parent_account_id AS matched_parent
+        FROM   txn t1
+        JOIN   txn t2      ON t2.id = t1.suspect_duplicate_of
+        JOIN   account a1  ON a1.id = t1.account_id
+        JOIN   account a2  ON a2.id = t2.account_id
+        WHERE  t1.import_batch_id = ?
+          AND  t1.suspect_duplicate_of IS NOT NULL
+          AND  t1.suspect_resolved_at IS NULL
+          AND  t1.trashed_at IS NULL
+          AND  a1.id <> a2.id
+        GROUP  BY account_id_low, account_id_high
+        ORDER  BY flag_count DESC
+        """,
+        (batch_id,),
+    ).fetchall()
+    shared_owner = _shared_owner_id(conn)
+    out = []
+    for r in rows:
+        owners = {r["incoming_owner_id"], r["matched_owner_id"]}
+        can_merge = bool(
+            r["incoming_type"] and r["matched_type"]
+            and r["incoming_owner_id"] and r["matched_owner_id"]
+            and r["incoming_type"] == r["matched_type"]
+            and (len(owners) == 1 or (shared_owner and shared_owner in owners))
+            and not r["incoming_parent"] and not r["matched_parent"]
+        )
+        out.append({
+            "account_id_low": r["account_id_low"], "account_id_high": r["account_id_high"],
+            "flag_count": r["flag_count"], "can_merge": can_merge,
+            # Named from the *incoming* side first: that is the account the user just imported into, and
+            # the one they are deciding about. The pair's canonical ordering is an index detail.
+            "incoming": {"id": r["incoming_id"], "name": r["incoming_name"], "mask": r["incoming_mask"]},
+            "matched":  {"id": r["matched_id"], "name": r["matched_name"], "mask": r["matched_mask"]},
+        })
+    return out
+
+
+def _shared_owner_id(conn: sqlite3.Connection) -> Optional[str]:
+    """The shared owner's id. A shared account merges with any personal account of the same type —
+    shared ownership usually reflects a life-stage change rather than a permanent category."""
+    from backend.db.database import SHARED_OWNER_ID
+    return SHARED_OWNER_ID
+
+
 def list_distinct_account_pairs(conn: sqlite3.Connection) -> list[dict]:
-    """Return every recorded distinct-account assertion the user has made via Keep, joined to
-    the account display names so the management UI can render them without a follow-up fetch."""
+    """Return every recorded distinct-account assertion the user has made, joined to the account display
+    names so the management UI can render them without a follow-up fetch."""
     rows = conn.execute(
         """
         SELECT
@@ -3079,6 +3229,11 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     return entries
 
 
+# Every action `resolve_suspect` accepts, checked before anything is read so an unknown one is named as
+# such rather than falling through to whichever branch happens to be last.
+_SUSPECT_ACTIONS = ("keep", "not_duplicate", "reject", "trash", "replace")
+
+
 def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> dict:
     """Resolve a soft-flagged suspect.
 
@@ -3105,13 +3260,28 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         'replace' does NOT assert the two accounts are distinct and does not cascade — it is a
         per-row "these are the same transaction" decision.
     """
+    if action not in _SUSPECT_ACTIONS:
+        return {"resolved": False, "reason": "invalid_action"}
     row = conn.execute(
-        "SELECT id, suspect_duplicate_of, trashed_at FROM txn WHERE id = ?",
+        "SELECT id, suspect_duplicate_of, suspect_resolved_at, trashed_at FROM txn WHERE id = ?",
         (txn_id,),
     ).fetchone()
     if not row:
         return {"resolved": False, "reason": "not_found"}
     if not row["suspect_duplicate_of"]:
+        # **Already resolved is a success, not an error.** `keep` on a cross-account pair deliberately
+        # resolves rows nobody asked about — one click asserts the two accounts are distinct and cascades
+        # over the whole pair — so an action issued per row necessarily arrives at rows a previous call in
+        # the same breath has already cleared. Reporting those as failures made a bulk Keep of N rows fail
+        # with "not flagged as a suspect duplicate" after having done every bit of the work, and (because
+        # the caller abandoned its reload on the error) leave the counts on screen describing the state
+        # before it. The requested end state holds, so say so.
+        #
+        # `suspect_resolved_at` is what separates that from the real error: it is set by every resolution
+        # path, so a row carrying it *was* a suspect and has been dealt with, while a row with neither
+        # field was never flagged at all and naming an action on it is still a genuine mistake.
+        if row["suspect_resolved_at"]:
+            return {"resolved": True, "action": action, "already_resolved": True}
         return {"resolved": False, "reason": "not_suspect"}
     if action == "replace":
         existing = conn.execute(
@@ -3189,73 +3359,30 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         )
         return {"resolved": True, "action": "reject"}
     if action in ("keep", "not_duplicate"):
-        # Broad-reading Keep: the user is asserting the two ACCOUNTS are distinct, not just
-        # this one row. Record that assertion in account_pair_distinct so the cross-account
-        # check skips this pair on all future imports, then cascade-resolve every other
-        # unresolved soft-flag suspect between the same pair — the user shouldn't have to
-        # click Keep N times for N coincidences when one click conveys the whole assertion.
-        matched_row = conn.execute(
-            "SELECT account_id FROM txn WHERE id = ?",
-            (row["suspect_duplicate_of"],),
-        ).fetchone()
-        suspect_account = conn.execute(
-            "SELECT account_id FROM txn WHERE id = ?", (txn_id,),
-        ).fetchone()
-        # The broad reading applies only to a pair of DISTINCT accounts. When both rows sit on one account
-        # there is no pair to assert anything about: `account_pair_distinct` would take a (X, X) row that
-        # its own `MIN/MAX` filter would then match for every future candidate on that account, switching
-        # detection off there permanently, and the cascade below would clear every unresolved suspect on
-        # it. Keep is per-row in that case — which is the correct meaning anyway, since "these two accounts
-        # are different" says nothing about two records inside one account.
-        same_account = bool(
-            matched_row and suspect_account
-            and matched_row["account_id"] == suspect_account["account_id"]
+        # **Per-row, and only this row.** Keep used to carry a second, much larger meaning: it recorded
+        # the two accounts as distinct in `account_pair_distinct` and cascade-cleared every other
+        # unresolved flag between them. The reasoning was sound — one click conveys the whole assertion —
+        # but the placement was not. A button on a transaction row, labelled for what happens to that
+        # transaction, was silently making a durable account-level decision that suppressed detection
+        # between the pair forever; selecting five rows and clicking it resolved all forty-two, so the
+        # bulk selection beside it was a fiction; and the assertion it wrote had no screen anywhere to
+        # show or undo it.
+        #
+        # The account question is now asked as an account question — at mapping time by the "Possible
+        # duplicate account?" chooser, and in the duplicate report by the prompt that follows a bulk keep
+        # — where it names both accounts and the user answers it deliberately. See
+        # `record_account_pair_distinct`. That leaves Keep meaning exactly what it says, identically for
+        # a same-account and a cross-account pair, with bulk select doing the bulk.
+        conn.execute(
+            """
+            UPDATE txn
+            SET    suspect_duplicate_of = NULL,
+                   suspect_duplicate_reason = NULL,
+                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE  id = ?
+            """,
+            (txn_id,),
         )
-        if (matched_row and suspect_account and matched_row["account_id"]
-                and suspect_account["account_id"] and not same_account):
-            low, high = _sorted_pair(suspect_account["account_id"], matched_row["account_id"])
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO account_pair_distinct
-                  (account_id_low, account_id_high, asserted_at)
-                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                """,
-                (low, high),
-            )
-            # Cascade: clear suspect flags on every other unresolved row whose endpoints are
-            # the same account pair (in either direction).
-            conn.execute(
-                """
-                UPDATE txn
-                SET    suspect_duplicate_of = NULL,
-                       suspect_duplicate_reason = NULL,
-                       suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE  id IN (
-                    SELECT t1.id
-                    FROM   txn t1
-                    JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
-                    WHERE  t1.suspect_duplicate_of IS NOT NULL
-                      AND  t1.suspect_resolved_at IS NULL
-                      AND  t1.trashed_at IS NULL
-                      AND  ((t1.account_id = ? AND t2.account_id = ?)
-                         OR (t1.account_id = ? AND t2.account_id = ?))
-                )
-                """,
-                (low, high, high, low),
-            )
-        else:
-            # A same-account pair (above), or no account info at all (shouldn't normally happen, but be
-            # defensive); either way, just clear the single flag we were asked about.
-            conn.execute(
-                """
-                UPDATE txn
-                SET    suspect_duplicate_of = NULL,
-                       suspect_duplicate_reason = NULL,
-                       suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE  id = ?
-                """,
-                (txn_id,),
-            )
         return {"resolved": True, "action": "keep"}
     return {"resolved": False, "reason": "invalid_action"}
 

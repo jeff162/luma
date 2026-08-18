@@ -20,6 +20,7 @@ import { Button, Input, AppDialog, DialogActions } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
+import { hasUsableVaultPasskey, runVaultPasskeyUnlock } from '../lib/vaultPasskey.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
 
@@ -86,7 +87,7 @@ function useStrandedBackups(active) {
   return backups
 }
 
-export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
+export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPasskey }) {
   // mode: 'set' (mint/replace the workspace vault) | 'unlock' (open it for this session)
   //     | 'change' (rewrap the DEK under a new passphrase)
   //     | 'request' (join a vault that already exists — same passphrase against the same floor, but it
@@ -96,6 +97,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
   const changing = mode === 'change'
   const requesting = mode === 'request'
   // Every one of these three chooses a NEW passphrase and is held to the floor.
@@ -108,6 +110,38 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
   // round trip, and letting the click through only to answer it with an error is what made the old
   // advisory meter feel like the passphrase had been accepted.
   const blocked = busy || (setting && (!passphrase || !!shortfall))
+
+  // Offered only for 'unlock', and only where a usable passkey exists. The other modes choose a NEW
+  // passphrase, which a passkey cannot stand in for.
+  //
+  // This is the fix for a gap that made the feature nearly unreachable: the ceremony existed and worked,
+  // but was wired only to the vault strip on the Connections tab. Every gated action — disconnect, sync,
+  // a credentials restore, and the 423 re-prompt that fires when the server drops the key on its idle
+  // timeout — raises THIS dialog instead, which offered the passphrase and nothing else. So a user who
+  // had set up a passkey specifically to stop typing their passphrase was asked for it every time, and
+  // the 423 path could not even be pre-empted by clicking the strip first, since it is invisible until
+  // it fires.
+  const canUsePasskey = mode === 'unlock' && !!onUnlockedByPasskey
+    && hasUsableVaultPasskey(session?.currentUser)
+
+  async function unlockByPasskey() {
+    setPasskeyBusy(true)
+    setError('')
+    const result = await runVaultPasskeyUnlock()
+    if (!result.ok) {
+      // A dismissed prompt reports nothing — the user closed it deliberately. Any other refusal leaves
+      // the dialog open on the passphrase, which is the fallback they still have.
+      if (result.message) setError(result.message)
+      setPasskeyBusy(false)
+      return
+    }
+    try {
+      await onUnlockedByPasskey(result.user)
+    } catch (e) {
+      setError(e?.message || 'The vault opened, but this screen could not refresh.')
+      setPasskeyBusy(false)
+    }
+  }
 
   async function submit() {
     if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
@@ -144,7 +178,15 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
       actions={
         <DialogActions>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
-          <Button small onClick={submit} disabled={blocked}>
+          {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
+              in does not change depending on which surface asked. */}
+          {canUsePasskey ? (
+            <Button small onClick={unlockByPasskey} disabled={busy || passkeyBusy}>
+              {passkeyBusy ? 'Waiting for passkey…' : 'Unlock with a passkey'}
+            </Button>
+          ) : null}
+          <Button small variant={canUsePasskey ? 'ghost' : 'primary'}
+            onClick={submit} disabled={blocked || passkeyBusy}>
             {busy ? 'Working…'
               : changing ? 'Change passphrase'
                 : requesting ? 'Request access'

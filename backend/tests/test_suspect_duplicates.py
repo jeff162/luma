@@ -30,7 +30,9 @@ from backend.services.duplicate_detection import (
     list_unified_batch_duplicates,
     mark_import_suspects,
     promote_in_group_suspects_to_confirmed,
+    record_account_pair_distinct,
     resolve_suspect,
+    unresolved_account_pairs,
     scan_scope_for_cross_account_duplicates,
     restore_auto_merged_after_detach,
     restore_rejected_duplicate,
@@ -57,7 +59,7 @@ class SuspectDuplicateTests(unittest.TestCase):
 
     # ---- factory helpers -------------------------------------------------
 
-    def _insert_account(self, name: str) -> str:
+    def _insert_account(self, name: str, account_type: str = "credit") -> str:
         account_id = str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
@@ -66,9 +68,10 @@ class SuspectDuplicateTests(unittest.TestCase):
                     INSERT INTO account
                       (id, external_account_id, provider, name, display_name, type, subtype,
                        mask, owner_id, parent_account_id, trashed_at)
-                    VALUES (?, ?, ?, ?, ?, 'credit', 'credit_card', NULL, ?, NULL, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, 'credit_card', NULL, ?, NULL, NULL)
                     """,
-                    (account_id, f"plaid_{account_id}", "fixture", name, name, SHARED_OWNER_ID),
+                    (account_id, f"plaid_{account_id}", "fixture", name, name, account_type,
+                     SHARED_OWNER_ID),
                 )
         return account_id
 
@@ -1274,7 +1277,12 @@ class SuspectDuplicateTests(unittest.TestCase):
     #   6. resolve_suspect('reject') does NOT record the pair (a rejection is row-scoped:
     #      "yes, that one IS a duplicate" tells us nothing about the accounts being distinct).
 
-    def test_resolve_keep_records_account_pair_in_distinct_table(self):
+    def test_resolve_keep_asserts_nothing_about_the_accounts(self):
+        # Keep is a decision about one transaction and says so. It used to also record the two ACCOUNTS
+        # as permanently distinct and clear every other flag between them — a durable, invisible,
+        # account-level decision made by a button on a transaction row, which is why selecting five rows
+        # and clicking it resolved forty-two. The account question is now asked as an account question,
+        # at mapping time and from the report's own prompt.
         account_a = self._insert_account("Account A")
         account_b = self._insert_account("Account B")
         batch = self._insert_batch()
@@ -1287,50 +1295,191 @@ class SuspectDuplicateTests(unittest.TestCase):
                 mark_import_suspects(conn, batch)
                 resolve_suspect(conn, new_id, action="keep")
                 pairs = list_distinct_account_pairs(conn)
+        self.assertEqual(pairs, [])
+        self.assertIsNone(self._suspect_link(new_id)["suspect_duplicate_of"], "the row itself is resolved")
 
+    def test_recording_a_distinct_pair_stores_it_canonically(self):
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        with self._use_db_path():
+            with get_db() as conn:
+                # Deliberately the higher id first: the table stores one row per pair whichever direction
+                # it arrives from, so every reader can key on (low, high) without normalizing again.
+                high_first, low_second = sorted([account_a, account_b], reverse=True)
+                record_account_pair_distinct(conn, high_first, low_second)
+                pairs = list_distinct_account_pairs(conn)
         self.assertEqual(len(pairs), 1)
-        # Pair stored canonically with lower id in account_id_low.
         low, high = sorted([account_a, account_b])
         self.assertEqual(pairs[0]["account_id_low"], low)
         self.assertEqual(pairs[0]["account_id_high"], high)
         self.assertIsNotNone(pairs[0]["asserted_at"])
 
-    def test_resolve_keep_cascades_to_other_unresolved_suspects_on_same_pair(self):
-        # Broad-reading Keep: clicking Keep on ONE suspect between (A, B) clears EVERY other
-        # unresolved suspect between (A, B). The user shouldn't have to click Keep N times
-        # for N coincidences when one click conveys "these two accounts are distinct".
+    def test_a_same_account_pair_is_refused_rather_than_recorded(self):
+        # A (X, X) row would be matched by the sweep's own MIN/MAX filter for every future candidate on
+        # that account, switching detection off there permanently.
+        account_a = self._insert_account("Account A")
+        with self._use_db_path():
+            with get_db() as conn:
+                result = record_account_pair_distinct(conn, account_a, account_a)
+                pairs = list_distinct_account_pairs(conn)
+        self.assertEqual(result, {"recorded": False, "resolved": 0})
+        self.assertEqual(pairs, [])
+
+    def test_recording_a_distinct_pair_clears_the_flags_it_just_made_meaningless(self):
+        # The two halves are one operation. The assertion suppresses FUTURE detection between the pair,
+        # so leaving the flags already raised would make the same evidence read as a problem before the
+        # assertion and as nothing after it — with the user staring at rows that can never be flagged
+        # again. This is the cascade that used to hide inside Keep, now attached to the decision that
+        # actually implies it.
         account_a = self._insert_account("Account A")
         account_b = self._insert_account("Account B")
         batch = self._insert_batch()
-        # Three independent matches between the same pair: clicking Keep on the first should
-        # cascade-resolve the other two.
-        canonical_1 = self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.00, merchant_name="P1")
-        canonical_2 = self._insert_txn(account_id=account_a, date="2025-10-02", amount=-20.00, merchant_name="P2")
-        canonical_3 = self._insert_txn(account_id=account_a, date="2025-10-03", amount=-30.00, merchant_name="P3")
-        suspect_1 = self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.00, merchant_name="P1", batch_id=batch)
-        suspect_2 = self._insert_txn(account_id=account_b, date="2025-10-02", amount=-20.00, merchant_name="P2", batch_id=batch)
-        suspect_3 = self._insert_txn(account_id=account_b, date="2025-10-03", amount=-30.00, merchant_name="P3", batch_id=batch)
+        for day, amount, payee in (("2025-10-01", -10.0, "P1"), ("2025-10-02", -20.0, "P2")):
+            self._insert_txn(account_id=account_a, date=day, amount=amount, merchant_name=payee)
+        suspects = [
+            self._insert_txn(account_id=account_b, date=day, amount=amount, merchant_name=payee,
+                             batch_id=batch)
+            for day, amount, payee in (("2025-10-01", -10.0, "P1"), ("2025-10-02", -20.0, "P2"))
+        ]
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, batch), 2)
+                result = record_account_pair_distinct(conn, account_a, account_b)
+        self.assertEqual(result["resolved"], 2)
+        for sid in suspects:
+            link = self._suspect_link(sid)
+            self.assertIsNone(link["suspect_duplicate_of"])
+            self.assertIsNotNone(link["suspect_resolved_at"])
+            self.assertIsNone(link["trashed_at"], "asserting distinctness never trashes a row")
+
+    def test_the_report_names_the_account_pairs_its_flags_span(self):
+        # A pile of flags between one pair is one question, not N. Naming the pairs is what lets the
+        # report ask it — the decision that used to ride invisibly on Keep.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        for day, amount, payee in (("2025-10-01", -10.0, "P1"), ("2025-10-02", -20.0, "P2")):
+            self._insert_txn(account_id=account_a, date=day, amount=amount, merchant_name=payee)
+            self._insert_txn(account_id=account_b, date=day, amount=amount, merchant_name=payee,
+                             batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, batch), 2)
+                pairs = unresolved_account_pairs(conn, batch)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["flag_count"], 2)
+        self.assertEqual(
+            {pairs[0]["incoming"]["id"], pairs[0]["matched"]["id"]}, {account_a, account_b})
+        low, high = sorted([account_a, account_b])
+        self.assertEqual((pairs[0]["account_id_low"], pairs[0]["account_id_high"]), (low, high))
+
+    def test_a_resolved_pair_stops_being_asked_about(self):
+        # Answering the question is what removes it. The prompt is driven by what is still unresolved, so
+        # nothing has to remember that it was shown.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
+        self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
+                         batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                mark_import_suspects(conn, batch)
+                self.assertEqual(len(unresolved_account_pairs(conn, batch)), 1)
+                record_account_pair_distinct(conn, account_a, account_b)
+                self.assertEqual(unresolved_account_pairs(conn, batch), [])
+
+    def test_a_pair_that_cannot_be_merged_says_so(self):
+        # The prompt offers "same account — merge them" only where a merge is actually possible, and the
+        # rule lives here rather than in the browser so this and the Accounts page cannot disagree about
+        # whether it is offerable. Different types is the plainest case.
+        account_a = self._insert_account("Account A", account_type="depository")
+        account_b = self._insert_account("Account B", account_type="credit")
+        batch = self._insert_batch()
+        self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.0, merchant_name="P1")
+        self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.0, merchant_name="P1",
+                         batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                mark_import_suspects(conn, batch)
+                pairs = unresolved_account_pairs(conn, batch)
+        self.assertEqual(len(pairs), 1)
+        self.assertFalse(pairs[0]["can_merge"])
+
+    def test_resolve_keep_touches_only_the_row_it_was_given(self):
+        # Keep used to cascade over the whole account pair, which made the bulk selection beside it a
+        # fiction: selecting one row of three resolved all three. Bulk now means bulk — N selected rows
+        # are N requests — and the account-wide decision has its own question.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        canonical_ids = [
+            self._insert_txn(account_id=account_a, date=day, amount=amount, merchant_name=payee)
+            for day, amount, payee in (("2025-10-01", -10.00, "P1"), ("2025-10-02", -20.00, "P2"),
+                                       ("2025-10-03", -30.00, "P3"))
+        ]
+        suspect_1, suspect_2, suspect_3 = [
+            self._insert_txn(account_id=account_b, date=day, amount=amount, merchant_name=payee,
+                             batch_id=batch)
+            for day, amount, payee in (("2025-10-01", -10.00, "P1"), ("2025-10-02", -20.00, "P2"),
+                                       ("2025-10-03", -30.00, "P3"))
+        ]
 
         with self._use_db_path():
             with get_db() as conn:
-                marked = mark_import_suspects(conn, batch)
-                self.assertEqual(marked, 3)
-                # Click Keep on ONLY one — the other two should follow.
+                self.assertEqual(mark_import_suspects(conn, batch), 3)
                 resolve_suspect(conn, suspect_1, action="keep")
 
-        for sid in (suspect_1, suspect_2, suspect_3):
-            link = self._suspect_link(sid)
-            self.assertIsNone(link["suspect_duplicate_of"],
-                              f"suspect {sid} should be cascade-resolved by broad Keep")
-            self.assertIsNone(link["suspect_duplicate_reason"])
-            self.assertIsNotNone(link["suspect_resolved_at"])
-            # Cascade must NOT trash anything.
-            self.assertIsNone(link["trashed_at"])
+        resolved = self._suspect_link(suspect_1)
+        self.assertIsNone(resolved["suspect_duplicate_of"])
+        self.assertIsNone(resolved["suspect_duplicate_reason"])
+        self.assertIsNotNone(resolved["suspect_resolved_at"])
+        self.assertIsNone(resolved["trashed_at"], "keep never trashes a row")
+        for sid in (suspect_2, suspect_3):
+            self.assertIsNotNone(self._suspect_link(sid)["suspect_duplicate_of"],
+                                 f"suspect {sid} was not the row Keep was given and must still stand")
         # Canonical rows are never touched.
-        for cid in (canonical_1, canonical_2, canonical_3):
+        for cid in canonical_ids:
             link = self._suspect_link(cid)
             self.assertIsNone(link["suspect_duplicate_of"])
             self.assertIsNone(link["trashed_at"])
+
+    def test_keeping_a_row_something_else_already_resolved_succeeds(self):
+        # Rows still get resolved out from under a per-row action: asserting the accounts distinct clears
+        # every flag between them, and a bulk keep issued against the same rows arrives after it. If that
+        # reads as an error, a bulk of N rows reports failure having done all N rows' work, and the
+        # caller abandons the reload that would have shown it. The requested end state holds; say so.
+        account_a = self._insert_account("Account A")
+        account_b = self._insert_account("Account B")
+        batch = self._insert_batch()
+        self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.00, merchant_name="P1")
+        suspect = self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.00,
+                                   merchant_name="P1", batch_id=batch)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, batch), 1)
+                record_account_pair_distinct(conn, account_a, account_b)
+                # The row was cleared by the assertion, not by a call naming it.
+                result = resolve_suspect(conn, suspect, action="keep")
+        self.assertTrue(result["resolved"])
+        self.assertTrue(result["already_resolved"])
+        # And the row is left exactly as the assertion left it — a redundant call changes nothing.
+        link = self._suspect_link(suspect)
+        self.assertIsNone(link["suspect_duplicate_of"])
+        self.assertIsNone(link["trashed_at"])
+
+    def test_a_row_that_was_never_flagged_is_still_an_error(self):
+        # The counterpart that gives the case above its force: "already resolved" is forgiven because
+        # `suspect_resolved_at` proves the row WAS a suspect and has been dealt with. A row carrying
+        # neither field was never flagged, and naming an action on it is a genuine mistake — forgiving
+        # that too would turn every wrong-id call into a silent success.
+        account_a = self._insert_account("Account A")
+        txn = self._insert_txn(account_id=account_a, date="2025-10-30", amount=-68.00, merchant_name="X")
+        with self._use_db_path():
+            with get_db() as conn:
+                result = resolve_suspect(conn, txn, action="keep")
+        self.assertEqual(result, {"resolved": False, "reason": "not_suspect"})
 
     def test_resolve_keep_cascade_is_scoped_to_the_specific_pair(self):
         # Cascade should ONLY touch suspects whose endpoints match the (A, B) pair being kept,
@@ -1404,7 +1553,8 @@ class SuspectDuplicateTests(unittest.TestCase):
         with self._use_db_path():
             with get_db() as conn:
                 mark_import_suspects(conn, first_batch)
-                resolve_suspect(conn, suspect, action="keep")
+                record_account_pair_distinct(conn, account_a, account_b)
+                self.assertIsNone(self._suspect_link(suspect)["suspect_duplicate_of"])
                 self.assertEqual(len(list_distinct_account_pairs(conn)), 1)
 
                 # User forgets the assertion.

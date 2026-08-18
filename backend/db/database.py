@@ -140,7 +140,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 37
+CURRENT_VERSION = 38
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1058,6 +1058,64 @@ def _sync_log_request_allowance(conn):
     conn.execute("ALTER TABLE connection_sync_log ADD COLUMN request_allowance TEXT")
 
 
+@migration(38)
+def _connection_last_sync_summary(conn):
+    # What the last sync did, stored on the connection instead of derived from the sync log on read — see
+    # the baseline CREATE for why a user-facing summary cannot rest on a prunable, user-clearable
+    # diagnostic. Existing rows are backfilled from each connection's newest surviving log row so no card
+    # blanks out on upgrade; a connection whose rows have already aged out of the buffer stays NULL, which
+    # reads as "no record yet" until its next sync.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if not cols or "last_sync_outcome" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection ADD COLUMN last_sync_outcome TEXT")
+    conn.execute("ALTER TABLE connection ADD COLUMN last_sync_summary TEXT")
+    if not {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}:
+        return  # no log to backfill from
+    for c in conn.execute("SELECT id FROM connection").fetchall():
+        row = conn.execute(
+            "SELECT * FROM connection_sync_log WHERE connection_id = ? "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
+            (c["id"],),
+        ).fetchone()
+        if row is None:
+            continue
+        keys = set(row.keys())
+        try:
+            accounts = json.loads(row["account_counts"] or "") if "account_counts" in keys else {}
+        except (TypeError, ValueError):
+            accounts = {}
+        if not isinstance(accounts, dict):
+            accounts = {}
+        # Historic per-account counts use the pre-split key, and which kind of no-destination row they
+        # were is not recoverable — the mapping that would answer it is today's, not the one in force when
+        # the pull ran. Normalized to the unknown-account bucket so the card's chips keep their counts;
+        # nothing alarms on the distinction, so the conservative label costs nothing here.
+        for counts in accounts.values():
+            if isinstance(counts, dict) and counts.get("skipped_no_account"):
+                counts["skipped_unknown_account"] = (
+                    int(counts.get("skipped_unknown_account") or 0)
+                    + int(counts.pop("skipped_no_account") or 0)
+                )
+        already_held = int(row["skipped_already_held"] or 0) if "skipped_already_held" in keys else 0
+        mode = row["mode"]
+        if row["error"]:
+            outcome = "failed"
+        elif mode == "initial" and already_held > 0:
+            outcome = "attention"
+        elif mode == "initial" and not row["became_complete"]:
+            outcome = "incomplete"
+        else:
+            outcome = "ok"
+        conn.execute(
+            "UPDATE connection SET last_sync_outcome = ?, last_sync_summary = ? WHERE id = ?",
+            (outcome, json.dumps({
+                "at": row["started_at"], "mode": mode, "added": row["added"] or 0,
+                "updated": row["updated"] or 0, "removed": row["removed"] or 0, "accounts": accounts,
+            }), c["id"]),
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1289,7 +1347,25 @@ def init_db(db_path: str | None = None):
                 -- so its own response says nothing until it is over, and a client that navigated away or
                 -- reloaded has nothing to reconnect to. Paired with `sync_started_at`, which says a run
                 -- exists; this says how far it has got.
-                sync_progress             TEXT
+                sync_progress             TEXT,
+                -- What the most recent sync of this connection DID, as the connection card reports it:
+                -- one outcome word ('ok'/'attention'/'incomplete'/'failed', see `sync_outcome` in
+                -- services/providers/config.py) plus a JSON summary of its counts and the per-account
+                -- breakdown the card's chips render.
+                --
+                -- Here rather than derived from `connection_sync_log` on read, because that table is a
+                -- diagnostic ring buffer: capped, pruned on every write, and emptied outright by
+                -- `DELETE /sync/diagnostics`. A card reading it lost its whole "Last sync" block — on a
+                -- perfectly healthy connection — the moment anyone cleared a debugging view. This is the
+                -- durable record; the log keeps the diagnostic detail (cursor fingerprints, request
+                -- windows, allowance, status sequence) that no card renders. Both are written from the
+                -- same assembled facts in one call, so they cannot describe one pull two ways.
+                --
+                -- NULL means "never synced", which the card reads as "no record yet" rather than as a
+                -- zero-count success. Distinct from `last_sync_error`, which says the connection is broken
+                -- *right now* and outranks the stored word when the card renders.
+                last_sync_outcome         TEXT,
+                last_sync_summary         TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);

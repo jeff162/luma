@@ -84,6 +84,8 @@ from backend.services.duplicate_detection import (
     get_effective_account_row,
     list_unified_batch_duplicates,
     mark_import_suspects,
+    record_account_pair_distinct,
+    unresolved_account_pairs,
     match_terminal_day_candidate,
     MIN_TERMINAL_WINDOW_DAYS,
     normalize_evidence_text,
@@ -2912,11 +2914,17 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_name, single_type, "checking",
                   default_owner_id))
             created_account_ids["__single_account__"] = new_acc_id
+        # "Keep separate" answers from the duplicate-account chooser, recorded after the loop so every
+        # account named in them exists. The user compared two account names and said they are different
+        # accounts; that is the assertion the cross-account sweep needs, and discarding it meant the same
+        # question returned as a flagged transaction for every coincidence between the pair.
+        declined_matches: list[tuple[str, str]] = []
         for na in new_accounts_cfg:
             csv_val  = na.get("csv_value", "")
             acc_name = na.get("name", csv_val).strip()
             acc_type = na.get("type", "depository")
             requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
+            declined_match_id = str(na.get("distinct_from_account_id") or "").strip()
             if not acc_name:
                 continue
             # Check if an account with this name already exists — use it rather
@@ -2931,6 +2939,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 # is restored automatically. (The per-import compare alias used to need re-asserting
                 # here; it no longer exists.)
                 created_account_ids[csv_val] = existing["id"]
+                if declined_match_id:
+                    declined_matches.append((existing["id"], declined_match_id))
                 continue
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
@@ -2940,10 +2950,15 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id
+            if declined_match_id:
+                declined_matches.append((new_acc_id, declined_match_id))
             if requested_group_target_id:
                 group_root_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
                 if group_root_id:
                     account_duplicate_compare_targets[csv_val] = group_root_id
+
+        for created_id, declined_id in declined_matches:
+            record_account_pair_distinct(conn, created_id, declined_id)
 
         created_account_owner_map = {}
         if created_account_ids:
@@ -3770,6 +3785,10 @@ def get_batch_duplicates_unified(batch_id: str):
             "soft_flag_count": soft,
             "total_count": len(entries),
             "rule_breakdown": rule_breakdown,
+            # The account pairs the unresolved cross-account flags span. A pile of flags between one pair
+            # is one question — are these the same account? — and answering it settles all of them, so
+            # the report offers that instead of asking the user to work through the pile a row at a time.
+            "account_pairs": unresolved_account_pairs(conn, batch_id),
         }
 
 

@@ -90,6 +90,14 @@ export function BackupRestoreTab() {
     closeVault(true)
   }
 
+  // The same settle the passphrase path performs, for an unlock the dialog ran with a passkey instead.
+  // Restoring a credentials backup is a gated action like any other, so it must accept the same proof:
+  // before this, a user with a passkey was still asked to type their passphrase here specifically.
+  async function adoptPasskeyUnlock() {
+    await refreshVault()
+    closeVault(true)
+  }
+
   // Fetch-and-save rather than navigate: a navigation hands the response to the browser, so any error
   // status renders as a raw JSON page with the app gone from under it.
   async function startDownload(url) {
@@ -543,7 +551,8 @@ export function BackupRestoreTab() {
           under the workspace DEK. Distinct from the backup-passphrase field above, which opens the
           file. `closeVault(true)` releases the waiting action; `false` declines it. */}
       {vaultDialog ? (
-        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => closeVault(false)} />
+        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault}
+          onUnlockedByPasskey={adoptPasskeyUnlock} onClose={() => closeVault(false)} />
       ) : null}
     </div>
   )

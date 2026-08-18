@@ -37,6 +37,7 @@ from backend.services.duplicate_detection import (
     forget_account_pair_distinct,
     list_distinct_account_pairs,
     promote_in_group_suspects_to_confirmed,
+    record_account_pair_distinct,
     restore_auto_merged_after_detach,
     scan_scope_for_cross_account_duplicates,
 )
@@ -59,6 +60,11 @@ class AccountUpdate(BaseModel):
 
 class AccountAttachRequest(BaseModel):
     parent_account_id: str
+
+
+class DistinctPairRequest(BaseModel):
+    account_id_a: str
+    account_id_b: str
 
 
 class AccountTagsUpdate(BaseModel):
@@ -604,15 +610,31 @@ def set_account_tags(account_id: str, body: AccountTagsUpdate):
     return {"ok": True}
 
 
-# Distinct-account-pair assertions: the user's explicit "these two accounts are different
-# physical accounts" decisions, recorded via Keep on a cross-account soft-flag suspect. The
-# `account_pair_distinct` table is read here for the management UI and written by the dedupe
-# service when the user clicks Keep. See `backend/services/duplicate_detection.py` for the
-# detection-side logic and the design rationale.
+# Distinct-account-pair assertions: the user's explicit "these two accounts are different physical
+# accounts" decisions. Made in exactly two places, and both ask it as a question about *accounts*: the
+# "Possible duplicate account?" chooser at mapping time (Keep separate), and the duplicate report's
+# prompt after resolving flags between one pair. It used to be a side effect of clicking Keep on a
+# transaction row, which is why it could be made without the user knowing an account-level decision was
+# being taken. See `backend/services/duplicate_detection.py` for the detection-side logic.
 @router.get("/distinct-pairs")
 def list_distinct_account_pairs_endpoint():
     with get_db() as conn:
         return {"pairs": list_distinct_account_pairs(conn)}
+
+
+@router.post("/distinct-pairs")
+def assert_distinct_account_pair(body: DistinctPairRequest):
+    """Record "these two accounts are different physical accounts", and clear the cross-account flags
+    the assertion has just made meaningless.
+
+    The counterpart of merging the two accounts, and the report offers them as the two answers to one
+    question. Refused for a same-account pair, which would switch detection off for that account for
+    good."""
+    with get_db() as conn:
+        result = record_account_pair_distinct(conn, body.account_id_a, body.account_id_b)
+    if not result.get("recorded"):
+        raise HTTPException(status_code=400, detail="Two different accounts are needed to assert a pair")
+    return result
 
 
 @router.delete("/distinct-pairs/{account_id_a}/{account_id_b}")

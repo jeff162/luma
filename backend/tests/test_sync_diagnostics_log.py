@@ -127,6 +127,13 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
     def _advisories(self, row):
         return json.loads(row["advisories"]) if row["advisories"] else []
 
+    def _breakdown(self, index=0):
+        """The newest row's skip buckets as the endpoint serves them — summed from `account_counts`, which
+        is the only place they are stored. Read through the endpoint on purpose: the derivation is the
+        thing under test, and asserting against the stored column would pin the shape this replaced."""
+        with self._use_db_path():
+            return sync_module.sync_diagnostics()["entries"][index]["skipped_breakdown"]
+
     def _txn(self, txn_id, external_account_id=None):
         return {
             "external_transaction_id": txn_id,
@@ -417,22 +424,34 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
 
     # ---- the skip breakdown ----------------------------------------------
     #
-    # `skipped` was one number covering three unrelated events. Only the first below means data was lost;
-    # the other two are routine, and the second is non-zero on *every* top-up by design because the
-    # incremental overlap re-asks for days already held. Anything surfaced from the undivided number would
-    # therefore have cried wolf on every sync, which is why the card could not show it before the split.
+    # `skipped` was one number covering several unrelated events, and only some of them mean anything went
+    # wrong. The buckets live per account in `account_counts` and nowhere else — no column stores their
+    # sums, and no consumer recovers one by subtracting the others, which is what made every previously
+    # added bucket silently corrupt whichever one was computed last.
 
-    def test_rows_with_no_local_account_are_counted_apart_from_routine_skips(self):
+    def test_a_skipped_account_and_an_unknown_one_are_different_buckets(self):
+        # The distinction the outcome rule turns on. Both rows had nowhere to go, but one names an account
+        # the user chose to exclude — nothing to act on, ever — and the other an account the app has never
+        # been told about, which the "N to map" nudge picks up. Counted as one number they were
+        # indistinguishable, and the connection permanently reported a problem it had no way to clear.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection_account (connection_id, external_account_id, mapping_mode, "
+                "provider_name, provider_mask) VALUES (?, 'acct-ext-skipped', 'skip', 'Example CD', '2222')",
+                (self.CONNECTION_ID,),
+            )
         with self._driven_sync(pages=[{
-            "added": [self._txn("t1"), self._txn("t2", external_account_id="acct-ext-unmapped")],
+            "added": [self._txn("t1"),
+                      self._txn("t2", external_account_id="acct-ext-skipped"),
+                      self._txn("t3", external_account_id="acct-ext-unmapped")],
             "has_more": False, "update_status": _DONE,
         }]):
             pass
-        row = self._log_rows()[0]
-        self.assertEqual(row["added"], 1)
-        self.assertEqual(row["skipped"], 1, "the total still counts every skip")
-        self.assertEqual(row["skipped_no_account"], 1, "the row that had nowhere to go")
-        self.assertEqual(row["skipped_already_held"], 0)
+        self.assertEqual(self._log_rows()[0]["skipped"], 2, "the total still counts every skip")
+        self.assertEqual(self._breakdown(), {
+            "skipped_by_choice": 1, "skipped_unknown_account": 1,
+            "skipped_already_held": 0, "skipped_zero_amount": 0,
+        })
 
     def test_a_re_fetched_row_counts_as_already_held_not_as_lost(self):
         # The routine case: sync the same transaction twice. Nothing is wrong, and nothing should read as
@@ -442,10 +461,25 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
             pass
         with self._driven_sync(pages=page):
             pass
-        row = self._log_rows()[0]   # newest first
-        self.assertEqual(row["added"], 0)
-        self.assertEqual(row["skipped_already_held"], 1)
-        self.assertEqual(row["skipped_no_account"], 0)
+        self.assertEqual(self._log_rows()[0]["added"], 0)   # newest first
+        self.assertEqual(self._breakdown()["skipped_already_held"], 1)
+        self.assertEqual(self._breakdown()["skipped_unknown_account"], 0)
+
+    def test_the_sums_are_derived_and_no_column_holds_them(self):
+        # The shape this replaced: the row carried `skipped_no_account` / `skipped_already_held` columns
+        # summarizing `account_counts` in the same row, and the one bucket that never got a column was
+        # reconstructed in the browser by subtracting the others. The columns survive as NOT NULL zeroes
+        # pending removal; what matters is that nothing writes a meaning into them or reads one out.
+        page = [{"added": [self._txn("t1")], "has_more": False, "update_status": _DONE}]
+        with self._driven_sync(pages=page):
+            pass
+        with self._driven_sync(pages=page):
+            pass
+        row = self._log_rows()[0]
+        self.assertEqual(row["skipped"], 1)
+        self.assertEqual((row["skipped_no_account"], row["skipped_already_held"]), (0, 0))
+        self.assertEqual(self._breakdown()["skipped_already_held"], 1,
+                         "the fact still reaches the reader — from the tally, not from a column")
 
     def test_the_per_account_breakdown_names_the_provider_account(self):
         # Keyed by the *provider's* account id, so an account with no local destination still appears —
@@ -457,7 +491,7 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
             pass
         counts = json.loads(self._log_rows()[0]["account_counts"])
         self.assertEqual(counts[self.EXTERNAL_ACCOUNT_ID]["added"], 1)
-        self.assertEqual(counts["acct-ext-unmapped"]["skipped_no_account"], 1)
+        self.assertEqual(counts["acct-ext-unmapped"]["skipped_unknown_account"], 1)
 
     # ---- the outcome the card reads --------------------------------------
 
@@ -477,13 +511,41 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self.assertEqual(summary["outcome"], "ok")
         self.assertEqual(summary["added"], 1)
 
-    def test_rows_with_nowhere_to_go_raise_the_outcome_to_attention(self):
+    def test_rows_with_nowhere_to_go_do_not_raise_the_outcome(self):
+        # Both no-destination cases read as `ok`, for different reasons, and the pairing is the point.
+        # A `skip` account is the user's own decision being honoured — an alarm for it can never be
+        # cleared, and this connection would have reported a problem on every sync forever. An unmapped
+        # account is a real gap, but one the card already reports through its "N to map" badge, so a
+        # second alarm for it adds nothing. Where the rows went is a question about the bundle of
+        # transactions received, and it is answered on the import card, per account.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection_account (connection_id, external_account_id, mapping_mode, "
+                "provider_name, provider_mask) VALUES (?, 'acct-ext-skipped', 'skip', 'Example CD', '2222')",
+                (self.CONNECTION_ID,),
+            )
         with self._driven_sync(pages=[{
-            "added": [self._txn("t1", external_account_id="acct-ext-unmapped")],
+            "added": [self._txn("t1", external_account_id="acct-ext-skipped"),
+                      self._txn("t2", external_account_id="acct-ext-unmapped")],
             "has_more": False, "update_status": _DONE,
         }]):
             pass
-        self.assertEqual(self._card_summary()["outcome"], "attention")
+        self.assertEqual(self._card_summary()["outcome"], "ok")
+
+    def test_the_card_summary_survives_the_log_being_cleared(self):
+        # The reason the summary lives on the connection at all. `connection_sync_log` is a diagnostic ring
+        # buffer — capped, pruned on every write, and emptied outright by this endpoint — so a card that
+        # derived from it lost its entire "Last sync" block, on a healthy connection, the moment anyone
+        # cleared a debugging view.
+        with self._driven_sync(pages=[{"added": [self._txn("t1")], "has_more": False, "update_status": _DONE}]):
+            pass
+        with self._use_db_path():
+            sync_module.clear_sync_diagnostics()
+            self.assertEqual(sync_module.sync_diagnostics()["entries"], [])
+        summary = self._card_summary()
+        self.assertEqual(summary["outcome"], "ok")
+        self.assertEqual(summary["added"], 1)
+        self.assertEqual(summary["accounts"][self.EXTERNAL_ACCOUNT_ID]["added"], 1)
 
     def test_already_held_rows_on_a_first_import_are_a_contradiction(self):
         # Nothing can already be held before the first import, so this cannot be the routine overlap. It is
@@ -499,9 +561,8 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         collide["external_transaction_id"] = f"{self.EXTERNAL_ACCOUNT_ID}-dup"
         with self._driven_sync(pages=[{"added": [collide], "has_more": False, "update_status": _DONE}]):
             pass
-        row = self._log_rows()[0]
-        self.assertEqual(row["mode"], "initial")
-        self.assertEqual(row["skipped_already_held"], 1)
+        self.assertEqual(self._log_rows()[0]["mode"], "initial")
+        self.assertEqual(self._breakdown()["skipped_already_held"], 1)
         self.assertEqual(self._card_summary()["outcome"], "attention")
 
     def test_the_same_rows_on_a_routine_sync_are_not_an_alarm(self):
@@ -513,7 +574,7 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         with self._driven_sync(pages=page):
             pass
         self.assertEqual(self._log_rows()[0]["mode"], "routine")
-        self.assertEqual(self._log_rows()[0]["skipped_already_held"], 1)
+        self.assertEqual(self._breakdown()["skipped_already_held"], 1)
         self.assertEqual(self._card_summary()["outcome"], "ok")
 
     def test_a_connection_that_has_never_synced_reports_no_summary(self):

@@ -31,6 +31,10 @@ export function defaultConnectionMapEntry(sourceLabel) {
     // an account that already exists would offer edits the mapping call ignores.
     materializedAccountId: '',
     suggestion: null,
+    // The existing account the duplicate-account chooser offered and the user declined with "Keep
+    // separate". Not a mapping relationship — the opposite — but it is an answer worth keeping, so it
+    // rides to the server and becomes an `account_pair_distinct` assertion.
+    distinctFromAccountId: '',
   }
 }
 
@@ -43,7 +47,15 @@ export function entryToMapping(entry) {
   // import.
   if (entry.skip) return { mode: 'skip', target_account_id: null }
   if (entry.createNew) {
-    const shared = { name: entry.newName, type: entry.newType || null }
+    const shared = {
+      name: entry.newName,
+      type: entry.newType || null,
+      // Carried only on a create-new decision, because that is the one shape that means "this is NOT
+      // that account". `distinctFromAccountId` is set when the user answers the "Possible duplicate
+      // account?" chooser with Keep separate; the server records it as a distinct-account assertion once
+      // the account exists, so the answer survives instead of being re-asked per flagged transaction.
+      distinct_from_account_id: entry.distinctFromAccountId || null,
+    }
     if (entry.groupWithAccountId) {
       return { mode: 'group', target_account_id: entry.groupWithAccountId, ...shared }
     }

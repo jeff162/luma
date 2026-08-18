@@ -57,7 +57,12 @@ PROVIDER_ACCOUNTS = [
 ]
 
 
-class ConnectionAccountMappingTests(unittest.TestCase):
+class _MappingFixture(unittest.TestCase):
+    """An isolated database, one connection, and the three calls every mapping test makes.
+
+    Split out from the tests rather than sitting on them so a second suite can reuse the fixture without
+    inheriting — and silently re-running — the first suite's whole test list."""
+
     def setUp(self):
         self._stack = _isolated_db()
         self.data_path = self._stack.__enter__()
@@ -89,6 +94,8 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             mappings=mappings, default_owner_id=self.owner_id,
         )
 
+
+class ConnectionAccountMappingTests(_MappingFixture):
     # ---- recording -----------------------------------------------------
 
     def test_connecting_records_provider_accounts_without_creating_any(self):
@@ -407,3 +414,84 @@ class AccountsAwaitingHistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeepSeparateIsAnAnswerTests(_MappingFixture):
+    """The "Possible duplicate account?" chooser's third option, and why discarding it was the bug.
+
+    The chooser asks the account-identity question at the only moment it can be answered cheaply: before
+    any rows exist, with both account names on screen. Two of its three answers were persisted as
+    relationships ('existing' adopts, 'group' nests) and the third — "Keep separate" — recorded nothing.
+    So a user who had just declared two accounts different was asked the same question again as soon as
+    the data landed, once per coincidence, as a pile of flagged transactions.
+    """
+
+    def _distinct_pairs(self, conn):
+        return [(r["account_id_low"], r["account_id_high"])
+                for r in conn.execute("SELECT * FROM account_pair_distinct").fetchall()]
+
+    def test_keep_separate_is_recorded_as_a_distinct_pair(self):
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-existing", "Voyager Unlimited")
+            self._record(conn)
+            result = self._apply(conn, {
+                "ext-card": {"mode": "new", "name": "Voyager (new)",
+                             "distinct_from_account_id": "acct-existing"},
+            })
+            created = result["created"][0]
+            self.assertEqual(result["distinct_pairs"], 1)
+            self.assertEqual(self._distinct_pairs(conn), [tuple(sorted([created, "acct-existing"]))])
+
+    def test_the_assertion_survives_re_applying_the_same_mapping(self):
+        # A connection's mapping is revisited, not applied once, and the second pass reuses the account
+        # rather than creating another. The assertion must not be lost or duplicated by that.
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-existing", "Voyager Unlimited")
+            self._record(conn)
+            choice = {"mode": "new", "name": "Voyager (new)",
+                      "distinct_from_account_id": "acct-existing"}
+            first = self._apply(conn, {"ext-card": choice})
+            self._apply(conn, {"ext-card": choice})
+            self.assertEqual(len(self._distinct_pairs(conn)), 1)
+            self.assertEqual(self._distinct_pairs(conn),
+                             [tuple(sorted([first["created"][0], "acct-existing"]))])
+
+    def test_the_other_answers_record_no_assertion(self):
+        # 'existing' and 'group' are statements that the accounts ARE related, so a distinctness claim
+        # alongside them would contradict the mode itself; 'skip' has no account to make one about.
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-existing", "Voyager Unlimited")
+            self._record(conn)
+            self._apply(conn, {
+                "ext-card": {"mode": "existing", "target_account_id": "acct-existing",
+                             "distinct_from_account_id": "acct-existing"},
+                "ext-checking": {"mode": "skip", "distinct_from_account_id": "acct-existing"},
+            })
+            self.assertEqual(self._distinct_pairs(conn), [])
+
+    def test_it_suppresses_the_flags_the_answer_was_about(self):
+        # The whole point, end to end: with the answer recorded, the sweep that would have raised the
+        # pile of flagged transactions finds the pair already settled and raises nothing.
+        from backend.services.duplicate_detection import mark_import_suspects
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-existing", "Voyager Unlimited")
+            self._record(conn)
+            created = self._apply(conn, {
+                "ext-card": {"mode": "new", "name": "Voyager (new)",
+                             "distinct_from_account_id": "acct-existing"},
+            })["created"][0]
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, row_count) VALUES ('batch-1', 'f.csv', 0)")
+            for n, (day, amount) in enumerate((("2025-10-01", -10.0), ("2025-10-02", -20.0))):
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date,"
+                    " is_pending) VALUES (?,?,?,?,?,?,?,0)",
+                    (f"old-{n}", "acct-existing", self.owner_id, amount, "P", "P", day),
+                )
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date,"
+                    " is_pending, import_batch_id) VALUES (?,?,?,?,?,?,?,0,'batch-1')",
+                    (f"new-{n}", created, self.owner_id, amount, "P", "P", day),
+                )
+            self.assertEqual(mark_import_suspects(conn, "batch-1"), 0,
+                             "the user already answered this question at mapping time")

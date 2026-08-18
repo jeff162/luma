@@ -429,8 +429,9 @@ function ImportTab({ onAmazonDetected }) {
 
   // When the user resolves rows from the floating dialog, the file-card pill counts on this
   // page need to refresh so the displayed numbers stay honest. The context advances
-  // `viewer.data.version` on every reload; we watch that counter (only when mounted) and re-fetch
-  // the batch list when it changes.
+  // `viewer.data.version` on every load — opening the report included, which is what lets a pill that
+  // has gone stale correct itself when the user clicks it — and we watch that counter (only when
+  // mounted) and re-fetch the batch list when it changes. 0 means no report has loaded at all.
   const viewerVersion = unifiedDuplicatesViewer.viewer?.data?.version || 0
   useEffect(() => {
     if (viewerVersion === 0) return
@@ -1088,6 +1089,10 @@ function ImportTab({ onAmazonDetected }) {
           },
         }
       }
+      // keep_separate. The one branch that records an *answer* rather than a relationship: the user has
+      // looked at both account names and said they are different accounts, which is exactly the
+      // assertion the cross-account duplicate sweep needs. Discarding it meant the same question came
+      // back one flagged transaction at a time as soon as the rows landed.
       return {
         ...prev,
         [csvValue]: {
@@ -1098,6 +1103,7 @@ function ImportTab({ onAmazonDetected }) {
           newType: current.newType || guessNewAccountTypeFromName(csvValue),
           groupWithAccountId: '',
           skip: false,
+          distinctFromAccountId: targetAccount?.id || '',
         },
       }
     })
@@ -2214,6 +2220,9 @@ function ImportTab({ onAmazonDetected }) {
                 name: m.newName,
                 type: m.newType,
                 ...(m.groupWithAccountId ? { group_with_account_id: m.groupWithAccountId } : {}),
+                // "Keep separate" from the duplicate-account chooser: the existing account this one was
+                // suggested as a match for, and is not. Recorded server-side once the account exists.
+                ...(m.distinctFromAccountId ? { distinct_from_account_id: m.distinctFromAccountId } : {}),
               })
             }
             else if (m.accountId) account_map[v] = m.accountId

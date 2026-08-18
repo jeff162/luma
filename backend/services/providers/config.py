@@ -156,37 +156,31 @@ SYNC_OUTCOME_ATTENTION = "attention"      # succeeded, and something did not mak
 SYNC_OUTCOME_OK = "ok"
 
 
-def _sync_outcome(log_row, connection_row) -> str | None:
-    """One word for the most recent sync of a connection, or None when it has never synced.
+def sync_outcome(*, error, mode: str | None, already_held: int, became_complete: bool) -> str:
+    """One word for what a sync call did, from the facts that call recorded.
 
-    The `attention` cases are the two a clean-looking sync can hide: rows the provider delivered that had
-    no local account to go into, and — on an **initial** pull — rows reported as already held, which is a
-    contradiction rather than the routine overlap it is on a top-up (nothing can already be held before the
-    first import). The second is what a transaction-id collision looks like from the outside.
+    Pure, and called at sync time rather than derived when a card is rendered, so the word is stored with
+    the connection and survives the sync log being pruned or cleared. It lives here, beside the constants
+    and the label table the card renders, so the rule has one home.
+
+    **`attention` is reserved for a problem with no other surface.** That leaves exactly one: rows the
+    provider reported as already held during an *initial* pull, which is a contradiction rather than the
+    routine overlap it is on a top-up (nothing can already be held before the first import) — the outward
+    appearance of a transaction-id collision.
+
+    Rows with no local account used to raise it too, and that was wrong twice over. A `skip`-mapped account
+    is the user's own decision being honoured, so the alarm could never be cleared and fired on every sync
+    forever; and an account genuinely awaiting a mapping already raises the card's "N to map" badge from
+    `connection_account`, so the second alarm added no information. Where those rows *went* is a question
+    about the bundle of transactions received, and it is answered on the import card, per account.
     """
-    if connection_row["last_sync_error"]:
+    if error:
         return SYNC_OUTCOME_FAILED
-    if log_row is None:
-        return None
-    if log_row["error"]:
-        return SYNC_OUTCOME_FAILED
-    if (log_row["skipped_no_account"] or 0) > 0:
+    if mode == "initial" and already_held > 0:
         return SYNC_OUTCOME_ATTENTION
-    if log_row["mode"] == "initial" and (log_row["skipped_already_held"] or 0) > 0:
-        return SYNC_OUTCOME_ATTENTION
-    if not log_row["became_complete"] and log_row["mode"] == "initial":
+    if mode == "initial" and not became_complete:
         return SYNC_OUTCOME_INCOMPLETE
     return SYNC_OUTCOME_OK
-
-
-# The newest sync-log row per connection. The card's counts come from here rather than from columns on
-# `connection`, so there is one record of what a sync did instead of a summary that can drift from it.
-_LATEST_SYNC_LOG = """
-    SELECT l.* FROM connection_sync_log l
-    WHERE  l.connection_id = ?
-    ORDER  BY l.started_at DESC, l.id DESC
-    LIMIT  1
-"""
 
 
 def list_connections(provider: str) -> list[dict]:
@@ -202,23 +196,27 @@ def list_connections(provider: str) -> list[dict]:
     per-account breakdown. A card that only reports failure cannot distinguish "nothing arrived" from
     "everything arrived", and the gap between those two is where an account quietly receiving none of its
     transactions lived.
+
+    It is read from the **connection**, not from the sync log. The log is a diagnostic ring buffer: capped,
+    pruned on every write, and emptied outright by `DELETE /sync/diagnostics` — so a card that derived from
+    it lost its entire "Last sync" block, on a perfectly healthy connection, the moment a user cleared a
+    debugging view. The two cannot drift apart despite living in different tables, because both are written
+    from the same recorded facts in the same call (`_record_connection_last_sync` in `routers/sync.py`).
     """
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
             "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at, "
-            "sync_progress "
+            "sync_progress, last_sync_outcome, last_sync_summary "
             "FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
-        logs = {r["id"]: conn.execute(_LATEST_SYNC_LOG, (r["id"],)).fetchone() for r in rows}
     out = []
     for r in rows:
         try:
             warnings = json.loads(r["last_sync_warnings"]) if r["last_sync_warnings"] else []
         except (TypeError, ValueError):
             warnings = []
-        log = logs.get(r["id"])
         out.append({
             "id": r["id"], "external_id": r["external_id"], "institution": r["institution"],
             "last_synced_at": r["last_synced_at"],
@@ -230,7 +228,7 @@ def list_connections(provider: str) -> list[dict]:
             # wrong, this says the user has to do something about it, and only one of the two is
             # actionable. A card showing both should lead with this one.
             "reauth_required": bool(r["reauth_required"]),
-            "last_sync": _last_sync_summary(log, r),
+            "last_sync": _last_sync_summary(r),
             # Read through the staleness check rather than as a bare "is the column set": a process that
             # died mid-sync leaves the marker behind, and a card that believed it would disable syncing
             # for good. Imported here rather than duplicating the rule — the router owns it because it is
@@ -260,28 +258,34 @@ def _json_or_none(value):
     return parsed if isinstance(parsed, dict) else None
 
 
-def _last_sync_summary(log, connection_row) -> dict | None:
-    """The card's view of one sync call. None when the connection has never synced — which reads as "no
-    record yet" rather than as a zero-count success."""
-    outcome = _sync_outcome(log, connection_row)
-    if outcome is None:
+def _last_sync_summary(connection_row) -> dict | None:
+    """The card's view of the connection's most recent sync. None when it has never synced — which reads as
+    "no record yet" rather than as a zero-count success.
+
+    A **currently** failing connection outranks the stored word. `last_sync_outcome` records what one call
+    did; `last_sync_error` says the connection is broken right now, which is the more important of the two
+    and is what the card must lead with. It is not a second copy of the outcome — it is a different fact,
+    and it is the reason the stored word is not simply trusted unconditionally.
+    """
+    if connection_row["last_sync_error"]:
+        stored = _json_or_none(connection_row["last_sync_summary"]) or {}
+        return {**stored, "outcome": SYNC_OUTCOME_FAILED,
+                "at": connection_row["last_sync_error_at"] or stored.get("at")}
+    outcome = connection_row["last_sync_outcome"]
+    if not outcome:
         return None
-    if log is None:
-        return {"outcome": outcome, "at": connection_row["last_sync_error_at"]}
-    try:
-        accounts = json.loads(log["account_counts"]) if log["account_counts"] else {}
-    except (TypeError, ValueError):
-        accounts = {}
+    summary = _json_or_none(connection_row["last_sync_summary"]) or {}
+    accounts = summary.get("accounts")
     return {
         "outcome":  outcome,
-        "at":       log["started_at"],
-        "mode":     log["mode"],
-        "added":    log["added"] or 0,
-        "updated":  log["updated"] or 0,
-        "removed":  log["removed"] or 0,
-        "skipped_no_account":   log["skipped_no_account"] or 0,
-        "skipped_already_held": log["skipped_already_held"] or 0,
+        "at":       summary.get("at"),
+        "mode":     summary.get("mode"),
+        "added":    int(summary.get("added") or 0),
+        "updated":  int(summary.get("updated") or 0),
+        "removed":  int(summary.get("removed") or 0),
         # Keyed by the provider's account id; the caller resolves display names from its own account list.
+        # The per-account buckets travel whole rather than pre-summed — the card's chips want them per
+        # account, and a total beside them would be a stored sum of the thing it sums.
         "accounts": accounts if isinstance(accounts, dict) else {},
     }
 

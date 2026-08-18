@@ -24,6 +24,8 @@
 // creation costs nothing where it is unsupported (the field is ignored, and the fallback still runs), and
 // removes a prompt where it is not.
 
+import { api } from './api.js'
+
 const PRF_UNSUPPORTED = { ok: false, reason: 'no_prf' }
 
 const b64 = {
@@ -194,3 +196,41 @@ export async function unlockWithPasskey(params) {
 }
 
 export const __testing = { b64 }
+
+// The whole unlock sequence, end to end: fetch this connection's parameters, run the ceremony, and hand
+// the PRF output to the server. One function because it is one user-visible act, and because it has two
+// callers that must not drift — the vault strip on the Connections tab, and the unlock dialog any gated
+// action raises. The dialog was the one that mattered and the one that did not have it: a passkey could
+// only be used by noticing the strip *before* triggering an action, so every disconnect, sync, or 423
+// re-prompt demanded the passphrase from users who had set up a passkey precisely to avoid typing it.
+//
+// Returns `{ ok, user }` or `{ ok: false, reason, message }`, never throws, and reports a dismissed
+// prompt with an empty `message` — the user closed it on purpose and does not need to be told what they
+// just did. Every failure leaves the vault locked and the passphrase still available, which is why the
+// callers keep their prompt open rather than treating this as terminal.
+export async function runVaultPasskeyUnlock() {
+  try {
+    const params = await api.vaultPasskeyParams()
+    const result = await unlockWithPasskey(params)
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.reason === 'cancelled'
+          ? ''
+          : (PASSKEY_UNAVAILABLE[result.reason] || PASSKEY_UNAVAILABLE.unsupported),
+      }
+    }
+    const resp = await api.unlockVaultWithPasskey(result.credentialId, result.prfOutput)
+    return { ok: true, user: resp?.user || null }
+  } catch (e) {
+    return { ok: false, reason: 'failed', message: e?.message || 'The vault stayed locked.' }
+  }
+}
+
+// Whether this user has a passkey that can actually open the vault. A `pending` slot is one awaiting
+// approval — registered, but not yet able to unlock anything — so offering it would produce a ceremony
+// that can only fail. Read from the session user, which both callers already hold.
+export function hasUsableVaultPasskey(user) {
+  return (user?.vault_passkeys || []).some(pk => !pk.pending)
+}

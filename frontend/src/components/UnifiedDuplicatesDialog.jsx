@@ -47,6 +47,9 @@ import {
   useRestorablePanelGeometry,
 } from './detailShared.jsx'
 import { kindMeta, kindRank } from '../lib/duplicateKinds.js'
+import { summarizeBulkOutcome } from '../lib/bulkRequestOutcome.js'
+import { AccountIdentityPrompt } from './importExport/AccountIdentityPrompt.jsx'
+import { notifyAccountsChanged } from '../App.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import HelpHoverCard from '../help/HelpHoverCard.jsx'
@@ -157,6 +160,7 @@ export default function UnifiedDuplicatesDialog({
   hardRejectCount = 0,
   softFlagCount = 0,
   ruleBreakdown = [],
+  accountPairs = [],
   title = 'this import',
   batchId = '',
   accountFilter = null,
@@ -190,6 +194,44 @@ export default function UnifiedDuplicatesDialog({
   const [sortState, setSortState] = useUserPreference(UNIFIED_DUPLICATES_SORT_PREF_KEY, DEFAULT_SORT_STATE)
   const [pendingBulk, setPendingBulk] = useState(false)
   const [actionError, setActionError] = useState('')
+  // Pairs the user answered "Not now" to. Deliberately component state and not persisted: dismissing is
+  // "leave me to it for now", not a durable preference, and the two real answers both remove the pair
+  // from the server's list anyway. Re-asking on a later visit is fine — nothing was decided.
+  const [dismissedPairs, setDismissedPairs] = useState(() => new Set())
+
+  // The largest pair still awaiting an answer. `accountPairs` is already ordered by flag count, and only
+  // the top one is offered: several prompts stacked above the list would compete for the same decision.
+  const promptPair = useMemo(() => (
+    (accountPairs || []).find(p => !dismissedPairs.has(`${p.account_id_low}:${p.account_id_high}`)) || null
+  ), [accountPairs, dismissedPairs])
+
+  function dismissPair(pair) {
+    setDismissedPairs(prev => new Set(prev).add(`${pair.account_id_low}:${pair.account_id_high}`))
+  }
+
+  // Both answers are terminal and both settle every flag between the pair — that symmetry is the reason
+  // the question can be asked once instead of per row. What they do differs, and deliberately so: mark
+  // distinct clears every flag (if the accounts are different, all of them are false positives, whatever
+  // the evidence was), while a merge auto-confirms only the *exact* matches as duplicates and leaves
+  // near-misses for review, because within one account "similar" is a genuinely open question.
+  async function resolvePair(pair, answer) {
+    setActionError('')
+    setPendingBulk(true)
+    try {
+      if (answer === 'merge') await api.attachAccount(pair.incoming.id, pair.matched.id)
+      else await api.assertDistinctAccountPair(pair.incoming.id, pair.matched.id)
+      // Accounts changed shape (a merge) or detection scope did (an assertion); either way every surface
+      // keyed on accounts is now stale.
+      notifyAccountsChanged()
+    } catch (err) {
+      setActionError(err?.message || 'Could not apply that answer')
+    } finally {
+      try {
+        if (typeof onReload === 'function') await onReload()
+      } catch { /* the reload's own error surfaces through the viewer */ }
+      setPendingBulk(false)
+    }
+  }
 
   // When opened from an account's detail panel, scope the whole report to that account's rows so the
   // counts, filter chips, and list all reflect just what's relevant — the user lands on exactly the
@@ -305,28 +347,45 @@ export default function UnifiedDuplicatesDialog({
         // Acknowledgment is one row-number-set call rather than N requests.
         const rows = selected.map(e => e.incoming.row_number).filter(n => n != null)
         if (rows.length) await api.markBatchDuplicatesReviewed(batchId, rows, action === 'mark_reviewed')
+        setSelectedIds(new Set())
       } else if (action === 'enrich' || action === 'unenrich') {
         const rows = selected.map(e => e.incoming.row_number).filter(n => n != null)
         if (rows.length) {
           if (action === 'enrich') await api.enrichBatchDuplicates(batchId, rows)
           else await api.undoBatchDuplicateEnrichment(batchId, rows)
         }
+        setSelectedIds(new Set())
       } else {
-        const tasks = selected.map(entry => {
-          if (action === 'keep')          return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep')
-          if (action === 'reject')        return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject')
-          if (action === 'replace')       return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace')
+        // `selected` is already scoped to entries offering this action (`actionsFor`), so every one of
+        // them yields a request — the map cannot produce a hole, which is what lets a result be paired
+        // back to its entry by index below.
+        const targets = selected
+        const tasks = targets.map(entry => {
           if (action === 'restore')       return api.restoreRejectedDuplicate(entry.incoming.txn_id)
           if (action === 'import_anyway') return api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
-          return null
-        }).filter(Boolean)
-        await Promise.all(tasks)
+          return api.resolveSuspectDuplicate(entry.incoming.txn_id, action)
+        })
+        // `allSettled`, not `all`: these are N independent requests and one refusal must not discard the
+        // N−1 that worked. `all` rejected on the first failure, which skipped both the reload and the
+        // selection clear below — so a bulk action that mostly succeeded left the dialog and the page's
+        // pill counts showing the state from before it, and reported the whole thing as failed.
+        const outcome = summarizeBulkOutcome(await Promise.allSettled(tasks))
+        if (outcome.error) setActionError(outcome.error)
+        // Only the rows that actually failed stay selected, so a retry re-sends exactly those rather than
+        // re-issuing the ones that already succeeded.
+        setSelectedIds(new Set(
+          targets.filter((_, i) => outcome.failedIndexes.has(i)).map(entryId)
+        ))
       }
-      setSelectedIds(new Set())
-      if (typeof onReload === 'function') await onReload()
     } catch (err) {
       setActionError(err?.message || 'Bulk action failed')
     } finally {
+      // Unconditional, including after a failure: a partly-applied bulk is exactly the case where the
+      // numbers on screen are least trustworthy, and this is what advances the viewer `version` that the
+      // Import/Export page watches to refresh its own counts.
+      try {
+        if (typeof onReload === 'function') await onReload()
+      } catch { /* the reload's own error surfaces through the viewer */ }
       setPendingBulk(false)
     }
   }
@@ -602,6 +661,21 @@ export default function UnifiedDuplicatesDialog({
                 Show all duplicates in this import
               </button>
             ) : null}
+          </div>
+        ) : null}
+        {/* One question that settles a whole pile, offered above the list rather than inside it: every
+            flag in `pair` sits between the same two accounts, so "are these the same account?" resolves
+            all of them at once whichever way it is answered. Only the largest outstanding pair is shown
+            — stacking a prompt per pair would turn the answer to one into noise about the others. */}
+        {promptPair ? (
+          <div style={{ padding: '10px 16px 0' }}>
+            <AccountIdentityPrompt
+              pair={promptPair}
+              busy={pendingBulk}
+              onMerge={() => resolvePair(promptPair, 'merge')}
+              onMarkDistinct={() => resolvePair(promptPair, 'distinct')}
+              onDismiss={() => dismissPair(promptPair)}
+            />
           </div>
         ) : null}
         <ContextualExplainer

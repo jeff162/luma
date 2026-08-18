@@ -123,17 +123,24 @@ _SHARED_POOL = "shared"
 
 # How many accounts may still be walking before the walk stops filtering per account.
 #
+# **The rule reads the size of the walking set and nothing else** — not whether this is a first backfill or
+# a top-up, not how much history is left. Worth stating plainly because the wording here used to imply
+# otherwise, and a small credential makes the difference visible: three accounts is *at* the threshold, so
+# a first connect there filters per account throughout its backfill, which reads as a surprise to anyone
+# who took "not for a first backfill" as the rule rather than as a remark about how large N usually is on
+# one.
+#
 # The two ways to advance N accounts by one window cost the same *depth* but draw on different allowances:
 # one unfiltered request advances all N and costs one shared token, while N filtered requests advance the
 # same N and cost one token from each account's own pool. Filtering therefore buys no extra reach — every
 # pool is the same size — it moves the cost off the shared pool, which is also what the routine top-up and
 # account discovery spend from.
 #
-# That trade is worth making for the case it was meant for, a few newly-mapped accounts catching up, and
-# not for a first backfill: N filtered requests per window is an N-fold increase in round trips, and on a
-# first connect N is every account on the credential. So a small walking set filters and a large one shares
-# the window — the same rule the code carried when it filtered only a lone account, with the threshold
-# raised now that the separate-pool question is settled.
+# So the trade is round trips against the shared pool, and the threshold is where it stops being worth
+# making: a few accounts catching up filter, and pay N calls per window to leave the shared allowance for
+# the top-ups that keep the ledger current. Above that, N filtered requests per window is an N-fold
+# increase in round trips for the same depth, and on a large credential that is most of what a first
+# connect would spend its time doing — so a wide walking set shares the window instead.
 FILTERED_WALK_MAX_ACCOUNTS = 3
 
 # Windows fetched before the walk hands control back to the caller as a page (`has_more`).

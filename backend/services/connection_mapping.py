@@ -118,6 +118,31 @@ def provider_account_label(row) -> str:
     return name or (mask and f"···{mask}") or str(row["external_account_id"])
 
 
+def provider_account_index(conn: sqlite3.Connection, connection_id: str) -> dict[str, dict]:
+    """Every provider account this connection knows of, by external id → `{label, mapping_mode}`.
+
+    Deliberately unfiltered, which is what separates it from `dedupe_inputs_for_connection`'s
+    `label_by_external`: that one drops `skip` and unmapped accounts because a source value with no
+    destination cannot participate in dedupe. This is the opposite case — the accounts it most needs to
+    describe are exactly the ones with no local account, since those are the rows that would otherwise be
+    recorded as having come from nowhere.
+
+    Both facts come back together because a sync wants them about the same account at the same moment:
+    what to call a dropped row's source, and whether dropping it was the user's decision (`skip`) or a
+    gap awaiting one (`mapping_mode` NULL, or no row at all for an account added provider-side).
+    """
+    return {
+        r["external_account_id"]: {
+            "label": provider_account_label(r), "mapping_mode": r["mapping_mode"],
+        }
+        for r in conn.execute(
+            "SELECT external_account_id, provider_name, provider_mask, mapping_mode "
+            "FROM connection_account WHERE connection_id = ?",
+            (connection_id,),
+        ).fetchall()
+    }
+
+
 def list_connection_accounts(conn: sqlite3.Connection, connection_id: str) -> list[dict]:
     """The connection's provider accounts with their current mapping, for the mapping UI and for
     building a sync's dedupe context. `account_name` reflects the *local* account (which the user may
@@ -217,18 +242,28 @@ def _create_local_account(conn, *, name: str, account_type: Optional[str], subty
 def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provider: str,
                           institution: Optional[str], mappings: dict, default_owner_id: Optional[str]) -> dict:
     """Materialize the user's mapping decisions. `mappings` is
-    {external_account_id: {mode, target_account_id?, name?, type?}}, where `target_account_id` is the
-    account adopted ('existing') or nested under ('group').
+    {external_account_id: {mode, target_account_id?, name?, type?, distinct_from_account_id?}}, where
+    `target_account_id` is the account adopted ('existing') or nested under ('group').
 
-    Returns {"created": [...], "linked": [...], "skipped": [...], "changed": bool} — `changed` drives
-    whether the caller re-runs duplicate detection, since a mapping change can newly qualify rows for
-    the cross-account rules.
+    `distinct_from_account_id` is the answer to the "Possible duplicate account?" chooser when the user
+    picked **Keep separate**: the existing account this provider account was suggested as a match for, and
+    which the user said it is not. It is recorded as an `account_pair_distinct` assertion once the new
+    account exists — which is the whole point of carrying it. Before this the answer was discarded, so a
+    user who looked at both account names side by side and declared them different was asked the same
+    question again, one transaction at a time, as soon as the data landed.
+
+    Returns {"created": [...], "linked": [...], "skipped": [...], "distinct_pairs": int, "changed": bool}
+    — `changed` drives whether the caller re-runs duplicate detection, since a mapping change can newly
+    qualify rows for the cross-account rules.
     """
     existing = {r["external_account_id"]: r for r in conn.execute(
         "SELECT * FROM connection_account WHERE connection_id = ?", (connection_id,)
     ).fetchall()}
 
     created, linked, skipped = [], [], []
+    # Collected rather than written inline: the assertion needs the local account's id, and for a `new`
+    # mapping that id does not exist until this loop creates it.
+    distinct_from: list[tuple[str, str]] = []
     changed = False
 
     for external_account_id, choice in (mappings or {}).items():
@@ -315,10 +350,26 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
             (account_id, mode, target_account_id if mode in ("existing", "group") else None,
              utcnow_iso(), connection_id, external_account_id),
         )
+        # Only meaningful for a mapping that ends up as its own local account: 'existing' and 'group' are
+        # already statements about the relationship, and 'skip' has no account to assert anything about.
+        declined = str((choice or {}).get("distinct_from_account_id") or "").strip() or None
+        if declined and account_id and mode in ("new", "group") and declined != account_id:
+            distinct_from.append((account_id, declined))
+
         if prior_mode != mode or prior_account != account_id:
             changed = True
 
-    return {"created": created, "linked": linked, "skipped": skipped, "changed": changed}
+    # After the loop, so every account named here exists. Imported lazily: `duplicate_detection` imports
+    # broadly and this module is pulled in by the sync path on every pull.
+    pairs = 0
+    if distinct_from:
+        from backend.services.duplicate_detection import record_account_pair_distinct
+        for account_id, declined in distinct_from:
+            if record_account_pair_distinct(conn, account_id, declined).get("recorded"):
+                pairs += 1
+
+    return {"created": created, "linked": linked, "skipped": skipped,
+            "distinct_pairs": pairs, "changed": changed}
 
 
 def build_sync_evidence(txn: dict, *, source_label: str, captured_fields: set[str]) -> Optional[str]:

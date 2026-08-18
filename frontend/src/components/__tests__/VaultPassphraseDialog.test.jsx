@@ -14,9 +14,17 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const vaultCredentialsBackups = vi.fn(async () => ({ backups: [] }))
+const runVaultPasskeyUnlock = vi.fn(async () => ({ ok: true, user: { id: 'u1' } }))
 
 vi.mock('../../lib/api.js', () => ({
   api: { vaultCredentialsBackups: (...a) => vaultCredentialsBackups(...a) },
+}))
+
+// The ceremony itself is mocked: it is WebAuthn, which jsdom has no way to run. What is under test here
+// is the affordance — whether the dialog offers a passkey at all, and what it does with the outcome.
+vi.mock('../../lib/vaultPasskey.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  runVaultPasskeyUnlock: (...a) => runVaultPasskeyUnlock(...a),
 }))
 
 const { VaultPassphraseDialog } = await import('../VaultPassphraseDialog.jsx')
@@ -37,15 +45,19 @@ const SESSION = {
   currentUser: { vault_passphrase_min_length: 20, vault_passphrase_min_distinct: 6 },
 }
 
-function renderDialog(props) {
+function renderDialog(props, session = SESSION) {
   return render(
-    <AppSessionProvider value={SESSION}>
+    <AppSessionProvider value={session}>
       <VaultPassphraseDialog onClose={() => {}} {...props} />
     </AppSessionProvider>,
   )
 }
 
-afterEach(() => { cleanup(); vaultCredentialsBackups.mockClear() })
+const withPasskey = (...passkeys) => ({
+  currentUser: { ...SESSION.currentUser, vault_passkeys: passkeys },
+})
+
+afterEach(() => { cleanup(); vaultCredentialsBackups.mockClear(); runVaultPasskeyUnlock.mockClear() })
 
 describe('the passphrase floor is enforced, not suggested', () => {
   it('blocks submit below the length floor and says how much is missing', async () => {
@@ -115,5 +127,70 @@ describe('changing the passphrase', () => {
     await userEvent.type(screen.getByPlaceholderText('New passphrase'), 'too-short')
     expect(await screen.findByText('11 more characters needed (at least 20).')).toBeTruthy()
     await clickIsIgnored('Change passphrase', onSubmit)
+  })
+})
+
+describe('unlocking with a passkey', () => {
+  // The gap this closes: the ceremony existed and worked, but was reachable only from the vault strip on
+  // the Connections tab. Every gated action raises THIS dialog, so a user who had set up a passkey to
+  // avoid typing their passphrase was asked for it on every disconnect, sync, and idle-timeout re-prompt.
+
+  it('is offered when the user has a usable passkey', async () => {
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    expect(screen.getByText('Unlock with a passkey')).toBeTruthy()
+  })
+
+  it('is not offered when there is no passkey to use', async () => {
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey: vi.fn() })
+    expect(screen.queryByText('Unlock with a passkey')).toBeNull()
+  })
+
+  it('ignores a slot still awaiting approval', async () => {
+    // A pending slot is registered but cannot open anything, so offering it produces a ceremony that can
+    // only fail.
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1', pending: true }))
+    expect(screen.queryByText('Unlock with a passkey')).toBeNull()
+  })
+
+  it('is not offered for the modes that choose a new passphrase', async () => {
+    // 'set' / 'change' / 'request' all mint or rewrap a passphrase, which a passkey cannot stand in for.
+    for (const mode of ['set', 'change', 'request']) {
+      cleanup()
+      renderDialog({ mode, onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+      expect(screen.queryByText('Unlock with a passkey')).toBeNull()
+    }
+  })
+
+  it('hands the unlocked session to the host, which settles the gate', async () => {
+    const onUnlockedByPasskey = vi.fn()
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey }, withPasskey({ id: 'pk1' }))
+    await userEvent.click(screen.getByText('Unlock with a passkey').closest('button'))
+    await waitFor(() => expect(onUnlockedByPasskey).toHaveBeenCalledWith({ id: 'u1' }))
+  })
+
+  it('keeps the passphrase available when the ceremony refuses', async () => {
+    // Every failure leaves the vault locked, so the dialog must stay open on its fallback rather than
+    // treating a refused passkey as the end of the attempt.
+    runVaultPasskeyUnlock.mockResolvedValueOnce({
+      ok: false, reason: 'no_prf', message: 'This authenticator cannot produce the key material.',
+    })
+    const onUnlockedByPasskey = vi.fn()
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey, onSubmit }, withPasskey({ id: 'pk1' }))
+    await userEvent.click(screen.getByText('Unlock with a passkey').closest('button'))
+    await waitFor(() => expect(
+      screen.getByText('This authenticator cannot produce the key material.')).toBeTruthy())
+    expect(onUnlockedByPasskey).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Vault passphrase')).toBeTruthy()
+  })
+
+  it('says nothing when the user dismisses the prompt themselves', async () => {
+    // A cancelled ceremony is an answer, not a fault — reporting it explains to the user what they just
+    // deliberately did.
+    runVaultPasskeyUnlock.mockResolvedValueOnce({ ok: false, reason: 'cancelled', message: '' })
+    renderDialog({ mode: 'unlock', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    await userEvent.click(screen.getByText('Unlock with a passkey').closest('button'))
+    await waitFor(() => expect(runVaultPasskeyUnlock).toHaveBeenCalled())
+    expect(screen.queryByText(/could not|cannot|failed/i)).toBeNull()
   })
 })

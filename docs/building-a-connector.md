@@ -203,6 +203,18 @@ ask because the local bucket is empty means the accounting worked; being refused
 provider's count and this app's disagree, which is a bug with a real penalty behind it. Distinguish them on
 `update_status` (`BUDGET_PAUSED` vs `RATE_LIMITED`).
 
+**If an adapter keeps more than one pool, the rule choosing between them is worth stating where a reader
+will look for it, because the choice is not the one they will guess.** SimpleFIN keeps a shared allowance
+plus one per account, and picks by the size of the *still-walking set* alone — a small set makes one
+filtered request per account and spends their own pools, a large one makes a single unfiltered request and
+spends the shared pool. It is deliberately **not** keyed on initial-vs-routine, which is the intuitive
+reading and the wrong one: a credential with only a few accounts filters throughout its first backfill,
+leaving the shared allowance untouched and available for the top-ups that keep the ledger current. That is
+correct behaviour and looks like a bug in the log — the same pull that spends dozens of per-account
+requests reports its shared bucket as full. Filtering buys no extra depth (every pool is the same size);
+it trades round trips for keeping the shared allowance free. State the trade, or the log's own numbers will
+be read as evidence against it.
+
 Then report the allowance itself, via the optional `request_allowance` field on the page dict
 (`{capacity, refill_per_hour, pools:{pool key: tokens left}}`). This is easy to skip and the omission is
 invisible until someone has to diagnose a stuck connection: the budget lives in a column the next sync

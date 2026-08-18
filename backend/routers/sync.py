@@ -34,7 +34,7 @@ from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
-from backend.services.providers.config import set_sync_running
+from backend.services.providers.config import set_sync_running, sync_outcome
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
@@ -51,7 +51,9 @@ from backend.services.source_capabilities import (
     ZERO_AMOUNT_REJECTION_REASON,
     rejects_zero_amount,
 )
-from backend.services.connection_mapping import build_sync_evidence, record_provider_accounts
+from backend.services.connection_mapping import (
+    build_sync_evidence, provider_account_index, record_provider_accounts,
+)
 from backend.services.duplicate_detection import (
     evaluate_duplicate,
     mark_import_suspects,
@@ -188,21 +190,25 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-# Per-account bookkeeping for one sync call, keyed by the **provider's** account id rather than the local
-# one — because the account that most needs counting is the one with no local account at all, and any
-# tally keyed on what the rows landed in can only ever count what landed. An account importing nothing is
-# invisible to `import_batch_account` (a card exists only where rows exist), which is exactly how an
-# account silently receiving none of its transactions went unnoticed.
+# Nested counters for one sync call: `{subject: Counter(bucket -> n)}`. The subject is the **provider's**
+# account id for the per-account tally — rather than the local one, because the account that most needs
+# counting is the one with no local account at all, and any tally keyed on what the rows landed in can
+# only ever count what landed — and a card id for the per-card one.
 #
-# `skipped` is deliberately three separate keys. It used to be one number covering "no local account to
-# put this in" (data lost), "we already hold this" (routine — the incremental overlap re-asks for days on
-# purpose, so it is non-zero on every top-up), and "a revision to a row we never had" (routine). Shown as
-# one number on a card it would cry wolf on every sync; split, the first is a real alarm and the second is
-# a contradiction whenever it appears on an *initial* pull.
-def _bump(tally: dict | None, external_account_id: str, key: str) -> None:
+# `skipped` is deliberately several separate buckets rather than one number, because they carry unrelated
+# meanings: a row whose account the user chose not to import, a row whose account has no mapping decision
+# yet, a row we already hold (routine — the incremental overlap re-asks for recent days on purpose, so it
+# is non-zero on every top-up), and a zero-amount row the provider's declared policy refuses. Summed into
+# one figure it would cry wolf on every sync; kept apart, each reaches the surface that can act on it.
+#
+# **Nothing stores the sums.** They are added up wherever they are needed — the log row keeps the buckets
+# and derives on read, and the card keeps its own totals in the CSV import vocabulary. A stored sum beside
+# the thing it sums is what forced the sync log's zero-amount count to be recovered by subtraction in the
+# browser, which in turn made every new bucket a breaking change.
+def _bump(tally: dict | None, subject: str, key: str) -> None:
     if tally is None:
         return
-    tally.setdefault(external_account_id, Counter())[key] += 1
+    tally.setdefault(subject, Counter())[key] += 1
 
 
 def _add_advisory(store: dict | None, message: str, *, count: int = 1, context: str | None = None) -> None:
@@ -283,8 +289,17 @@ def _card_counts(conn, card_added: dict, baseline: dict) -> list[dict]:
 
 
 def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
-    """Persist this sync's per-connection diagnostic rows and prune to the retention window. Called only
-    when developer options are enabled; never lets a logging failure affect the sync itself."""
+    """Persist this sync's per-connection diagnostic rows and prune to the retention window.
+
+    Written on every sync, not only under developer options — see the call site for why. Never lets a
+    logging failure affect the sync itself.
+
+    This table is a **diagnostic ring buffer**: capped at `_SYNC_LOG_RETENTION`, pruned on every write and
+    emptied wholesale by `DELETE /sync/diagnostics`. Nothing user-facing may derive from it, because all
+    three of those can remove the row it would be reading. The connection card's own summary lives on
+    `connection` for exactly that reason (`services/providers/config.py`); this row is what a *developer*
+    reads to explain a pull after the fact.
+    """
     for r in rows:
         conn.execute(
             """
@@ -306,8 +321,14 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 # an existing database carries no default, so every write has to supply the value.
                 json.dumps(r["warnings"]) if r.get("warnings") else None,
                 json.dumps(r["advisories"]) if r.get("advisories") else None,
-                r.get("skipped_no_account") or 0,
-                r.get("skipped_already_held") or 0,
+                # Vestigial, written 0 and read by nothing. They held sums of `account_counts` — a column
+                # summarizing another column in the same row — which is the shape this restructure exists
+                # to remove; the breakdown is derived on read by `_skipped_breakdown` instead. Still
+                # supplied rather than dropped from the INSERT because they are NOT NULL, and still
+                # present rather than dropped from the table because a DDL rebuild of a prunable buffer
+                # is the riskiest, least valuable step available here.
+                0,
+                0,
                 json.dumps(r["account_counts"]) if r.get("account_counts") else None,
                 json.dumps(r["card_counts"]) if r.get("card_counts") else None,
                 json.dumps(r["requested_windows"]) if r.get("requested_windows") else None,
@@ -425,6 +446,48 @@ def record_sync_zero_amount_rejection(conn, *, batch_id: str, txn: dict, source_
                  (json.dumps(snapshot), batch_id))
 
 
+def record_sync_card_totals(conn, *, batch_id: str, imported: int, deduped: int,
+                            account_skipped: int, rejected: int) -> None:
+    """Fold one sync's contribution into a card's headline `import_summary` counts.
+
+    A sync card is the same kind of record as a file card — "here is a bundle of transactions and where
+    each one went" — so it reports in the same vocabulary rather than a sync-specific one. Every key here
+    already exists on a CSV card (`core.py`, `_finalize_import`), and `account_skipped_count` in
+    particular already means exactly what a sync's no-destination rows are: rows dropped because the
+    account they name has nowhere to go. Writing a parallel set of sync-only counters was what left the
+    two cards answering the same question in two different dialects, with `summarizeImportOutcome` papering
+    over the difference by reconstructing the missing figures from whatever it could find.
+
+    **Accumulates, never overwrites.** A monthly period card is added to by every top-up for the rest of
+    the month, so a summary written whole would report only the latest sync's figures — the same reason
+    `record_sync_zero_amount_rejection` accumulates, and the totals are re-derived from the accumulated
+    values rather than added to independently so they cannot drift from their own parts.
+
+    `rejected` counts refused rows toward `skipped_count` only. The rejected-row report itself — the
+    count, the rows, the headers — belongs to `record_sync_zero_amount_rejection`, which is the writer
+    that has the row in hand; splitting one summary between two writers is safe precisely because they
+    own disjoint keys.
+    """
+    from backend.routers.import_export.core import IMPORT_SUMMARY_KEY
+
+    snapshot = _card_config_snapshot(conn, batch_id)
+    summary = snapshot.get(IMPORT_SUMMARY_KEY) or {}
+    imported_count = int(summary.get("imported_count") or 0) + imported
+    deduped_count = int(summary.get("deduped_count") or 0) + deduped
+    account_skipped_count = int(summary.get("account_skipped_count") or 0) + account_skipped
+    skipped_count = int(summary.get("skipped_count") or 0) + account_skipped + rejected
+    summary.update({
+        "imported_count": imported_count,
+        "deduped_count": deduped_count,
+        "account_skipped_count": account_skipped_count,
+        "skipped_count": skipped_count,
+        "total_rows": imported_count + skipped_count + deduped_count,
+    })
+    snapshot[IMPORT_SUMMARY_KEY] = summary
+    conn.execute("UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+                 (json.dumps(snapshot), batch_id))
+
+
 def _card_config_snapshot(conn, batch_id: str) -> dict:
     """A card's `config_snapshot` as a dict. The card's identity markers (`initial_backfill`,
     `sync_period`) live in the same blob and are resolved by `json_extract`, so it is read and rewritten
@@ -460,6 +523,41 @@ def _record_sync_success(conn, connection_id: str, warnings: list) -> None:
         WHERE  id = ?
         """,
         (_utcnow_iso(), json.dumps(warnings) if warnings else None, connection_id),
+    )
+
+
+def _record_connection_last_sync(conn, entry: dict) -> None:
+    """Store what this call did on the **connection**, from the same facts the log row is built from.
+
+    The connection card reads this; `connection_sync_log` is a diagnostic that may be pruned or cleared at
+    any moment, and a user-facing summary cannot rest on something a debugging action deletes. Fed the
+    already-assembled diagnostic dict rather than the individual figures precisely so the two records
+    cannot disagree about one call — the guarantee the card and the log had when both read the log row,
+    kept now that only one of them does.
+
+    Only the facts a card renders are kept. Everything else the pull knows — cursor fingerprints, request
+    windows, the allowance it left behind, the status sequence — is diagnostic, belongs to the log, and is
+    deliberately not copied here.
+    """
+    accounts = entry.get("account_counts") or {}
+    already_held = sum(
+        int((c or {}).get("skipped_already_held") or 0) for c in accounts.values()
+    )
+    outcome = sync_outcome(
+        error=entry.get("error"), mode=entry.get("mode"),
+        already_held=already_held, became_complete=bool(entry.get("became_complete")),
+    )
+    summary = {
+        "at":       entry.get("started_at"),
+        "mode":     entry.get("mode"),
+        "added":    entry.get("added") or 0,
+        "updated":  entry.get("updated") or 0,
+        "removed":  entry.get("removed") or 0,
+        "accounts": accounts,
+    }
+    conn.execute(
+        "UPDATE connection SET last_sync_outcome = ?, last_sync_summary = ? WHERE id = ?",
+        (outcome, json.dumps(summary), entry["connection_id"]),
     )
 
 
@@ -716,12 +814,20 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     cards_touched: set[str] = set()          # cards that received added rows (for the post-sync dedup sweep)
     card_added: dict[str, int] = {}          # card_id -> rows added this call
     card_dupes: dict[str, int] = {}          # card_id -> rows hard-rejected as duplicates this call
-    card_accounts: dict[tuple[str, str], dict] = {}  # (card_id, csv_value) -> {account_id, count}
+    # (card_id, csv_value) -> {account_id, count, skipped}. `count` is rows that landed, `skipped` is rows
+    # dropped for having no local account to land in; a source value is one or the other within a sync,
+    # but a card outlives a sync and can see both once an account is mapped after the fact.
+    card_accounts: dict[tuple[str, str], dict] = {}
+    # card_id -> Counter of the skip buckets attributable to that card, for its headline totals. Only the
+    # skips a card can *report* are here: a dropped row is nowhere else, and a refused zero-amount row is
+    # on the card's rejected report, but an already-held row is in the ledger already and the card would
+    # only be restating the transaction list (see `_insert_added`).
+    card_skipped: dict[str, Counter] = {}
     synced_statuses: list = []               # each synced connection's final update_status
     more_to_poll: list[bool] = []            # per connection: is there more to deliver by polling now?
     paused: list[dict] = []                  # connections that stopped early and will resume on a later sync
     warned: list[dict] = []                  # connections that synced but reported a partial problem
-    sync_diagnostics: list[dict] = []        # per-connection diagnostic rows (persisted only in dev mode)
+    sync_diagnostics: list[dict] = []        # per-connection diagnostic rows, persisted at the end of the run
 
     _SELECT_CONNECTIONS = (
         "SELECT id, provider, external_id, credential, credential_enc, institution, "
@@ -838,12 +944,47 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             acc = _account_for(t["external_account_id"])
             if not acc:
                 skipped += 1
-                _bump(tally, t["external_account_id"], "skipped_no_account")
+                known = provider_accounts.get(t["external_account_id"]) or {}
+                # Split where it is counted, because the two carry opposite meanings and only one is worth
+                # a reader's attention. `skip` is a decision the user made and the sync is honouring; every
+                # other case — a row awaiting a mapping decision, or an account the provider added since —
+                # is a gap, and one the "N to map" badge already reports from `connection_account`. Folding
+                # them into a single count is what made a correctly-configured connection report a problem
+                # on every sync, permanently, with nothing the user could do to clear it.
+                _bump(tally, t["external_account_id"],
+                      "skipped_by_choice" if known.get("mapping_mode") == "skip"
+                      else "skipped_unknown_account")
                 # Noted rather than merely counted: an id with no local account is either an account the
                 # user skipped or one the provider has added since — and only the second is worth acting
                 # on. `_discover_new_provider_accounts` tells them apart after the page is applied.
                 if seen_unknown is not None:
                     seen_unknown.add(t["external_account_id"])
+                # Recorded on the card as a skipped source account, in exactly the shape a CSV import
+                # writes for a source value the user chose not to map (`was_skipped = 1` plus the row
+                # count it dropped). Without this the card lists only the accounts that contributed rows,
+                # so a connection's card cannot answer "what arrived and where did it go" the way a file's
+                # card already does — the accounts with nothing to show are the ones the question is about.
+                #
+                # The card is resolved here, which means a pull whose only content is skipped rows still
+                # creates one. Same call the zero-amount refusal above makes, for the same reason: a sync
+                # that received data and imported none of it has something to tell the user, and a card is
+                # the only surface that says so per account.
+                #
+                # The label falls back to the opaque provider id for an account this connection has never
+                # recorded — a provider-side addition, discovered only after the page is applied. That is
+                # the honest name: at the moment these rows were dropped, nothing here knew any other.
+                card_id = get_card(t["date"])
+                entry = card_accounts.setdefault(
+                    (card_id, known.get("label") or t["external_account_id"]),
+                    {"account_id": None, "count": 0, "skipped": 0},
+                )
+                entry["skipped"] += 1
+                # The card's own headline count, in the CSV vocabulary: `account_skipped_count` already
+                # means "rows dropped because their account had no destination" on a file card, and this
+                # is the same fact. Both kinds of no-destination row land in it — the card reports what
+                # arrived and where it went, and on that question the reason is the per-account chip's
+                # business, not the headline's.
+                _bump(card_skipped, card_id, "account_skipped")
                 return False
             # Refused before any lookup or write, so a $0 row from a rejecting provider never touches
             # ledger state. See the zero-amount invariant in this module's docstring for why the answer
@@ -854,14 +995,19 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             # signal in practice, suppressing it is the intended alternative — see the doc.)
             if rejects_zero_amount(adapter.zero_amount_rows) and t["amount"] == 0:
                 skipped += 1
-                # Its own bucket, never folded into `skipped_no_account`: that one is the alarm that means
-                # data was lost, and a refusal we chose is routine. Rides in `account_counts` (no column).
+                # Its own bucket, never folded into the no-destination ones: those are about an account
+                # with nowhere to put rows, and a refusal we chose is routine. Rides in `account_counts`.
                 _bump(tally, t["external_account_id"], "skipped_zero_amount")
+                card_id = get_card(t["date"])
                 record_sync_zero_amount_rejection(
-                    conn, batch_id=get_card(t["date"]), txn=t,
+                    conn, batch_id=card_id, txn=t,
                     source_label=dedupe.label_by_external.get(
                         t["external_account_id"], t["external_account_id"]),
                 )
+                # Counted toward the card's `skipped_count` but NOT its `account_skipped_count`: the row's
+                # account had a destination, so this is a rejected row, and the card already reports it as
+                # one. `record_sync_zero_amount_rejection` keeps the rejected-row half of the summary.
+                _bump(card_skipped, card_id, "rejected")
                 # Deliberately not added to `cards_touched`: that drives the post-sync duplicate sweep,
                 # and nothing was inserted for it to examine.
                 return False
@@ -905,7 +1051,14 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     skipped += 1
                     # Routine on a top-up — the incremental overlap re-asks for days already held, so this
                     # is non-zero by design. On an *initial* pull it is a contradiction, and that is the
-                    # signal `_sync_outcome` reads: nothing can already be held before the first import.
+                    # signal `sync_outcome` reads: nothing can already be held before the first import.
+                    #
+                    # Deliberately not attributed to a card, and deliberately not allowed to create one.
+                    # The other two skips are reported on a card because a card is the only place they
+                    # appear at all — a dropped row is nowhere, a refused row is in no ledger. This row IS
+                    # in the ledger; a card entry would restate what the transaction list already shows.
+                    # It is also the single most routine event a sync has (every top-up re-asks for recent
+                    # days on purpose), so resolving a card here would mint an empty one every month.
                     _bump(tally, t["external_account_id"], "skipped_already_held")
                 return False
 
@@ -985,7 +1138,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             touched_ids.append(txn_id)
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
-            entry = card_accounts.setdefault((card_id, source_label), {"account_id": acc["id"], "count": 0})
+            entry = card_accounts.setdefault(
+                (card_id, source_label), {"account_id": acc["id"], "count": 0, "skipped": 0})
+            entry["account_id"] = acc["id"]
             entry["count"] += 1
             entry.setdefault("dates", set()).add(t["date"])
             return True
@@ -1089,7 +1244,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             card_added0 = dict(card_added)
 
             def _record(*, error=None, became_complete=False):
-                sync_diagnostics.append({
+                entry = {
                     "connection_id":  connection["id"],
                     "provider":       connection["provider"],
                     "institution":    connection["institution"],
@@ -1112,16 +1267,17 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # lists per call, which is what makes "it started failing three syncs ago" answerable.
                     "warnings":       list(connection_warnings),
                     "advisories":     list(connection_advisories.values()),
-                    # The connection-level split of `skipped`, plus the per-account breakdown it is summed
-                    # from. Both are stored: the totals are what a card reads at a glance, the breakdown is
-                    # what names *which* account received nothing.
-                    "skipped_no_account":   sum(c.get("skipped_no_account", 0) for c in account_tally.values()),
-                    "skipped_already_held": sum(c.get("skipped_already_held", 0) for c in account_tally.values()),
                     # Row counts per account, merged with the depth each one reached on this call. They are
                     # kept in one structure because they answer one question together: an account with no
                     # rows and no advance is idle, one with no rows but a moved frontier genuinely had
                     # nothing in the window, and telling those apart is the whole point of a per-account
                     # breakdown. Accounts appear here if they had either.
+                    #
+                    # This is the *only* copy of the skip breakdown. The connection-level totals used to be
+                    # stored beside it as their own columns, which is to say the row stored sums of another
+                    # column in the same row — and the one bucket that never got a column had to be
+                    # reconstructed by subtracting the others in the browser, so adding a bucket silently
+                    # corrupted it. Every consumer now sums these on read (`_skipped_breakdown`).
                     "account_counts": {
                         a: {**dict(account_tally.get(a) or {}), **(account_reach.get(a) or {})}
                         for a in {*account_tally, *account_reach}
@@ -1132,7 +1288,12 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # to reconcile this row against the history page and against the provider's own limits.
                     "card_counts":      _card_counts(conn, card_added, card_added0),
                     "requested_windows": list(requested_windows),
-                })
+                }
+                sync_diagnostics.append(entry)
+                # The durable half, written now rather than with the log at the end of the run: the log is
+                # best-effort and its write is swallowed on failure, while this is what the connection card
+                # reads. Both are built from `entry`, so one call can only ever be described one way.
+                _record_connection_last_sync(conn, entry)
 
             # The card is created lazily on the first actually-inserted row (a no-op sync leaves no empty
             # card): the initial historical pull → one "initial import" card; a routine sync (backfill
@@ -1161,6 +1322,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 ledger_currency = get_ledger_currency(conn)
                 days_requested = _resolve_fetch_depth(adapter, days=days, is_range_pull=is_range_pull)
                 dedupe = build_connection_dedupe(conn, connection, adapter)
+                # Every provider account's label and mapping decision, including the ones `dedupe` drops.
+                # Read alongside it because both are per-connection and both describe source accounts;
+                # kept separate because they answer opposite questions — dedupe needs the accounts that
+                # have a destination, reporting needs the ones that do not.
+                provider_accounts = provider_account_index(conn, connection["id"])
                 # A provider with no app-level credential resolves to an empty config rather than a missing
                 # one — "unconfigured" is its permanent normal state, not a setup step left undone.
                 app_config = {} if not adapter.requires_app_config else resolve_app_config(
@@ -1401,6 +1567,22 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             conn.execute("UPDATE import_batch SET row_count = row_count + ? WHERE id = ?", (n, card_id))
         for card_id, n in card_dupes.items():
             conn.execute("UPDATE import_batch SET deduped_count = deduped_count + ? WHERE id = ?", (n, card_id))
+        # `skipped_count` on the card itself, which a sync never wrote — so a sync card reported 0 skipped
+        # however much it had turned away, and every consumer that derives from the column (notably
+        # `summarizeImportOutcome`'s imported-count fallback) was working from a figure that was not true.
+        for card_id, counts in card_skipped.items():
+            conn.execute("UPDATE import_batch SET skipped_count = skipped_count + ? WHERE id = ?",
+                         (sum(counts.values()), card_id))
+        # The headline summary, in the CSV card's own vocabulary. Every card this pull touched is covered,
+        # including one that only turned rows away: `card_skipped` and `card_added` need not name the same
+        # cards, and a card that imported nothing is exactly the case a summary of zero would misreport.
+        for card_id in {*card_added, *card_dupes, *card_skipped}:
+            counts = card_skipped.get(card_id) or Counter()
+            record_sync_card_totals(
+                conn, batch_id=card_id,
+                imported=card_added.get(card_id, 0), deduped=card_dupes.get(card_id, 0),
+                account_skipped=counts.get("account_skipped", 0), rejected=counts.get("rejected", 0),
+            )
         for (card_id, csv_value), info in card_accounts.items():
             # `csv_value` is the provider account's LABEL (e.g. "CREDIT CARD ···6612"), not its opaque
             # provider id: it is the connection's "source value", it reads like a CSV card's account
@@ -1409,16 +1591,31 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             #
             # No coverage columns are written. A card holds whatever a delta happened to deliver, which
             # proves nothing about the dates it spans; the connection's coverage claim lives on
-            # connection_account (see _record_sync_coverage).
+            # connection_account (see _record_sync_coverage). A skipped row has no coverage claim to make
+            # for the further reason that it was never held — matching the CSV skip path, which writes the
+            # three coverage columns NULL for the same reason.
+            #
+            # `row_count` counts rows *seen* for this source account, landed or dropped, which is what
+            # makes the CSV card's `✕ Some Account 35` and a sync card's read the same. The two are
+            # summed rather than kept apart because `was_skipped` already says which kind they are, and a
+            # pair can only hold both across syncs — the case the two clauses below exist for:
+            #
+            #   account_id  COALESCE, so a later sync's skipped rows (account_id NULL) cannot erase the
+            #               destination an earlier sync recorded.
+            #   was_skipped MIN, so mapping an account the user had skipped clears the flag on the next
+            #               sync that lands a row, and nothing can set it back. "Skipped" is a claim about
+            #               the whole pair, and one row landing disproves it.
             conn.execute(
                 """
-                INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count, was_skipped)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(batch_id, csv_value)
-                DO UPDATE SET row_count  = row_count + excluded.row_count,
-                              account_id = excluded.account_id
+                DO UPDATE SET row_count   = row_count + excluded.row_count,
+                              account_id  = COALESCE(excluded.account_id, import_batch_account.account_id),
+                              was_skipped = MIN(import_batch_account.was_skipped, excluded.was_skipped)
                 """,
-                (card_id, csv_value, info["account_id"], info["count"]),
+                (card_id, csv_value, info["account_id"], info["count"] + info["skipped"],
+                 1 if info["skipped"] and not info["count"] else 0),
             )
 
         # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py): a
@@ -1483,6 +1680,45 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 # user needs, and needs without an env var or a reproduction.
 
 
+# The buckets a reader is owed, named rather than positional, summed from the per-account tally at read
+# time. Naming them here is the point: the four are unrelated events, and the two the user can act on read
+# as opposite advice — a `skip` account is working as configured, an unmapped one is waiting on a decision.
+# Folding those two together is what made a correctly-configured connection report a problem forever.
+_SKIP_BUCKETS = ("skipped_by_choice", "skipped_unknown_account", "skipped_already_held",
+                 "skipped_zero_amount")
+
+
+def _skipped_breakdown(account_counts: dict | None, row: dict) -> dict | None:
+    """One row's `skipped` total split into its named buckets, or None when the row recorded no breakdown.
+
+    Summed on read from `account_counts`, which is the only place the buckets are stored. Nothing derives a
+    bucket by subtracting the others: that was how the zero-amount count used to be recovered, and it made
+    every added bucket a silent corruption of the one computed last.
+
+    Rows written before the split carry the legacy columns instead, and are reported under a single
+    `skipped_no_account` key so a log that spans the change still reads truthfully rather than showing an
+    old row's skips as zero. `None` (no breakdown recorded at all) stays distinct from all-zero.
+    """
+    if not isinstance(account_counts, dict):
+        legacy = int(row.get("skipped_no_account") or 0) + int(row.get("skipped_already_held") or 0)
+        return None if not legacy else {
+            "skipped_no_account":   int(row.get("skipped_no_account") or 0),
+            "skipped_already_held": int(row.get("skipped_already_held") or 0),
+        }
+    out = {b: 0 for b in _SKIP_BUCKETS}
+    for counts in account_counts.values():
+        if not isinstance(counts, dict):
+            continue
+        for bucket in _SKIP_BUCKETS:
+            out[bucket] += int(counts.get(bucket) or 0)
+        # A row from before the split has its no-destination count under the old key and no way to say
+        # which kind it was. Reported as unknown rather than as the user's choice: the wording for an
+        # unmapped account ("map it to import them") is the one that is merely unhelpful if wrong, while
+        # calling a genuine gap a deliberate exclusion would hide it.
+        out["skipped_unknown_account"] += int(counts.get("skipped_no_account") or 0)
+    return out
+
+
 @router.get("/diagnostics")
 def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
     """Recent connection-sync diagnostic rows, newest first. One row per connection per /sync call: the
@@ -1534,6 +1770,7 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         d["request_allowance"] = _json_obj(d.get("request_allowance"))
         d["account_counts"] = _json_obj(d.get("account_counts"))
         d["became_complete"] = bool(r["became_complete"])
+        d["skipped_breakdown"] = _skipped_breakdown(d["account_counts"], d)
         return d
 
     return {"entries": [_entry(r) for r in rows]}

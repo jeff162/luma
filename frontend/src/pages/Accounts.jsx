@@ -17,7 +17,8 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { VaultPassphraseDialog } from '../components/VaultPassphraseDialog.jsx'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../components/VaultSettingsDialog.jsx'
-import { PASSKEY_UNAVAILABLE, unlockWithPasskey as unlockWithPasskeyCeremony } from '../lib/vaultPasskey.js'
+import { runVaultPasskeyUnlock } from '../lib/vaultPasskey.js'
+import { providerSummaryLine } from '../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
 import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
@@ -455,14 +456,30 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
   // Every account the connection offers, not only those that received something. An account that imported
   // nothing is exactly what this exists to surface, and it cannot appear in a tally built from what landed
   // — which is why the chips are driven from the offered list and the counts merely joined onto it.
-  const chips = providerAccounts.map(pa => ({
-    ...pa,
-    added: lastSync.accounts?.[pa.external_account_id]?.added || 0,
-  }))
-  const lost = lastSync.skipped_no_account || 0
+  //
+  // The count is rows *seen* for the account, not rows landed, which is what an import card's chip has
+  // always meant (`import_batch_account.row_count`, whether or not the account was skipped). Feeding this
+  // one `added` alone made the shared chip mean two different things on the two surfaces: a skipped
+  // account showed a bare `✕` here and `✕ … 35` there, so the connection card could not say how much data
+  // a skipped account was turning away. Only the two no-destination buckets are added in — they arise
+  // solely for accounts with no local account, so a mapped account's `−` (offered rows, imported none)
+  // cannot be flipped to a `✓` by the routine already-held and zero-amount skips.
+  const chips = providerAccounts.map(pa => {
+    const c = lastSync.accounts?.[pa.external_account_id]
+    return {
+      ...pa,
+      added: (c?.added || 0) + (c?.skipped_by_choice || 0) + (c?.skipped_unknown_account || 0),
+    }
+  })
   // Nothing can already be held before a first import, so on an initial pull this is a contradiction
-  // rather than the routine re-fetch it is on a top-up.
-  const heldOnInitial = lastSync.mode === 'initial' ? (lastSync.skipped_already_held || 0) : 0
+  // rather than the routine re-fetch it is on a top-up. This is the only remaining outcome chip: rows
+  // with no destination are now carried by the `✕` chips beside it, per account and with their counts,
+  // which is both more informative and unambiguous — a separate total sat next to a row of `✕` chips and
+  // read as a count of them whenever the two happened to agree.
+  const heldOnInitial = lastSync.mode === 'initial'
+    ? Object.values(lastSync.accounts || {})
+      .reduce((n, c) => n + Number(c?.skipped_already_held || 0), 0)
+    : 0
 
   return (
     <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
@@ -489,12 +506,6 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
             <OutcomeChip
               label="Already imported" count={heldOnInitial} tone="warning" onClick={onOpenLog}
               title="Reported as already imported during a first import, which should not happen — open the sync log."
-            />
-          ) : null}
-          {lost ? (
-            <OutcomeChip
-              label="No destination" count={lost} tone="warning" onClick={onOpenLog}
-              title="These transactions had no account to go into. Map the account to import them."
             />
           ) : null}
         </div>
@@ -1046,29 +1057,24 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     await refresh()
   }
 
-  // Unlocking by passkey settles the gate exactly as the passphrase dialog does, so an action waiting on
-  // `ensureVault` resumes either way. A refused or dismissed ceremony leaves the gate open on the
-  // passphrase prompt rather than closing it, because the passphrase is the fallback the user still has.
+  // What this page does once a passkey has opened the vault, whichever surface ran the ceremony — the
+  // strip's own button, or the unlock dialog a gated action raised. Settles the gate exactly as the
+  // passphrase path does, so an action waiting on `ensureVault` resumes either way.
+  async function adoptPasskeyUnlock(user) {
+    if (user) setCurrentUser?.(user)
+    await refresh()
+    closeVault(true)
+  }
+
+  // The strip's button. A refused or dismissed ceremony leaves the strip as it was rather than opening
+  // anything, because the passphrase is still one click away on the button beside it.
   async function unlockWithPasskey() {
-    try {
-      const params = await api.vaultPasskeyParams()
-      const result = await unlockWithPasskeyCeremony(params)
-      if (!result.ok) {
-        if (result.reason !== 'cancelled') {
-          setNotice({
-            title: 'Could not use a passkey',
-            description: PASSKEY_UNAVAILABLE[result.reason] || PASSKEY_UNAVAILABLE.unsupported,
-          })
-        }
-        return
-      }
-      const resp = await api.unlockVaultWithPasskey(result.credentialId, result.prfOutput)
-      if (resp?.user) setCurrentUser?.(resp.user)
-      await refresh()
-      closeVault(true)
-    } catch (e) {
-      setNotice({ title: 'Could not use a passkey', description: e?.message || 'The vault stayed locked.' })
+    const result = await runVaultPasskeyUnlock()
+    if (!result.ok) {
+      if (result.message) setNotice({ title: 'Could not use a passkey', description: result.message })
+      return
     }
+    await adoptPasskeyUnlock(result.user)
   }
 
   // A 423 is the gate arriving late: this page's "the vault is open" is a cached answer, and the server
@@ -1548,12 +1554,16 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           <SectionCard
             key={p.provider}
             title={providerLabel(p.provider)}
-            summary={
-              connections.length
-                ? `${connections.length} connection${connections.length === 1 ? '' : 's'}`
-                + (lastSyncedLabel ? ` · last synced ${lastSyncedLabel}` : ' · never synced')
-                : 'Not connected'
-            }
+            // Same syncing expression the button below uses, deliberately: `ss.syncing` is this
+            // component's memory of a pull it started and turns over immediately on click, while
+            // `serverSyncing` is the connection's own marker and survives a navigation. Reading only
+            // one of them would let the button and the line beside it disagree, which is the class of
+            // bug this line already had once. The precedence itself lives in `providerSummaryLine`.
+            summary={providerSummaryLine({
+              connectionCount: connections.length,
+              syncing: ss.syncing || serverSyncing,
+              lastSyncedLabel,
+            })}
             collapsible
             expanded={expanded}
             onExpandedChange={(next) => setExpandedProviders({ ...expandedProviders, [p.provider]: next })}
@@ -1877,7 +1887,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       ) : null}
 
       {vaultDialog ? (
-        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => closeVault(false)} />
+        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault}
+          onUnlockedByPasskey={adoptPasskeyUnlock} onClose={() => closeVault(false)} />
       ) : null}
       {changingPassphrase ? (
         <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}

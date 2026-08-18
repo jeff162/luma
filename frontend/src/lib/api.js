@@ -351,6 +351,11 @@ export const api = {
   getTrashedAccounts: () => request('/accounts/trash'),
   emptyAccountTrash: () => request('/accounts/trash/empty', { method: 'POST' }),
   getDistinctAccountPairs: () => request('/accounts/distinct-pairs'),
+  assertDistinctAccountPair: (accountIdA, accountIdB) =>
+    request('/accounts/distinct-pairs', {
+      method: 'POST',
+      body: JSON.stringify({ account_id_a: accountIdA, account_id_b: accountIdB }),
+    }),
   forgetDistinctAccountPair: (accountIdA, accountIdB) =>
     request(`/accounts/distinct-pairs/${accountIdA}/${accountIdB}`, { method: 'DELETE' }),
 

@@ -288,6 +288,89 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON", "Jp Licks")
         self.assertEqual([c["id"] for c in out], ["nameless"])
 
+    # ---- the date exemption is relative, not absolute --------------------
+
+    def _three_same_amount_charges(self):
+        """Three same-amount charges on adjacent days, each on its own row — the shape that exposed this.
+
+        Nothing here is unusual: a round amount repeating over two days is ordinary on a real ledger, and
+        every one of these rows is a legitimate candidate on amount-and-date evidence alone."""
+        return {
+            "2026-07-22": [
+                self._texted("cyclery", "2026-07-22", "HILLTOP CYCLERY", "Hilltop Cyclery", amount=500.0),
+                self._texted("diner", "2026-07-22", "BLUE PLATE DINER", "Blue Plate Diner", amount=500.0),
+            ],
+            "2026-07-23": [
+                self._texted("freight", "2026-07-23", "TARROW FREIGHT", "Tarrow Freight", amount=500.0),
+            ],
+        }
+
+    def test_a_wordless_neighbour_is_dropped_once_something_agrees_textually(self):
+        # The reported case. Three same-amount charges a day apart, each of which has an exact-wording
+        # twin in the ledger — and every row listed all three, with its real twin buried among two
+        # coincidences shown at equal confidence. The near-date exemption was written for a genuine case
+        # (two sources describing one charge with no shared text) but stated absolutely, so it could not
+        # tell that case from this one. Once a candidate for the same row agrees textually, a better
+        # explanation is already present and the wordless neighbours are noise.
+        rows = self._three_same_amount_charges()
+        ctx = self._context({amount_key(d, 500.0): r for d, r in rows.items()})
+        out = self._tiered_lookup(ctx, "2026-07-23", "TARROW FREIGHT", "Tarrow Freight", amount=500.0)
+        self.assertEqual([c["id"] for c in out], ["freight"])
+        self.assertEqual(out[0]["text_relation"], "exact")
+
+    def test_each_of_the_three_resolves_to_its_own_twin(self):
+        # Stated for all three rather than one, because the failure was symmetric: every row saw the same
+        # three candidates, so fixing the case means each row now names a *different* one.
+        rows = self._three_same_amount_charges()
+        ctx = self._context({amount_key(d, 500.0): r for d, r in rows.items()})
+        for date, statement, payee, expected in (
+            ("2026-07-23", "TARROW FREIGHT", "Tarrow Freight", "freight"),
+            ("2026-07-22", "HILLTOP CYCLERY", "Hilltop Cyclery", "cyclery"),
+            ("2026-07-22", "BLUE PLATE DINER", "Blue Plate Diner", "diner"),
+        ):
+            with self.subTest(payee=payee):
+                out = self._tiered_lookup(ctx, date, statement, payee, amount=500.0)
+                self.assertEqual([c["id"] for c in out], [expected])
+
+    def test_the_exemption_still_holds_when_nothing_agrees(self):
+        # The counterfactual that keeps the rule honest, and the case the exemption exists for: with no
+        # textual agreement anywhere in the list, the near-date candidates are all the evidence there is
+        # and every one of them is kept. Filtering here would drop correct matches — a bank's terminal
+        # string against an aggregator's cleaned merchant name shares nothing by design.
+        rows = self._three_same_amount_charges()
+        ctx = self._context({amount_key(d, 500.0): r for d, r in rows.items()})
+        out = self._tiered_lookup(ctx, "2026-07-23", "POS PURCHASE TERMINAL 4471", "Terminal 4471",
+                                  amount=500.0)
+        self.assertEqual(sorted(c["id"] for c in out), ["cyclery", "diner", "freight"])
+        self.assertTrue(all("text_relation" not in c for c in out))
+
+    def test_a_pair_with_no_text_to_compare_is_never_outranked(self):
+        # The one exemption that stays unconditional. A nameless money-movement leg agrees with nothing
+        # because there is nothing to agree with, so it cannot be beaten by evidence it never had.
+        ctx = self._context({amount_key("2026-07-23", 500.0): [
+            self._texted("freight", "2026-07-23", "TARROW FREIGHT", "Tarrow Freight", amount=500.0),
+            {"id": "nameless", "date": "2026-07-23", "merchant_name": "", "amount": 500.0,
+             "account_id": "acct", "source_texts": row_match_texts(None, None, None)},
+        ]})
+        out = self._tiered_lookup(ctx, "2026-07-23", "TARROW FREIGHT", "Tarrow Freight", amount=500.0)
+        self.assertEqual(sorted(c["id"] for c in out), ["freight", "nameless"])
+
+    def test_the_strongest_explanation_is_listed_first(self):
+        # Candidates arrive closest-day-first, which is the wrong order once the tiers differ: the real
+        # twin could be listed below a nearer-dated row that merely shares a payee name. Order is by
+        # tier, then by distance — so the row a reader checks first is the one most likely to be right.
+        ctx = self._context({
+            amount_key("2026-07-23", 500.0): [
+                self._texted("same-day-weaker", "2026-07-23", "TARROW FREIGHT - DEPOT 12",
+                             "Tarrow Freight", amount=500.0)],
+            amount_key("2026-07-22", 500.0): [
+                self._texted("day-before-exact", "2026-07-22", "TARROW FREIGHT", "Tarrow Freight",
+                             amount=500.0)],
+        })
+        out = self._tiered_lookup(ctx, "2026-07-23", "TARROW FREIGHT", "Tarrow Freight", amount=500.0)
+        self.assertEqual([c["id"] for c in out], ["day-before-exact", "same-day-weaker"])
+        self.assertEqual(out[0]["text_relation"], "exact")
+
     def test_cross_account_fallback_without_a_connection_is_a_no_op(self):
         # A context with no connection (a pure-unit caller) skips the ledger fallback rather than
         # failing, and simply keeps 'no specific match'.

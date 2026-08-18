@@ -44,6 +44,11 @@ class AccountMappingChoice(BaseModel):
     # Only consulted when the mode creates an account, and only on first application.
     name: Optional[str] = None
     type: Optional[str] = None
+    # The existing account the "Possible duplicate account?" chooser suggested and the user rejected by
+    # picking **Keep separate**. Recorded as a distinct-account assertion once the new account exists, so
+    # an answer given while looking at both account names is not thrown away and re-asked later, one
+    # flagged transaction at a time. Ignored unless the mode gives this provider account its own account.
+    distinct_from_account_id: Optional[str] = None
 
 
 class AccountMappingRequest(BaseModel):

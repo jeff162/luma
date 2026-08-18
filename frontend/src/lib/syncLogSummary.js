@@ -192,52 +192,83 @@ export function requestPoolSummary(windows) {
   return parts.length ? parts.join(', ') : null
 }
 
-// `skipped` split into the three unrelated events it folds together, because they carry opposite meanings:
-// a row with no local account to land in is data quietly lost, a row already held is the incremental
-// overlap working exactly as designed, and a zero-amount row is a provider artifact. One number covering
-// all three either cries wolf on every routine sync or hides a real loss inside a routine-looking total.
+// What a row's `mode` means to a reader, which is one distinction finer than what it stores.
 //
-// Only `no_account` and `already_held` are stored as their own columns; the zero-amount count lives per
-// account in `account_counts`, so the total's remainder is what names it — safe because those three are
-// the only things that increment `skipped` (see `_insert_added` in backend/routers/sync.py).
+// `mode` is derived server-side from `initial_sync_complete`, and that flag flips only when the backfill
+// *finishes* — so a first pull that stops early (a metered provider pausing on its request allowance, a
+// provider still preparing its data) leaves every later resume labelled `initial` too. Literally that is
+// true of all of them: each ran while the backfill was unfinished. But it reads as several first syncs,
+// and it hides the one thing separating them — whether this pull began the backfill or continued it.
 //
-// Whether a breakdown was recorded at all is read from `account_counts`, not from the two counters being
-// nonzero. A row written before the split existed carries 0/0 against a real total, and deriving from that
-// would report every one of its skips as zero-amount — but so does a genuine all-zero-amount sync, which is
-// the common shape for a provider that reports balance-only rows. `account_counts` separates them: it
-// arrived in the same migration as the counters, so its presence means "this row recorded a breakdown" and
-// its absence means "this row predates the idea". Only presence is read; the per-account contents are the
-// same numbers already summed into the columns.
+// `cursor_before` answers that with no new state: it is empty on the pull that started from nothing and
+// carries the previous resume point on every pull after it. A row that *finishes* the backfill still says
+// "continuing" and picks up the row's own `backfill complete` badge, which reads correctly — it continued,
+// and it finished.
+export function syncModeLabel(entry) {
+  const mode = (entry?.mode || '').trim()
+  if (mode !== 'initial') return mode || null
+  return String(entry?.cursor_before || '').trim() ? 'initial · continuing' : 'initial'
+}
+
+// `skipped` split into the unrelated events it folds together, because they carry opposite meanings: an
+// account the user chose not to import is working as configured, an account with no mapping decision yet
+// is waiting on the user, a row already held is the incremental overlap working exactly as designed, and a
+// zero-amount row is a provider artifact. One number covering them either cries wolf on every routine sync
+// or hides a real gap inside a routine-looking total.
 //
-// Labels and tones are the connection card's, deliberately — the card renders the same two facts as
-// `OutcomeChip`s and deep-links here for the detail behind them, so a reader arriving by that link must
-// find the same words. `already_held` is toned by mode for the same reason the card only shows it for a
-// first import: the incremental overlap re-asks for days already held *on purpose*, so it is routine on a
-// top-up and a contradiction on an initial pull.
+// **Nothing here subtracts.** The server sums the buckets from `account_counts` — the only place they are
+// stored — and sends them named, as `skipped_breakdown` (`_skipped_breakdown` in backend/routers/sync.py).
+// The previous shape had two of the buckets stored as their own columns and recovered the third from the
+// total's remainder, which quietly reassigned every newly-added bucket into whichever one was computed by
+// subtraction. Reading named counts is what makes adding a bucket a safe, local change.
+//
+// A row predating the split reports its no-destination count under the legacy `skipped_no_account` key,
+// which the server still emits for those rows; `null` (no breakdown recorded at all) stays distinct from
+// every-bucket-zero, since a genuine all-zero-amount sync is the common shape for a provider that reports
+// balance-only rows.
+//
+// Tone carries the whole editorial judgement, so it is worth stating: only two of these are ever a
+// problem. An unmapped account is actionable, and already-held rows on a *first* import are a
+// contradiction (nothing can already be held before the first import) — that one is what a
+// transaction-id collision looks like from the outside, and it is the sole remaining reason a connection
+// card turns orange. The rest are muted because they describe the system doing what it was told.
+const SKIP_BUCKETS = [
+  {
+    key: 'skipped_by_choice', label: 'Not imported', tone: 'muted',
+    title: 'From accounts set to skip. These were left out on purpose and need no action.',
+  },
+  {
+    key: 'skipped_unknown_account', label: 'No destination', tone: 'warning',
+    title: 'These transactions had no account to go into. Map the account to import them.',
+  },
+  {
+    key: 'skipped_no_account', label: 'No destination', tone: 'warning',
+    title: 'These transactions had no account to go into. Map the account to import them.',
+  },
+  {
+    key: 'skipped_already_held', label: 'Already imported', tone: 'byMode',
+    title: 'Already held from a previous sync — the incremental overlap re-asks for recent days on purpose.',
+    initialTitle: 'Reported as already imported during a first import, which should not happen.',
+  },
+  {
+    key: 'skipped_zero_amount', label: 'Zero amount', tone: 'muted',
+    title: 'Rows the provider reported with no amount, which carry nothing to import.',
+  },
+]
+
 export function skippedBreakdown(entry) {
-  const total = Number(entry?.skipped || 0)
-  if (total <= 0 || !entry?.account_counts) return null
-  const noAccount = Number(entry.skipped_no_account || 0)
-  const alreadyHeld = Number(entry.skipped_already_held || 0)
-  const zeroAmount = Math.max(0, total - noAccount - alreadyHeld)
-  return [
-    // First, and always toned as a problem: this is the bucket that means rows had nowhere to go.
-    {
-      key: 'no_account', label: 'No destination', count: noAccount, tone: 'warning',
-      title: 'These transactions had no account to go into. Map the account to import them.',
-    },
-    {
-      key: 'already_held', label: 'Already imported', count: alreadyHeld,
-      tone: entry?.mode === 'initial' ? 'warning' : 'muted',
-      title: entry?.mode === 'initial'
-        ? 'Reported as already imported during a first import, which should not happen.'
-        : 'Already held from a previous sync — the incremental overlap re-asks for recent days on purpose.',
-    },
-    {
-      key: 'zero_amount', label: 'Zero amount', count: zeroAmount, tone: 'muted',
-      title: 'Rows the provider reported with no amount, which carry nothing to import.',
-    },
-  ].filter(b => b.count > 0)
+  const counts = entry?.skipped_breakdown
+  if (!counts || typeof counts !== 'object') return null
+  const initial = entry?.mode === 'initial'
+  return SKIP_BUCKETS
+    .map(b => ({
+      key: b.key,
+      label: b.label,
+      count: Number(counts[b.key] || 0),
+      tone: b.tone === 'byMode' ? (initial ? 'warning' : 'muted') : b.tone,
+      title: b.tone === 'byMode' && initial ? b.initialTitle : b.title,
+    }))
+    .filter(b => b.count > 0)
 }
 
 // Where the call ended up, in words — the provider's own readiness signal for the last page it drained.

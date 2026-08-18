@@ -17,10 +17,12 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 import { invalidateTags } from '../lib/useTags.js'
+import { formatDate } from '../lib/utils.js'
+import { notifyAccountsChanged } from '../App.jsx'
 import { DEFAULT_LEDGER_CURRENCY, applyLedgerCurrency, currencySymbolFor } from '../lib/moneyDisplay.js'
 import {
   allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
-  requestPoolSummary, skippedBreakdown, syncLogDate, windowSummary,
+  requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
 } from '../lib/syncLogSummary.js'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
@@ -2149,7 +2151,7 @@ function SyncLogRow({ entry }) {
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 600, fontSize: 13 }}>{entry.institution || entry.provider || 'Connection'}</span>
-        <span style={{ padding: '1px 7px', borderRadius: 999, background: 'var(--surface2)', color: 'var(--muted)' }}>{entry.mode || '—'}</span>
+        <span style={{ padding: '1px 7px', borderRadius: 999, background: 'var(--surface2)', color: 'var(--muted)' }}>{syncModeLabel(entry) || '—'}</span>
         {entry.became_complete ? (
           <span style={{ padding: '1px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--success, #16a34a) 16%, var(--surface2))', color: 'var(--success, #16a34a)' }}>backfill complete</span>
         ) : null}
@@ -2272,11 +2274,14 @@ function syncLogAsText(entries, scopeLabel) {
   for (const e of entries) {
     lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
     const requests = e.requested_windows?.length
-    // Raw throughout, including the skip split and the day count the rendered row states as a duration:
-    // this is the artifact someone debugs from, and a derived figure is a worse starting point than the
-    // value it came from.
+    // Raw throughout, including the day count the rendered row states as a duration: this is the artifact
+    // someone debugs from, and a derived figure is a worse starting point than the value it came from.
+    // The skip buckets are printed under their own keys rather than the rendered labels, and every bucket
+    // the row carries is printed — including ones this build does not know about, so a log pasted from a
+    // newer version is not silently trimmed on its way into a bug report.
+    const skips = Object.entries(e.skipped_breakdown || {}).map(([k, v]) => `${k} ${v}`).join(', ')
     lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped}`
-      + ` (no_account ${e.skipped_no_account ?? 0}, already_held ${e.skipped_already_held ?? 0})`
+      + (skips ? ` (${skips})` : '')
       + ` · ${requests ? `${requests} request(s)` : `pages ${e.pages}`} · asked for ${e.days_requested ?? '—'} days`)
     const cards = cardSummary(e.card_counts, e.institution)
     if (cards) lines.push(`  rows filed on ${cards}`)
@@ -2540,6 +2545,108 @@ function RulesTrashSection() {
         )}
       </Card>
     </>
+  )
+}
+
+
+function DistinctAccountPairsSection() {
+  /*
+   * The "these two accounts are different physical accounts" assertions, and the one place they can be
+   * seen and undone.
+   *
+   * Each one permanently switches off cross-account duplicate detection between its pair, so it is
+   * exactly the kind of durable, invisible decision that has to be inspectable. It was not: the
+   * assertion could only be made as a side effect of clicking Keep on a flagged transaction, and these
+   * endpoints existed with no screen calling them — so a user could suppress detection between two
+   * accounts without knowing they had, and had no way to look or reverse it.
+   *
+   * Forgetting one is deliberately not destructive: it only re-enables checking. Rows the user already
+   * resolved individually stay resolved; what comes back is future detection, plus any match the
+   * assertion had been suppressing.
+   */
+  const [pairs, setPairs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [workingKey, setWorkingKey] = useState('')
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const resp = await api.getDistinctAccountPairs()
+      setPairs(resp.pairs || [])
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load account pairs')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function forget(pair) {
+    const key = `${pair.account_id_low}:${pair.account_id_high}`
+    setWorkingKey(key)
+    setError('')
+    try {
+      await api.forgetDistinctAccountPair(pair.account_id_low, pair.account_id_high)
+      notifyAccountsChanged()
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to forget the assertion')
+    } finally {
+      setWorkingKey('')
+    }
+  }
+
+  const label = (name, displayName, mask) => {
+    const base = (displayName || '').trim() || (name || '').trim() || 'Account'
+    return mask ? `${base} ···${mask}` : base
+  }
+
+  return (
+    <Card style={{ display: 'grid', gap: 14 }}>
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
+        Pairs you have said are different real-world accounts. Imports stop checking for duplicate
+        transactions between them. Forgetting a pair turns that checking back on — it does not undo
+        decisions already made about individual transactions.
+      </div>
+      {error ? <div style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}
+      {loading ? <Spinner /> : pairs.length === 0 ? (
+        <EmptyState message="No account pairs have been marked as distinct." />
+      ) : (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          {pairs.map((pair, index) => {
+            const key = `${pair.account_id_low}:${pair.account_id_high}`
+            return (
+              <div
+                key={key}
+                style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16,
+                  alignItems: 'center', padding: '12px 14px',
+                  borderTop: index === 0 ? 'none' : '1px solid var(--border)',
+                  background: 'var(--surface2)',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    {label(pair.account_low_name, pair.account_low_display_name, pair.account_low_mask)}
+                    <span style={{ color: 'var(--muted)', fontWeight: 400 }}> and </span>
+                    {label(pair.account_high_name, pair.account_high_display_name, pair.account_high_mask)}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                    Marked distinct {formatDate(String(pair.asserted_at || '').slice(0, 10)) || 'recently'}.
+                  </div>
+                </div>
+                <Button small variant="ghost" disabled={!!workingKey} onClick={() => forget(pair)}>
+                  {workingKey === key ? 'Forgetting…' : 'Forget'}
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -3346,6 +3453,15 @@ export default function Settings() {
             {...bindSection('connectionSyncLog')}
           >
             <ConnectionSyncLogSection initialConnectionId={deepLink.connectionId} />
+          </StickySection>
+
+          <StickySection
+            title="Distinct account pairs"
+            description="Accounts you have declared to be different from one another, so imports stop looking for duplicate transactions between them."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('distinctAccountPairs')}
+          >
+            <DistinctAccountPairsSection />
           </StickySection>
 
           <StickySection

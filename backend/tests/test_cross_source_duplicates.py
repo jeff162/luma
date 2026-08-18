@@ -322,30 +322,29 @@ class SameAccountResolutionTests(_LedgerTestCase):
                     self.assertEqual(promote_in_group_suspects_to_confirmed(conn, [ACCOUNT]), 0)
                 self.assertIsNone(self._suspect("b1")["trashed_at"])
 
-    def test_keep_on_a_same_account_pair_asserts_nothing_about_accounts(self):
-        # The landmine. `account_pair_distinct` is keyed (low, high) and matched with MIN/MAX, so an
-        # (X, X) row would match every future candidate pair on that account and switch detection off
-        # there for good — and the cascade would clear every unresolved suspect on it on the way.
-        self._flag()
-        with self._db() as conn:
-            self.assertEqual(resolve_suspect(conn, "b1", action="keep")["action"], "keep")
-            pairs = conn.execute("SELECT COUNT(*) AS n FROM account_pair_distinct").fetchone()["n"]
-        self.assertEqual(pairs, 0)
-        row = self._suspect("b1")
-        self.assertIsNone(row["suspect_duplicate_of"], "the one row asked about is still cleared")
-
-    def test_keep_across_two_accounts_still_asserts_the_pair(self):
-        # The broad reading is not weakened, only bounded — this is the case it was written for.
-        self._flag()
-        with self._db() as conn:
-            conn.execute(
-                "INSERT INTO account (id, name, display_name, type, owner_id)"
-                " VALUES ('acct-other','Other','Other','depository', ?)", (SHARED_OWNER_ID,),
-            )
-            conn.execute("UPDATE txn SET account_id = 'acct-other' WHERE id = 'a1'")
-            resolve_suspect(conn, "b1", action="keep")
-            pairs = conn.execute("SELECT COUNT(*) AS n FROM account_pair_distinct").fetchone()["n"]
-        self.assertEqual(pairs, 1)
+    def test_keep_asserts_nothing_about_accounts_either_way(self):
+        # Keep is per-row for a same-account pair and for a cross-account one alike — the mode switch is
+        # gone along with the account-level meaning it used to carry. The same-account case was the
+        # landmine that made the switch necessary: `account_pair_distinct` is keyed (low, high) and
+        # matched with MIN/MAX, so an (X, X) row would match every future candidate pair on that account
+        # and switch detection off there for good.
+        for same_account in (True, False):
+            with self.subTest(same_account=same_account):
+                self.setUp()
+                self._flag()
+                with self._db() as conn:
+                    if not same_account:
+                        conn.execute(
+                            "INSERT INTO account (id, name, display_name, type, owner_id)"
+                            " VALUES ('acct-other','Other','Other','depository', ?)", (SHARED_OWNER_ID,),
+                        )
+                        conn.execute("UPDATE txn SET account_id = 'acct-other' WHERE id = 'a1'")
+                    self.assertEqual(resolve_suspect(conn, "b1", action="keep")["action"], "keep")
+                    pairs = conn.execute(
+                        "SELECT COUNT(*) AS n FROM account_pair_distinct").fetchone()["n"]
+                self.assertEqual(pairs, 0)
+                self.assertIsNone(self._suspect("b1")["suspect_duplicate_of"],
+                                  "the one row asked about is still cleared")
 
 
 class WeakTierTests(unittest.TestCase):

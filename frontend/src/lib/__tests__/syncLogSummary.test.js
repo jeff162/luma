@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
-  parseCheckpoint, requestPoolSummary, skippedBreakdown, windowSummary,
+  parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, windowSummary,
 } from '../syncLogSummary.js'
 
 // The fingerprint format these read is produced by `_cursor_fingerprint` in backend/routers/sync.py and
@@ -153,60 +153,81 @@ describe('requestPoolSummary', () => {
 })
 
 describe('skippedBreakdown', () => {
-  const recorded = '{"provider:acct": {"added": 1}}'   // presence is the "breakdown was recorded" signal
+  // The server sums these from `account_counts` and sends them named. Nothing here subtracts, which is the
+  // property under test: the previous shape recovered the zero-amount bucket from the total's remainder,
+  // so every bucket added after it was silently absorbed into whichever one was computed last.
+  const breakdown = (over = {}) => ({
+    skipped_by_choice: 0, skipped_unknown_account: 0,
+    skipped_already_held: 0, skipped_zero_amount: 0, ...over,
+  })
 
   it('splits the total into the buckets that mean opposite things', () => {
     const parts = skippedBreakdown({
-      skipped: 31, skipped_no_account: 3, skipped_already_held: 26, mode: 'routine',
-      account_counts: recorded,
+      mode: 'routine',
+      skipped_breakdown: breakdown({
+        skipped_by_choice: 6, skipped_unknown_account: 3, skipped_already_held: 26,
+        skipped_zero_amount: 2,
+      }),
     })
     expect(parts.map(p => [p.key, p.count, p.tone])).toEqual([
-      ['no_account', 3, 'warning'],
-      ['already_held', 26, 'muted'],
-      ['zero_amount', 2, 'muted'],
+      ['skipped_by_choice', 6, 'muted'],
+      ['skipped_unknown_account', 3, 'warning'],
+      ['skipped_already_held', 26, 'muted'],
+      ['skipped_zero_amount', 2, 'muted'],
     ])
   })
 
-  it('names an all-zero-amount sync rather than falling back to the bare total', () => {
-    // The shape a provider reporting balance-only rows produces: both counters legitimately 0 against a
-    // real total. Reading "no breakdown" off the counters alone hid exactly this case.
-    const parts = skippedBreakdown({
-      skipped: 31, skipped_no_account: 0, skipped_already_held: 0, account_counts: recorded,
+  it('keeps a deliberately skipped account clear of the actionable wording', () => {
+    // The two halves of the split read as opposite advice, which is the whole reason it exists. "Map the
+    // account to import them" is wrong for an account the user excluded on purpose — there is nothing to
+    // fix, and saying otherwise is what made a correctly-configured connection look broken.
+    const [byChoice, unknown] = skippedBreakdown({
+      skipped_breakdown: breakdown({ skipped_by_choice: 6, skipped_unknown_account: 3 }),
     })
-    expect(parts.map(p => [p.key, p.count])).toEqual([['zero_amount', 31]])
+    expect(byChoice.label).toBe('Not imported')
+    expect(byChoice.tone).toBe('muted')
+    expect(byChoice.title).not.toMatch(/Map the account/)
+    expect(unknown.label).toBe('No destination')
+    expect(unknown.tone).toBe('warning')
+    expect(unknown.title).toMatch(/Map the account/)
   })
 
-  it('uses the connection card’s wording, since the card deep-links here', () => {
-    const parts = skippedBreakdown({ skipped: 3, skipped_no_account: 3, account_counts: recorded })
-    expect(parts[0].label).toBe('No destination')
+  it('names an all-zero-amount sync rather than falling back to the bare total', () => {
+    // The shape a provider reporting balance-only rows produces. It used to be the remainder, and so was
+    // indistinguishable from any bucket the client did not know about.
+    const parts = skippedBreakdown({ skipped_breakdown: breakdown({ skipped_zero_amount: 31 }) })
+    expect(parts.map(p => [p.key, p.count])).toEqual([['skipped_zero_amount', 31]])
+  })
+
+  it('reports a row written before the split under its legacy bucket', () => {
+    // The server still emits `skipped_no_account` for rows that predate the split, since which kind they
+    // were is not recoverable. A log spanning the change stays truthful rather than reporting old skips
+    // as zero.
+    const parts = skippedBreakdown({ skipped_breakdown: { skipped_no_account: 4 } })
+    expect(parts.map(p => [p.key, p.count, p.label])).toEqual([
+      ['skipped_no_account', 4, 'No destination'],
+    ])
   })
 
   it('tones already-imported as a problem only on a first pull', () => {
     // The incremental overlap re-asks for held days on purpose, so this is routine on a top-up. On an
-    // initial pull nothing should be held yet, which is the contradiction the card also flags.
-    const initial = skippedBreakdown({
-      skipped: 4, skipped_already_held: 4, mode: 'initial', account_counts: recorded,
-    })
-    expect(initial[0].tone).toBe('warning')
-    const routine = skippedBreakdown({
-      skipped: 4, skipped_already_held: 4, mode: 'routine', account_counts: recorded,
-    })
-    expect(routine[0].tone).toBe('muted')
+    // initial pull nothing should be held yet, which is the contradiction the card also flags — and now
+    // the only one that does.
+    const counts = { skipped_breakdown: breakdown({ skipped_already_held: 4 }) }
+    expect(skippedBreakdown({ ...counts, mode: 'initial' })[0].tone).toBe('warning')
+    expect(skippedBreakdown({ ...counts, mode: 'routine' })[0].tone).toBe('muted')
   })
 
   it('omits buckets that caught nothing', () => {
-    const parts = skippedBreakdown({ skipped: 4, skipped_already_held: 4, account_counts: recorded })
-    expect(parts.map(p => p.key)).toEqual(['already_held'])
+    const parts = skippedBreakdown({ skipped_breakdown: breakdown({ skipped_already_held: 4 }) })
+    expect(parts.map(p => p.key)).toEqual(['skipped_already_held'])
   })
 
-  it('is null for a row written before the breakdown existed', () => {
-    // Such a row has no `account_counts`, which is what separates it from a genuine all-zero-amount sync
-    // — the counters read 0/0 in both cases, and deriving from that alone confuses the two.
-    expect(skippedBreakdown({ skipped: 31, skipped_no_account: 0, skipped_already_held: 0 })).toBeNull()
-  })
-
-  it('is null when nothing was skipped', () => {
-    expect(skippedBreakdown({ skipped: 0, account_counts: recorded })).toBeNull()
+  it('is null for a row that recorded no breakdown at all', () => {
+    // Distinct from every-bucket-zero: "nothing was recorded" and "measured, and the answer is none" are
+    // different facts, and a row predating the tally must not render as a clean sync.
+    expect(skippedBreakdown({ skipped: 31 })).toBeNull()
+    expect(skippedBreakdown({ skipped: 31, skipped_breakdown: null })).toBeNull()
     expect(skippedBreakdown(undefined)).toBeNull()
   })
 })
@@ -259,5 +280,41 @@ describe('cardSummary', () => {
 
   it('is null when the pull added nothing', () => {
     expect(cardSummary([], 'SimpleFIN Bridge')).toBeNull()
+  })
+})
+
+describe('syncModeLabel', () => {
+  // `mode` stores whether the backfill was unfinished, not whether THIS pull started it. A metered
+  // provider pausing on its allowance leaves several pulls all labelled `initial`, reading as several
+  // first syncs; `cursor_before` is what separates the one that began from the ones that resumed.
+
+  it('names the pull that started the backfill', () => {
+    expect(syncModeLabel({ mode: 'initial', cursor_before: null })).toBe('initial')
+    expect(syncModeLabel({ mode: 'initial', cursor_before: '' })).toBe('initial')
+  })
+
+  it('names a resumed backfill as continuing', () => {
+    expect(syncModeLabel({ mode: 'initial', cursor_before: 'through=2026-08-18' }))
+      .toBe('initial · continuing')
+  })
+
+  it('says continuing for the pull that finally finishes, which is what it did', () => {
+    // It continued, and it finished — the row's own `backfill complete` badge carries the second half,
+    // so the mode chip has no need to contradict itself trying to say both.
+    expect(syncModeLabel({ mode: 'initial', cursor_before: 'through=2026-08-18', became_complete: true }))
+      .toBe('initial · continuing')
+  })
+
+  it('leaves a routine top-up alone', () => {
+    // A top-up always resumes from a cursor, so the continuing distinction would be true of every one of
+    // them and worth saying about none.
+    expect(syncModeLabel({ mode: 'routine', cursor_before: 'through=2026-08-18' })).toBe('routine')
+  })
+
+  it('passes through anything it does not recognize, and nulls an absent mode', () => {
+    // A mode this build predates must still render as itself rather than vanish.
+    expect(syncModeLabel({ mode: 'backfill' })).toBe('backfill')
+    expect(syncModeLabel({})).toBeNull()
+    expect(syncModeLabel(undefined)).toBeNull()
   })
 })

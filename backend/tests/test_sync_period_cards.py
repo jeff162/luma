@@ -115,7 +115,8 @@ class SyncPeriodCardTests(unittest.TestCase):
     def _cards(self):
         with self._use_db_path(), get_db() as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT id, filename, source_kind, connection_id, row_count, config_snapshot "
+                "SELECT id, filename, source_kind, connection_id, row_count, skipped_count, "
+                "deduped_count, config_snapshot "
                 "FROM import_batch WHERE source_kind = 'connection_sync' ORDER BY filename"
             ).fetchall()]
 
@@ -517,6 +518,194 @@ class SyncPeriodCardTests(unittest.TestCase):
             self.assertEqual(res["skipped"], 1)
             self.assertEqual(res["discovered"], 0)
         adapter.fetch_accounts.assert_not_called()
+
+    # ---- what the card says about accounts that received nothing ---------
+
+    def _card_accounts(self):
+        """Every card's per-source-account row, as (card filename, csv_value) -> row."""
+        with self._use_db_path(), get_db() as conn:
+            return {(r["filename"], r["csv_value"]): dict(r) for r in conn.execute(
+                """
+                SELECT b.filename, iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
+                       iba.coverage_start_date, iba.coverage_end_date, iba.terminal_date
+                FROM   import_batch_account iba
+                JOIN   import_batch b ON b.id = iba.batch_id
+                """
+            )}
+
+    def _skip_account(self, external_account_id="acct-ext-cd", name="Example CD", mask="2222"):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection_account "
+                "  (connection_id, external_account_id, mapping_mode, provider_name, provider_mask) "
+                "VALUES (?, ?, 'skip', ?, ?)",
+                (self.connection_id, external_account_id, name, mask),
+            )
+
+    def test_a_skipped_accounts_dropped_rows_are_reported_on_the_card(self):
+        # The card is the surface that answers "what arrived and where did it go". Listing only the
+        # accounts that contributed rows makes a skipped account's data vanish without a trace — the
+        # connection card can say a total went nowhere, but nothing could say which account it came from.
+        self._skip_account()
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"),
+                                self._txn_for("acct-ext-cd", txn_id="cd1"),
+                                self._txn_for("acct-ext-cd", txn_id="cd2")]) as res:
+            self.assertEqual(res["added"], 1)
+            self.assertEqual(res["skipped"], 2)
+        cards = self._cards()
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["row_count"], 1, "only landed rows count toward the card's own total")
+        accounts = self._card_accounts()
+        landed = accounts[(cards[0]["filename"], "Joint Checking ···1188")]
+        self.assertEqual((landed["row_count"], landed["was_skipped"]), (1, 0))
+        self.assertEqual(landed["account_id"], "a1")
+        dropped = accounts[(cards[0]["filename"], "Example CD ···2222")]
+        self.assertEqual(dropped["row_count"], 2, "rows seen for the account, exactly as a CSV card counts")
+        self.assertEqual(dropped["was_skipped"], 1)
+        self.assertIsNone(dropped["account_id"], "there is no destination — that is the whole finding")
+
+    def _summary(self, card):
+        return json.loads(card["config_snapshot"] or "{}").get("import_summary") or {}
+
+    def test_the_card_reports_its_totals_in_the_csv_vocabulary(self):
+        # A sync card and a file card are the same kind of record — a bundle of transactions and where each
+        # one went — so they report in one vocabulary rather than two. `account_skipped_count` already
+        # means "rows dropped because their account had no destination" on a file card, which is exactly
+        # what a sync's no-destination rows are. Before this the sync wrote none of it, so a sync card
+        # reported 0 skipped however much it had turned away and `summarizeImportOutcome` reconstructed
+        # what it could from the columns.
+        self._skip_account()
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"),
+                                self._txn_for("acct-ext-cd", txn_id="cd1"),
+                                self._txn_for("acct-ext-cd", txn_id="cd2")]):
+            pass
+        card = self._cards()[0]
+        self.assertEqual(card["row_count"], 1)
+        self.assertEqual(card["skipped_count"], 2, "the column a sync never wrote")
+        summary = self._summary(card)
+        self.assertEqual(summary["imported_count"], 1)
+        self.assertEqual(summary["account_skipped_count"], 2)
+        self.assertEqual(summary["skipped_count"], 2)
+        self.assertEqual(summary["deduped_count"], 0)
+        self.assertEqual(summary["total_rows"], 3, "imported + skipped + deduped, as a file card defines it")
+
+    def test_card_totals_accumulate_across_the_syncs_that_share_a_card(self):
+        # A monthly period card is added to by every top-up for the rest of the month, so a summary written
+        # whole would report only the latest sync's figures. The totals are re-derived from the accumulated
+        # parts rather than accumulated themselves, so they cannot drift away from them.
+        self._complete_initial()
+        self._skip_account()
+        for n, day in ((1, "2026-08-10"), (2, "2026-08-11")):
+            with self._driven_sync([self._txn(f"t{n}", -10.0, "Coffee", day=day),
+                                    self._txn_for("acct-ext-cd", txn_id=f"cd{n}", day=day)], day):
+                pass
+        cards = self._cards()
+        self.assertEqual(len(cards), 1, "both syncs file onto the same monthly card")
+        summary = self._summary(cards[0])
+        self.assertEqual((summary["imported_count"], summary["account_skipped_count"]), (2, 2))
+        self.assertEqual(summary["total_rows"], 4)
+
+    def test_a_refused_row_counts_as_skipped_but_not_as_a_missing_destination(self):
+        # Its account HAD a destination — the row was refused on its own merits, and the card already
+        # reports it as a rejected row. Folding it into `account_skipped_count` would claim an account was
+        # unmapped when none was.
+        self._complete_initial()
+        adapter = _FakeAdapter(pages=[{"added": [self._txn("z1", 0.0, "Fuel Stop")]}])
+        adapter.zero_amount_rows = REJECT_ZERO_AMOUNT
+        with self._driven_sync(adapter=adapter):
+            pass
+        summary = self._summary(self._cards()[0])
+        self.assertEqual(summary["skipped_count"], 1)
+        self.assertEqual(summary["account_skipped_count"], 0)
+        self.assertEqual(summary["rejected_count"], 1, "written by the rejected-row half of the summary")
+
+    def test_an_already_held_row_reaches_no_card_and_creates_none(self):
+        # The asymmetry worth stating. A dropped row is nowhere and a refused row is in no ledger, so a
+        # card is the only place either can be reported. An already-held row is in the ledger — a card
+        # entry would restate the transaction list — and it is the most routine event a sync has, so
+        # resolving a card for it would mint an empty one every month.
+        self._complete_initial()
+        page = [self._txn("t1", -10.0, "Coffee", day="2026-08-10")]
+        with self._driven_sync(page, "2026-08-10"):
+            pass
+        before = self._summary(self._cards()[0])
+        with self._driven_sync(page, "2026-09-05") as res:
+            self.assertEqual(res["added"], 0)
+        cards = self._cards()
+        self.assertEqual(len(cards), 1, "no September card for a sync that only re-saw held rows")
+        self.assertEqual(self._summary(cards[0]), before, "and nothing was added to August's totals")
+
+    def test_a_skipped_accounts_rows_carry_no_coverage_claim(self):
+        # A dropped row proves nothing about dates held: it was never held. The CSV skip path writes the
+        # three coverage columns NULL for the same reason, and the terminal-window matcher reads them.
+        self._skip_account()
+        with self._driven_sync([self._txn_for("acct-ext-cd", txn_id="cd1")]):
+            pass
+        dropped = next(v for k, v in self._card_accounts().items() if k[1] == "Example CD ···2222")
+        self.assertEqual(
+            (dropped["coverage_start_date"], dropped["coverage_end_date"], dropped["terminal_date"]),
+            (None, None, None),
+        )
+
+    def test_a_sync_that_imports_nothing_still_reports_what_it_turned_away(self):
+        # The judgment call, stated: a pull whose only content is skipped rows creates a card, because the
+        # card is the only per-account surface and "3 rows arrived for an account you skip" is the thing
+        # the user cannot otherwise learn. Matches the zero-amount refusal path, which resolves a card for
+        # a sync that inserted nothing for the same reason.
+        self._skip_account()
+        with self._driven_sync([self._txn_for("acct-ext-cd", txn_id="cd1")]) as res:
+            self.assertEqual(res["added"], 0)
+        cards = self._cards()
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["row_count"], 0)
+        dropped = self._card_accounts()[(cards[0]["filename"], "Example CD ···2222")]
+        self.assertEqual((dropped["row_count"], dropped["was_skipped"]), (1, 1))
+
+    def test_an_undiscovered_account_is_named_by_the_only_name_there_is(self):
+        # An account added on the provider's side is not in `connection_account` when its rows are
+        # dropped — discovery runs after the page is applied. The opaque id is the honest label: at that
+        # moment nothing here knew another one.
+        adapter = _FakeAdapter(
+            pages=[{"added": [self._txn_for("acct-ext-2")]}],
+            accounts=[{"external_account_id": "acct-ext-2", "name": "New Savings",
+                       "official_name": "Some Bank", "type": None, "subtype": None, "mask": None}],
+        )
+        with self._driven_sync(adapter=adapter):
+            pass
+        dropped = next(v for k, v in self._card_accounts().items() if k[1] == "acct-ext-2")
+        self.assertEqual((dropped["row_count"], dropped["was_skipped"]), (1, 1))
+
+    def test_mapping_a_skipped_account_clears_the_flag_without_losing_the_earlier_count(self):
+        # A card outlives the sync that made it, so one source account can be skipped on one sync and
+        # mapped on the next. `was_skipped` is a claim about the pair, and one row landing disproves it;
+        # the rows already counted stay counted, and the destination is not erased by a later NULL.
+        self._complete_initial()
+        self._skip_account()
+        with self._driven_sync([self._txn_for("acct-ext-cd", txn_id="cd1", day="2026-08-10")], "2026-08-10"):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO account
+                  (id, external_account_id, connection_id, provider, name, display_name, type, subtype,
+                   mask, owner_id)
+                VALUES ('a2', 'acct-ext-cd', ?, 'plaid', 'Example CD', 'Example CD', 'depository', 'cd',
+                        '2222', ?)
+                """,
+                (self.connection_id, SHARED_OWNER_ID),
+            )
+            conn.execute(
+                "UPDATE connection_account SET mapping_mode = 'existing', account_id = 'a2', "
+                "target_account_id = 'a2' WHERE external_account_id = 'acct-ext-cd'"
+            )
+        with self._driven_sync([self._txn_for("acct-ext-cd", txn_id="cd2", day="2026-08-11")], "2026-08-11") as res:
+            self.assertEqual(res["added"], 1)
+        cards = self._cards()
+        self.assertEqual(len(cards), 1, "both syncs file onto the same monthly card")
+        row = self._card_accounts()[(cards[0]["filename"], "Example CD ···2222")]
+        self.assertEqual(row["row_count"], 2, "the dropped row stays counted alongside the landed one")
+        self.assertEqual(row["was_skipped"], 0, "one row landing disproves 'skipped' for the pair")
+        self.assertEqual(row["account_id"], "a2", "a later NULL must not erase a recorded destination")
 
     def test_a_sync_with_nothing_unfamiliar_never_asks_for_the_account_list(self):
         adapter = _FakeAdapter(pages=[{"added": [self._txn("t1", -10.0, "Coffee")]}])
