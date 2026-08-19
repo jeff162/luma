@@ -762,6 +762,23 @@ result no response depends on has no reason to be inside at all** — the sweep 
 surfaces read later, so both now run after the commit, in their own connections, guarded so a failure in
 either cannot fail the ingest that already succeeded.
 
+**An expression in a predicate needs an index on that same expression** — SQLite matches the expression
+textually, not algebraically, so a function around a column silently opts the query out of every index on
+it. `idx_txn_amount_round` exists for that reason: the cross-account duplicate sweep joins on
+`ROUND(amount, 2)`, and until the index existed it scanned the whole ledger per row, which is how one
+card's sweep reached 109 seconds. The cost is invisible until the table is large, so the check belongs at
+writing time, where `EXPLAIN QUERY PLAN` costs a minute.
+
+**But the first question is whether the expression is right, not whether to index it.** The money-movement
+candidate lookup (`_amount_window_rows`) matched on `ROUND(ABS(amount), 2)` and so could use no index
+either — the obvious fix being a second expression index beside the first. The better fix was to delete the
+`ABS`: it was there because two callers share the helper and want *opposite* sign relationships (a
+transfer's equal-and-opposite twin; a payment's same-signed corroborating charge), so comparing magnitudes
+served both by serving each one loosely. Each now states its own sign, which is both more precise — an
+opposite-signed refund could previously corroborate a payment and keep a real row from importing — and
+indexable by the index that already existed. A predicate that cannot use an index is often a predicate
+that is saying more than it means.
+
 **Commits are genuinely durable, and cheap enough to take often.** No `PRAGMA synchronous` is set, so it is
 SQLite's default `FULL`: each commit fsyncs the WAL and survives power loss, not merely process death. The
 WAL being append-only also guarantees ordering — a later commit cannot survive without an earlier one. At

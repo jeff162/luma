@@ -892,8 +892,18 @@ _GENERIC_MERCHANT_TOKENS = frozenset({
 
 
 def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: int, amount: float):
-    """Rows on *other* accounts with the same |amount| within ±window_days — the shared candidate
-    query behind both cross-account fallbacks below."""
+    """Rows on *other* accounts whose ledger amount is exactly `amount` — **sign included** —
+    within ±window_days. The shared candidate query behind both cross-account fallbacks below.
+
+    The caller states the sign it wants, because the two callers want opposite ones: a transfer’s twin
+    is the equal-and-**opposite** leg (money out of one account is money into the other), while a
+    payment’s corroborating charge is the **same** outflow seen on a second account. This compared
+    magnitudes until 2026-08 — `ROUND(ABS(...))`, the union of both — which handed each caller the
+    other’s rows and left a text check as the only thing between them. That holds until the text
+    agrees: a refund and the charge it reverses share an amount and a merchant, so an opposite-signed
+    refund could corroborate a payment and stop a genuinely new row from importing. Stating the sign
+    also lets both callers seek `idx_txn_amount_round` rather than scan the ledger once per row.
+    """
     low = (on_date - timedelta(days=window_days)).isoformat()
     high = (on_date + timedelta(days=window_days)).isoformat()
     return conn.execute(
@@ -902,7 +912,7 @@ def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: i
                   t.import_evidence_json, t.import_batch_id,
                   COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
            FROM   txn t JOIN account a ON a.id = t.account_id
-           WHERE  ROUND(ABS(t.amount), 2) = ROUND(ABS(?), 2)
+           WHERE  ROUND(t.amount, 2) = ROUND(?, 2)
              AND  t.account_id <> ?
              AND  t.trashed_at IS NULL
              AND  date(t.date) BETWEEN date(?) AND date(?)""",
@@ -922,7 +932,7 @@ def _row_text_haystack(row) -> str:
 def find_cross_account_transfer_candidates(conn, receiving_account_id: str, parsed_date: str,
                                            amount: float) -> list[dict]:
     """The transfer counterpart of a coverage-rejected leg that found no same-account match: a row on a
-    *different* account, same |amount|, within a few days, whose name **or captured source text** contains
+    *different* account, the equal-and-opposite amount, within a few days, whose name **or captured source text** contains
     the receiving account's name (the wallet it funds). Display-only and heuristic — surfaced for the user
     to confirm or reject, never auto-resolved — so it turns a bare 'no specific match' into a reviewable
     'possible transfer match' without changing the (correct) reject verdict. Empty when the account can't
@@ -936,7 +946,10 @@ def find_cross_account_transfer_candidates(conn, receiving_account_id: str, pars
     if not token or on_date is None or amount is None:
         return []
     out: list[dict] = []
-    for r in _amount_window_rows(conn, receiving_account_id, on_date, _CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS, amount):
+    # Negated: a leg’s twin is the other side of one movement. A row on another account with the
+    # *same* sign is a second transaction of the same size, never the counterpart of this one.
+    for r in _amount_window_rows(conn, receiving_account_id, on_date,
+                                 _CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS, -amount):
         if token in _row_text_haystack(r):
             out.append({
                 "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
@@ -960,7 +973,8 @@ def find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str,
     """For a coverage-rejected **named** payment with no same-account/transfer candidate: is it actually
     already in the ledger as a charge elsewhere — e.g. a ``PAYPAL <merchant>`` card charge — or is it a
     genuinely-new payment the covering aggregator never saw (a balance-funded subscription or P2P send)?
-    Matches by a distinctive merchant token + same |amount| within a couple of weeks on another account.
+    Matches by a distinctive merchant token + the same signed amount within a couple of weeks on
+    another account; the opposite-signed row of that amount is the refund, not a corroborating charge.
 
     Returns a compact candidate dict (a corroborating charge exists → keep rejecting, and the report can
     show it) or ``None`` (nothing corroborates → the payment is genuinely new and should import). Nameless
@@ -970,6 +984,9 @@ def find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str,
     on_date = _parse_iso_date(str(parsed_date))
     if not tokens or on_date is None or amount is None:
         return None
+    # Same sign, deliberately: what corroborates a payment is the same money leaving by another route —
+    # the card charge behind a wallet purchase. The opposite-signed row of that amount and merchant is
+    # the *refund*, and taking a refund as corroboration is what would keep a real payment out.
     for r in _amount_window_rows(conn, receiving_account_id, on_date, _PAYMENT_MATCH_WINDOW_DAYS, amount):
         haystack = _row_text_haystack(r)
         if any(tok in haystack for tok in tokens):

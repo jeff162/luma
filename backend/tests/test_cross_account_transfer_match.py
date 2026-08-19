@@ -6,6 +6,11 @@ real-world twin is the *funding* transaction on the bank/card account: same magn
 off (ACH/settlement lag), named for the wallet. That twin is cross-account and opposite-signed, so the
 same-account coverage lookup never sees it and the leg reads as a bare "no specific match". These tests
 pin `find_cross_account_transfer_candidates` (the targeted SQL that finds the twin) directly.
+
+The second class covers `find_ledger_payment_match`, the other caller of the same candidate query.
+It wants the opposite sign relationship — a payment is corroborated by the *same* outflow charged on
+another account — and the two together are why that query states a sign instead of comparing
+magnitudes.
 """
 
 from __future__ import annotations
@@ -18,10 +23,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.services.duplicate_detection import find_cross_account_transfer_candidates
+from backend.services.duplicate_detection import (
+    find_cross_account_transfer_candidates,
+    find_ledger_payment_match,
+)
 
 
-class CrossAccountTransferMatchTests(unittest.TestCase):
+class _WalletLedgerFixture(unittest.TestCase):
+    """Three accounts and a row writer, shared by both callers' tests."""
+
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "transfer-match.db"
@@ -58,6 +68,8 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
             )
         return tid
 
+
+class CrossAccountTransferMatchTests(_WalletLedgerFixture):
     def _find(self, date, amount):
         with self._use_db_path(), get_db() as conn:
             return find_cross_account_transfer_candidates(conn, "paypal", date, amount)
@@ -112,11 +124,60 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
             conn.execute("UPDATE txn SET trashed_at = '2026-02-01T00:00:00Z' WHERE id = ?", (tid,))
         self.assertEqual(self._find("2026-01-20", -716.0), [])
 
+    def test_a_same_signed_row_is_not_a_transfer_twin(self):
+        # A twin is the *other side* of one movement, so it carries the opposite sign. A row on another
+        # account with the same sign is a second transaction of the same size — and it can be named for
+        # the wallet too (a second deposit, a fee), so the name check does not separate them. Magnitude
+        # matching used to offer it as a candidate; the sign is what rules it out.
+        self._txn("checking", -716.0, "2026-01-21", "PayPal")
+        self.assertEqual(self._find("2026-01-20", -716.0), [])
+
     def test_nearest_date_ranks_first(self):
         far = self._txn("checking", 388.5, "2026-03-08", "PayPal")   # 3 off
         near = self._txn("card", 388.5, "2026-03-05", "PayPal")      # exact
         out = self._find("2026-03-05", -388.5)
         self.assertEqual([c["id"] for c in out], [near, far])
+
+
+class LedgerPaymentMatchTests(_WalletLedgerFixture):
+    """The same candidate query, read the other way round.
+
+    A wallet payment the covering aggregator never saw is only a duplicate if the same money already
+    reached the ledger by another route — the card charge behind it, which carries the **same** sign. A
+    match here keeps the row *out*; no match lets it import.
+    """
+
+    def _match(self, date, amount, merchant):
+        with self._use_db_path(), get_db() as conn:
+            return find_ledger_payment_match(conn, "paypal", date, amount, merchant)
+
+    def test_a_same_signed_charge_on_another_account_corroborates_the_payment(self):
+        charge = self._txn("card", -49.99, "2026-04-02", "PayPal Spotify")
+        out = self._match("2026-04-01", -49.99, "Spotify")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["id"], charge)
+        self.assertTrue(out["payment_match"])
+
+    def test_a_refund_is_not_corroborated_by_the_charge_it_reverses(self):
+        # The case magnitude matching got wrong, and the only one here that changes what lands in the
+        # ledger. A +49.99 refund and the -49.99 charge it reverses share an amount and a merchant, so
+        # the merchant-token check cannot separate them — under |amount| the refund read as "already in
+        # the ledger" and was rejected, losing a real transaction. Opposite signs are opposite events.
+        self._txn("card", -49.99, "2026-04-02", "PayPal Spotify")
+        self.assertIsNone(self._match("2026-04-01", 49.99, "Spotify"))
+
+    def test_a_refund_is_corroborated_by_a_matching_refund(self):
+        # The mirror image, to show the sign is being read rather than payments simply privileged: a
+        # refund already in the ledger on another account does corroborate this one.
+        refund = self._txn("card", 49.99, "2026-04-02", "PayPal Spotify")
+        out = self._match("2026-04-01", 49.99, "Spotify")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["id"], refund)
+
+    def test_an_unnamed_charge_does_not_corroborate(self):
+        # The merchant token is the other half of the test; amount and sign alone are not evidence.
+        self._txn("card", -49.99, "2026-04-02", "Corner Market")
+        self.assertIsNone(self._match("2026-04-01", -49.99, "Spotify"))
 
 
 if __name__ == "__main__":
