@@ -210,12 +210,28 @@ describe('skippedBreakdown', () => {
   })
 
   it('tones already-imported as a problem only on a first pull', () => {
-    // The incremental overlap re-asks for held days on purpose, so this is routine on a top-up. On an
-    // initial pull nothing should be held yet, which is the contradiction the card also flags — and now
+    // The incremental overlap re-asks for held days on purpose, so this is routine on a top-up. On a
+    // first pull nothing should be held yet, which is the contradiction the card also flags — and now
     // the only one that does.
     const counts = { skipped_breakdown: breakdown({ skipped_already_held: 4 }) }
     expect(skippedBreakdown({ ...counts, mode: 'initial' })[0].tone).toBe('warning')
     expect(skippedBreakdown({ ...counts, mode: 'routine' })[0].tone).toBe('muted')
+  })
+
+  it('does not call a resumed backfill a contradiction', () => {
+    // `mode` alone cannot answer "is this the first pull". A metered provider delivers its initial
+    // backfill over as many syncs as its allowance allows, and every one of them is still `initial`,
+    // because what flips the mode is the backfill completing. Each resumption re-asks for a window it has
+    // already partly fetched, so already-held rows are what it is *supposed* to produce — painted orange
+    // on every sync, for as long as the backfill took. `cursor_before` is the resume point it started
+    // from, and only a call with none had nothing to have already fetched.
+    const counts = { skipped_breakdown: breakdown({ skipped_already_held: 26 }), mode: 'initial' }
+    const resumed = skippedBreakdown({ ...counts, cursor_before: 'through=2026-08-18' })[0]
+    expect(resumed.tone).toBe('muted')
+    expect(resumed.title).toMatch(/on purpose/)
+    const firstPull = skippedBreakdown({ ...counts, cursor_before: null })[0]
+    expect(firstPull.tone).toBe('warning')
+    expect(firstPull.title).toMatch(/should not happen/)
   })
 
   it('omits buckets that caught nothing', () => {

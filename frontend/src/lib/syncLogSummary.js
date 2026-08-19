@@ -248,7 +248,7 @@ const SKIP_BUCKETS = [
   {
     key: 'skipped_already_held', label: 'Already imported', tone: 'byMode',
     title: 'Already held from a previous sync — the incremental overlap re-asks for recent days on purpose.',
-    initialTitle: 'Reported as already imported during a first import, which should not happen.',
+    initialTitle: 'Reported as already imported on this connection\u2019s first pull, which should not happen.',
   },
   {
     key: 'skipped_zero_amount', label: 'Zero amount', tone: 'muted',
@@ -259,14 +259,20 @@ const SKIP_BUCKETS = [
 export function skippedBreakdown(entry) {
   const counts = entry?.skipped_breakdown
   if (!counts || typeof counts !== 'object') return null
-  const initial = entry?.mode === 'initial'
+  // Already-held rows are only a contradiction on a connection's **first** pull, and `mode` alone does not
+  // say that: a metered provider's initial backfill spans as many syncs as its allowance allows, and the
+  // mode stays `initial` for every one of them, because what flips it is the backfill completing. Each
+  // resumption re-asks for a window it has already partly fetched, so already-held is routine there —
+  // reading the mode alone painted a normally-resuming backfill orange on every sync. `cursor_before` is
+  // the resume point this call started from, absent only when the connection had never fetched anything.
+  const firstPull = entry?.mode === 'initial' && !entry?.cursor_before
   return SKIP_BUCKETS
     .map(b => ({
       key: b.key,
       label: b.label,
       count: Number(counts[b.key] || 0),
-      tone: b.tone === 'byMode' ? (initial ? 'warning' : 'muted') : b.tone,
-      title: b.tone === 'byMode' && initial ? b.initialTitle : b.title,
+      tone: b.tone === 'byMode' ? (firstPull ? 'warning' : 'muted') : b.tone,
+      title: b.tone === 'byMode' && firstPull ? b.initialTitle : b.title,
     }))
     .filter(b => b.count > 0)
 }

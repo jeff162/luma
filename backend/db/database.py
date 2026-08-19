@@ -1781,6 +1781,14 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_txn_owner       ON txn(owner_id);
             CREATE INDEX IF NOT EXISTS idx_txn_batch       ON txn(import_batch_id);
             CREATE INDEX IF NOT EXISTS idx_txn_hash        ON txn(content_hash);
+            -- An EXPRESSION index, and it has to be: the cross-account duplicate sweep pairs rows on
+            -- `ROUND(t2.amount, 2) = ROUND(t1.amount, 2)`, and a function over the column makes a plain
+            -- index on `amount` unusable — so the sweep's inner side was a full scan of `txn` for every
+            -- row it checked, and the pairing is quadratic in the ledger. On a 17.8k-row ledger, sweeping
+            -- a 7.3k-row card took 109 seconds; with this index, 1.0. Partial on `trashed_at IS NULL`
+            -- because every consumer excludes trashed rows, which keeps it to the live ledger.
+            CREATE INDEX IF NOT EXISTS idx_txn_amount_round
+                ON txn(ROUND(amount, 2)) WHERE trashed_at IS NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_name_unique ON tag(LOWER(TRIM(name)));
             CREATE INDEX IF NOT EXISTS idx_tag_sort_order  ON tag(sort_order);
             CREATE INDEX IF NOT EXISTS idx_rule_category   ON category_rule(category_id);

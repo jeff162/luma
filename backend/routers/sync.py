@@ -56,8 +56,7 @@ from backend.services.connection_mapping import (
 )
 from backend.services.duplicate_detection import (
     evaluate_duplicate,
-    mark_import_suspects,
-    promote_in_group_suspects_to_confirmed,
+    sweep_import_suspects,
 )
 from backend.services.recurring_detection import payee_keys_for_ids, run_auto_scan, scan_imported_payees
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
@@ -546,6 +545,11 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
     outcome = sync_outcome(
         error=entry.get("error"), mode=entry.get("mode"),
         already_held=already_held, became_complete=bool(entry.get("became_complete")),
+        # No resume point going in means this connection had never fetched anything, which is the only
+        # state in which "the provider says we already hold this" is a contradiction rather than the
+        # overlap a resumed backfill re-asks for on purpose. `cursor_before` is the fingerprint of that
+        # resume point, and it is None exactly when there was none.
+        first_call=not entry.get("cursor_before"),
     )
     summary = {
         "at":       entry.get("started_at"),
@@ -813,6 +817,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
     cards_touched: set[str] = set()          # cards that received added rows (for the post-sync dedup sweep)
     card_added: dict[str, int] = {}          # card_id -> rows added this call
+    # card_id -> the ids of the rows added this call. The duplicate sweep is told exactly these, because a
+    # connection's first backfill files every call into ONE card: swept by card, each resumption re-examines
+    # everything imported so far to check what this call added, and the cost climbs with the card.
+    card_added_ids: dict[str, list[str]] = {}
     card_dupes: dict[str, int] = {}          # card_id -> rows hard-rejected as duplicates this call
     # (card_id, csv_value) -> {account_id, count, skipped}. `count` is rows that landed, `skipped` is rows
     # dropped for having no local account to land in; a source value is one or the other within a sync,
@@ -1138,6 +1146,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             touched_ids.append(txn_id)
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
+            card_added_ids.setdefault(card_id, []).append(txn_id)
             entry = card_accounts.setdefault(
                 (card_id, source_label), {"account_id": acc["id"], "count": 0, "skipped": 0})
             entry["account_id"] = acc["id"]
@@ -1618,22 +1627,6 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                  1 if info["skipped"] and not info["count"] else 0),
             )
 
-        # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py): a
-        # CSV/manual row re-fetched via a data source is a *cross-account* duplicate (the sync creates a new
-        # account record, distinct from the CSV account until merged), which provider-id idempotence never
-        # sees. mark_import_suspects soft-flags those on the card; promote_in_group_suspects_to_confirmed
-        # confirms the ones whose accounts are already merged. Only cards that received rows are swept.
-        for card_id in cards_touched:
-            mark_import_suspects(conn, card_id)
-            card_account_ids = [
-                str(r["account_id"]) for r in conn.execute(
-                    "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND account_id IS NOT NULL",
-                    (card_id,),
-                ).fetchall()
-            ]
-            if card_account_ids:
-                promote_in_group_suspects_to_confirmed(conn, card_account_ids)
-
         # Persist the sync diagnostics. Written unconditionally: a diagnostic that only records while a
         # flag is on cannot explain a failure that already happened — enabling the flag afterwards yields
         # an empty table and the user has to reproduce the problem to see anything, which is backwards for
@@ -1644,6 +1637,25 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 _write_sync_diagnostics(conn, sync_diagnostics)
             except Exception as e:
                 log_warning(f"[sync] could not write sync diagnostics: {e}")
+
+    # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py): a CSV/manual
+    # row re-fetched via a data source is a *cross-account* duplicate (the sync creates a new account
+    # record, distinct from the CSV account until merged), which provider-id idempotence never sees. Only
+    # cards that received rows are swept, and each is told the rows this call gave it.
+    #
+    # **After the sync transaction, in its own connection** — the same rule the recurring rescan below
+    # follows, and for a stronger reason. This is analysis over the whole ledger, not part of writing the
+    # rows; run inside the ingest transaction it held the write lock for as long as it took to read, which
+    # on one real backfill was 109 seconds — no other writer could proceed, the sync's own request could not
+    # return, and the progress panel sat frozen behind it because the sync marker is only cleared once the
+    # response is on its way.
+    if cards_touched:
+        try:
+            with get_db() as conn:
+                for card_id in cards_touched:
+                    sweep_import_suspects(conn, card_id, txn_ids=card_added_ids.get(card_id, []))
+        except Exception as e:
+            log_warning(f"[sync] duplicate sweep failed: {e}")
 
     # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
     # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
@@ -1665,6 +1677,23 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     overall_status = min(synced_statuses, key=lambda s: _STATUS_ORDER.get(s, 2), default=None)
     return {
         "added": added, "updated": updated, "removed": removed, "skipped": skipped, "deduped": deduped,
+        # This call's totals split per connection, from the same `entry` dicts the log and the connection
+        # card are built from — so the three cannot disagree about one call. It exists because the client
+        # drives a *sequence* of these calls and wants a per-connection total for the whole run: summing
+        # responses is exact, where the alternative (differencing the `sync_progress` a slow poll happens
+        # to observe) silently loses any call that begins and ends between two polls.
+        "connections": [
+            {
+                "connection_id": e["connection_id"],
+                "institution":   e["institution"] or e["provider"],
+                "added":         e["added"],
+                "updated":       e["updated"],
+                "removed":       e["removed"],
+                "skipped":       e["skipped"],
+                "error":         e["error"],
+            }
+            for e in sync_diagnostics
+        ],
         # Provider accounts seen for the first time in this sync's data. Their transactions were skipped
         # (nothing to map them to yet), so this is what turns "N skipped" from an unexplained number into
         # the "N to map" nudge on the connection card.

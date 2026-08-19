@@ -11,7 +11,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.import_export.core import run_import_core
+from backend.routers.import_export.core import (
+    BatchDuplicateImportRequest, import_batch_duplicates, run_import_core,
+)
 
 
 def _account_sql(account_id, name, acct_type):
@@ -81,6 +83,41 @@ class RunImportCoreTests(unittest.TestCase):
             self.assertIn("Fuel", cats)
             sources = {r[0] for r in conn.execute("SELECT DISTINCT category_source FROM txn")}
             self.assertEqual(sources, {"import"})
+
+    def test_a_forced_duplicate_is_not_handed_straight_back_as_a_suspect(self):
+        """"Import anyway" is an answer; the post-import sweep must not put the question back.
+
+        The row the user forces in is byte-identical to the one it was rejected against and lands on the
+        same account from a different batch — which is exactly the shape the cross-source sweep pairs. So
+        without excluding the pair the user just settled, forcing a duplicate in returns it immediately as
+        a soft-flagged suspect awaiting review, and the user is asked the same question twice.
+        """
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(*_account_sql("acc-chk", "Checking", "depository"))
+        row = "2026-03-04,Corner Market,25.00,Checking\n"
+        header = "Date,Description,Amount,Account\n"
+        cfg = self._cfg({"Checking": "acc-chk"}, use_imported_categories=False)
+        with self._use_db_path():
+            run_import_core(header + row, cfg, filename="march.csv")
+            # A second file carrying the same transaction: rejected as a duplicate rather than imported.
+            second = run_import_core(header + row + "2026-03-05,Bakery,8.00,Checking\n",
+                                     cfg, filename="march-again.csv")
+            self.assertEqual(second["deduped"], 1, "the repeated row should be held back as a duplicate")
+
+            forced = import_batch_duplicates(second["batch_id"],
+                                             BatchDuplicateImportRequest(import_all=True))
+        self.assertEqual(forced["imported_count"], 1)
+
+        with get_db(str(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT id, suspect_duplicate_of, trashed_at FROM txn WHERE merchant_name = 'Corner Market'"
+                " OR raw_name = 'Corner Market'"
+            ).fetchall()
+            self.assertEqual(len(rows), 2, "the forced row should be in the ledger beside the original")
+            self.assertTrue(all(r["trashed_at"] is None for r in rows),
+                            "forcing a duplicate in must not end with it trashed")
+            self.assertTrue(all(r["suspect_duplicate_of"] is None for r in rows),
+                            "the pair the user overruled must not come back as review work")
 
     def test_cross_account_duplicate_is_flagged(self):
         with get_db(str(self.db_path)) as conn:

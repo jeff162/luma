@@ -2258,12 +2258,32 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
     return list(best_by_new.values())
 
 
-def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
+def mark_import_suspects(conn: sqlite3.Connection, batch_id: str, *,
+                         txn_ids: list[str] | None = None,
+                         exclude_pairs: set[tuple[str, str]] | None = None) -> int:
     """After a batch's transactions have been inserted, flag every cross-batch cross-SOURCE match by
     (date-window, amount, source text) as a soft-flag suspect — unless the pair of accounts is already in
     `account_pair_distinct` (the user has previously declared them distinct). Returns the number flagged.
 
-    The check runs for ALL rows in the batch; there is no "brand-new account" gate. The
+    `txn_ids` narrows the sweep to specific rows of the batch, for a caller that adds to a batch it has
+    added to before. A **sync** is that caller: a connection's whole first backfill files into one
+    "Initial import" card, and a metered provider delivers it across many calls — so the default
+    whole-batch sweep re-examines every row imported so far to check the handful just added, and the cost
+    of each resumption grows with everything that preceded it. One real backfill reached 7,266 rows on the
+    card, at which point adding 172 rows cost a 109-second sweep. A CSV import passes nothing: its batch
+    *is* the rows it just added, so the two are the same sweep.
+
+    `exclude_pairs` drops specific (new row, existing row) pairs from consideration — a question the user
+    has already answered, which this sweep must not re-ask. "Import anyway" is that answer: the importer
+    rejected the row as a duplicate of a named existing transaction and the user overruled it, so pairing
+    the two again returns the settled question as review work. Excluding the **pair** rather than skipping
+    the row is what keeps the rest of the check: a forced row is an ordinary transaction in the ledger and
+    may well duplicate something *else*, and this is the only pass that ever compares it backward against
+    what already existed. It also un-masks that other match — selection keeps at most one match per new
+    row, and an overridden pair is byte-identical and same-day, so it outranked every other candidate and
+    hid it.
+
+    The check runs for ALL rows in the batch (or in `txn_ids`); there is no "brand-new account" gate. The
     `account_pair_distinct` filter is what keeps the output non-noisy after the user has reviewed each
     pair once. Text matching compares the UNION of each row's captured texts (`source_match_texts`): an
     exact (byte-identical) match flags `'cross_account'` (high confidence — auto-confirmed on merge); a
@@ -2284,8 +2304,57 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
     # (`_select_best_cross_account_matches`) because comparing evidence-JSON fields per row can't be
     # expressed in the join. Returns every candidate pair, then one existing match is kept per new row.
     window = CROSS_ACCOUNT_DATE_WINDOW_DAYS
-    candidates = conn.execute(
+    candidates = _cross_account_candidates(conn, batch_id, window, txn_ids)
+    if exclude_pairs:
+        # Filtered here rather than in SQL, and before selection so the next-best candidate can win the
+        # place the excluded pair was holding.
+        candidates = [r for r in candidates
+                      if (r["new_id"], r["existing_id"]) not in exclude_pairs]
+    if not candidates:
+        return 0
+    matches = _select_best_cross_account_matches(candidates)
+    if not matches:
+        return 0
+    conn.executemany(
         """
+        UPDATE txn
+        SET    suspect_duplicate_of = ?,
+               suspect_duplicate_reason = ?,
+               suspect_resolved_at = NULL
+        WHERE  id = ?
+        """,
+        [(m["existing_id"], m["reason"], m["new_id"]) for m in matches],
+    )
+    return len(matches)
+
+
+# Chunked so a caller may pass more ids than SQLite will bind in one statement. Splitting on `t1` is safe
+# because selection keeps at most one match per *new* row (`_select_best_cross_account_matches` groups by
+# `new_id`), so no candidate pair is separated from a rival it would have been ranked against.
+_CANDIDATE_ID_CHUNK = 400
+
+
+def _cross_account_candidates(conn: sqlite3.Connection, batch_id: str, window: int,
+                              txn_ids: list[str] | None):
+    """The raw (new row × existing row) pairs for `mark_import_suspects`, narrowed in SQL."""
+    def _run(id_clause: str, id_params: list) -> list:
+        return conn.execute(
+            _CROSS_ACCOUNT_CANDIDATE_SQL.format(id_clause=id_clause),
+            (*([f"-{window} days", f"+{window} days"] * 3), batch_id, *id_params),
+        ).fetchall()
+
+    if txn_ids is None:
+        return _run("", [])
+    rows: list = []
+    for start in range(0, len(txn_ids), _CANDIDATE_ID_CHUNK):
+        chunk = txn_ids[start:start + _CANDIDATE_ID_CHUNK]
+        if not chunk:
+            continue
+        rows.extend(_run(f"AND t1.id IN ({','.join('?' * len(chunk))})", list(chunk)))
+    return rows
+
+
+_CROSS_ACCOUNT_CANDIDATE_SQL = """
         SELECT
           t1.id AS new_id, t1.date AS new_date,
           t1.merchant_name AS new_merchant, t1.raw_name AS new_raw,
@@ -2331,25 +2400,34 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
                     AND COALESCE(b2.connection_id, t2.import_batch_id) IS NOT NULL
                     AND COALESCE(b1.connection_id, t1.import_batch_id)
                         != COALESCE(b2.connection_id, t2.import_batch_id)))
-        """,
-        (*([f"-{window} days", f"+{window} days"] * 3), batch_id),
-    ).fetchall()
-    if not candidates:
-        return 0
-    matches = _select_best_cross_account_matches(candidates)
-    if not matches:
-        return 0
-    conn.executemany(
-        """
-        UPDATE txn
-        SET    suspect_duplicate_of = ?,
-               suspect_duplicate_reason = ?,
-               suspect_resolved_at = NULL
-        WHERE  id = ?
-        """,
-        [(m["existing_id"], m["reason"], m["new_id"]) for m in matches],
-    )
-    return len(matches)
+          {id_clause}
+"""
+
+
+def sweep_import_suspects(conn: sqlite3.Connection, batch_id: str, *,
+                          txn_ids: list[str] | None = None) -> None:
+    """The post-ingest duplicate sweep, as its two halves are always run together: soft-flag this batch's
+    cross-account matches, then promote the ones whose accounts the user has already merged.
+
+    **Stage 2, and it must not run inside the ingest transaction.** It is analysis over the ledger as a
+    whole, not part of writing the rows — it reads every account, and on a large ledger it reads for a
+    long time. Held inside the write transaction that imported the rows, that time is time no other writer
+    can proceed: one 109-second sweep took a sync's request with it, froze the progress panel behind it
+    (the sync marker is cleared after the response), and failed every unrelated preference write for the
+    duration. Nothing in any caller's response depends on the result — it feeds the card's pills, read
+    later — so every caller commits its ingest first and calls this after.
+    """
+    mark_import_suspects(conn, batch_id, txn_ids=txn_ids)
+    # Scoped to the accounts this batch touched: promotion asks "has the user already merged these two
+    # accounts", which can only be true for accounts the batch actually landed rows on.
+    account_ids = [
+        str(r["account_id"]) for r in conn.execute(
+            "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND account_id IS NOT NULL",
+            (batch_id,),
+        ).fetchall()
+    ]
+    if account_ids:
+        promote_in_group_suspects_to_confirmed(conn, account_ids)
 
 
 def list_suspects(conn: sqlite3.Connection, *, batch_id: str | None = None, limit: int = 500) -> list[dict]:

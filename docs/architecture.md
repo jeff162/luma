@@ -511,7 +511,12 @@ came of leaving it unstated, in `docs/data-model.md`.
   calls after debiting and *before* issuing the request, so a crash can only forfeit an unused allowance
   rather than lose the record of a request already made. Progress is committed with each page
   (`connection.sync_progress`), which is what lets any request observe a pull still in flight — the pull's
-  own HTTP response cannot, being a single call that returns only at the end.
+  own HTTP response cannot, being a single call that returns only at the end. The response does, however,
+  break its totals down **per connection** (`connections[]`, from the same per-call facts as the sync log
+  and the connection card, so the three cannot disagree about one call): a client drives a *sequence* of
+  these calls and wants a per-connection total for the whole run, and summing responses cannot miss a call
+  where differencing the progress a slow poll happens to observe drops any call that starts and finishes
+  between two polls — which a routine top-up usually does.
   `run_sync` takes `full_history` to tell an initial/deepening pull from a routine top-up (they otherwise
   send identical arguments), and `provider` to scope a sync so one card cannot spend another provider's
   request budget. A pull may also return **`warnings`** — problems that did not fail it, such as one bank
@@ -727,13 +732,35 @@ contention shows up only between writers, and it shows up as *waiting*: a blocke
 timeout (`_BUSY_TIMEOUT_SECONDS`, explicitly set — Python's 5-second default was never chosen for this
 workload) and then fails with `database is locked`. Data is never lost to contention, but a request can be.
 
-**So the rule that matters is: never hold a write transaction across slow work.** A transaction spanning
-network I/O converts "one slow operation" into "every writing request fails for the duration", which is how
-a long sync used to leave the app routing but unable to load anything — navigation is client-side, so
-clicks worked while the recurring auto-scan on app load, preference saves, and cache updates all timed out.
-The provider-sync path is the case this was learned on and the pattern to copy: fetch with nothing open,
-apply, commit, repeat. `backend/routers/import_export/core.py` also shows the defensive half — a read
-endpoint whose best-effort write is wrapped so transient lock contention degrades instead of 500ing.
+**So the rule that matters is: a write transaction contains only the work it exists to do.** Gather
+everything the update needs *before* opening it, do the update, commit, and only then go on to whatever
+comes next. A transaction that holds anything else converts "one slow operation" into "every writing
+request fails for the duration", which is how a long sync used to leave the app routing but unable to load
+anything — navigation is client-side, so clicks worked while the recurring auto-scan on app load,
+preference saves, and cache updates all timed out. The provider-sync path is the case this was learned on
+and the pattern to copy: fetch with nothing open, apply, commit, repeat.
+`backend/routers/import_export/core.py` also shows the defensive half — a read endpoint whose best-effort
+write is wrapped so transient lock contention degrades instead of 500ing.
+
+**Network I/O is the obvious violation, not the only one — the expensive lesson was a purely local one.**
+Ingestion (a sync, a file import) and the analysis that follows it (the cross-account duplicate sweep, the
+recurring rescan) are separate stages, and the transaction boundary is where they separate: the writing
+stage ends at its commit, and every stage after it opens its own. This was decided when a
+threaded producer/consumer ingest and a raw staging table were both rejected as overkill (`ui-patterns.md`
+→ long operations) — the decision was that one process could keep the same *staging*, logically, and this
+is what that means in practice. What was written down at the time was only the rejection, so the rule was
+not there to fire when the duplicate sweep was added *inside* the sync's ingest transaction. It reads the
+whole ledger; on a real database it took 109 seconds, and for all 109 the sync's own request could not
+return, the progress panel sat frozen behind it (the running marker is cleared only once the response is on
+its way), and every unrelated write failed with `database is locked`. Nothing about it was slow in the
+"network" sense — it was a query holding a lock it had no business holding.
+
+Two corollaries worth keeping in mind when adding a step to an ingest path. **A stage that only *reads*
+still belongs outside**: a long read inside a write transaction blocks writers exactly as a long write
+does, because the lock is held from the transaction's first write until its commit. And **a stage whose
+result no response depends on has no reason to be inside at all** — the sweep and the rescan both feed
+surfaces read later, so both now run after the commit, in their own connections, guarded so a failure in
+either cannot fail the ingest that already succeeded.
 
 **Commits are genuinely durable, and cheap enough to take often.** No `PRAGMA synchronous` is set, so it is
 SQLite's default `FULL`: each commit fsyncs the WAL and survives power loss, not merely process death. The

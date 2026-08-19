@@ -127,7 +127,8 @@ SYNC_OUTCOME_ATTENTION = "attention"      # succeeded, and something did not mak
 SYNC_OUTCOME_OK = "ok"
 
 
-def sync_outcome(*, error, mode: str | None, already_held: int, became_complete: bool) -> str:
+def sync_outcome(*, error, mode: str | None, already_held: int, became_complete: bool,
+                 first_call: bool) -> str:
     """One word for what a sync call did, from the facts that call recorded.
 
     Pure, and called at sync time rather than derived when a card is rendered, so the word is stored with
@@ -135,9 +136,20 @@ def sync_outcome(*, error, mode: str | None, already_held: int, became_complete:
     and the label table the card renders, so the rule has one home.
 
     **`attention` is reserved for a problem with no other surface.** That leaves exactly one: rows the
-    provider reported as already held during an *initial* pull, which is a contradiction rather than the
-    routine overlap it is on a top-up (nothing can already be held before the first import) — the outward
-    appearance of a transaction-id collision.
+    provider reported as already held on a connection's **first** pull, which is a contradiction rather
+    than the routine overlap it is on a top-up (nothing can already be held before the first import) — the
+    outward appearance of a transaction-id collision.
+
+    `first_call` is what makes that reading sound, and `mode == "initial"` is not a substitute for it. An
+    initial backfill is not one call: a metered provider delivers it across as many syncs as its allowance
+    allows, and the connection stays in `initial` mode for every one of them, because what flips the mode
+    is the backfill *completing*. Each resumption re-asks for a window it has already partly fetched, so
+    already-held rows are routine there — and reading the mode alone reported a connection resuming
+    normally as needing attention, on every sync, for as long as the backfill took. It also masked the
+    outcome that was actually true of it (`incomplete`, "more history to fetch"), which is the one the
+    user could act on. The discriminator is whether this call had a resume point to start from: a
+    connection with no stored cursor has never fetched anything, and only then is "already held"
+    impossible.
 
     Rows with no local account used to raise it too, and that was wrong twice over. A `skip`-mapped account
     is the user's own decision being honoured, so the alarm could never be cleared and fired on every sync
@@ -147,7 +159,7 @@ def sync_outcome(*, error, mode: str | None, already_held: int, became_complete:
     """
     if error:
         return SYNC_OUTCOME_FAILED
-    if mode == "initial" and already_held > 0:
+    if mode == "initial" and first_call and already_held > 0:
         return SYNC_OUTCOME_ATTENTION
     if mode == "initial" and not became_complete:
         return SYNC_OUTCOME_INCOMPLETE

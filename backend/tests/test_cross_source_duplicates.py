@@ -270,6 +270,86 @@ class OriginNotAccountTests(_LedgerTestCase):
         with self._db() as conn:
             self.assertEqual(mark_import_suspects(conn, "card-b"), 0)
 
+    def test_a_scoped_sweep_examines_only_the_rows_it_was_given(self):
+        """`txn_ids` is what keeps a resumed backfill from re-sweeping its own card.
+
+        A connection's whole first backfill files into ONE card and a metered provider delivers it over
+        many calls, so a sweep scoped to the card re-examines every row imported so far to check the few
+        just added — the cost of each resumption growing with everything before it. Told the new rows, it
+        does the work those rows need and no more; the older row is left exactly as the earlier sweep left
+        it, rather than being re-judged.
+        """
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("a2", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-31.0, text="Book Shop")
+        # Both of card-b's rows have a match on card-a, but only the second is handed to the sweep.
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b2", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-31.0, text="Book Shop")
+
+        with self._db() as conn:
+            self.assertEqual(mark_import_suspects(conn, "card-b", txn_ids=["b2"]), 1)
+        self.assertEqual(self._suspect("b2")["suspect_duplicate_of"], "a2")
+        self.assertIsNone(self._suspect("b1")["suspect_duplicate_of"],
+                          "a row outside the given ids must not be examined")
+
+        # And the unscoped sweep still reaches the row the scoped one deliberately skipped.
+        with self._db() as conn:
+            self.assertEqual(mark_import_suspects(conn, "card-b"), 1)
+        self.assertEqual(self._suspect("b1")["suspect_duplicate_of"], "a1")
+
+    def test_a_pair_the_user_already_overruled_is_not_re_flagged(self):
+        """"Import anyway" is an answer, and the sweep must not put the question back.
+
+        Excluding the *pair* rather than the row is the whole design: the forced row stays under
+        examination, so anything else it duplicates is still found — and found *because* of the exclusion,
+        since selection keeps at most one match per new row and the overridden pair is byte-identical and
+        same-day, so it outranks and hides every other candidate.
+        """
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        # `a1` is the row the importer rejected `b1` against, and the user overruled: same day, same text.
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        # A second, weaker candidate: same text and amount, a different day inside the window.
+        self._row("a2", "card-a", label=LABEL_A, date="2026-08-05", amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+
+        # Unexcluded, the settled pair wins the one slot and the other candidate is never reported.
+        with self._db() as conn:
+            self.assertEqual(mark_import_suspects(conn, "card-b"), 1)
+        self.assertEqual(self._suspect("b1")["suspect_duplicate_of"], "a1")
+
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET suspect_duplicate_of = NULL, suspect_duplicate_reason = NULL")
+            marked = mark_import_suspects(conn, "card-b", exclude_pairs={("b1", "a1")})
+        self.assertEqual(marked, 1, "the row is still swept — only the answered pair is off the table")
+        self.assertEqual(self._suspect("b1")["suspect_duplicate_of"], "a2",
+                         "excluding the settled pair should surface the match it was masking")
+
+    def test_excluding_a_row_s_only_pair_leaves_it_unflagged(self):
+        # The ordinary case: the overruled pair was the only thing the forced row matched, so the sweep
+        # finds nothing and the user is not handed back the decision they just made.
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        with self._db() as conn:
+            self.assertEqual(mark_import_suspects(conn, "card-b", exclude_pairs={("b1", "a1")}), 0)
+        self.assertIsNone(self._suspect("b1")["suspect_duplicate_of"])
+
+    def test_a_scoped_sweep_handles_more_ids_than_sqlite_will_bind(self):
+        # The id list is chunked, so the pairing must not depend on which chunk a row lands in.
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        # Real ids in the middle of a long list of ids that match nothing.
+        padded = [f"absent-{n}" for n in range(1200)]
+        padded.insert(700, "b1")
+        with self._db() as conn:
+            self.assertEqual(mark_import_suspects(conn, "card-b", txn_ids=padded), 1)
+        self.assertEqual(self._suspect("b1")["suspect_duplicate_of"], "a1")
+
     def test_the_existing_vs_existing_sweep_pairs_on_origin_too(self):
         # Rows that both predate any comparison are invisible to the import-time sweep; the scope scan is
         # what reaches them. It used to require two accounts to have anything to compare.

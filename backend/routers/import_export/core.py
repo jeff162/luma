@@ -91,7 +91,7 @@ from backend.services.duplicate_detection import (
     MIN_TERMINAL_WINDOW_DAYS,
     normalize_evidence_text,
     parse_import_evidence,
-    promote_in_group_suspects_to_confirmed,
+    sweep_import_suspects,
     refresh_unexplained_coverage_candidates,
     tokenize_duplicate_match_text,
 )
@@ -2849,6 +2849,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     skip_set = set(skip_accounts_cfg)
 
     # Run inside the caller's transaction when one is supplied (demo loader); otherwise own the connection.
+    # Kept under its own name because `conn` is rebound below: the post-import sweep, which runs *after*
+    # this transaction, has to know whether there is a transaction of ours to have committed.
+    caller_conn = conn
     with (nullcontext(conn) if conn is not None else get_db()) as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
         # A recognized PayPal import groups under the single system PayPal data source, so all PayPal
@@ -3550,29 +3553,21 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL)
                 """, (batch_id, csv_val, mapped_id or None, row_ct))
 
-            # Cross-account soft-flag sweep. Catches matches between this batch's rows and
-            # existing rows on different accounts that the exact-content-hash dedup didn't see.
-            # Filtered by `account_pair_distinct` so pairs the user has already declared distinct
-            # don't re-surface — see `mark_import_suspects` in duplicate_detection.py.
-            mark_import_suspects(conn, batch_id)
-
-            # Honor any pre-existing merge. If the receiving account was already merged with the
-            # account holding a matched row, the user has already declared them the same physical
-            # account, so the just-flagged cross-account suspect between them is really an in-group
-            # duplicate — promote it to confirmed (auto_merge) exactly as the merge would have. This
-            # makes import order-independent: merge-then-import settles identically to import-then-
-            # merge. Cross-account matches against accounts NOT in the receiving group stay as
-            # soft-flags for review. Scoped to the accounts this batch touched.
-            batch_account_ids = [
-                str(r["account_id"]) for r in conn.execute(
-                    "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND account_id IS NOT NULL",
-                    (batch_id,),
-                ).fetchall()
-            ]
-            if batch_account_ids:
-                promote_in_group_suspects_to_confirmed(conn, batch_account_ids)
-
         account_skipped = sum(skip_counts.values())
+
+    # Cross-account soft-flag sweep — catches matches between this batch's rows and existing rows on
+    # different accounts that the exact-content-hash dedup didn't see, and promotes the ones whose accounts
+    # the user has already merged (so merge-then-import settles identically to import-then-merge).
+    #
+    # **After the import transaction, never inside it**: it is analysis across the whole ledger rather than
+    # part of writing the rows, and reading that much inside the write transaction blocks every other writer
+    # for as long as it takes (see `sweep_import_suspects`). No batch id means nothing was imported and
+    # there is nothing to sweep. A caller that supplied its own connection (the demo loader) is importing
+    # inside a transaction of its own that only it can end, so the sweep necessarily stays within it —
+    # a one-shot bulk load, not a path the user runs into repeatedly.
+    if batch_id:
+        with (nullcontext(caller_conn) if caller_conn is not None else get_db()) as sweep_conn:
+            sweep_import_suspects(sweep_conn, batch_id)
 
     trailing_non_transaction_message = None
     if trailing_non_transaction_suspected:
@@ -3857,6 +3852,20 @@ def _duplicate_match_txn_id(matched: dict) -> tuple[Optional[str], Optional[str]
     return None, "no matched transaction"
 
 
+def _duplicate_match_txn_ids(matched: dict) -> list[str]:
+    """Every existing transaction a duplicate row was rejected against.
+
+    The plural is the point, and it is why this is not `_duplicate_match_txn_id` above: that one answers
+    "is there exactly one row to enrich", so it deliberately gives up on an ambiguous match. Here an
+    ambiguous match means the user overruled the rejection against *all* of the candidates it named, and
+    every one of those pairs is a settled question.
+    """
+    candidates = matched.get("candidates")
+    if isinstance(candidates, list):
+        return [c["id"] for c in candidates if isinstance(c, dict) and c.get("id")]
+    return [matched["id"]] if matched.get("id") else []
+
+
 def _enrich_duplicate_rows(conn, batch_id: str, row_numbers: list[int]) -> tuple[list[dict], list[dict]]:
     """Fold each given duplicate row's incoming detail into the existing transaction it matched. Only
     unambiguous rows are touched — a row with exactly one matched candidate; rows with no match (nothing
@@ -3960,6 +3969,10 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
             raise HTTPException(status_code=400, detail="Choose duplicates to import")
 
         imported_now = 0
+        imported_ids: list[str] = []   # scopes the post-commit duplicate sweep to what this call added
+        # (forced row, the existing row it was rejected against) — the pairs the user has just overruled,
+        # which the sweep below must not put back in front of them as review work.
+        settled_pairs: set[tuple[str, str]] = set()
         remaining_rows = []
         importable_selected = 0
         not_importable_count = 0
@@ -3979,7 +3992,12 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
                 continue
 
             importable_selected += 1
-            _insert_imported_transaction(conn, batch_id, payload)
+            txn_id = _insert_imported_transaction(conn, batch_id, payload)
+            imported_ids.append(txn_id)
+            settled_pairs.update(
+                (txn_id, existing_id)
+                for existing_id in _duplicate_match_txn_ids(entry.get("matched_transaction") or {})
+            )
             imported_now += 1
             account_key = (payload.get("account_id"), str(payload.get("csv_value") or entry.get("csv_value") or ""))
             account_increments[account_key] = account_increments.get(account_key, 0) + 1
@@ -4029,9 +4047,28 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
             (len(remaining_rows), batch_id),
         )
 
-        # Same soft-duplicate sweep as the main import path, so user-driven "force import these
-        # duplicates" rows also get cross-checked against unrelated accounts.
-        mark_import_suspects(conn, batch_id)
+    # The same soft-duplicate sweep the main import path runs, so user-driven "force import these
+    # duplicates" rows are cross-checked against unrelated accounts too — after the transaction above has
+    # committed, for the reason given on `sweep_import_suspects`, and told exactly the rows this call
+    # inserted. Scoping matters more here than anywhere: this endpoint adds to a batch that has already
+    # been imported and already been swept, so a whole-batch sweep would re-examine every row of it to
+    # check the few just forced in.
+    #
+    # Two deliberate narrowings, both about not re-litigating what the user just decided.
+    #
+    # `mark_import_suspects` rather than the full `sweep_import_suspects`, because the promotion half
+    # **trashes** what it promotes (`trashed_at` + `rejection_reason='duplicate_confirmed'`) and promotes
+    # same-account pairs as readily as cross-account ones. A forced row is byte-identical to the row it was
+    # rejected against and lands on the same account from a different batch — precisely the shape it
+    # promotes — so running it here would trash the rows the user just insisted on importing, in the same
+    # request that imported them.
+    #
+    # And `exclude_pairs`, so the sweep does not hand back the very pair "import anyway" answered. The
+    # pair, not the row: a forced row is an ordinary transaction that may duplicate something *else*, and
+    # this is its only backward look at what already existed.
+    if imported_ids:
+        with get_db() as conn:
+            mark_import_suspects(conn, batch_id, txn_ids=imported_ids, exclude_pairs=settled_pairs)
 
     return {
         "batch_id": batch_id,

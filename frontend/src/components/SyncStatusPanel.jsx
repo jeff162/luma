@@ -9,11 +9,21 @@
 //
 // What it shows is chosen for the question a waiting user actually has, which is not "what percent":
 // there is no total to be a percent of, because a walk discovers where history ends by walking into it.
-// So it reports what is known and true — how much has arrived, how many requests it took, and how far
-// back each account has reached — and leaves the ending open.
+// So it reports what is known and true — how much has arrived and how many requests it took — and leaves
+// the ending open.
+//
+// **The row set is the run's roster, fixed from the first frame, not whatever is running this instant.**
+// A run is a sequence of HTTP calls with a wait between them and the sync marker cleared on each one's way
+// out, so "running right now" is empty for several seconds of every cycle; rendering it directly made the
+// panel grow and collapse on that rhythm, and collapse once more at the end as the connection rows gave
+// way to a single provider total. Every connection the run covers is listed from the start, each row
+// filling in as it goes and holding its final figures afterwards — so the same panel that answers "how is
+// it going" answers "what happened" once it is over, without ever changing size. The roster and the
+// arithmetic behind it live in `SyncStatusContext` and `lib/syncRoster.js`.
 
 import { AppDialog, Button } from './ui.jsx'
 import { providerLabel } from '../lib/importSourceFields.js'
+import { rosterAdded, rosterRequests } from '../lib/syncRoster.js'
 
 // A row-sized "still working" mark. The shared `Spinner` is a page-level block — 40px of padding around
 // the word "Loading…" — so dropping it into a status line both dwarfed the line and said the wrong thing:
@@ -21,24 +31,41 @@ import { providerLabel } from '../lib/importSourceFields.js'
 // only has to show that time is still passing.
 const PULSE_KEYFRAMES = '@keyframes lumaSyncPulse { 0%, 100% { opacity: 0.25 } 50% { opacity: 1 } }'
 
-function ProgressRow({ entry }) {
-  const p = entry.progress || {}
+// One connection, in whichever of its two states the run is in. The two are deliberately the same row —
+// same width, same order, same wording for the count — so that a run ending changes a mark and a tense,
+// not the shape of what the user was already reading.
+function ConnectionRow({ institution, added = 0, requests = 0, running, error }) {
+  const detail = running
+    ? (added ? `${added} imported` : 'starting…')
+    : (error ? 'could not sync' : added ? `${added} imported` : 'nothing new')
   return (
     <div style={{
-      display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 12px', borderRadius: 8,
-      background: 'var(--surface2)', fontSize: 13,
+      padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13,
     }}>
-      <span aria-hidden style={{
-        width: 7, height: 7, borderRadius: '50%', flexShrink: 0, alignSelf: 'center',
-        background: 'var(--accent)', animation: 'lumaSyncPulse 1.4s ease-in-out infinite',
-      }} />
-      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {entry.institution}
-      </span>
-      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>
-        {p.added ? `${p.added} imported` : 'starting…'}
-        {p.requests ? ` · ${p.requests} request${p.requests === 1 ? '' : 's'}` : ''}
-      </span>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        {running ? (
+          <span aria-hidden style={{
+            width: 7, height: 7, borderRadius: '50%', flexShrink: 0, alignSelf: 'center',
+            background: 'var(--accent)', animation: 'lumaSyncPulse 1.4s ease-in-out infinite',
+          }} />
+        ) : (
+          // Sized and positioned as the dot was, so a row settling does not shift its own text sideways.
+          <span aria-hidden style={{
+            width: 7, flexShrink: 0, alignSelf: 'center', lineHeight: 1, fontSize: 11,
+            color: error ? 'var(--danger)' : 'var(--success)',
+          }}>{error ? '!' : '✓'}</span>
+        )}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {institution}
+        </span>
+        <span style={{ color: 'var(--muted)', flexShrink: 0 }}>
+          {detail}
+          {requests ? ` · ${requests} request${requests === 1 ? '' : 's'}` : ''}
+        </span>
+      </div>
+      {error ? (
+        <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted)' }}>{error}</div>
+      ) : null}
     </div>
   )
 }
@@ -63,7 +90,7 @@ function FinishedRow({ provider, state }) {
   )
 }
 
-export function SyncStatusPanel({ running = [], syncState = {}, runProviders = [],
+export function SyncStatusPanel({ connections = [], syncState = {}, runProviders = [], watching = false,
                                   onClose, onMinimize }) {
   // Scoped to the run in progress, not to everything `syncState` has accumulated. That map is keyed by
   // provider and keeps each one's last result for the life of the page (the Accounts cards read it that
@@ -72,15 +99,20 @@ export function SyncStatusPanel({ running = [], syncState = {}, runProviders = [
   const finished = runProviders
     .map(p => [p, syncState[p]])
     .filter(([, s]) => s && !s.syncing && s.result)
-  // Providers this tab has started that the backend has not reported back as running yet. `runSync` marks
-  // its provider syncing before the panel is even opened, while `running` cannot list a connection until
-  // the pull is underway and its first progress committed — seconds later for a provider that has a
-  // session to establish first. Without this the panel spent that window in its genuine-idle state,
-  // titled "Sync finished" over the words "No sync is running", which is the opposite of what is
-  // happening.
-  const serverReported = new Set(running.map(r => r.provider))
-  const starting = runProviders.filter(p => syncState[p]?.syncing && !serverReported.has(p))
-  const active = running.length > 0 || starting.length > 0
+  // A connection's row is live for as long as its *provider* is, rather than for as long as the connection
+  // itself is reporting progress. Those are different questions: between the driver's calls no connection
+  // is reporting anything, and a row that answered the second one would settle and un-settle every few
+  // seconds while the sync went on regardless. A run this tab is only watching has no local driver to
+  // follow, so those rows read `watching` — the observer's own judgement about whether it is still going.
+  const isRunning = entry => (
+    runProviders.includes(entry.provider) ? !!syncState[entry.provider]?.syncing : watching
+  )
+  // A driving provider with no rows yet — the one round trip between pressing Sync and the roster arriving.
+  // Covering it is what stops the panel opening on "Sync finished" over "No sync is running", which is the
+  // opposite of what is happening; the row it draws is replaced in place by that provider's real ones.
+  const rostered = new Set(connections.map(e => e.provider))
+  const starting = runProviders.filter(p => syncState[p]?.syncing && !rostered.has(p))
+  const active = connections.some(isRunning) || starting.length > 0
   return (
     <AppDialog
       draggable
@@ -111,17 +143,26 @@ export function SyncStatusPanel({ running = [], syncState = {}, runProviders = [
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <style>{PULSE_KEYFRAMES}</style>
-        {running.map(entry => <ProgressRow key={entry.connectionId} entry={entry} />)}
-        {/* Deliberately the same row a server-backed connection gets, rather than a sentence of its own:
-            `ProgressRow` already says "starting…" while a real connection has no counts yet, so the panel
-            neither changes shape nor swaps vocabulary when the first poll lands — the numbers just fill in. */}
+        {connections.map(entry => (
+          <ConnectionRow
+            key={entry.connectionId}
+            institution={entry.institution}
+            added={rosterAdded(entry)}
+            requests={rosterRequests(entry)}
+            running={isRunning(entry)}
+            error={entry.error}
+          />
+        ))}
+        {/* Deliberately the same row the roster gets, rather than a sentence of its own: `ConnectionRow`
+            already says "starting…" before a connection has counts, so the panel neither changes shape nor
+            swaps vocabulary when the roster lands — the names and the numbers just fill in. */}
         {starting.map(p => (
-          <ProgressRow key={`starting-${p}`} entry={{ institution: providerLabel(p) }} />
+          <ConnectionRow key={`starting-${p}`} institution={providerLabel(p)} running />
         ))}
         {finished.map(([provider, state]) => (
           <FinishedRow key={provider} provider={provider} state={state} />
         ))}
-        {!running.length && !starting.length && !finished.length ? (
+        {!connections.length && !starting.length && !finished.length ? (
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>No sync is running.</div>
         ) : null}
       </div>

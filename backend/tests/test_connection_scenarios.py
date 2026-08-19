@@ -398,6 +398,33 @@ class ConnectionScenarioTests(unittest.TestCase):
         self.assertEqual(len(self.sim.requests), spent,
                          "an allowance that has refilled by nothing must grant nothing")
 
+    def test_a_resumed_backfill_is_not_reported_as_needing_attention(self):
+        """A metered provider's backfill spans many syncs, and every one of them is still `initial`.
+
+        The connection card reserves `attention` for one thing: rows the provider says we already hold on a
+        pull that cannot possibly hold anything yet. Keyed on the mode alone, that fired on every
+        resumption of a paused backfill — each of which re-asks for a window it has already partly fetched,
+        so already-held rows are exactly what it should produce. The card then read as a problem for as
+        long as the backfill took, and the outcome that *was* true of it — more history to fetch — was
+        masked by the alarm.
+        """
+        self._wide_bank()
+        self._sync(days=0, full_history=True)
+        # Refill some allowance and resume. The second call re-covers days the first one already imported.
+        self.sim.advance_hours(6)
+        self._sync(days=0, full_history=True)
+
+        row = self._connection_row()
+        summary = json.loads(row["last_sync_summary"])
+        already_held = sum(
+            int((c or {}).get("skipped_already_held") or 0) for c in (summary["accounts"] or {}).values()
+        )
+        self.assertGreater(already_held, 0, "this scenario is only meaningful if the resumption re-asks")
+        self.assertEqual(summary["mode"], "initial",
+                         "the backfill is unfinished, so the mode has not flipped — that is the trap")
+        self.assertEqual(row["last_sync_outcome"], "incomplete",
+                         "a resumed backfill re-asking for held days is not a problem; it has more to fetch")
+
     def test_a_history_pull_with_nothing_left_to_walk_claims_nothing_new(self):
         # Once every account's history is complete, "Fetch more history" has no account left to walk — and
         # a pull that walked nothing must not record having reached anywhere. The tempting reading is that
@@ -456,6 +483,75 @@ class ConnectionScenarioTests(unittest.TestCase):
         self._sync(days=90, full_history=True, transport=probing_transport)
         self.assertEqual(blocked, [], "a write transaction was open while the provider was being called")
 
+    def test_the_duplicate_sweep_runs_after_the_sync_transaction_commits(self):
+        """The same rule as the test above, applied to the *other* end of the call.
+
+        The per-page commits kept the write lock free across provider calls, and then the post-import
+        duplicate sweep — analysis over the whole ledger, not part of writing the rows — was run inside the
+        very transaction that had just been kept short. On a real ledger that sweep took 109 seconds, so
+        every other writer failed with `database is locked`, the sync's own request could not return, and
+        the progress panel stayed frozen behind it because the running marker is only cleared once the
+        response is on its way.
+
+        Probed the same way, from inside the sweep: a second connection with a short timeout must be able
+        to take the write lock while the sweep runs. What that proves is that the ingest transaction has
+        already committed — which is the invariant, not the speed.
+        """
+        blocked = []
+        db_path = str(self.db_path)
+        real_sweep = sync_module.sweep_import_suspects
+
+        def probing_sweep(conn, batch_id, **kwargs):
+            probe = sqlite3.connect(db_path, timeout=0.25)
+            try:
+                probe.execute("UPDATE db_meta SET value = value WHERE key = 'version'")
+                probe.commit()
+            except sqlite3.OperationalError as e:
+                blocked.append(str(e))
+            finally:
+                probe.close()
+            return real_sweep(conn, batch_id, **kwargs)
+
+        self._offer(CHECKING)
+        self._offer(SAVINGS)
+        with mock.patch.object(sync_module, "sweep_import_suspects", probing_sweep):
+            self._sync(days=90, full_history=True)
+        self.assertEqual(blocked, [],
+                         "the sync's write transaction was still open while the duplicate sweep ran")
+
+    def test_the_sweep_is_told_only_the_rows_this_call_added(self):
+        """A connection's whole first backfill files into ONE card, and a metered provider delivers it over
+        many calls — so a sweep scoped to the *card* re-examines everything imported so far to check what
+        this call added, and every resumption costs more than the last. It is told the new rows instead.
+        """
+        swept: list[dict] = []
+        real_sweep = sync_module.sweep_import_suspects
+
+        def recording_sweep(conn, batch_id, *, txn_ids=None):
+            swept.append({"batch_id": batch_id, "txn_ids": list(txn_ids or [])})
+            return real_sweep(conn, batch_id, txn_ids=txn_ids)
+
+        self._offer(CHECKING)
+        with mock.patch.object(sync_module, "sweep_import_suspects", recording_sweep):
+            self._sync(days=90, full_history=True)
+            first = sum(len(s["txn_ids"]) for s in swept)
+            self.assertEqual(first, self._row_count(), "the first call sweeps the rows it imported")
+
+            # A later call adds a little; the card now holds everything. The sweep must be told the little.
+            swept.clear()
+            self.sim.advance_days(1)
+            self.sim.ledger.append(
+                Txn("late-1", "Demo Checking", self.sim.today.isoformat(), "-9.99", "Coffee",
+                    memo="CORNER COFFEE", payee="Coffee")
+            )
+            self._sync(days=90)
+
+        added_now = self._row_count() - first
+        self.assertEqual(added_now, 1, "the scenario should have added exactly one row")
+        told = sum(len(s["txn_ids"]) for s in swept)
+        self.assertEqual(told, added_now,
+                         "the sweep was handed the whole card rather than the rows this call added")
+
     def test_progress_is_readable_from_outside_while_the_sync_is_still_running(self):
         """A long backfill is one HTTP call, so its own response says nothing until it is over.
 
@@ -495,6 +591,37 @@ class ConnectionScenarioTests(unittest.TestCase):
         with self._db() as conn:
             self.assertIsNone(conn.execute(
                 "SELECT sync_progress FROM connection WHERE id = ?", (CONNECTION_ID,)).fetchone()[0])
+
+    def test_each_call_reports_what_it_did_per_connection(self):
+        """The response's own breakdown of its totals, which is what a client sums into a run total.
+
+        The alternative — differencing the `sync_progress` a slow poll happens to catch — cannot see a call
+        that begins and ends between two polls, and a routine top-up is exactly that. So the figures a
+        client reports per connection come from here, and they have to add up to the call's own totals.
+        """
+        self._offer(CHECKING)
+        self._offer(SAVINGS)
+        result = self._sync(days=90, full_history=True)
+
+        rows = result["connections"]
+        self.assertEqual([r["connection_id"] for r in rows], [CONNECTION_ID],
+                         "one row per connection the call touched")
+        for field in ("added", "updated", "removed", "skipped"):
+            self.assertEqual(sum(r[field] for r in rows), result[field],
+                             f"the per-connection {field} figures must add up to the call's own")
+        self.assertGreater(rows[0]["added"], 0, "this backfill imported rows; the breakdown must say so")
+        self.assertIsNone(rows[0]["error"])
+
+    def test_a_connection_that_could_not_sync_says_so_in_its_own_row(self):
+        # A run is many calls over many connections, and a client showing a row each needs the failure
+        # attached to the connection it belongs to — not inferred from a total that came up short.
+        self._offer(CHECKING)
+        self.sim.refuse_with = SimpleFinError("the bank hung up")
+        result = self._sync(days=90, full_history=True)
+
+        self.assertEqual(len(result["connections"]), 1)
+        self.assertIn("hung up", result["connections"][0]["error"])
+        self.assertEqual(result["connections"][0]["added"], 0)
 
     def test_a_requests_debit_is_durable_before_that_request_is_issued(self):
         """Write-ahead, and the asymmetry that forces it.
