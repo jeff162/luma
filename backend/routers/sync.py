@@ -34,7 +34,9 @@ from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
-from backend.services.providers.config import set_sync_running, sync_outcome
+from backend.services.providers.config import (
+    set_sync_running, sync_outcome, unexplained_already_held,
+)
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
@@ -539,17 +541,13 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
     deliberately not copied here.
     """
     accounts = entry.get("account_counts") or {}
-    already_held = sum(
-        int((c or {}).get("skipped_already_held") or 0) for c in accounts.values()
-    )
+    # Computed once, here, and stored beside the outcome it decided. The card renders its chip from this
+    # number and the outcome pill comes from the same call, so the two surfaces cannot disagree — they did,
+    # for exactly as long as each re-derived the judgement from `mode`.
+    unexplained = unexplained_already_held(accounts=accounts, cursor_before=entry.get("cursor_before"))
     outcome = sync_outcome(
         error=entry.get("error"), mode=entry.get("mode"),
-        already_held=already_held, became_complete=bool(entry.get("became_complete")),
-        # No resume point going in means this connection had never fetched anything, which is the only
-        # state in which "the provider says we already hold this" is a contradiction rather than the
-        # overlap a resumed backfill re-asks for on purpose. `cursor_before` is the fingerprint of that
-        # resume point, and it is None exactly when there was none.
-        first_call=not entry.get("cursor_before"),
+        already_held=unexplained, became_complete=bool(entry.get("became_complete")),
     )
     summary = {
         "at":       entry.get("started_at"),
@@ -558,6 +556,10 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
         "updated":  entry.get("updated") or 0,
         "removed":  entry.get("removed") or 0,
         "accounts": accounts,
+        # The one figure the card's "Already imported" chip is allowed to warn on. Stored rather than
+        # re-derived because the card reads this summary and nothing else: it has no cursor, no per-call
+        # row set, and no way to tell routine overlap from a collision on its own.
+        "already_held_unexplained": unexplained,
     }
     conn.execute(
         "UPDATE connection SET last_sync_outcome = ?, last_sync_summary = ? WHERE id = ?",
@@ -821,6 +823,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     # connection's first backfill files every call into ONE card: swept by card, each resumption re-examines
     # everything imported so far to check what this call added, and the cost climbs with the card.
     card_added_ids: dict[str, list[str]] = {}
+    # Every row id this call inserted. A walking adapter drains pages whose windows overlap, so page 3
+    # routinely re-offers what page 1 just imported; without this the call cannot tell its own work from
+    # rows that were in the ledger before it started, and only the latter mean anything is wrong.
+    inserted_ids: set[str] = set()
     card_dupes: dict[str, int] = {}          # card_id -> rows hard-rejected as duplicates this call
     # (card_id, csv_value) -> {account_id, count, skipped}. `count` is rows that landed, `skipped` is rows
     # dropped for having no local account to land in; a source value is one or the other within a sync,
@@ -1068,6 +1074,13 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # It is also the single most routine event a sync has (every top-up re-asks for recent
                     # days on purpose), so resolving a card here would mint an empty one every month.
                     _bump(tally, t["external_account_id"], "skipped_already_held")
+                    # Counted apart, not derived by subtraction: `_prior` is the half that was in the
+                    # ledger *before this call*, and it is the only half that can mean a transaction-id
+                    # collision. The rest is this call re-seeing its own pages. Storing it directly is the
+                    # same rule the skip breakdown already follows — a bucket recovered by subtracting the
+                    # others is silently corrupted by the next bucket anyone adds.
+                    if existing["id"] not in inserted_ids:
+                        _bump(tally, t["external_account_id"], "skipped_already_held_prior")
                 return False
 
             # A check number folded into the merchant as "Check #<n>", matching the CSV convention, so
@@ -1147,6 +1160,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
             card_added_ids.setdefault(card_id, []).append(txn_id)
+            inserted_ids.add(txn_id)
             entry = card_accounts.setdefault(
                 (card_id, source_label), {"account_id": acc["id"], "count": 0, "skipped": 0})
             entry["account_id"] = acc["id"]
@@ -1800,6 +1814,11 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         d["account_counts"] = _json_obj(d.get("account_counts"))
         d["became_complete"] = bool(r["became_complete"])
         d["skipped_breakdown"] = _skipped_breakdown(d["account_counts"], d)
+        # The same number the connection card warns on, from the same function, so a reader following the
+        # card's deep-link into this log cannot meet a different verdict about the call they just clicked.
+        d["already_held_unexplained"] = unexplained_already_held(
+            accounts=d["account_counts"], cursor_before=r["cursor_before"],
+        )
         return d
 
     return {"entries": [_entry(r) for r in rows]}

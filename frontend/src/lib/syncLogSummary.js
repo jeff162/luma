@@ -259,13 +259,16 @@ const SKIP_BUCKETS = [
 export function skippedBreakdown(entry) {
   const counts = entry?.skipped_breakdown
   if (!counts || typeof counts !== 'object') return null
-  // Already-held rows are only a contradiction on a connection's **first** pull, and `mode` alone does not
-  // say that: a metered provider's initial backfill spans as many syncs as its allowance allows, and the
-  // mode stays `initial` for every one of them, because what flips it is the backfill completing. Each
-  // resumption re-asks for a window it has already partly fetched, so already-held is routine there —
-  // reading the mode alone painted a normally-resuming backfill orange on every sync. `cursor_before` is
-  // the resume point this call started from, absent only when the connection had never fetched anything.
-  const firstPull = entry?.mode === 'initial' && !entry?.cursor_before
+  // Already-held rows are only a contradiction where the call cannot account for them, and the server is
+  // what decides that (`unexplained_already_held`): it strips the two innocent sources — a connection that
+  // has fetched before, and a walking adapter's overlapping pages re-offering rows the same call just
+  // imported — leaving the case a transaction-id collision would produce. Read rather than re-derived so
+  // this row, the connection card's chip, and the outcome pill cannot reach different verdicts about one
+  // call. Rows written before the server sent the figure fall back to the older, looser reading.
+  const unexplained = entry?.already_held_unexplained
+  const firstPull = unexplained === undefined || unexplained === null
+    ? entry?.mode === 'initial' && !entry?.cursor_before
+    : unexplained > 0
   return SKIP_BUCKETS
     .map(b => ({
       key: b.key,

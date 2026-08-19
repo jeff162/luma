@@ -471,15 +471,18 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
       added: (c?.added || 0) + (c?.skipped_by_choice || 0) + (c?.skipped_unknown_account || 0),
     }
   })
-  // Nothing can already be held before a first import, so on an initial pull this is a contradiction
-  // rather than the routine re-fetch it is on a top-up. This is the only remaining outcome chip: rows
-  // with no destination are now carried by the `✕` chips beside it, per account and with their counts,
-  // which is both more informative and unambiguous — a separate total sat next to a row of `✕` chips and
-  // read as a count of them whenever the two happened to agree.
-  const heldOnInitial = lastSync.mode === 'initial'
-    ? Object.values(lastSync.accounts || {})
-      .reduce((n, c) => n + Number(c?.skipped_already_held || 0), 0)
-    : 0
+  // Already-held rows this call cannot account for — decided server-side by `unexplained_already_held`
+  // and stored on the summary, not re-derived here. Re-deriving it from `mode` is what made this chip
+  // disagree with the outcome pill beside it and with the sync log behind it: `mode` stays `initial` for
+  // every call of a backfill a metered provider spreads over days, and a walking adapter's overlapping
+  // pages re-offer rows the same call just imported. Both are routine, and both used to light this up.
+  // A summary written before the server sent the figure has no key, which reads as nothing to report —
+  // the next sync fills it in, and staying quiet is the right way to be wrong about a warning.
+  //
+  // This is the only remaining outcome chip: rows with no destination are carried by the `✕` chips beside
+  // it, per account and with their counts, which is both more informative and unambiguous — a separate
+  // total sat next to a row of `✕` chips and read as a count of them whenever the two happened to agree.
+  const heldUnexplained = Number(lastSync.already_held_unexplained || 0)
 
   return (
     <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
@@ -502,10 +505,10 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
               skipped={c.mapping_mode === 'skip'}
             />
           ))}
-          {heldOnInitial ? (
+          {heldUnexplained ? (
             <OutcomeChip
-              label="Already imported" count={heldOnInitial} tone="warning" onClick={onOpenLog}
-              title="Reported as already imported during a first import, which should not happen — open the sync log."
+              label="Already imported" count={heldUnexplained} tone="warning" onClick={onOpenLog}
+              title="Reported as already imported on this connection’s first pull, before it had fetched anything — open the sync log."
             />
           ) : null}
         </div>

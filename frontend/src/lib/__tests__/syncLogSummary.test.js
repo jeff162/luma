@@ -218,6 +218,19 @@ describe('skippedBreakdown', () => {
     expect(skippedBreakdown({ ...counts, mode: 'routine' })[0].tone).toBe('muted')
   })
 
+  it('reads the server’s verdict rather than re-deriving one', () => {
+    // The judgement lives in one place (`unexplained_already_held`, backend), because three surfaces
+    // render it — this row, the connection card's chip, and the outcome pill — and while each derived it
+    // from `mode` they disagreed about the same sync in front of the user.
+    const counts = { skipped_breakdown: breakdown({ skipped_already_held: 26 }), mode: 'initial' }
+    expect(skippedBreakdown({ ...counts, already_held_unexplained: 0 })[0].tone).toBe('muted')
+    expect(skippedBreakdown({ ...counts, already_held_unexplained: 3 })[0].tone).toBe('warning')
+    // Including when the server says the *raw* count is entirely routine overlap on a first pull — the
+    // walk re-seeing its own pages, which no client-side reading of `mode` or `cursor_before` can spot.
+    expect(skippedBreakdown({ ...counts, cursor_before: null, already_held_unexplained: 0 })[0].tone)
+      .toBe('muted')
+  })
+
   it('does not call a resumed backfill a contradiction', () => {
     // `mode` alone cannot answer "is this the first pull". A metered provider delivers its initial
     // backfill over as many syncs as its allowance allows, and every one of them is still `initial`,
@@ -232,6 +245,14 @@ describe('skippedBreakdown', () => {
     const firstPull = skippedBreakdown({ ...counts, cursor_before: null })[0]
     expect(firstPull.tone).toBe('warning')
     expect(firstPull.title).toMatch(/should not happen/)
+  })
+
+  it('falls back to the older reading for rows written before the server sent a verdict', () => {
+    // Log rows are kept across upgrades, so a row with no `already_held_unexplained` still has to render
+    // something defensible — the cursor-based reading it had before.
+    const counts = { skipped_breakdown: breakdown({ skipped_already_held: 26 }), mode: 'initial' }
+    expect(skippedBreakdown({ ...counts, cursor_before: 'through=2026-08-18' })[0].tone).toBe('muted')
+    expect(skippedBreakdown({ ...counts, cursor_before: null })[0].tone).toBe('warning')
   })
 
   it('omits buckets that caught nothing', () => {

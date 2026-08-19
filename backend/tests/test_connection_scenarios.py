@@ -425,6 +425,56 @@ class ConnectionScenarioTests(unittest.TestCase):
         self.assertEqual(row["last_sync_outcome"], "incomplete",
                          "a resumed backfill re-asking for held days is not a problem; it has more to fetch")
 
+    def test_a_first_pull_re_seeing_its_own_pages_is_not_a_contradiction(self):
+        """The other innocent source of "already held", and the one `mode` and the cursor both miss.
+
+        A walking adapter drains several pages whose windows overlap, so page 3 re-offers rows page 1 has
+        already imported. That is the call re-seeing its own work on a connection with no cursor and no
+        history — every signal that says "first pull" is true, and nothing is wrong. Only rows the ledger
+        held *before* the call began can mean a transaction-id collision.
+        """
+        self._offer(CHECKING)
+        self._offer(SAVINGS)
+        self._sync(days=0, full_history=True)
+
+        row = self._connection_row()
+        summary = json.loads(row["last_sync_summary"])
+        raw_held = sum(
+            int((c or {}).get("skipped_already_held") or 0) for c in summary["accounts"].values()
+        )
+        self.assertGreater(raw_held, 0, "this walk must re-cover some of its own pages to be the case")
+        self.assertEqual(summary["already_held_unexplained"], 0,
+                         "rows this very call imported are not evidence of anything")
+        self.assertNotEqual(row["last_sync_outcome"], "attention")
+
+    def test_a_first_pull_told_it_already_holds_a_row_does_raise_attention(self):
+        # The case the alarm exists for, kept working while the innocent ones are stripped out: rows the
+        # ledger held before this call began, on a connection with no resume point — from outside,
+        # indistinguishable from a transaction-id collision.
+        #
+        # The planted row carries the id the adapter will derive for the same transaction: SimpleFIN ids
+        # are only unique *within* an account, so the ledger's globally-unique `external_transaction_id`
+        # is `<namespaced account>:<provider id>` (see `_normalize_txn`). Built from the account constant
+        # rather than written out, so it stays honest if the namespacing changes.
+        shallow = [Txn(txn_id="only-1", account="Demo Checking", posted="2026-07-20", amount="-12.00",
+                       description="Grocery store", memo="LOCAL GROCER STORE #1133", payee="Grocery store")]
+        self.sim = SimpleFinSim(transactions=shallow, accounts=["Demo Checking"], today="2026-08-08")
+        local = self._offer(CHECKING)
+        with self._db() as conn:
+            conn.execute(
+                """INSERT INTO txn (id, external_transaction_id, account_id, owner_id, amount,
+                                    merchant_name, display_name, raw_name, date, is_pending)
+                   VALUES ('planted', ?, ?, ?, -12.00, 'Grocery store', 'Grocery store',
+                           'Grocery store', '2026-07-20', 0)""",
+                (f"{CHECKING}:only-1", local, SHARED_OWNER_ID),
+            )
+
+        self._sync(days=0, full_history=True)
+        row = self._connection_row()
+        summary = json.loads(row["last_sync_summary"])
+        self.assertEqual(summary["already_held_unexplained"], 1)
+        self.assertEqual(row["last_sync_outcome"], "attention")
+
     def test_a_history_pull_with_nothing_left_to_walk_claims_nothing_new(self):
         # Once every account's history is complete, "Fetch more history" has no account left to walk — and
         # a pull that walked nothing must not record having reached anywhere. The tempting reading is that
