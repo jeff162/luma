@@ -201,6 +201,20 @@ def _placeholders(values) -> str:
     return ",".join("?" * len(values))
 
 
+def _account_label_sql(alias: str) -> str:
+    """An account's label in a duplicate report: its display name plus the masked suffix.
+
+    One expression, used everywhere a report names an account, because the two sides of a match are read
+    against each other. The hard-reject incoming side shows the *source's* own label for the account
+    (`provider_account_label`, "Rewards Card ···4417"), which is not ours to restate — so the matched
+    side has to reach the same string by its own route, or one account renders as two different-looking
+    ones directly beside itself. The mask is what does that, and it is worth having regardless: it is the
+    thing that separates two cards a user has named alike.
+    """
+    return (f"COALESCE(NULLIF({alias}.display_name, ''), {alias}.name)"
+            f" || COALESCE(' ···' || NULLIF({alias}.mask, ''), '')")
+
+
 # A payment processor stamps its own tag on the front of the descriptor it forwards ("<tag> *MERCHANT"),
 # and whether a given source passes that tag through is a property of the source, not of the charge — so
 # one side carrying it while the other does not is the single most common reason two records of the same
@@ -3096,10 +3110,30 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
         out["source_imported_at"]  = meta.get("source_imported_at")
         return out
 
-    entries: list[dict] = []
+    # Account labels, for naming the account a matched row sits on.
+    #
+    # Resolved **here, at report time, from the stored id** rather than written into the record at import
+    # time — which is what makes this repair reports that already exist instead of only ones imported from
+    # now on. The soft-flag half has always named both accounts (it builds its records from a live JOIN);
+    # only the hard-reject half went without, because a coverage candidate attached `account_name` solely
+    # when it was flagged `cross_account`. The reasoning was that a same-account match need not repeat the
+    # account — but the reader sees an account under the incoming row and nothing under the matched one,
+    # which reads as unknown rather than as "the same". It also stopped being true once coverage
+    # candidates began arriving from linked-group siblings.
+    #
+    # The label is per row and not hoisted to a column header or the report title, though within any one
+    # report it is often constant: a report is not *structurally* single-account. One import spreading
+    # across several accounts (a CSV with an account column, a connection feeding several) produces a
+    # report whose rows sit on different accounts, and a header stating one of them would read as
+    # authoritative while being wrong for the rest — worse than the omission this fixes.
+    account_labels: dict[str, str] = {
+        str(r["id"]): r["label"]
+        for r in conn.execute(
+            f"SELECT id, {_account_label_sql('account')} AS label FROM account account"
+        ).fetchall()
+    }
 
-    # Hard rejects (never made it into the ledger).
-    for row in conn.execute(
+    duplicate_rows = conn.execute(
         """
         SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json, reviewed_at,
                enriched_at, enriched_delta_json
@@ -3108,7 +3142,55 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
         ORDER  BY row_number
         """,
         (batch_id,),
-    ).fetchall():
+    ).fetchall()
+
+    # Records predating `account_id` on the stored match carry only the matched transaction's `id`, so
+    # their account is reachable one hop further on. Collected across the whole report and resolved in a
+    # single query rather than per record: the fallback fires on every row of an *old* report, and a
+    # per-row lookup would make the age of a report decide how many queries rendering it costs.
+    def _matched_records(matched: dict) -> list[dict]:
+        """Every dict inside a stored match that names a transaction, whatever the rule's shape."""
+        if not isinstance(matched, dict):
+            return []
+        if "covered" in matched:
+            return [c for c in (matched.get("candidates") or []) if isinstance(c, dict)]
+        return [matched] if matched.get("id") or matched.get("account_id") else []
+
+    unresolved_txn_ids: set[str] = set()
+    for row in duplicate_rows:
+        try:
+            parsed = json.loads(row["matched_transaction_json"]) if row["matched_transaction_json"] else {}
+        except Exception:
+            continue
+        for record in _matched_records(parsed):
+            if not record.get("account_id") and record.get("id"):
+                unresolved_txn_ids.add(str(record["id"]))
+    account_by_txn_id: dict[str, str] = {}
+    _unresolved = sorted(unresolved_txn_ids)
+    for start in range(0, len(_unresolved), _ORIGIN_LOOKUP_CHUNK):
+        chunk = _unresolved[start:start + _ORIGIN_LOOKUP_CHUNK]
+        for r in conn.execute(
+            f"SELECT id, account_id FROM txn WHERE id IN ({_placeholders(chunk)})", chunk,
+        ).fetchall():
+            account_by_txn_id[str(r["id"])] = str(r["account_id"])
+
+    def with_account_name(target: dict) -> dict:
+        """Name the account a matched record sits on, from whichever id the record kept."""
+        if not isinstance(target, dict) or target.get("account_name"):
+            return target
+        account_id = target.get("account_id") or account_by_txn_id.get(str(target.get("id") or ""))
+        label = account_labels.get(str(account_id or ""))
+        if not label:
+            return target
+        out = dict(target)
+        out["account_id"] = account_id
+        out["account_name"] = label
+        return out
+
+    entries: list[dict] = []
+
+    # Hard rejects (never made it into the ledger).
+    for row in duplicate_rows:
         try:
             values = json.loads(row["values_json"]) if row["values_json"] else {}
         except Exception:
@@ -3147,11 +3229,16 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 enriched_matched = dict(enriched_matched)
                 enriched_matched["covered"] = enrich_with_source(covered, covered.get("source_batch_id"))
                 enriched_matched["candidates"] = [
-                    _with_text_relation_label(enrich_with_source(c, c.get("import_batch_id")))
+                    _with_text_relation_label(with_account_name(enrich_with_source(c, c.get("import_batch_id"))))
                     for c in (enriched_matched.get("candidates") or [])
                 ]
-            elif enriched_matched.get("import_batch_id"):
-                enriched_matched = enrich_with_source(enriched_matched, enriched_matched.get("import_batch_id"))
+            else:
+                # Named unconditionally, not only when the record knows its source batch: the account is
+                # the fact the reader is missing, and a matched row with no batch (a hand-entered
+                # transaction) still sits on one.
+                enriched_matched = with_account_name(
+                    enrich_with_source(enriched_matched, enriched_matched.get("import_batch_id"))
+                )
 
         # Advisory-review sub-state, only meaningful for coverage-window rejects (the rule that can
         # fire without a specific matching row). `reviewed_at` set → the user has acknowledged it,
@@ -3228,7 +3315,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.amount                   AS new_amount,
             COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, '')) AS new_merchant,
             t1.account_id               AS new_account_id,
-            a1.name                     AS new_account_name,
+            {_account_label_sql('a1')} AS new_account_name,
             COALESCE(NULLIF(a1p.display_name, ''), a1p.name) AS new_account_merged_into,
             COALESCE(a1.parent_account_id, a1.id)            AS new_account_root,
             t1.suspect_duplicate_reason AS reason_key,
@@ -3238,7 +3325,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t2.date                     AS existing_date,
             t2.amount                   AS existing_amount,
             COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, '')) AS existing_merchant,
-            a2.name                     AS existing_account_name,
+            {_account_label_sql('a2')} AS existing_account_name,
             COALESCE(NULLIF(a2p.display_name, ''), a2p.name) AS existing_account_merged_into,
             COALESCE(a2.parent_account_id, a2.id)            AS existing_account_root,
             t2.import_batch_id          AS existing_batch_id

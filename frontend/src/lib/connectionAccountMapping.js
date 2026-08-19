@@ -13,7 +13,11 @@
 // account would quietly restate the others — and since a mapping change triggers a duplicate re-scan,
 // a spurious restatement is not free.
 
-import { findLikelyAccountMatch, guessNewAccountTypeFromName } from './importExport/importAccountMatching.js'
+import {
+  findAccountMatchCandidates,
+  findLikelyAccountMatch,
+  guessNewAccountTypeFromName,
+} from './importExport/importAccountMatching.js'
 
 // The row state is the CSV grid's, field for field, so the two stay comparable and the eventual shared
 // extraction is mechanical (see docs/shared-components.md → watchlist). The backend's mapping mode is
@@ -30,11 +34,20 @@ export function defaultConnectionMapEntry(sourceLabel) {
     // — a file's mapping is applied once — but a connection's is revisited, and a name/type editor for
     // an account that already exists would offer edits the mapping call ignores.
     materializedAccountId: '',
+    // Every existing account this source account could already be. A list, not a winner: one candidate
+    // is a suggestion the row can offer in one click, several is a set the picker shows and the user
+    // chooses from, and the difference between those is a rendering decision — not a reason to discard
+    // the ones that did not win.
+    candidates: [],
+    // The one candidate confident enough for a one-click accept chip, or null. Carried alongside the
+    // list rather than re-derived from it by each row, because "is this chip-worthy?" is a rule with
+    // two conditions (exactly one possibility, and it came from name evidence) and a row that reasons
+    // "the list has one entry, so show the chip" quietly offers one-click accepts on mask look-alikes.
     suggestion: null,
-    // The existing account the duplicate-account chooser offered and the user declined with "Keep
-    // separate". Not a mapping relationship — the opposite — but it is an answer worth keeping, so it
-    // rides to the server and becomes an `account_pair_distinct` assertion.
-    distinctFromAccountId: '',
+    // The candidates the user ruled out by giving this source account an account of its own. Not a
+    // mapping relationship — the opposite — but it is an answer worth keeping, so it rides to the server
+    // and becomes an `account_pair_distinct` assertion per entry.
+    distinctFromAccountIds: [],
   }
 }
 
@@ -51,10 +64,11 @@ export function entryToMapping(entry) {
       name: entry.newName,
       type: entry.newType || null,
       // Carried only on a create-new decision, because that is the one shape that means "this is NOT
-      // that account". `distinctFromAccountId` is set when the user answers the "Possible duplicate
-      // account?" chooser with Keep separate; the server records it as a distinct-account assertion once
-      // the account exists, so the answer survives instead of being re-asked per flagged transaction.
-      distinct_from_account_id: entry.distinctFromAccountId || null,
+      // that account". Set when the user picks **New account** from the picker, which sits below the
+      // possible matches precisely so that choosing it is a visible answer about them; the server
+      // records one distinct-account assertion per entry, so the answer survives instead of being
+      // re-asked per flagged transaction.
+      distinct_from_account_ids: entry.distinctFromAccountIds || [],
     }
     if (entry.groupWithAccountId) {
       return { mode: 'group', target_account_id: entry.groupWithAccountId, ...shared }
@@ -90,9 +104,10 @@ export function entryFromProviderAccount(pa, selectableAccounts) {
       entry.skip = true
       break
     default:
-      // Undecided: offer the suggestion as a one-click chip, never silently apply it. A decided
-      // account is deliberately not re-suggested — the chip is a prompt to decide, and re-offering it
-      // would invite undoing a choice by reflex on every reopen.
+      // Undecided: surface what this account might already be, never silently apply it. A decided
+      // account is deliberately not re-offered — the candidates are a prompt to decide, and re-offering
+      // them would invite undoing a choice by reflex on every reopen.
+      entry.candidates = findAccountMatchCandidates(selectableAccounts, pa.source_label)
       entry.suggestion = findLikelyAccountMatch(selectableAccounts, pa.source_label)
   }
   return entry

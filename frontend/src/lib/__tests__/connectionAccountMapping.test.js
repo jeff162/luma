@@ -58,7 +58,7 @@ describe('stored mapping → row state → stored mapping', () => {
       mapping_mode: 'compare', account_id: 'acct-new', target_account_id: 'acct-csv',
     })
     expect(roundTrip(pa)).toBeNull()
-    expect(entryFromProviderAccount(pa, ACCOUNTS).suggestion?.id).toBe('acct-csv')
+    expect(entryFromProviderAccount(pa, ACCOUNTS).candidates.map(a => a.id)).toEqual(['acct-csv'])
   })
 
   it('round-trips a plain new account with no relationship', () => {
@@ -80,21 +80,21 @@ describe('the undecided state is preserved, not defaulted', () => {
     expect(roundTrip(providerAccount())).toBeNull()
   })
 
-  it('an unmapped account gets a suggestion offered, but not applied', () => {
+  it('an unmapped account gets its possible matches offered, but not applied', () => {
     const entry = entryFromProviderAccount(providerAccount(), ACCOUNTS)
-    expect(entry.suggestion?.id).toBe('acct-csv')
+    expect(entry.candidates.map(a => a.id)).toEqual(['acct-csv'])
     expect(entry.accountId).toBe('')
     expect(entry.createNew).toBe(false)
     expect(entryToMapping(entry)).toBeNull()
   })
 
-  it('an already-decided account is not re-suggested', () => {
-    // The chip is a prompt to decide. Once decided, re-offering it would invite undoing a choice by
+  it('an already-decided account is not re-offered candidates', () => {
+    // They are a prompt to decide. Once decided, re-offering them would invite undoing a choice by
     // reflex on every reopen.
     const entry = entryFromProviderAccount(
       providerAccount({ mapping_mode: 'existing', account_id: 'acct-csv' }), ACCOUNTS,
     )
-    expect(entry.suggestion).toBeNull()
+    expect(entry.candidates).toEqual([])
   })
 })
 
@@ -173,7 +173,7 @@ describe('a mapping whose account has since been merged into a group', () => {
   })
 
   it('is not treated as undecided, so no suggestion is offered over it', () => {
-    expect(entryFromProviderAccount(mergedMapping, WITH_CHILDREN).suggestion).toBeNull()
+    expect(entryFromProviderAccount(mergedMapping, WITH_CHILDREN).candidates).toEqual([])
   })
 })
 

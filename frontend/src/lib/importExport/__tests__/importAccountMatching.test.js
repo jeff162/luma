@@ -11,6 +11,8 @@ import {
   findExactAccountNameMatch,
   getAccountOptionLabel,
   normalizeAccountMatchStem,
+  extractAccountMask,
+  findAccountMatchCandidates,
   findLikelyAccountMatch,
   selectableAccountOptions,
   buildAccountImportStateSnapshot,
@@ -48,6 +50,108 @@ describe('findExactAccountNameMatch', () => {
     const accounts = [{ name: 'Primary Checking', display_name: 'Joint' }]
     expect(findExactAccountNameMatch(accounts, '  primary checking ')).toBe(accounts[0])
     expect(findExactAccountNameMatch(accounts, 'Joint')).toBeNull()
+  })
+})
+
+describe('findAccountMatchCandidates', () => {
+  // The set behind the suggestion. `findLikelyAccountMatch` collapses this to one-or-nothing for the
+  // one-click chip; the mapping row renders the whole thing, because "is this any of these?" is a
+  // perfectly answerable question when the chip's "is it *that* one?" is not.
+  it('returns every rival where the single-match rule returns nothing', () => {
+    const accounts = [acc('Eastern Checking'), acc('Eastern Checking')]
+    expect(findLikelyAccountMatch(accounts, 'Eastern Checking (...1234)')).toBeNull()
+    expect(findAccountMatchCandidates(accounts, 'Eastern Checking (...1234)')).toHaveLength(2)
+  })
+
+  it('agrees with the single-match rule when there is exactly one', () => {
+    const accounts = [acc('Eastern Checking'), acc('Western Savings')]
+    expect(findAccountMatchCandidates(accounts, 'Eastern Checking (...1234)')).toEqual([accounts[0]])
+    expect(findLikelyAccountMatch(accounts, 'Eastern Checking (...1234)')).toBe(accounts[0])
+  })
+
+  it('still yields nothing where there was nothing to suggest', () => {
+    // An exact match is a mapping to be MADE, not a resemblance to rule out; and the generic-token
+    // guard has to hold for the list too, or every savings account becomes something to assert about.
+    expect(findAccountMatchCandidates([acc('Checking')], 'Checking')).toEqual([])
+    expect(findAccountMatchCandidates([acc('Acme Savings')], 'Savings (...7304)')).toEqual([])
+    expect(findAccountMatchCandidates([acc('Eastern Checking')], '')).toEqual([])
+  })
+
+  it('collapses a merge group to one candidate rather than offering parent and child', () => {
+    // Same reason the single-match rule collapses first: a merged child usually carries its parent's
+    // name, so counting both would put two entries in the list that are one account.
+    const accounts = [
+      { id: 'root-cash', name: 'Harborline Cash' },
+      { id: 'child-cash', name: 'Harborline Cash', parent_account_id: 'root-cash' },
+    ]
+    expect(findAccountMatchCandidates(accounts, 'Harborline Cash (5093)').map(a => a.id)).toEqual(['root-cash'])
+  })
+})
+
+describe('extractAccountMask', () => {
+  it('reads back exactly the suffixes the stem normalizer strips', () => {
+    expect(extractAccountMask('Checking (...1234)')).toBe('1234')
+    expect(extractAccountMask('Visa ****5678')).toBe('5678')
+    expect(extractAccountMask('Rewards Card x1234')).toBe('1234')
+    expect(extractAccountMask('Riverstone Summit Cash ···5093')).toBe('5093')
+    expect(extractAccountMask('Savings …7304')).toBe('7304')
+  })
+
+  it('finds no mask where the digits are part of the name', () => {
+    // The same restraint the normalizer shows, for the same reason: "401k" is a name and "Checking2"
+    // is a name. Reading either as a mask would make every account sharing that digit a possible match.
+    expect(extractAccountMask('401k')).toBe('')
+    expect(extractAccountMask('Harborline Checking2')).toBe('')
+    expect(extractAccountMask('Everyday Account')).toBe('')
+  })
+})
+
+describe('a shared mask is possible, but never one-click', () => {
+  // The gap this closes, in the shape that exposed it: a second data source delivering the same real
+  // account under a name the matcher cannot connect ("Harborline Checking" vs "Harborline Checking2"), agreeing
+  // only on the masked digits. The name rule never proposed it, so declining the *name* match asserted
+  // nothing about it, and every transaction the two shared came back as a cross-account flag.
+  const BY_MASK = [
+    { id: 'a-name', name: 'Harborline Checking', mask: '6120' },
+    { id: 'a-mask', name: 'Harborline Checking2', mask: '6120' },
+    { id: 'a-other', name: 'Harborline Saving', mask: '7204' },
+  ]
+
+  it('offers both the name match and the mask-only match', () => {
+    expect(findAccountMatchCandidates(BY_MASK, 'Harborline Checking ···6120').map(a => a.id))
+      .toEqual(['a-name', 'a-mask'])
+  })
+
+  it('retires the one-click chip once a second possibility is known', () => {
+    // The name evidence did not get weaker — but a chip claiming "this is that one" cannot stand while
+    // the row is simultaneously showing something else it might be.
+    expect(findLikelyAccountMatch(BY_MASK, 'Harborline Checking ···6120')).toBeNull()
+  })
+
+  it('never offers one-click on mask evidence alone', () => {
+    // Four digits shared between unrelated real accounts is ordinary. Worth a row in an opened list,
+    // never worth a press that maps the account.
+    const accounts = [{ id: 'a-mask', name: 'Something Unrelated', mask: '6120' }]
+    expect(findAccountMatchCandidates(accounts, 'Harborline Checking ···6120').map(a => a.id)).toEqual(['a-mask'])
+    expect(findLikelyAccountMatch(accounts, 'Harborline Checking ···6120')).toBeNull()
+  })
+
+  it('keeps the one-click chip when the name match is the only possibility', () => {
+    // The widening must not cost the common case its one-click path.
+    const accounts = [{ id: 'a-name', name: 'Harborline Checking', mask: '6120' }]
+    expect(findLikelyAccountMatch(accounts, 'Harborline Checking ···6120')?.id).toBe('a-name')
+  })
+
+  it('lists an account only once when it matches on both name and mask', () => {
+    const accounts = [{ id: 'a-name', name: 'Harborline Checking', mask: '6120' }, { id: 'a-x', name: 'Zzz' }]
+    expect(findAccountMatchCandidates(accounts, 'Harborline Checking ···6120').map(a => a.id)).toEqual(['a-name'])
+  })
+
+  it('stays silent when the value already names an account exactly', () => {
+    // An exact name match is a mapping to be made. Hoisting mask look-alikes next to it would turn a
+    // settled question back into an open one.
+    const accounts = [{ id: 'a', name: 'Harborline Checking', mask: '6120' }, { id: 'b', name: 'Other', mask: '6120' }]
+    expect(findAccountMatchCandidates(accounts, 'Harborline Checking')).toEqual([])
   })
 })
 
@@ -121,7 +225,7 @@ describe('findLikelyAccountMatch across merged accounts', () => {
 
   it('still declines when candidates belong to different groups', () => {
     const accounts = [
-      { id: 'root-first', name: 'Riverstone Checking', mask: '1111' },
+      { id: 'root-first', name: 'Riverstone Checking', mask: '7204' },
       { id: 'child-first', name: 'Riverstone Checking', parent_account_id: 'root-first' },
       { id: 'root-second', name: 'Riverstone Checking', mask: '2222' },
     ]

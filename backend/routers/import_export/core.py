@@ -2914,17 +2914,24 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_name, single_type, "checking",
                   default_owner_id))
             created_account_ids["__single_account__"] = new_acc_id
-        # "Keep separate" answers from the duplicate-account chooser, recorded after the loop so every
-        # account named in them exists. The user compared two account names and said they are different
-        # accounts; that is the assertion the cross-account sweep needs, and discarding it meant the same
-        # question returned as a flagged transaction for every coincidence between the pair.
+        # What the user ruled out by giving a CSV account value its own new account: every existing
+        # account the mapping row offered as a possible match. Recorded after the loop so every account
+        # named in them exists. The user compared the account names and said they are different accounts;
+        # that is the assertion the cross-account sweep needs, and discarding it meant the same question
+        # returned as a flagged transaction for every coincidence between the pair.
+        #
+        # A set per new account rather than one id: "is this any of these?" is a question about a set, and
+        # answering it recorded only one arbitrarily-chosen pair — or, when the candidates tied and no
+        # suggestion was offered at all, nothing.
         declined_matches: list[tuple[str, str]] = []
         for na in new_accounts_cfg:
             csv_val  = na.get("csv_value", "")
             acc_name = na.get("name", csv_val).strip()
             acc_type = na.get("type", "depository")
             requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
-            declined_match_id = str(na.get("distinct_from_account_id") or "").strip()
+            declined_match_ids = {
+                str(d).strip() for d in (na.get("distinct_from_account_ids") or []) if str(d or "").strip()
+            }
             if not acc_name:
                 continue
             # Check if an account with this name already exists — use it rather
@@ -2939,8 +2946,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 # is restored automatically. (The per-import compare alias used to need re-asserting
                 # here; it no longer exists.)
                 created_account_ids[csv_val] = existing["id"]
-                if declined_match_id:
-                    declined_matches.append((existing["id"], declined_match_id))
+                declined_matches.extend(
+                    (existing["id"], declined) for declined in declined_match_ids if declined != existing["id"]
+                )
                 continue
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
@@ -2950,8 +2958,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id
-            if declined_match_id:
-                declined_matches.append((new_acc_id, declined_match_id))
+            declined_matches.extend(
+                (new_acc_id, declined) for declined in declined_match_ids if declined != new_acc_id
+            )
             if requested_group_target_id:
                 group_root_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
                 if group_root_id:

@@ -20,7 +20,8 @@ import { Button, Input, AppDialog, DialogActions } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
-import { hasUsableVaultPasskey, runVaultPasskeyUnlock } from '../lib/vaultPasskey.js'
+import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
+import { useVaultPasskeyUnlock } from '../lib/useVaultPasskeyUnlock.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
 
@@ -97,7 +98,6 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [passkeyBusy, setPasskeyBusy] = useState(false)
   const changing = mode === 'change'
   const requesting = mode === 'request'
   // Every one of these three chooses a NEW passphrase and is held to the floor.
@@ -124,24 +124,11 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   const canUsePasskey = mode === 'unlock' && !!onUnlockedByPasskey
     && hasUsableVaultPasskey(session?.currentUser)
 
-  async function unlockByPasskey() {
-    setPasskeyBusy(true)
-    setError('')
-    const result = await runVaultPasskeyUnlock()
-    if (!result.ok) {
-      // A dismissed prompt reports nothing — the user closed it deliberately. Any other refusal leaves
-      // the dialog open on the passphrase, which is the fallback they still have.
-      if (result.message) setError(result.message)
-      setPasskeyBusy(false)
-      return
-    }
-    try {
-      await onUnlockedByPasskey(result.user)
-    } catch (e) {
-      setError(e?.message || 'The vault opened, but this screen could not refresh.')
-      setPasskeyBusy(false)
-    }
-  }
+  // A refusal leaves the dialog open on the passphrase, which is the fallback the user still has.
+  const { busy: passkeyBusy, unlock: unlockByPasskey, label: passkeyLabel } = useVaultPasskeyUnlock({
+    onUnlocked: onUnlockedByPasskey,
+    onRefused: setError,
+  })
 
   async function submit() {
     if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
@@ -182,7 +169,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
               in does not change depending on which surface asked. */}
           {canUsePasskey ? (
             <Button small onClick={unlockByPasskey} disabled={busy || passkeyBusy}>
-              {passkeyBusy ? 'Waiting for passkey…' : 'Unlock with a passkey'}
+              {passkeyLabel}
             </Button>
           ) : null}
           <Button small variant={canUsePasskey ? 'ghost' : 'primary'}

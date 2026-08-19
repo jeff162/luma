@@ -9,10 +9,11 @@
 //   - CompatibleBatchAttachDialog: a just-saved profile looks compatible with
 //     existing uncategorized imports; offers to attach them or leave them.
 //   - DuplicateImportConfirmDialog: confirm re-importing N skipped duplicate rows.
-//   - PossibleAccountMatchChooserDialog: a new CSV account value looks like an
-//     existing account; pick map / group / compare-only / keep-separate.
+//   - PossibleAccountMatchChooserDialog: a source account being given a NEW account looks like one or
+//     more accounts that already exist; pick one and map to it or nest under it, or keep separate from
+//     all of them.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Button,
   DialogActions,
@@ -335,20 +336,52 @@ export function DuplicateImportConfirmDialog({
   )
 }
 
+/*
+ * "You asked for a new account — is it one of these first?"
+ *
+ * Reached only by pressing the row's `+New` when the matcher found something the source could already
+ * be. That entry point is what makes the picker beside it able to stay a plain picker: the question of
+ * *which* account is answered there, and this dialog exists for the question that has no room in a
+ * dropdown — whether a new account should be **nested under** one of the possibles.
+ *
+ * It is also what makes "Keep separate" honest. That button records an `account_pair_distinct` assertion
+ * against every candidate listed here, and an assertion may only cover what the user was actually shown.
+ * A modal cannot be missed, so this is where the showing happens.
+ *
+ * **The list is the possible matches, not every account.** The dialog's question is about them; anyone
+ * wanting an account the matcher never proposed uses the picker, which lists them all. That is strictly
+ * more than the dialog offered before, when it could only ever name the single suggested account.
+ *
+ * Two of the three actions need an account and are disabled until one is chosen; a single candidate
+ * arrives pre-selected, so the common case is the same press count it has always been and never shows a
+ * lone radio dressed up as a choice. **"Keep separate" is never disabled** — a radio group cannot be
+ * cleared once set, so gating it on "nothing selected" would strand anyone who selected a candidate to
+ * consider it and then decided against it, with cancelling and reopening as their only escape. A lit
+ * radio is simply ignored: they declined every candidate either way, so the assertion is identical.
+ */
 export function PossibleAccountMatchChooserDialog({
   pending,
   onSelect,
   onCancel,
 }) {
   const dialogRef = useRef(null)
+  const candidates = pending?.candidates || []
+  const [selectedId, setSelectedId] = useState('')
 
   useEffect(() => {
     dialogRef.current?.focus()
   }, [])
 
+  // Pre-select the lone candidate, and re-run when the dialog is reopened about a different row.
+  useEffect(() => {
+    setSelectedId(candidates.length === 1 ? (candidates[0]?.id || '') : '')
+  }, [pending])  // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!pending) return null
 
-  const targetLabel = pending.targetLabel || 'the existing account'
+  const single = candidates.length === 1 ? candidates[0] : null
+  const singleLabel = single ? (single.label || single.name || 'the existing account') : ''
+  const needsAccount = !selectedId
 
   return (
     <OverlayBackdrop
@@ -379,11 +412,74 @@ export function PossibleAccountMatchChooserDialog({
         <div style={{ display: 'grid', gap: 6 }}>
           <div style={{ fontSize: 16, fontWeight: 600 }}>Possible duplicate account?</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-            “{pending.csvValue}” looks like it may be the same real-world account as “{targetLabel}”.
+            {single
+              ? <>“{pending.csvValue}” looks like it may be the same real-world account as “{singleLabel}”.</>
+              : <>“{pending.csvValue}” looks like it may be the same real-world account as one of these.</>}
           </div>
         </div>
+
+        {/* A radio group rather than per-row action buttons, so the three answers keep the full labels
+            that say what they do. Buttons on every row would have to shrink to two words each and would
+            multiply with the candidates; this stays three controls whether there are two possibles or
+            six. */}
+        <div
+          role="radiogroup"
+          aria-label="Possible matching accounts"
+          style={{
+            display: 'grid', gap: 2, border: '1px solid var(--border)', borderRadius: 8,
+            padding: 4, maxHeight: 210, overflowY: 'auto',
+          }}
+        >
+          {candidates.map(candidate => {
+            const label = candidate.label || candidate.name || ''
+            const checked = selectedId === candidate.id
+            return (
+              <label
+                key={candidate.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 9, padding: '7px 9px', borderRadius: 6,
+                  cursor: 'pointer', fontSize: 13, lineHeight: 1.35,
+                  background: checked ? 'color-mix(in srgb, var(--accent2) 12%, var(--surface2))' : 'transparent',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="possible-account-match"
+                  value={candidate.id}
+                  checked={checked}
+                  onChange={() => setSelectedId(candidate.id)}
+                  style={{ flexShrink: 0, accentColor: 'var(--accent2)' }}
+                />
+                <span style={{ display: 'grid', gap: 1, minWidth: 0 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {label}
+                  </span>
+                  {/* Where it is held. With mask-derived candidates the names can be unrelated, and
+                      "why am I being shown this one?" is otherwise a fair question with no answer on
+                      screen. Omitted when the account records no institution rather than printing a
+                      blank line. */}
+                  {candidate.institution ? (
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>{candidate.institution}</span>
+                  ) : null}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+
+        {/* All three carry equal weight. The dialog used to open only for a single strong name match, so
+            emphasizing "Map to existing account" was a real recommendation; it now opens with several
+            candidates — some matching on the masked digits alone, with unrelated names — and not knowing
+            which is right is the whole reason it is asking. A house favourite would also be pushing back
+            against the intent that opened the dialog, since the way in is pressing `+New`. The accent has
+            a better home on the selected radio, which is what the user is actually manipulating. */}
         <div style={{ display: 'grid', gap: 8 }}>
-          <Button onClick={() => onSelect?.('map_existing')}>
+          <Button
+            variant="ghost"
+            disabled={needsAccount}
+            title={needsAccount ? 'Choose which account above this one is' : undefined}
+            onClick={() => onSelect?.('map_existing', selectedId)}
+          >
             Map to existing account
           </Button>
           {/* Grouping here is a shortcut, not a distinct concept: it is the same end state as creating
@@ -392,11 +488,16 @@ export function PossibleAccountMatchChooserDialog({
               It had no analogue anywhere else in the app and asserted the two were the same physical
               account while deliberately keeping them apart; "Map to existing account" says that
               properly. Don't reintroduce it. */}
-          <Button variant="ghost" onClick={() => onSelect?.('group_with_existing')}>
+          <Button
+            variant="ghost"
+            disabled={needsAccount}
+            title={needsAccount ? 'Choose which account above to group the new one under' : undefined}
+            onClick={() => onSelect?.('group_with_existing', selectedId)}
+          >
             Create new account and group with existing
           </Button>
           <Button variant="ghost" onClick={() => onSelect?.('keep_separate')}>
-            Keep separate
+            {candidates.length === 1 ? 'Keep separate' : 'Keep separate from all of these'}
           </Button>
         </div>
         <DialogActions>

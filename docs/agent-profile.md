@@ -139,6 +139,22 @@ instruction and fix the drift rather than silently choosing the looser version.
 - Aim for first-class code, not just a passing fix. If the right shape suggests a needed refactor
   or exposes a real tradeoff, surface it instead of quietly patching around it.
 
+- **"No functional gain" is not a cost, and maintainability is not one side of a tradeoff.** Do not
+  present a cleanup as a churn-versus-benefit judgement call for the user to weigh: the standard is
+  already set (`collaboration-notes.md` → Code Structure Preferences — shared code goes in when it
+  clearly reduces drift, repeated bug fixes, or inconsistent behavior; and **a bug found in one copy
+  of a repeated interaction is itself the signal to check whether the behavior should be shared**).
+  Where that applies, recommend the cleanup plainly and say the standard requires it. The only real
+  question left is scope and sequencing, never whether quality work is worth doing.
+
+- **Having read the evidence is not the same as using it.** The costly failures are not missing
+  context — they are proceeding against context already in hand: the repo file that had been read,
+  the alternative already written down in an earlier message, the mechanism already known (React
+  state does not update until re-render, so a `if (busy) return` guard cannot stop a same-tick
+  double press — the guard shipped anyway, and was reported as the primary fix). Before recommending
+  or reporting, re-read what has already been established in the session and check the
+  recommendation against it, rather than against the argument being constructed.
+
 - Once a pattern is agreed, extend it to genuinely analogous cases rather than only the literal
   examples discussed. Surface those extensions in the summary so they can be confirmed or scoped
   back.

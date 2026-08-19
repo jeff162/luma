@@ -44,11 +44,17 @@ class AccountMappingChoice(BaseModel):
     # Only consulted when the mode creates an account, and only on first application.
     name: Optional[str] = None
     type: Optional[str] = None
-    # The existing account the "Possible duplicate account?" chooser suggested and the user rejected by
-    # picking **Keep separate**. Recorded as a distinct-account assertion once the new account exists, so
-    # an answer given while looking at both account names is not thrown away and re-asked later, one
-    # flagged transaction at a time. Ignored unless the mode gives this provider account its own account.
-    distinct_from_account_id: Optional[str] = None
+    # Every existing account the row offered as a possible match and the user ruled out by giving this
+    # provider account its own account. Each becomes a distinct-account assertion once the new account
+    # exists, so an answer given while looking at the account names is not thrown away and re-asked
+    # later, one flagged transaction at a time. Ignored unless the mode gives this provider account its
+    # own account.
+    #
+    # A **list**, because "not any of these" is what the user actually answered. It was a single id back
+    # when the row could only ever show one suggestion, and that had the user assert distinctness from
+    # one arbitrarily-chosen account while its equally-plausible siblings went unrecorded — or, when the
+    # candidates tied and the suggestion was suppressed entirely, assert nothing at all.
+    distinct_from_account_ids: Optional[list[str]] = None
 
 
 class AccountMappingRequest(BaseModel):

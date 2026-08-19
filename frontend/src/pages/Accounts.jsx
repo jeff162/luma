@@ -18,7 +18,7 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { VaultPassphraseDialog } from '../components/VaultPassphraseDialog.jsx'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../components/VaultSettingsDialog.jsx'
-import { runVaultPasskeyUnlock } from '../lib/vaultPasskey.js'
+import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../lib/useVaultPasskeyUnlock.js'
 import { providerSummaryLine } from '../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
 import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
@@ -780,7 +780,8 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
 }
 
 
-function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockPasskey, onLock, onSettings }) {
+function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockPasskey,
+  passkeyBusy = false, passkeyLabel = VAULT_PASSKEY_LABEL, onLock, onSettings }) {
   const box = (bg, border) => ({
     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
@@ -822,10 +823,20 @@ function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockP
         <span>The vault is locked. Unlock it to connect or sync.</span>
         {/* Offered first where it exists, because it is the day-to-day unlock the passkey slot was added
             for: a touch or a glance against retyping a 20-character passphrase. */}
+        {/* Disabled for the duration of the ceremony, and saying so. A WebAuthn prompt is a separate
+            window the browser owns, so the strip underneath still looks idle and pressable — which is
+            how a second press happened, and the browser answers that with an error dialog stacked on
+            top of the prompt. Busy state and wording both come from `useVaultPasskeyUnlock`, shared
+            with the passphrase dialog's identical button rather than kept in step by hand. */}
         {vault.hasPasskey ? (
-          <Button small onClick={onUnlockPasskey} style={{ marginLeft: 'auto' }}>Unlock with a passkey</Button>
+          <Button small onClick={onUnlockPasskey} disabled={passkeyBusy} style={{ marginLeft: 'auto' }}>
+            {passkeyLabel}
+          </Button>
         ) : null}
+        {/* Also disabled: the passphrase dialog opens *over* the passkey prompt, and dismissing one of
+            two stacked asks for the same thing is the confusion this whole change is about. */}
         <Button small variant={vault.hasPasskey ? 'ghost' : 'primary'} onClick={onUnlock}
+          disabled={passkeyBusy}
           style={vault.hasPasskey ? undefined : { marginLeft: 'auto' }}>
           Unlock with a passphrase
         </Button>
@@ -1125,16 +1136,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     closeVault(true)
   }
 
-  // The strip's button. A refused or dismissed ceremony leaves the strip as it was rather than opening
-  // anything, because the passphrase is still one click away on the button beside it.
-  async function unlockWithPasskey() {
-    const result = await runVaultPasskeyUnlock()
-    if (!result.ok) {
-      if (result.message) setNotice({ title: 'Could not use a passkey', description: result.message })
-      return
-    }
-    await adoptPasskeyUnlock(result.user)
-  }
+  // The strip's button, on the same hook the unlock dialog uses. A refused or dismissed ceremony leaves
+  // the strip as it was rather than opening anything, because the passphrase is still one click away on
+  // the button beside it — so a refusal here is a notice, where in the dialog it is an inline error.
+  const { busy: passkeyBusy, unlock: unlockWithPasskey, label: passkeyLabel } = useVaultPasskeyUnlock({
+    onUnlocked: adoptPasskeyUnlock,
+    onRefused: message => setNotice({ title: 'Could not use a passkey', description: message }),
+  })
 
   // A 423 is the gate arriving late: this page's "the vault is open" is a cached answer, and the server
   // drops the key on restart and on its idle timeout. So it is answered the same way a locked vault is —
@@ -1576,6 +1584,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         onRequest={() => openVault('request')}
         onUnlock={() => openVault('unlock')}
         onUnlockPasskey={unlockWithPasskey}
+        passkeyBusy={passkeyBusy}
+        passkeyLabel={passkeyLabel}
         onSettings={() => setVaultSettingsOpen(true)}
         onLock={lockVault}
       />

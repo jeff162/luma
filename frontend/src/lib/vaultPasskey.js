@@ -208,7 +208,23 @@ export const __testing = { b64 }
 // prompt with an empty `message` — the user closed it on purpose and does not need to be told what they
 // just did. Every failure leaves the vault locked and the passphrase still available, which is why the
 // callers keep their prompt open rather than treating this as terminal.
+// One ceremony at a time, enforced here rather than left to each button.
+//
+// The browser refuses a second `navigator.credentials.get()` while one is pending, and its refusal
+// arrives as an ordinary exception — so a double-click produced the passkey prompt *and* an error dialog
+// quoting the browser ("a request is already in progress"), which the user then had to dismiss on top of
+// the ceremony they actually wanted. Callers disable their own controls too, and should; this exists
+// because "only one WebAuthn ceremony can be in flight" is a fact about WebAuthn rather than about any
+// particular button, and it also covers a press that lands before a re-render can disable one.
+//
+// The duplicate resolves to a **silent** refusal: `message` is empty, and both callers surface a notice
+// only when there is a message, so the extra press does nothing at all. That is the honest outcome —
+// the ceremony the user asked for is already on screen, and nothing has gone wrong for them to read.
+let unlockInFlight = false
+
 export async function runVaultPasskeyUnlock() {
+  if (unlockInFlight) return { ok: false, reason: 'in_progress', message: '' }
+  unlockInFlight = true
   try {
     const params = await api.vaultPasskeyParams()
     const result = await unlockWithPasskey(params)
@@ -225,6 +241,10 @@ export async function runVaultPasskeyUnlock() {
     return { ok: true, user: resp?.user || null }
   } catch (e) {
     return { ok: false, reason: 'failed', message: e?.message || 'The vault stayed locked.' }
+  } finally {
+    // `finally`, so a thrown ceremony cannot leave the flag set and wedge the button for the rest of
+    // the session — a failure someone could only escape by reloading.
+    unlockInFlight = false
   }
 }
 

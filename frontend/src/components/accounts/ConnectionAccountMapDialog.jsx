@@ -28,9 +28,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AppDialog, Button, DialogActions, Select, Spinner } from '../ui.jsx'
 import { PossibleAccountMatchChooserDialog } from '../importExport/importConfirmDialogs.jsx'
+import AccountMatchSelect from '../importExport/AccountMatchSelect.jsx'
 import {
   getAccountMatchLabel,
-  getAccountOptionLabel,
   guessNewAccountTypeFromName,
   selectableAccountOptions,
 } from '../../lib/importExport/importAccountMatching.js'
@@ -85,31 +85,53 @@ export default function ConnectionAccountMapDialog({
     }))
   }
 
-  function openChooser(pa, target) {
+  // Opened with the whole candidate set, not one account: the dialog is where those are shown, and
+  // "Keep separate" asserts distinctness from all of them. A caller re-entering to revisit an existing
+  // grouping passes the single account it is about, which arrives as a one-entry list and pre-selects.
+  function openChooser(pa, targets) {
+    const candidates = (Array.isArray(targets) ? targets : [targets]).filter(Boolean)
+    if (!candidates.length) return
     setChooser({
       externalId: pa.external_account_id,
       csvValue: pa.source_label,
-      targetAccountId: target.id,
-      targetLabel: getAccountMatchLabel(target) || target.name || '',
+      candidates: candidates.map(target => ({
+        id: target.id,
+        label: getAccountMatchLabel(target) || target.name || '',
+        institution: target.institution || '',
+      })),
     })
   }
 
   // The three chooser outcomes, resolved onto the same fields the CSV flow sets
   // (`applyAccountMatchChoice`). Keeping the shapes identical is what will make the two grids
   // extractable later without reconciling two vocabularies first.
-  function applyChoice(choice) {
+  //
+  // `selectedId` is which candidate the two relationship answers act on; `keep_separate` ignores it and
+  // reads the whole list instead, because declining is an answer about all of them.
+  function applyChoice(choice, selectedId) {
     const pending = chooser
     setChooser(null)
-    if (!pending?.targetAccountId) return
-    const target = accountsById.get(pending.targetAccountId)
-    if (!target) return
+    if (!pending) return
     const base = {
       accountId: '',
       createNew: true,
       groupWithAccountId: '',
       skip: false,
-      distinctFromAccountId: '',
+      distinctFromAccountIds: [],
     }
+    if (choice === 'keep_separate') {
+      // A plain new account, and the one branch that carries an answer rather than a relationship.
+      // "These are not the same account" is exactly the assertion the duplicate sweep needs; discarding
+      // it was why a user who had just said so, looking at the names, was asked again per flagged
+      // transaction once the data arrived.
+      update(pending.externalId, {
+        ...base,
+        distinctFromAccountIds: pending.candidates.map(c => c.id),
+      })
+      return
+    }
+    const target = accountsById.get(selectedId)
+    if (!target) return
     if (choice === 'map_existing') {
       update(pending.externalId, {
         ...base,
@@ -120,12 +142,6 @@ export default function ConnectionAccountMapDialog({
       })
     } else if (choice === 'group_with_existing') {
       update(pending.externalId, { ...base, groupWithAccountId: target.id })
-    } else {
-      // keep_separate — a plain new account, and the one branch that carries an answer rather than a
-      // relationship. "These are not the same account" is exactly the assertion the duplicate sweep
-      // needs; discarding it was why a user who had just said so, looking at both names, was asked
-      // again per flagged transaction once the data arrived.
-      update(pending.externalId, { ...base, distinctFromAccountId: target.id })
     }
   }
 
@@ -227,6 +243,10 @@ export default function ConnectionAccountMapDialog({
             {rows.map(pa => {
               const externalId = pa.external_account_id
               const entry = { ...defaultConnectionMapEntry(pa.source_label), ...(entries[externalId] || {}) }
+              const candidates = entry.candidates || []
+              // Not re-derived from the list: the chip's rule lives in `findLikelyAccountMatch` and is
+              // stricter than "the list has one entry" — a lone mask look-alike is worth showing and is
+              // never worth a single press.
               const suggestion = entry.suggestion
               const suggestionLabel = getAccountMatchLabel(suggestion) || suggestion?.name || ''
               const relationshipTargetId = entry.groupWithAccountId || ''
@@ -283,24 +303,28 @@ export default function ConnectionAccountMapDialog({
                   ) : !entry.createNew ? (
                     <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                        <Select
+                        <AccountMatchSelect
                           name={`connection-map-target-${externalId}`}
                           value={entry.accountId}
-                          onChange={v => update(externalId, {
-                            accountId: v,
+                          // Per row, not once for the grid: the merged child each list carries is the
+                          // one THIS row's mapping is on, so two rows can offer different lists.
+                          options={selectableAccountOptions(selectableAccounts, entry.accountId)}
+                          candidates={candidates}
+                          accountsById={accountsById}
+                          // Picking from the list maps to it. That is the whole interaction — the
+                          // relationship question belongs to `+New`, which is the path where a second
+                          // question genuinely remains.
+                          onSelectAccount={a => update(externalId, {
+                            accountId: a.id,
                             createNew: false,
                             groupWithAccountId: '',
                           })}
-                          // Per row, not once for the grid: the merged child each list carries is the
-                          // one THIS row's mapping is on, so two rows can offer different lists.
-                          options={[
-                            { value: '', label: '— Select —' },
-                            ...selectableAccountOptions(selectableAccounts, entry.accountId).map(a => ({
-                              value: a.id,
-                              label: getAccountOptionLabel(a, accountsById),
-                            })),
-                          ]}
-                          style={{ width: 170, maxWidth: '100%', fontSize: 12, padding: '5px 6px' }}
+                          onClear={() => update(externalId, {
+                            accountId: '',
+                            createNew: false,
+                            newName: pa.provider_name || pa.source_label,
+                            groupWithAccountId: '',
+                          })}
                         />
                         {entry.accountId ? (
                           <button
@@ -319,10 +343,12 @@ export default function ConnectionAccountMapDialog({
                         ) : (
                           <button
                             type="button"
+                            // With possible matches, ask before creating: the dialog is where they are
+                            // shown, which is what lets "Keep separate" record an assertion about them.
+                            // With none there is nothing to show and nothing to assert, so this stays a
+                            // one-press create — the common case when connecting a genuinely new bank.
                             onClick={() => {
-                              // A likely match makes the relationship the real question, so ask it
-                              // rather than assuming a plain new account — same as the CSV grid.
-                              if (suggestion) { openChooser(pa, suggestion); return }
+                              if (candidates.length) { openChooser(pa, candidates); return }
                               update(externalId, {
                                 createNew: true,
                                 newName: pa.provider_name || pa.source_label,
@@ -431,7 +457,7 @@ export default function ConnectionAccountMapDialog({
                       {relationshipTarget && relationshipLabel ? (
                         <button
                           type="button"
-                          onClick={() => openChooser(pa, relationshipTarget)}
+                          onClick={() => openChooser(pa, [relationshipTarget])}
                           style={chipStyle}
                           title={`Change how this relates to ${relationshipLabel}`}
                         >

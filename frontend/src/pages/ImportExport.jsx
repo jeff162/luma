@@ -33,6 +33,7 @@ import {
   ImportedCategoryUsageInline,
 } from '../components/importExport/importPresentational.jsx'
 import { ImportErrorBoundary } from '../components/importExport/ImportErrorBoundary.jsx'
+import AccountMatchSelect from '../components/importExport/AccountMatchSelect.jsx'
 import {
   DataSourceMismatchDialog,
   MultipleSourceMatchDialog,
@@ -127,6 +128,7 @@ import {
   guessNewAccountTypeFromName,
   findExactAccountNameMatch,
   getAccountMatchLabel,
+  findAccountMatchCandidates,
   findLikelyAccountMatch,
   buildAccountImportStateSnapshot,
 } from '../lib/importExport/importAccountMatching.js'
@@ -602,10 +604,15 @@ function ImportTab({ onAmazonDetected }) {
     () => distinctAccountValues.filter(value => !previousImportAccountsByValue.has(value)),
     [distinctAccountValues, previousImportAccountsByValue],
   )
-  const likelyAccountMatchesByValue = useMemo(
-    () => Object.fromEntries(
-      remainingAccountValues.map(value => [value, findLikelyAccountMatch(accounts, value)]),
-    ),
+  // Every account each unmapped CSV value could already be, plus the one (if any) confident enough for
+  // the row's one-click accept chip. Both come from the matcher rather than the row deriving the second
+  // from the first: "chip-worthy" needs exactly one possibility AND name evidence, and a row reasoning
+  // "the list has one entry" would offer one-click accepts on mask look-alikes.
+  const accountMatchesByValue = useMemo(
+    () => Object.fromEntries(remainingAccountValues.map(value => [value, {
+      candidates: findAccountMatchCandidates(accounts, value),
+      likely: findLikelyAccountMatch(accounts, value),
+    }])),
     [remainingAccountValues, accounts],
   )
   const importableRowCount = useMemo(() => {
@@ -1032,27 +1039,41 @@ function ImportTab({ onAmazonDetected }) {
   useEffect(() => {
     if (!pendingAccountMatchChooser) return
     const stillExists = distinctAccountValues.includes(pendingAccountMatchChooser.csvValue)
-    const targetStillExists = accounts.some(account => account.id === pendingAccountMatchChooser.targetAccountId)
+    // At least one candidate must survive. `some`, not `every`: an account deleted underneath the dialog
+    // should drop out of the question, not cancel a question the remaining candidates can still answer.
+    const targetStillExists = pendingAccountMatchChooser.candidates
+      .some(candidate => accounts.some(account => account.id === candidate.id))
     if (!stillExists || !targetStillExists) {
       setPendingAccountMatchChooser(null)
     }
   }, [pendingAccountMatchChooser, distinctAccountValues, accounts])
 
-  function openAccountMatchChooser(csvValue, targetAccount) {
-    if (!csvValue || !targetAccount?.id) return
+  // Opened with the whole candidate set, not one account: the dialog is where those are shown, and
+  // "Keep separate" asserts distinctness from all of them. A caller re-entering to revisit an existing
+  // grouping passes the single account it is about, which arrives as a one-entry list and pre-selects.
+  function openAccountMatchChooser(csvValue, targets) {
+    const candidates = (Array.isArray(targets) ? targets : [targets]).filter(Boolean)
+    if (!csvValue || !candidates.length) return
     setPendingAccountMatchChooser({
       csvValue,
-      targetAccountId: targetAccount.id,
-      targetLabel: getAccountMatchLabel(targetAccount) || targetAccount.name || csvValue,
+      candidates: candidates.map(target => ({
+        id: target.id,
+        label: getAccountMatchLabel(target) || target.name || csvValue,
+        institution: target.institution || '',
+      })),
     })
   }
 
-  function applyAccountMatchChoice(choice) {
+  // `selectedId` is which candidate the two relationship answers act on; `keep_separate` ignores it and
+  // reads the whole list instead, because declining is an answer about all of them.
+  function applyAccountMatchChoice(choice, selectedId) {
     const pending = pendingAccountMatchChooser
-    if (!pending?.csvValue || !pending?.targetAccountId) return
+    if (!pending?.csvValue) return
     const csvValue = pending.csvValue
-    const targetAccount = accounts.find(account => account.id === pending.targetAccountId)
+    const ruledOut = pending.candidates.map(c => c.id)
+    const targetAccount = accounts.find(account => account.id === selectedId)
     setPendingAccountMatchChooser(null)
+    if (choice !== 'keep_separate' && !targetAccount) return
     setAccountMap(prev => {
       const defaultEntry = {
         accountId: '',
@@ -1105,7 +1126,7 @@ function ImportTab({ onAmazonDetected }) {
           newType: current.newType || guessNewAccountTypeFromName(csvValue),
           groupWithAccountId: '',
           skip: false,
-          distinctFromAccountId: targetAccount?.id || '',
+          distinctFromAccountIds: ruledOut,
         },
       }
     })
@@ -2222,9 +2243,12 @@ function ImportTab({ onAmazonDetected }) {
                 name: m.newName,
                 type: m.newType,
                 ...(m.groupWithAccountId ? { group_with_account_id: m.groupWithAccountId } : {}),
-                // "Keep separate" from the duplicate-account chooser: the existing account this one was
-                // suggested as a match for, and is not. Recorded server-side once the account exists.
-                ...(m.distinctFromAccountId ? { distinct_from_account_id: m.distinctFromAccountId } : {}),
+                // What the user ruled out by giving this value its own account: the possible matches the
+                // mapping row showed, or the single account the chooser asked about. Recorded server-side
+                // as one distinct-account assertion each, once the account exists.
+                ...(m.distinctFromAccountIds?.length
+                  ? { distinct_from_account_ids: m.distinctFromAccountIds }
+                  : {}),
               })
             }
             else if (m.accountId) account_map[v] = m.accountId
@@ -3760,7 +3784,8 @@ function ImportTab({ onAmazonDetected }) {
                   [csvVal]: { ...DEFAULT_ENTRY, ...(prev[csvVal] || {}), ...patch }
                 }))
                 const alreadyImported = previousImportAccountsByValue.get(csvVal)
-                const likelyMatch = likelyAccountMatchesByValue[csvVal] || null
+                const candidates = accountMatchesByValue[csvVal]?.candidates || []
+                const likelyMatch = accountMatchesByValue[csvVal]?.likely || null
                 const likelyMatchLabel = getAccountMatchLabel(likelyMatch) || likelyMatch?.name || ''
                 const relationshipTargetId = m.groupWithAccountId || ''
                 const relationshipTarget = relationshipTargetId
@@ -3796,55 +3821,42 @@ function ImportTab({ onAmazonDetected }) {
                     ) : !m.createNew ? (
                       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
-                          <select
+                          <AccountMatchSelect
                             name={`account-map-target-${csvVal}`}
                             value={m.accountId}
-                            onChange={e => {
-                              const v = e.target.value
-                              // "__new__:<name>" = share a new account another label is creating in
-                              // this import. We don't reference that label — we independently declare
-                              // the same name, which the importer merges by name (so changing the
-                              // other label later can't dangle this one).
-                              if (v.startsWith('__new__:')) {
-                                const name = v.slice('__new__:'.length)
-                                const sibling = inFlightNewAccounts.find(n => n.name === name)
-                                update({
-                                  accountId: '',
-                                  createNew: true,
-                                  newName: name,
-                                  newType: sibling?.type || guessNewAccountTypeFromName(csvVal),
-                                  groupWithAccountId: '',
-                                })
-                              } else {
-                                update({
-                                  accountId: v,
-                                  createNew: false,
-                                  groupWithAccountId: '',
-                                })
-                              }
-                            }}
-                            style={{
-                              width: 170, maxWidth: '100%', background: 'var(--surface2)', color: 'var(--text)',
-                              border: '1px solid var(--border)', borderRadius: 6,
-                              padding: '5px 6px', fontSize: 12,
-                            }}
-                          >
-                            <option value="">— Select —</option>
-                            {inFlightNewAccounts.length > 0 ? (
-                              <optgroup label="New in this import">
-                                {inFlightNewAccounts.map(n => (
-                                  <option key={`__new__:${n.name}`} value={`__new__:${n.name}`}>+ {n.name} (new)</option>
-                                ))}
-                              </optgroup>
-                            ) : null}
-                            <optgroup label="Existing accounts">
-                              {/* Marketplace accounts (Amazon, …) are filled by their own importer, not
-                                  by mapping a CSV onto them, so they are not offered here. */}
-                              {accounts.filter(a => !isMarketplaceAccountType(a.type)).map(a => (
-                                <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>
-                              ))}
-                            </optgroup>
-                          </select>
+                            // Marketplace accounts (Amazon, …) are filled by their own importer, not
+                            // by mapping a CSV onto them, so they are not offered here.
+                            options={accounts.filter(a => !isMarketplaceAccountType(a.type))}
+                            candidates={candidates}
+                            inFlightOptions={inFlightNewAccounts.map(n => ({
+                              value: n.name, label: `${n.name} (new)`, type: n.type,
+                            }))}
+                            // Sharing a new account another label is creating in this import. We don't
+                            // reference that label — we independently declare the same name, which the
+                            // importer merges by name (so changing the other label later can't dangle
+                            // this one).
+                            onSelectInFlight={option => update({
+                              accountId: '',
+                              createNew: true,
+                              newName: option.value,
+                              newType: option.type || guessNewAccountTypeFromName(csvVal),
+                              groupWithAccountId: '',
+                            })}
+                            // Picking from the list maps to it. That is the whole interaction — the
+                            // relationship question belongs to `+New`, which is the path where a
+                            // second question genuinely remains.
+                            onSelectAccount={a => update({
+                              accountId: a.id,
+                              createNew: false,
+                              groupWithAccountId: '',
+                            })}
+                            onClear={() => update({
+                              accountId: '',
+                              createNew: false,
+                              newName: csvVal,
+                              groupWithAccountId: '',
+                            })}
+                          />
                           {m.accountId ? (
                             <button
                               onClick={() => update({
@@ -3863,22 +3875,29 @@ function ImportTab({ onAmazonDetected }) {
                               ×
                             </button>
                           ) : (
-                            <button onClick={() => {
-                              if (likelyMatch) {
-                                openAccountMatchChooser(csvVal, likelyMatch)
-                                return
-                              }
-                              update({
-                                createNew: true,
-                                newName: csvVal,
-                                newType: guessNewAccountTypeFromName(csvVal),
-                                groupWithAccountId: '',
-                              })
-                            }} style={{
-                              flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                              borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                              fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
-                            }}>+New</button>
+                            <button
+                              // With possible matches, ask before creating: the dialog is where they
+                              // are shown, which is what lets "Keep separate" record an assertion about
+                              // them. With none there is nothing to show and nothing to assert, so this
+                              // stays a one-press create.
+                              onClick={() => {
+                                if (candidates.length) {
+                                  openAccountMatchChooser(csvVal, candidates)
+                                  return
+                                }
+                                update({
+                                  createNew: true,
+                                  newName: csvVal,
+                                  newType: guessNewAccountTypeFromName(csvVal),
+                                  groupWithAccountId: '',
+                                })
+                              }}
+                              style={{
+                                flexShrink: 0, background: 'none', border: '1px solid var(--border)',
+                                borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
+                                fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
+                              }}
+                            >+New</button>
                           )}
                         </div>
                         {!m.accountId && likelyMatchLabel ? (
@@ -3945,7 +3964,7 @@ function ImportTab({ onAmazonDetected }) {
                         {relationshipTarget && relationshipLabel ? (
                           <button
                             type="button"
-                            onClick={() => openAccountMatchChooser(csvVal, relationshipTarget)}
+                            onClick={() => openAccountMatchChooser(csvVal, [relationshipTarget])}
                             style={{
                               justifySelf: 'start',
                               maxWidth: '100%',

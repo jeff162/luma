@@ -242,15 +242,20 @@ def _create_local_account(conn, *, name: str, account_type: Optional[str], subty
 def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provider: str,
                           institution: Optional[str], mappings: dict, default_owner_id: Optional[str]) -> dict:
     """Materialize the user's mapping decisions. `mappings` is
-    {external_account_id: {mode, target_account_id?, name?, type?, distinct_from_account_id?}}, where
+    {external_account_id: {mode, target_account_id?, name?, type?, distinct_from_account_ids?}}, where
     `target_account_id` is the account adopted ('existing') or nested under ('group').
 
-    `distinct_from_account_id` is the answer to the "Possible duplicate account?" chooser when the user
-    picked **Keep separate**: the existing account this provider account was suggested as a match for, and
-    which the user said it is not. It is recorded as an `account_pair_distinct` assertion once the new
-    account exists — which is the whole point of carrying it. Before this the answer was discarded, so a
-    user who looked at both account names side by side and declared them different was asked the same
-    question again, one transaction at a time, as soon as the data landed.
+    `distinct_from_account_ids` is what the user ruled out by giving this provider account an account of
+    its own: every existing account the row offered as a possible match. Each is recorded as an
+    `account_pair_distinct` assertion once the new account exists — which is the whole point of carrying
+    them. Before this the answer was discarded, so a user who looked at the account names side by side and
+    declared them different was asked the same question again, one transaction at a time, as soon as the
+    data landed.
+
+    It is a **list** because the question is "is this any of these?", which is a question about a set. As
+    a single id it recorded the user's answer about one arbitrarily-chosen account and silently dropped
+    it for the rest — and recorded nothing whatsoever in the case where the candidates tied, which is
+    precisely when the user has the most to rule out.
 
     Returns {"created": [...], "linked": [...], "skipped": [...], "distinct_pairs": int, "changed": bool}
     — `changed` drives whether the caller re-runs duplicate detection, since a mapping change can newly
@@ -352,9 +357,11 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
         )
         # Only meaningful for a mapping that ends up as its own local account: 'existing' and 'group' are
         # already statements about the relationship, and 'skip' has no account to assert anything about.
-        declined = str((choice or {}).get("distinct_from_account_id") or "").strip() or None
-        if declined and account_id and mode in ("new", "group") and declined != account_id:
-            distinct_from.append((account_id, declined))
+        declined_ids = (choice or {}).get("distinct_from_account_ids") or []
+        if account_id and mode in ("new", "group"):
+            for declined in {str(d).strip() for d in declined_ids if str(d or "").strip()}:
+                if declined != account_id:
+                    distinct_from.append((account_id, declined))
 
         if prior_mode != mode or prior_account != account_id:
             changed = True

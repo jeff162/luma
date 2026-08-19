@@ -84,6 +84,25 @@ export function normalizeAccountMatchStem(value) {
     .trim()
 }
 
+// The masked digits a source value carries, or ''. The mirror of what `normalizeAccountMatchStem`
+// *strips*: the same three suffix shapes, capturing the digits instead of discarding them.
+//
+// Kept in step with that function by construction — the patterns are the same ones — because a mask the
+// stem normalizer removes but this one cannot see would be evidence silently thrown away, and a mask
+// this one reads but the normalizer leaves in the stem would poison the name match instead.
+export function extractAccountMask(value) {
+  const text = String(value || '').trim()
+  for (const pattern of [
+    /\(\s*(?:\.\.\.)?\s*(\d{2,})\s*\)\s*$/,
+    /[\s\-_/]*[·•…]+\s*(\d{2,})\s*$/,
+    /(?:\s+|[-_/])(?:x|xx|xxx|xxxx|\*|[*]{2,}|ending|acct|account)?\s*(\d{2,})\s*$/i,
+  ]) {
+    const found = text.match(pattern)
+    if (found) return found[1]
+  }
+  return ''
+}
+
 // Account-type words that are too generic to anchor a suggestion on their own. They're kept in
 // the stem (so "eastern checking" doesn't collapse to "eastern" and match "eastern savings"),
 // but a subset match whose overlapping tokens are ALL generic ("Savings (...7304)" ⊂ "xyz
@@ -116,20 +135,22 @@ function getAccountRawMatchName(account) {
   return String(account?.name || '').trim()
 }
 
-// Candidates → the one account to suggest, or null when they disagree.
+// Raw candidates → the distinct group roots among them.
 //
-// Candidates are collapsed onto their group roots *before* the "exactly one" test, and the reason is
-// that merging duplicates a name: a merged child keeps the name it was created with, which is usually
-// the name its new parent already has. Counting the two as rival candidates suppressed the suggestion
-// for every account that had ever been grouped — the ambiguity guard firing on a group that is, by
-// construction, one account. Collapsing first also fixes what the guard let through: a lone child was
-// suggested as itself, so accepting the chip pointed the source at a child the picker does not even
-// offer (`selectableAccountOptions` lists roots).
+// Collapsing onto roots happens here, before any caller counts them, and the reason is that merging
+// duplicates a name: a merged child keeps the name it was created with, which is usually the name its
+// new parent already has. Counting the two as rival candidates suppressed the suggestion for every
+// account that had ever been grouped — the ambiguity guard firing on a group that is, by construction,
+// one account. Collapsing first also fixes what the guard let through: a lone child was suggested as
+// itself, so accepting the chip pointed the source at a child the picker does not even offer
+// (`selectableAccountOptions` lists roots). Both reasons apply just as much to a *list* of possibles as
+// they did to a single suggestion — a row offering a child and its own parent as two things to rule out
+// is the same defect wearing a different control.
 //
 // A child is still a candidate on the way in. Grouping does not oblige the root to carry a name that
 // matches the source — a card merged under an umbrella account keeps the only name the source would
 // ever recognize — so dropping children outright would lose those matches instead of resolving them.
-function suggestSingleRootFrom(candidates, accountsById) {
+function distinctRootsFrom(candidates, accountsById) {
   const roots = new Map()
   for (const candidate of candidates) {
     const root = effectiveAccountRoot(candidate, accountsById)
@@ -138,7 +159,7 @@ function suggestSingleRootFrom(candidates, accountsById) {
     // perfectly good root match to nothing.
     if (root) roots.set(root.id || root, root)
   }
-  return roots.size === 1 ? [...roots.values()][0] : null
+  return [...roots.values()]
 }
 
 // The top of an account's merge group. Bounded by a visited set so a corrupt parent loop cannot hang
@@ -155,25 +176,56 @@ function effectiveAccountRoot(account, accountsById) {
   return current
 }
 
-export function findLikelyAccountMatch(accounts, value) {
+// Every existing account this value could plausibly already be, as group roots, best stage first.
+//
+// Split out from `findLikelyAccountMatch` because the two questions a mapping row asks are not the same
+// question, and one answer cannot serve both. **"Is this the same as *that* account?"** must be
+// unambiguous to be worth a one-click accept, so rival candidates have to suppress it. **"Is this any of
+// these?"** is a set question that tolerates ambiguity perfectly well — "none of them" is well defined
+// over three candidates — and it is the one that matters, because answering it with *New account* is
+// what records an `account_pair_distinct` assertion.
+//
+// Collapsing to a winner served only the first, which left the second with two failures. A tie produced
+// **silence** — no suggestion, no chooser, nothing recorded — exactly when the user had the most to rule
+// out. And a lone winner had the user assert distinctness from one arbitrarily-selected account while
+// its equally-plausible siblings went unmentioned.
+//
+// Returns `[]` when the value already names an account exactly: that is a match to be *made*, not a
+// resemblance to be ruled out, and the exact-match path handles it.
+export function findAccountMatchCandidates(accounts, value) {
   const exactMatch = findExactAccountNameMatch(accounts, value)
-  if (exactMatch) return null
-  const normalized = normalizeAccountMatchStem(value)
-  if (!normalized) return null
+  if (exactMatch) return []
   const accountsById = new Map((accounts || []).map(account => [account?.id, account]))
+  const byName = findNameMatchCandidates(accounts, value, accountsById)
+  const seen = new Set(byName.map(account => account?.id))
+  // Same masked digits, whatever the names say. A mask is the strongest identifier a bank account has
+  // short of its name, and the name is exactly what has already failed by the time this runs — two
+  // institutions' exports of the same account routinely disagree about what to call it while agreeing
+  // to the digit on which account it is.
+  //
+  // Shown, never suggested: masks are four digits, so two unrelated real accounts sharing one is
+  // ordinary rather than remarkable. That is a fine reason to refuse a one-click accept (see
+  // `findLikelyAccountMatch`) and a poor reason to withhold the entry from a list the user opened to
+  // decide — where the cost of an extra row is a glance, and the cost of omitting it is the question
+  // coming back later as a pile of flagged transactions.
+  return [...byName, ...findMaskMatchCandidates(accounts, value, accountsById, seen)]
+}
+
+function findNameMatchCandidates(accounts, value, accountsById) {
+  const normalized = normalizeAccountMatchStem(value)
+  if (!normalized) return []
   // 1. Strong signal: stems are byte-identical after stripping the mask suffix. e.g.,
-  //    "Checking (...1234)" and "Checking" both reduce to "checking" — exactly one such match
-  //    is a high-confidence suggestion. A stem match that resolves to rival groups suggests
-  //    nothing at all rather than falling through: the weaker stage cannot break a tie the
-  //    stronger one could not.
+  //    "Checking (...1234)" and "Checking" both reduce to "checking". The weaker stage does not run
+  //    when this one found anything — it cannot add candidates the stronger rule already rejected
+  //    without diluting what "possible" means on the row.
   const stemMatches = accounts.filter(account => normalizeAccountMatchStem(getAccountRawMatchName(account)) === normalized)
-  if (stemMatches.length) return suggestSingleRootFrom(stemMatches, accountsById)
+  if (stemMatches.length) return distinctRootsFrom(stemMatches, accountsById)
   // 2. Fallback: token-subset match in either direction. e.g., csv ["foo", "bar"] is a subset
   //    of an existing account's ["acme", "foo", "bar"]. Require at least one non-generic token
   //    in the subset side so generics like "Savings (...0000)" don't surface every savings
   //    account on the strength of "savings" alone.
   const csvTokens = accountStemTokenSet(value)
-  if (!csvTokens.size || !hasNonGenericToken(csvTokens)) return null
+  if (!csvTokens.size || !hasNonGenericToken(csvTokens)) return []
   const subsetCandidates = []
   for (const account of accounts) {
     const accountTokens = accountStemTokenSet(getAccountRawMatchName(account))
@@ -184,7 +236,28 @@ export function findLikelyAccountMatch(accounts, value) {
     if (!subset || !hasNonGenericToken(subset)) continue
     subsetCandidates.push(account)
   }
-  return suggestSingleRootFrom(subsetCandidates, accountsById)
+  return distinctRootsFrom(subsetCandidates, accountsById)
+}
+
+function findMaskMatchCandidates(accounts, value, accountsById, exclude) {
+  const mask = extractAccountMask(value)
+  if (!mask) return []
+  const matches = (accounts || []).filter(account => String(account?.mask || '').trim() === mask)
+  return distinctRootsFrom(matches, accountsById).filter(account => !exclude.has(account?.id))
+}
+
+// The one-click accept's answer: a single unambiguous candidate, or nothing.
+//
+// Two conditions, and they are different claims. The possible set must hold **exactly one** entry — a
+// chip that applies a mapping in one press may only exist where there is one thing it could mean, so
+// knowing of a second possibility retires the chip even though it does not retire the first. And that
+// entry must be **name evidence**: a shared four-digit mask is worth showing in a list, and is nowhere
+// near enough to act on in a single click, since unrelated real accounts share masks routinely.
+export function findLikelyAccountMatch(accounts, value) {
+  const candidates = findAccountMatchCandidates(accounts, value)
+  if (candidates.length !== 1) return null
+  const byName = findNameMatchCandidates(accounts, value, new Map((accounts || []).map(a => [a?.id, a])))
+  return byName.length === 1 ? candidates[0] : null
 }
 
 // Grouping is not carried here: it is applied to the created account (`parent_account_id`) at import

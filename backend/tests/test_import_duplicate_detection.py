@@ -1033,6 +1033,78 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._entry_for_row(batch, 2)["review_substate"], "no_match")
         self.assertEqual(self._entry_for_row(batch, 3)["review_substate"], "transfer_match")
 
+    def test_a_matched_row_names_the_account_it_sits_on(self):
+        # The report shows an account under the incoming row; without one under the matched row, the two
+        # sides are not comparable and the blank reads as "unknown" rather than "the same account".
+        #
+        # Resolved when the report is *read*, from the id the record already stored — which is what makes
+        # this repair reports written before it existed, rather than only ones imported from now on. The
+        # candidate here carries no `account_name`, exactly as the stored ones do.
+        account = self._insert_account("Rewards Card", account_type="credit", mask="4417")
+        txn_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, "
+                    "is_pending) VALUES (?,?,?,?,?,?,?,0)",
+                    (txn_id, account, SHARED_OWNER_ID, 20.22, "TOLL CO", "TOLL CO", "2023-08-11"),
+                )
+        batch = "batch-matched-account"
+        self._insert_coverage_reject(
+            batch_id=batch, filename="f.csv", row_number=1,
+            candidates=[{"id": txn_id, "date": "2023-08-11", "amount": 20.22, "account_id": account}],
+        )
+        candidate = self._entry_for_row(batch, 1)["matched"]["candidates"][0]
+        # The mask rides along: the incoming side shows the *source's* label for the account, which
+        # carries one, so a bare name beside it renders one account as two different-looking ones.
+        self.assertEqual(candidate["account_name"], "Rewards Card ···4417")
+
+    def test_a_matched_row_predating_the_stored_account_id_still_names_its_account(self):
+        # Records written before `account_id` was stored keep only the matched transaction's id. The
+        # account is one hop further on, and reaching it is what stops an old report being the one place
+        # this stays blank forever.
+        account = self._insert_account("Everyday Checking", account_type="depository", mask="0091")
+        txn_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, "
+                    "is_pending) VALUES (?,?,?,?,?,?,?,0)",
+                    (txn_id, account, SHARED_OWNER_ID, 20.22, "TOLL CO", "TOLL CO", "2023-08-11"),
+                )
+        batch = "batch-legacy-account"
+        self._insert_coverage_reject(
+            batch_id=batch, filename="f.csv", row_number=1,
+            candidates=[{"id": txn_id, "date": "2023-08-11", "amount": 20.22}],
+        )
+        candidate = self._entry_for_row(batch, 1)["matched"]["candidates"][0]
+        self.assertEqual(candidate["account_name"], "Everyday Checking ···0091")
+        self.assertEqual(candidate["account_id"], account)
+
+    def test_a_matched_row_whose_transaction_is_gone_simply_goes_unnamed(self):
+        # A candidate pointing at a deleted transaction must render without an account, not fail the
+        # whole report: the rest of the entry is still a truthful record of what was rejected and why.
+        batch = "batch-missing-account"
+        self._insert_coverage_reject(
+            batch_id=batch, filename="f.csv", row_number=1,
+            candidates=[{"id": "no-such-txn", "date": "2023-08-11", "amount": 20.22}],
+        )
+        candidate = self._entry_for_row(batch, 1)["matched"]["candidates"][0]
+        self.assertIsNone(candidate.get("account_name"))
+
+    def test_an_account_name_already_on_the_record_is_left_alone(self):
+        # A cross-account transfer candidate is labelled at import time with the account it was found on.
+        # Re-resolving would be harmless today and wrong the moment the two ever differ, so the stored
+        # answer wins.
+        batch = "batch-preserve-account"
+        self._insert_coverage_reject(
+            batch_id=batch, filename="f.csv", row_number=1,
+            candidates=[{"id": "y", "date": "2023-08-12", "amount": 20.22,
+                         "cross_account": True, "account_name": "Funding Wallet"}],
+        )
+        candidate = self._entry_for_row(batch, 1)["matched"]["candidates"][0]
+        self.assertEqual(candidate["account_name"], "Funding Wallet")
+
     def test_candidate_text_tier_is_worded_when_the_report_is_read(self):
         # The stored verdict carries only the tier key, so the wording can be revised without
         # re-importing every file it was already written into. A candidate with no tier — kept on date

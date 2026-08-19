@@ -436,7 +436,7 @@ class KeepSeparateIsAnAnswerTests(_MappingFixture):
             self._record(conn)
             result = self._apply(conn, {
                 "ext-card": {"mode": "new", "name": "Voyager (new)",
-                             "distinct_from_account_id": "acct-existing"},
+                             "distinct_from_account_ids": ["acct-existing"]},
             })
             created = result["created"][0]
             self.assertEqual(result["distinct_pairs"], 1)
@@ -449,12 +449,58 @@ class KeepSeparateIsAnAnswerTests(_MappingFixture):
             self._existing_account(conn, "acct-existing", "Voyager Unlimited")
             self._record(conn)
             choice = {"mode": "new", "name": "Voyager (new)",
-                      "distinct_from_account_id": "acct-existing"}
+                      "distinct_from_account_ids": ["acct-existing"]}
             first = self._apply(conn, {"ext-card": choice})
             self._apply(conn, {"ext-card": choice})
             self.assertEqual(len(self._distinct_pairs(conn)), 1)
             self.assertEqual(self._distinct_pairs(conn),
                              [tuple(sorted([first["created"][0], "acct-existing"]))])
+
+    def test_every_ruled_out_candidate_is_recorded_not_just_one(self):
+        # The reason this is a list. The row shows every account the value could already be, and "give it
+        # its own account" answers the question about all of them at once. Recording one pair left the
+        # rest to come back as flagged transactions — the exact bug this whole mechanism exists to stop,
+        # surviving in the case where the user was shown the most to rule out.
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-one", "Voyager Unlimited")
+            self._existing_account(conn, "acct-two", "Voyager Unlimited 2")
+            self._existing_account(conn, "acct-three", "Voyager Rise")
+            self._record(conn)
+            result = self._apply(conn, {
+                "ext-card": {"mode": "new", "name": "Voyager (new)",
+                             "distinct_from_account_ids": ["acct-one", "acct-two", "acct-three"]},
+            })
+            created = result["created"][0]
+            self.assertEqual(result["distinct_pairs"], 3)
+            self.assertEqual(
+                sorted(self._distinct_pairs(conn)),
+                sorted(tuple(sorted([created, other])) for other in ("acct-one", "acct-two", "acct-three")),
+            )
+
+    def test_a_repeated_or_self_referential_candidate_is_ignored(self):
+        # The list is assembled in the browser from what the row rendered, so it is not guaranteed clean.
+        # A duplicate must not be counted twice, a blank must not count at all, and the new account naming
+        # *itself* must not produce a self-pair — `record_account_pair_distinct` refuses that one anyway,
+        # but silently, so a miscount would be the only trace it had been attempted.
+        #
+        # `distinct_pairs` counts assertions in force, not rows inserted: re-applying a mapping re-asserts
+        # the same pair idempotently (INSERT OR IGNORE) and still reports it, which is why the count here
+        # is 1 rather than 0 on the second pass and the table is what pins "no duplicate row".
+        with database.get_db() as conn:
+            self._existing_account(conn, "acct-existing", "Voyager Unlimited")
+            self._record(conn)
+            first = self._apply(conn, {
+                "ext-card": {"mode": "new", "name": "Voyager (new)",
+                             "distinct_from_account_ids": ["acct-existing"]},
+            })
+            created = first["created"][0]
+            again = self._apply(conn, {
+                "ext-card": {"mode": "new", "name": "Voyager (new)",
+                             "distinct_from_account_ids": ["acct-existing", "acct-existing", created, ""]},
+            })
+            self.assertEqual(again["distinct_pairs"], 1,
+                             "one real pair — the repeat, the blank and the self-reference add nothing")
+            self.assertEqual(len(self._distinct_pairs(conn)), 1)
 
     def test_the_other_answers_record_no_assertion(self):
         # 'existing' and 'group' are statements that the accounts ARE related, so a distinctness claim
@@ -464,8 +510,8 @@ class KeepSeparateIsAnAnswerTests(_MappingFixture):
             self._record(conn)
             self._apply(conn, {
                 "ext-card": {"mode": "existing", "target_account_id": "acct-existing",
-                             "distinct_from_account_id": "acct-existing"},
-                "ext-checking": {"mode": "skip", "distinct_from_account_id": "acct-existing"},
+                             "distinct_from_account_ids": ["acct-existing"]},
+                "ext-checking": {"mode": "skip", "distinct_from_account_ids": ["acct-existing"]},
             })
             self.assertEqual(self._distinct_pairs(conn), [])
 
@@ -478,7 +524,7 @@ class KeepSeparateIsAnAnswerTests(_MappingFixture):
             self._record(conn)
             created = self._apply(conn, {
                 "ext-card": {"mode": "new", "name": "Voyager (new)",
-                             "distinct_from_account_id": "acct-existing"},
+                             "distinct_from_account_ids": ["acct-existing"]},
             })["created"][0]
             conn.execute(
                 "INSERT INTO import_batch (id, filename, row_count) VALUES ('batch-1', 'f.csv', 0)")
