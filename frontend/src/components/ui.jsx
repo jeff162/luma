@@ -6,6 +6,7 @@
 import { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
+import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -876,6 +877,37 @@ export function Badge({ label, toneKey, markerKind = 'category' }) {
       <CategoryMarker kind={markerKind} />
       {label}
     </span>
+  )
+}
+
+// Content that is on screen but no longer current, because a reload is in flight.
+//
+// The alternative for a panel that reloads — swap it for a spinner — moves everything below it twice and
+// is the app's most disruptive jitter, which is why the standing rule is to keep the previous content and
+// show the spinner only when there is nothing to keep (`ui-patterns.md`). That rule has one exception:
+// figures that answer a question the user has just *changed*. Holding last month's totals silently under a
+// newly-picked date filter is worse than a flicker, because the numbers are wrong rather than merely old.
+//
+// So: keep them, and make it visible that they are not the answer yet. Dimmed, non-interactive (a click on
+// a stale bar would drill into figures that are about to change), and `aria-busy` for anyone not seeing
+// the dimming. It gates on `useBusyIndicator`, so a reload quick enough to be imperceptible does not dim
+// at all — otherwise this would reintroduce the flicker it exists to replace, in a subtler form.
+export function StaleWhileRefreshing({ refreshing, children, style }) {
+  const stale = useBusyIndicator(refreshing)
+  return (
+    <div
+      aria-busy={stale || undefined}
+      style={{
+        opacity: stale ? 0.45 : 1,
+        // Fading in both directions: an instant jump between opacities is its own flicker, and the fade
+        // out doubles as the "it's current now" signal.
+        transition: 'opacity 160ms ease',
+        pointerEvents: stale ? 'none' : undefined,
+        ...style,
+      }}
+    >
+      {children}
+    </div>
   )
 }
 

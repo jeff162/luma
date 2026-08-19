@@ -519,7 +519,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
             Activity at {payee}{dateStart || dateEnd ? '' : ' — all time'}
           </div>
 
-          {trendLoading ? <Spinner /> : trend.length === 0 ? (
+          {trendLoading && trend.length === 0 ? <Spinner /> : trend.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)', padding: '16px 0' }}>
               No history found for this payee.
             </div>

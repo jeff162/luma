@@ -2445,7 +2445,7 @@ export default function Categories() {
 
                   <BulkEditChrome controller={matchingBulk} />
 
-                  {matchingTxnsLoading ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
+                  {matchingTxnsLoading && pagedMatchingTxns.length === 0 ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
                     <div style={{
                       padding: '14px 16px',
                       border: '1px solid var(--border)',

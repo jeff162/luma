@@ -4423,7 +4423,10 @@ export default function Accounts() {
                 )}
               </div>
 
-              {loading ? <Spinner /> : (
+              {/* Spinner only when there is nothing to keep on screen: `loadData` re-runs after every
+                  account mutation, and swapping the whole list for a spinner each time moved everything
+                  below it twice per edit. A reload holds the current list until the new one arrives. */}
+              {loading && accounts.length === 0 ? <Spinner /> : (
                 <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
                     <SectionCard

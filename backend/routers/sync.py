@@ -28,7 +28,9 @@ import json
 import uuid
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Request
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
@@ -1763,24 +1765,47 @@ def _skipped_breakdown(account_counts: dict | None, row: dict) -> dict | None:
 
 
 @router.get("/diagnostics")
-def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
+def sync_diagnostics(limit: int = 100,
+                     connection_id: Annotated[list[str] | str | None, Query()] = None):
     """Recent connection-sync diagnostic rows, newest first. One row per connection per /sync call: the
     status sequence, cursor fingerprints, count deltas, any warnings/advisories the pull produced, and
     whether the call completed the initial backfill — enough to see whether a sync stopped at the Initial
     Update or ran to HISTORICAL_UPDATE_COMPLETE, and why an under-fetch happened.
 
-    `connection_id` scopes the list to one connection, so opening the log from a connection card doesn't
-    ship the whole retention window to be filtered client-side."""
+    `connection_id` may be repeated to scope the list to several connections (one is the deep link from a
+    connection card). Filtered here rather than in the browser: the retention window is bounded but its
+    rows are not small — a deep walk records one entry per request — so the whole buffer is worth several
+    hundred KB that a filtered view has no use for.
+
+    `counts` rides along, and is deliberately **not** filtered: it feeds the log's own per-connection
+    filter pills, which have to keep saying how many rows each connection has while some of them are
+    filtered out. Counting the filtered rows would collapse every unselected pill to zero the moment the
+    first one was clicked. Each count is rows currently in the buffer, not syncs ever run — the table is a
+    ring buffer capped at `_SYNC_LOG_RETENTION`, so it is a count of what this log can show."""
     limit = max(1, min(limit, _SYNC_LOG_RETENTION))
+    # A bare string is accepted beside the list because this is called directly as a function as well as
+    # over HTTP, and iterating a string here would scope the query to its characters.
+    raw = [connection_id] if isinstance(connection_id, str) else (connection_id or [])
+    ids = [c for c in raw if c]
     where, params = "", []
-    if connection_id:
-        where = "WHERE connection_id = ?"
-        params.append(connection_id)
+    if ids:
+        where = f"WHERE connection_id IN ({','.join('?' * len(ids))})"
+        params.extend(ids)
     params.append(limit)
     with get_db() as conn:
         rows = conn.execute(
             f"SELECT * FROM connection_sync_log {where} ORDER BY started_at DESC, id DESC LIMIT ?",
             params,
+        ).fetchall()
+        # Labels come from the log's own denormalized columns, not from the connection table: a connection
+        # the user has since disconnected still has rows here, and they must stay filterable and named.
+        count_rows = conn.execute(
+            """
+            SELECT   connection_id, provider, institution, COUNT(*) AS count
+            FROM     connection_sync_log
+            GROUP BY connection_id
+            ORDER BY COUNT(*) DESC, institution, connection_id
+            """
         ).fetchall()
 
     def _json_list(value):
@@ -1821,7 +1846,18 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         )
         return d
 
-    return {"entries": [_entry(r) for r in rows]}
+    return {
+        "entries": [_entry(r) for r in rows],
+        "counts": [
+            {
+                "connection_id": r["connection_id"],
+                "provider":      r["provider"],
+                "institution":   r["institution"] or r["provider"],
+                "count":         r["count"],
+            }
+            for r in count_rows
+        ],
+    }
 
 
 @router.delete("/diagnostics")

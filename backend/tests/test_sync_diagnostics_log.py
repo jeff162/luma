@@ -584,7 +584,8 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
 
     # ---- scoping ---------------------------------------------------------
 
-    def test_the_read_endpoint_can_be_scoped_to_one_connection(self):
+    def _two_connection_log(self):
+        """One logged call for each of two connections — the shape every scoping question needs."""
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
@@ -594,10 +595,42 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
             pass
         with self._driven_sync(connection_id="conn-2"):
             pass
+
+    def test_the_read_endpoint_can_be_scoped_to_one_connection(self):
+        self._two_connection_log()
         with self._use_db_path():
             self.assertEqual(len(sync_module.sync_diagnostics()["entries"]), 2)
             scoped = sync_module.sync_diagnostics(connection_id="conn-2")["entries"]
             self.assertEqual([e["connection_id"] for e in scoped], ["conn-2"])
+
+    def test_the_read_endpoint_can_be_scoped_to_several_connections(self):
+        # The log's own filter pills are multi-select, so scoping takes a list: a user watching two banks
+        # that both misbehave should not have to look at them one at a time.
+        self._two_connection_log()
+        with self._use_db_path():
+            both = sync_module.sync_diagnostics(connection_id=["conn-1", "conn-2"])["entries"]
+            self.assertEqual({e["connection_id"] for e in both}, {"conn-1", "conn-2"})
+            one = sync_module.sync_diagnostics(connection_id=["conn-2"])["entries"]
+            self.assertEqual({e["connection_id"] for e in one}, {"conn-2"})
+            # An empty selection means "no filter", not "match nothing" — no pill pressed shows everything.
+            self.assertEqual(len(sync_module.sync_diagnostics(connection_id=[])["entries"]), 2)
+
+    def test_the_per_connection_counts_ignore_the_current_filter(self):
+        """The counts feed the filter pills, so they describe the buffer, not the current view.
+
+        Counting the filtered rows would zero every unselected pill the moment the first one was clicked,
+        which is the one thing a filter's own counts must never do.
+        """
+        self._two_connection_log()
+        with self._use_db_path():
+            unfiltered = sync_module.sync_diagnostics()["counts"]
+            scoped = sync_module.sync_diagnostics(connection_id=["conn-2"])["counts"]
+            self.assertEqual(unfiltered, scoped)
+            self.assertEqual({c["connection_id"] for c in unfiltered}, {"conn-1", "conn-2"})
+            self.assertEqual(sum(c["count"] for c in unfiltered), 2)
+            # Labelled from the log's own denormalized columns, so a disconnected connection keeps a named,
+            # clickable pill rather than losing it along with its row in the connection table.
+            self.assertTrue(all(c["institution"] for c in unfiltered))
 
 
 class SyncLogMigrationTests(unittest.TestCase):

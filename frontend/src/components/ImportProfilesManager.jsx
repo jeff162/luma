@@ -1085,7 +1085,7 @@ export default function ImportProfilesManager({
         </div>
       ) : null}
 
-      {loading ? <Spinner /> : profiles.length === 0 && !showAdd ? (
+      {loading && profiles.length === 0 ? <Spinner /> : profiles.length === 0 && !showAdd ? (
         <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
           <div>
             {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}

@@ -10,6 +10,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
+
 export function RawFilePreview({
   rawLines,
   headerRowIndex,
@@ -23,6 +25,7 @@ export function RawFilePreview({
   canLoadMore = false,
   loadingMore = false,
 }) {
+  const busyMore = useBusyIndicator(loadingMore)
   const [pos, setPos] = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
   const [size, setSize] = useState({ w: 520, h: 320 })
   const [dragState, setDragState] = useState(null)
@@ -232,7 +235,10 @@ export function RawFilePreview({
                 color: 'var(--text)', cursor: loadingMore ? 'default' : 'pointer',
                 fontSize: 12, padding: '4px 12px',
               }}
-            >{loadingMore ? 'Loading…' : 'Load more'}</button>
+              /* `disabled` on the raw flag so a second press can't queue another page; the label waits for
+                 `useBusyIndicator`, since reading the next slice of an already-open file is usually quick
+                 enough that "Loading…" would land and leave before it could be read. */
+            >{busyMore ? 'Loading…' : 'Load more'}</button>
           ) : (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>Entire file loaded</span>
           )}

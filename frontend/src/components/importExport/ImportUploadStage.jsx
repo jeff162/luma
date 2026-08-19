@@ -11,6 +11,7 @@ import TransientTextInput from '../TransientTextInput.jsx'
 import { Spinner } from '../ui.jsx'
 import { DataSourcePill } from './importPresentational.jsx'
 import { MANUAL_DATA_SOURCE_VALUE } from '../../lib/importExport/constants.js'
+import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
 
 export function ImportUploadStage({
   chooserOpen,
@@ -42,6 +43,7 @@ export function ImportUploadStage({
   loading,
   demoLoaded = false,
 }) {
+  const busy = useBusyIndicator(loading)
   const demoImportMessage = 'Imports are disabled while demo data is loaded — clear it from the banner above to import your own data.'
   const dropEnabled = !chooserOpen && !demoLoaded
   return (
@@ -303,7 +305,9 @@ export function ImportUploadStage({
           </div>
         </div>
       </div>
-      {loading && <Spinner />}
+      {/* Additive rather than a swap, so nothing is displaced — but a parse that returns in a few
+          milliseconds would still blink a spinner into the layout and out again. */}
+      {busy && <Spinner />}
     </>
   )
 }

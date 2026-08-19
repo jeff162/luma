@@ -4,6 +4,7 @@
 import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { sniffAmazonExportKind } from '../lib/amazonDetect.js'
 import {
   Card,
@@ -278,6 +279,7 @@ function ImportTab({ onAmazonDetected }) {
   const [demoLoaded, setDemoLoaded] = useState(false)
   const [demoLoadable, setDemoLoadable] = useState(false)
   const [loadingDemo, setLoadingDemo] = useState(false)
+  const busyDemo = useBusyIndicator(loadingDemo)
   // Re-evaluate when the tenant's blank-slate status can have changed, not just on mount: `loadable`
   // means an untouched tenant (no data rows AND no configured source/connection — see is_demo_loadable),
   // so importing the first file, saving a data source, or undoing the last batch flips it. Keying off
@@ -3268,8 +3270,11 @@ function ImportTab({ onAmazonDetected }) {
               You can clear it anytime from the banner that appears.
             </div>
           </div>
+          {/* The load is genuinely slow — it runs a real import — so this label almost always earns its
+              place; the gate is here for the case where it does not (a small dataset, a warm machine),
+              where the flash would be all the user saw. `disabled` stays on the raw flag. */}
           <Button onClick={loadDemoFromImport} disabled={loadingDemo}>
-            {loadingDemo ? 'Loading…' : 'Load demo data'}
+            {busyDemo ? 'Loading…' : 'Load demo data'}
           </Button>
         </Card>
       ) : null}

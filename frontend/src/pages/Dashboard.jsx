@@ -25,7 +25,7 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -1905,6 +1905,11 @@ export default function Dashboard() {
 
   const [loading, setLoading] = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
+  // Whether there are figures worth holding on screen through a reload. Empty on the very first load
+  // and on a filter that genuinely matches nothing, which are the two cases where a spinner is the
+  // honest thing to show — there is no previous answer being superseded.
+  const hasTotals = groupRows.length > 0 || incomeRows.length > 0
+    || cmpGroupsA.length > 0 || cmpGroupsB.length > 0
   const multiDetailMode = detailTxns.length > 1
   const [categoryTxnColumns, setCategoryTxnColumns] = useTransactionTableLayout({
     preferenceKey: DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY,
@@ -2418,8 +2423,12 @@ export default function Dashboard() {
           </div>
         )}
 
-        {loading ? <Spinner /> : (
-          <>
+        {/* First load gets the spinner; a reload keeps the figures up but visibly not-current, because
+            these numbers answer a question the user has just changed — leaving the previous period’s
+            totals standing as if they were the new ones is worse than a flicker. See
+            `StaleWhileRefreshing`. */}
+        {loading && !hasTotals ? <Spinner /> : (
+          <StaleWhileRefreshing refreshing={loading}>
             {mode === 'single' && (
               <>
 
@@ -3009,7 +3018,7 @@ export default function Dashboard() {
                 )}
               </>
             )}
-          </>
+          </StaleWhileRefreshing>
         )}
       </div>
       {detailTxns.map((txn, index) => (

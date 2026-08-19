@@ -223,3 +223,15 @@ review-state-seeding tests).
 **Notes.** Build candidate rows + an inserted `category_rule` against the temp-DB
 harness; call `get_system_rule_suggestions` (or `_generate_rule_suggestions`
 directly). Watch seeded default rules — use fixture keywords.
+
+## Settings.jsx has no component-test harness
+
+`Settings.jsx` is one of the largest surfaces in the app and has no component test of any kind, so
+interactive behavior added there ships unpinned — the sync log's multi-select connection filter pills
+(2026-08-19) are the current example: the backend contract is tested, the pill behavior is not.
+
+Standing one up is the real work; the sections are large and lean on `UserPreferencesContext`,
+`AppSessionContext`, and a lot of `api` surface. Worth doing as its own task rather than as a rider on
+whatever feature lands there next. `VaultSettingsDialog.test.jsx` is the closest existing example of
+mounting one of this file's dialogs with mocked `api`.
+

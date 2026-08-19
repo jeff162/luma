@@ -507,8 +507,12 @@ export const api = {
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
   // Developer-options connection sync diagnostics: recent per-connection /sync calls (status sequence,
   // cursor fingerprints, count deltas). Both endpoints 404 when developer options are off.
-  getSyncDiagnostics: (limit = 100, connectionId = null) => request(
-    `/sync/diagnostics?limit=${limit}${connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''}`,
+  // `connectionIds` may be a single id or several — the log's filter pills are multi-select, and the
+  // param repeats once per connection. Empty means unfiltered, never "match nothing".
+  getSyncDiagnostics: (limit = 100, connectionIds = null) => request(
+    `/sync/diagnostics?limit=${limit}`
+    + [].concat(connectionIds || []).filter(Boolean)
+      .map(id => `&connection_id=${encodeURIComponent(id)}`).join(''),
   ),
   clearSyncDiagnostics: () => request('/sync/diagnostics', { method: 'DELETE' }),
 

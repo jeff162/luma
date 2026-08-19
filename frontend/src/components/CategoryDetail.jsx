@@ -146,7 +146,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
             Monthly activity — {category.name}
           </div>
 
-          {trendLoading ? <Spinner /> : trend.length === 0 ? (
+          {trendLoading && trend.length === 0 ? <Spinner /> : trend.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)', padding: '16px 0' }}>
               No history found for this category.
             </div>

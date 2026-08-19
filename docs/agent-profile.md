@@ -48,6 +48,33 @@ instruction and fix the drift rather than silently choosing the looser version.
   UI change done without re-reading the sentence that asked for it. Each cost a user round trip that
   reading for thirty seconds would have saved.
 
+- **When a defect is found, enumerate its siblings before closing it.** One frozen progress panel produced
+  seven more findings, and almost none of them came from insight — they came from two mechanical habits.
+  *Grep for the other call sites of anything you touch*: the duplicate sweep sat inside the ingest
+  transaction at three call sites, and a review of the commit that added the first would have seen only
+  one. *Ask what else has the shape of the bug you just fixed*: an index was missing because a predicate
+  wrapped a column in a function, and grepping for other function-wrapped predicates found a second one on
+  a per-imported-row path (15 ms a row) that nothing had noticed. The same habit applied to a rendering
+  rule found three surfaces re-deriving one judgement from `mode`, disagreeing with each other on screen.
+
+- **Ask structural questions of a diff, not just "is this correct?"** Most of that session's defects were
+  invisible to a correctness reading and obvious to a specific question — *is everything between BEGIN and
+  COMMIT part of what this transaction is for?*, *is a durable state being used as an event?* (`mode`
+  stays `initial` for every call of a resumed backfill), *does this predicate need an index it cannot
+  use?*, *does this render one judgement that is also rendered somewhere else?* A rule stated as a
+  rejection ("we decided we don't need threads") does not fire when someone later adds a step; the same
+  rule stated as an invariant ("the ingest transaction ends before analysis begins") does. When a decision
+  is recorded, record the invariant that survived it, not only what was declined.
+
+- **Measure before blaming, and measure on a copy of real data.** The first suspect for a 109-second
+  freeze was the recurring auto-scan; it measured 0.03 s and was innocent. The actual cause measured 109 s
+  on the same database and 1 s with an index. `cp` the live DB to the scratchpad and drive the real
+  functions against it — the test fixtures are tiny (largest ~1,200 rows) and cannot show a cost that only
+  appears at ledger scale. Two sweeps worth repeating: EXPLAIN the SQL the suite actually executes (trace
+  it with `sqlite3.set_trace_callback` from a pytest plugin, then `EXPLAIN QUERY PLAN` each statement
+  against a real-data copy and flag scans of large tables), and grep `with get_db()` blocks that both
+  write and call into a service that reads broadly.
+
 - **Check which database the app is actually pointed at before querying live state.** The defaults put
   both databases in the working directory, but `.env` is an *override* file that may or may not exist —
   and where it does, `DB_PATH` / `CONTROL_DB_PATH` routinely differ from those defaults. Read the file

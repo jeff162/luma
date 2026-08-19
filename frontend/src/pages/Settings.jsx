@@ -11,6 +11,7 @@ import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, S
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
+import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
@@ -1359,7 +1360,7 @@ function BackupRecipientsSection() {
         </form>
 
         {error && <div style={{ padding: '10px 16px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
-        {loading ? <Spinner /> : recipients.length === 0 ? (
+        {loading && recipients.length === 0 ? <Spinner /> : recipients.length === 0 ? (
           <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
             Add an RSA public key here if you wish to generate encrypted backups.
           </div>
@@ -1687,7 +1688,7 @@ function TransactionTagsSection() {
           </div>
         ) : null}
 
-        {loading ? <Spinner /> : tags.length === 0 ? (
+        {loading && tags.length === 0 ? <Spinner /> : tags.length === 0 ? (
           <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
             No tags created yet.
           </div>
@@ -2557,36 +2558,39 @@ function ConnectionSyncLogSection({ initialConnectionId = '' }) {
   const [error, setError] = useState('')
   const [clearing, setClearing] = useState(false)
   const [copied, setCopied] = useState(false)
-  // Scoped by the deep link from a connection card, then adjustable here. Filtered server-side so a
-  // one-connection view doesn't ship the whole retention window to be thrown away in the browser.
-  const [connectionId, setConnectionId] = useState(initialConnectionId || '')
-  // Only for naming the scoped connection in the banner and the export header — the log's own rows carry
-  // a denormalized provider/institution, so a disconnected connection still reads correctly without this.
-  const [connections, setConnections] = useState([])
+  // Which connections the list is scoped to — seeded by the deep link from a connection card, then
+  // adjustable here with the pills below. Filtered server-side: the retention window is bounded but its
+  // rows are not small (a deep walk records one entry per request), so a filtered view has no reason to
+  // ship the whole buffer. Empty means no filter, which is what makes "no pill pressed" show everything.
+  const [connectionIds, setConnectionIds] = useState(initialConnectionId ? [initialConnectionId] : [])
+  // Rows per connection *in the buffer*, from the same response and deliberately unfiltered — these label
+  // and size the pills, so they have to keep describing every connection while some are filtered out.
+  // Also the source of the labels: they come from the log's own denormalized columns, so a connection the
+  // user has since disconnected keeps a named, clickable pill instead of losing it with its connection row.
+  const [counts, setCounts] = useState([])
 
-  useEffect(() => { setConnectionId(initialConnectionId || '') }, [initialConnectionId])
-
-  useEffect(() => {
-    api.getProviders()
-      .then(res => setConnections((res.providers || []).flatMap(p => p.connections || [])))
-      .catch(() => setConnections([]))   // a label is a nicety; the log stands on its own without one
-  }, [])
+  useEffect(() => { setConnectionIds(initialConnectionId ? [initialConnectionId] : []) }, [initialConnectionId])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const res = await api.getSyncDiagnostics(200, connectionId || null)
+      const res = await api.getSyncDiagnostics(200, connectionIds)
       setEntries(res.entries || [])
+      setCounts(res.counts || [])
     } catch (e) {
       setError(e.message || 'Could not load the sync log.')
       setEntries([])
     } finally {
       setLoading(false)
     }
-  }, [connectionId])
+  }, [connectionIds])
 
   useEffect(() => { load() }, [load])
+
+  // Whether the load has run long enough to be worth saying so. See `useBusyIndicator`: the work is
+  // never delayed, only the announcement of it.
+  const busy = useBusyIndicator(loading)
 
   async function clearLog() {
     setClearing(true)
@@ -2601,8 +2605,15 @@ function ConnectionSyncLogSection({ initialConnectionId = '' }) {
     }
   }
 
-  const scoped = connections.find(c => c.id === connectionId)
-  const scopeLabel = scoped ? (scoped.institution || scoped.provider || 'this connection') : ''
+  const selected = new Set(connectionIds)
+  const scopeLabel = counts
+    .filter(c => selected.has(c.connection_id))
+    .map(c => c.institution || c.provider || 'this connection')
+    .join(', ')
+
+  function togglePill(id) {
+    setConnectionIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+  }
 
   async function copyForSupport() {
     try {
@@ -2623,7 +2634,11 @@ function ConnectionSyncLogSection({ initialConnectionId = '' }) {
           the place to look when a connection brings in nothing, or less than expected.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button small variant="ghost" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</Button>
+          {/* `disabled` follows the raw flag — a button must stop accepting presses the instant the work
+              starts — while the *label* waits for `useBusyIndicator`, so a load too quick to read never
+              repaints it. Clicking a filter pill reloads the list, and this button relabelling itself for
+              10ms each time read as the panel twitching rather than as anything being reported. */}
+          <Button small variant="ghost" onClick={load} disabled={loading}>{busy ? 'Loading…' : 'Refresh'}</Button>
           <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
             title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
             {copied ? 'Copied' : 'Copy for support'}
@@ -2631,29 +2646,61 @@ function ConnectionSyncLogSection({ initialConnectionId = '' }) {
           <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
         </div>
       </div>
-      {scoped ? (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-          padding: '6px 10px', borderRadius: 8, fontSize: 12,
-          background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))',
-        }}>
-          <span style={{ color: 'var(--muted)' }}>
-            Showing only <strong style={{ color: 'var(--text)' }}>{scopeLabel}</strong>.
-          </span>
-          <button
-            type="button"
-            onClick={() => setConnectionId('')}
-            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
-          >
-            Show all connections
-          </button>
+      {/* One pill per connection that has rows here, replacing the old "Showing only X" banner rather than
+          sitting beside it — two controls for one filter can disagree, and the banner could only ever say
+          what the deep link had chosen. Only connections present in the log are offered: a pill that
+          filters to nothing is a dead end, and the log's own columns name them even after a disconnect. */}
+      {/* A single connection needs no pill — it would filter to what is already on screen. But an active
+          filter always renders the row, so a deep link to a connection with no rows yet still offers a
+          way back to everything instead of stranding the user on an empty list. */}
+      {counts.length > 1 || connectionIds.length ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {counts.map(c => {
+            const on = selected.has(c.connection_id)
+            return (
+              <button
+                key={c.connection_id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => togglePill(c.connection_id)}
+                title={on
+                  ? `Showing ${c.institution}. Click to stop filtering by it.`
+                  : `Show only ${c.institution}${connectionIds.length ? ' as well' : ''}.`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
+                  border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                  background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',
+                  color: on ? 'var(--text)' : 'var(--muted)',
+                  fontWeight: on ? 600 : 400,
+                }}
+              >
+                {c.institution}
+                {/* Rows this log is holding for the connection, not syncs it has ever run: the table is a
+                    ring buffer, so this is a count of what clicking would show. */}
+                <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.7 }}>{c.count}</span>
+              </button>
+            )
+          })}
+          {connectionIds.length ? (
+            <button
+              type="button"
+              onClick={() => setConnectionIds([])}
+              /* "Clear filters", not "Show all": with every pill selected the list is already showing
+                 everything, so a control promising to change that would be describing nothing. What it
+                 does in both states is empty the selection. */
+              style={{ background: 'none', border: 'none', padding: '0 4px', color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
+            >
+              Clear filters
+            </button>
+          ) : null}
         </div>
       ) : null}
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
       {entries && entries.length === 0 && !loading ? (
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {scoped
-            ? `No sync calls recorded for ${scopeLabel} yet.`
+          {connectionIds.length
+            ? `No sync calls recorded for ${scopeLabel || 'this connection'} yet.`
             : 'No sync calls recorded yet. Run a sync from Accounts → Connections, then Refresh here.'}
         </div>
       ) : null}
@@ -2733,7 +2780,7 @@ function RulesTrashSection() {
           </Button>
         </div>
         {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
-        {loading ? <Spinner /> : items.length === 0 ? (
+        {loading && items.length === 0 ? <Spinner /> : items.length === 0 ? (
           <EmptyState message="No trashed rules." />
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -2832,7 +2879,7 @@ function DistinctAccountPairsSection() {
         decisions already made about individual transactions.
       </div>
       {error ? <div style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}
-      {loading ? <Spinner /> : pairs.length === 0 ? (
+      {loading && pairs.length === 0 ? <Spinner /> : pairs.length === 0 ? (
         <EmptyState message="No account pairs have been marked as distinct." />
       ) : (
         <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -2956,7 +3003,7 @@ function TrashSection() {
           </Button>
         </div>
 
-        {loading ? <Spinner /> : items.length === 0 ? (
+        {loading && items.length === 0 ? <Spinner /> : items.length === 0 ? (
           <EmptyState message="Nothing in trash." />
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -3196,7 +3243,7 @@ function TransactionsTrashSection() {
           </Button>
         </div>
 
-        {t.loading ? <Spinner /> : t.items.length === 0 ? (
+        {t.loading && t.items.length === 0 ? <Spinner /> : t.items.length === 0 ? (
           <EmptyState message="No transactions in trash." />
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
@@ -3271,7 +3318,7 @@ function DuplicateTransactionsTrashSection() {
           </Button>
         </div>
 
-        {t.loading ? <Spinner /> : t.items.length === 0 ? (
+        {t.loading && t.items.length === 0 ? <Spinner /> : t.items.length === 0 ? (
           <EmptyState message="No removed duplicates in trash." />
         ) : groups.map(label => {
           const open = effectiveOpen.has(label)
