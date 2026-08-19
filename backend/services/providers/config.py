@@ -276,17 +276,34 @@ def _last_sync_summary(connection_row) -> dict | None:
     and is what the card must lead with. It is not a second copy of the outcome — it is a different fact,
     and it is the reason the stored word is not simply trusted unconditionally.
     """
+    stored = _json_or_none(connection_row["last_sync_summary"]) or {}
     if connection_row["last_sync_error"]:
-        stored = _json_or_none(connection_row["last_sync_summary"]) or {}
-        return {**stored, "outcome": SYNC_OUTCOME_FAILED,
-                "at": connection_row["last_sync_error_at"] or stored.get("at")}
+        return {
+            **_projected_sync_summary(stored),
+            "outcome": SYNC_OUTCOME_FAILED,
+            "at": connection_row["last_sync_error_at"] or stored.get("at"),
+        }
     outcome = connection_row["last_sync_outcome"]
     if not outcome:
         return None
-    summary = _json_or_none(connection_row["last_sync_summary"]) or {}
+    return {**_projected_sync_summary(stored), "outcome": outcome}
+
+
+def _projected_sync_summary(summary: dict) -> dict:
+    """The publishable view of a stored sync summary — every branch above goes through this rather than
+    spreading the stored blob, because one field in it must never reach a client.
+
+    `row_ids` is that field. It backs the connection card's "review what just arrived" report, but it is
+    served **server-side**: the client asks for the report by connection id and the query expands the list
+    itself (`sync_connection_id` in the transactions filter). Sending the ids instead would put several
+    kilobytes on a payload that is *polled* for the duration of every sync, and would put them there on
+    every connection whether or not anyone opens the report. What travels is the count, which is all the
+    card needs to decide between the two things its arrow can do.
+    """
     accounts = summary.get("accounts")
+    cards = summary.get("cards")
+    row_ids = summary.get("row_ids")
     return {
-        "outcome":  outcome,
         "at":       summary.get("at"),
         "mode":     summary.get("mode"),
         "added":    int(summary.get("added") or 0),
@@ -296,6 +313,14 @@ def _last_sync_summary(connection_row) -> dict | None:
         # The per-account buckets travel whole rather than pre-summed — the card's chips want them per
         # account, and a total beside them would be a stored sum of the thing it sums.
         "accounts": accounts if isinstance(accounts, dict) else {},
+        # The import cards this pull wrote to, newest-largest first, so the card can open the shared import
+        # ledger in place instead of sending the user to the history page to hunt for it. Usually one; two
+        # for a few days after a month rollover, when the tail of the previous month is still arriving.
+        "cards":    cards if isinstance(cards, list) else [],
+        # How many rows the report would show, or 0 when this pull recorded no scopable list — either
+        # because it added nothing, or because it exceeded the cap and the whole card is the better report.
+        # A count, never the ids: see above.
+        "scoped_rows": len(row_ids) if isinstance(row_ids, list) else 0,
     }
 
 

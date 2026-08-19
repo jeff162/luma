@@ -606,6 +606,13 @@ came of leaving it unstated, in `docs/data-model.md`.
   ride `GET /api/providers` alongside each connection rather than sitting behind their own call,
   because the Connections card has to surface them **while collapsed** — a failure that only appears once
   a card is expanded is one nobody sees. See `docs/data-model.md` for what each field may and may not mean.
+  The same payload carries the **last sync's report**: the import cards the pull wrote to, and a count of
+  the rows it added or revised. The `↗` beside "Last sync" opens the shared import-card ledger
+  (`useBatchDetailPanels`) over the Connections tab — scoped to just those rows when the count is non-zero,
+  otherwise the whole card — so newly arrived transactions can be categorized where they arrived instead of
+  the user navigating to Import / Export history to hunt for the card. Only the count travels; the row ids
+  stay server-side and the query expands them (`sync_connection_id`), because this payload is polled
+  throughout every sync. See `docs/data-model.md` for the cap and the three rules governing the row list.
 - **"Reconnect this" is a separate signal from "syncing failed", because only one of them is actionable.**
   An adapter raises `ProviderCredentialRejected` (`services/providers/base.py`) when the provider has
   stopped accepting the stored credential; `run_sync` sets `connection.reauth_required` (migration **v30**),

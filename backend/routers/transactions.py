@@ -629,6 +629,7 @@ def _build_transaction_filter(
     exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
     exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None, require_all_tag_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
+    sync_connection_id=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
     amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
@@ -683,6 +684,30 @@ def _build_transaction_filter(
         if id_list:
             clauses.append(f"t.id IN ({','.join('?' * len(id_list))})")
             params.extend(id_list)
+    # Rows a connection's most recent sync added or revised — the connection card's "review what just
+    # arrived" report, which opens the import-card ledger scoped to the pull rather than to the whole
+    # calendar month the card covers.
+    #
+    # The ids are expanded **here, in SQL**, from the list the sync stored on the connection, rather than
+    # sent by the client. Three reasons, and each one on its own is decisive: a few hundred uuids is ~10KB
+    # of query string, past the default request-line limit and re-sent on every page and every sort; the
+    # list would otherwise have to ride `GET /api/providers`, which is polled throughout a sync; and doing
+    # it in the shared filter builder means the list feed and the bulk endpoint resolve the identical set,
+    # which is what makes "select all matching" safe from this surface.
+    #
+    # Every missing case collapses to zero rows on its own — no stored summary, a summary from before this
+    # existed, or a pull whose list exceeded the cap and was dropped. That is the honest answer rather than
+    # a silent widening to the whole card: a report that quietly changes its own scope is worse than an
+    # empty one. The client only offers the arrow in scoped mode when `scoped_rows` is non-zero, so the
+    # empty case is reachable only by re-syncing while the drawer is open — where the rows really have
+    # been replaced by a newer pull's.
+    if sync_connection_id and isinstance(sync_connection_id, str):
+        clauses.append("""t.id IN (
+            SELECT je.value
+            FROM   connection cn, json_each(json_extract(cn.last_sync_summary, '$.row_ids')) je
+            WHERE  cn.id = ?
+        )""")
+        params.append(sync_connection_id)
     _append_effective_account_filter(
         clauses, params, account_id=account_id, account_ids=account_ids,
         exclude_account_ids=exclude_account_ids,
@@ -823,6 +848,7 @@ def list_transactions(
     search:       Optional[str] = Query(None),
     quick_filter: Optional[str] = Query(None),
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
+    sync_connection_id: Optional[str] = Query(None, description="Only rows this connection's most recent sync added or revised. The id list is expanded server-side from the stored sync summary; matches nothing once a newer sync has replaced it."),
     recurring_series_id: Optional[str] = Query(None, description="Only rows linked to this recurring series (its members)."),
     recurring_only: bool          = Query(False, description="Only rows linked to any recurring series (recurring_series_id IS NOT NULL)."),
     recurring_excluded_series_id: Optional[str] = Query(None, description="Only rows the user removed from this series (an 'excluded' override)."),
@@ -852,6 +878,7 @@ def list_transactions(
         exclude_payees=exclude_payees, exclude_tag_ids=exclude_tag_ids,
         require_all_tag_ids=require_all_tag_ids,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
+        sync_connection_id=sync_connection_id,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
         recurring_only=recurring_only,
         recurring_excluded_series_id=recurring_excluded_series_id,
@@ -1199,7 +1226,7 @@ def trash_transaction(txn_id: str):
 
 
 _BULK_FILTER_KEYS = {
-    "month", "date_start", "date_end", "import_batch_id", "account_id", "account_ids",
+    "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id", "account_ids",
     "source_account_ids", "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids",
     "payees", "exclude_account_ids", "exclude_group_ids", "exclude_category_ids",
     "exclude_owner_ids", "exclude_payees", "exclude_tag_ids", "require_all_tag_ids",

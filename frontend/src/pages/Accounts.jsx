@@ -9,6 +9,7 @@ import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { SourceAccountChip, OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
+import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -440,7 +441,7 @@ const SYNC_OUTCOMES = {
 // The outcome of the last sync, laid out like the Import/Export history card's own outcome row and built
 // from the same chips (`SourceAccountChip`) — a sync and a file import answer the same question, and a
 // user reads the two surfaces minutes apart, so they should not look like different features.
-function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }) {
+function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog, onOpenReport }) {
   if (syncing) {
     return (
       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -483,6 +484,13 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
   // it, per account and with their counts, which is both more informative and unambiguous — a separate
   // total sat next to a row of `✕` chips and read as a count of them whenever the two happened to agree.
   const heldUnexplained = Number(lastSync.already_held_unexplained || 0)
+  // The import cards this pull wrote to, and whether its rows are still individually identified. Both come
+  // from the stored summary rather than being inferred here: `scoped_rows` is 0 both when a pull added
+  // nothing and when it added more than the server keeps a row list for, and the card has no way to tell
+  // those apart — nor any need to, since the answer is the same either way.
+  const reportCards  = lastSync.cards || []
+  const reportRows   = Number(lastSync.scoped_rows || 0)
+  const reportScoped = reportRows > 0
 
   return (
     <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
@@ -494,6 +502,26 @@ function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>
           {rowTotal ? `${n(rowTotal)} row${rowTotal === 1 ? '' : 's'}` : 'no new transactions'}
         </span>
+        {/* The same `↗` launcher used elsewhere on this card, and it opens the ledger over this page
+            rather than navigating: finding the right card on the Import / Export history page was the
+            entire friction this removes.
+            The two modes are named rather than left to look identical, because they answer different
+            questions — one shows what this pull delivered, the other the card it landed on, which by
+            then usually holds earlier syncs' rows too. Both are useful; being told which one is open
+            is what keeps the count in the drawer from reading as a contradiction of the count here. */}
+        {onOpenReport && reportCards.length ? (
+          <button
+            type="button"
+            onClick={onOpenReport}
+            title={reportScoped
+              ? `Review the ${n(reportRows)} transaction${reportRows === 1 ? '' : 's'} from this sync`
+              : 'Open the import card this sync added to'}
+            style={{
+              background: 'none', border: 'none', padding: '0 2px', cursor: 'pointer',
+              color: 'var(--accent2)', fontSize: 11, lineHeight: 1, opacity: 0.75,
+            }}
+          >↗</button>
+        ) : null}
       </div>
       {chips.length ? (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -836,7 +864,7 @@ function loadPlaidScript() {
 }
 
 function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCurrentUser, authEnabled, width, disabled,
-  onOpenAccountDetail }) {
+  onOpenAccountDetail, categories = [], onAddCategory }) {
   const [providers, setProviders] = useState(null)
   const [transport, setTransport] = useState(null)
   const [vault, setVault] = useState({ configured: false, hasPassphrase: false, unlocked: false })
@@ -872,6 +900,34 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
   // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
   const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
+  // The same floating import-card ledger the Import / Export page opens, hosted here so a connection's
+  // last sync can be reviewed without leaving the tab. Reused rather than rebuilt: that panel is already
+  // read-write for categories and already knows how to page, sort, search and bulk-edit a card's rows.
+  const { openBatchDetail, panelsNode } = useBatchDetailPanels({ categories, onAddCategory })
+
+  // Open the ledger on whatever the connection's last sync wrote to.
+  //
+  // ONE panel per card, because one pull can write to two: rows are filed under their own transaction
+  // month, so for a few days after a rollover the tail of the previous month arrives beside the current
+  // one. Opening only the largest would silently drop rows the summary just counted, and a card cannot
+  // show rows that are not on it.
+  //
+  // `scoped` decides which of the two reports this is. Under the cap the ledger is narrowed to exactly
+  // the rows this sync delivered — the case worth having, since a routine sync is a handful of rows
+  // someone may well want to categorize on the spot. Over it the ids were never stored and the card
+  // opens whole, which is the better report at that size anyway: the only pull that exceeds the cap is
+  // a first backfill, and a backfill has a dedicated "Initial import" card that already isolates it.
+  const openLastSyncReport = useCallback((connection) => {
+    const cards = connection?.last_sync?.cards || []
+    if (!cards.length) return
+    const scoped = Number(connection?.last_sync?.scoped_rows || 0) > 0
+    cards.forEach(card => openBatchDetail({
+      id: card.id,
+      filename: card.label,
+      imported_at: card.imported_at,
+      ...(scoped ? { _syncScope: { connectionId: connection.id, label: 'the last sync' } } : {}),
+    }))
+  }, [openBatchDetail])
   // How far back a new connection's initial pull fetches (`days_requested`; 0 = all available ~24 months).
   // Persisted as the user's default for future connections. Routine syncs pull cursor deltas regardless.
   const [historyDays, setHistoryDays] = useUserPreference('connection.historyDays', 90)
@@ -1491,6 +1547,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   }
 
   return (
+    <>
     <div style={{ display: 'grid', gap: 12, width: typeof width === 'number' ? `${width}px` : (width || '100%'), maxWidth: '100%', opacity: disabled ? 0.55 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
       {/* Modal block while Plaid Link is open. Plaid's own iframe sits at ~max z-index, so Link stays fully
           interactive above this scrim; the scrim (z 2000, above app chrome) covers the app so a stray click
@@ -1772,6 +1829,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           lastSync={c.last_sync}
                           syncing={!!c.syncing}
                           providerAccounts={providerAccountsByConnection[c.id] || []}
+                          onOpenReport={() => openLastSyncReport(c)}
                           onOpenLog={() => navigate(
                             `/settings?section=connectionSyncLog&connection=${encodeURIComponent(c.id)}`,
                           )}
@@ -2034,6 +2092,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         <AppNoticeDialog title={notice.title} description={notice.description} onClose={() => setNotice(null)} />
       ) : null}
     </div>
+    {/* Outside the wrapper above on purpose: it dims and disables itself while another workspace owns the
+        page, and these panels float over the app rather than belonging to the tab that opened them. */}
+    {panelsNode}
+    </>
   )
 }
 
@@ -4793,6 +4855,13 @@ export default function Accounts() {
               // include_children fetch.
               accounts={activeAccounts}
               onAccountsChanged={loadData}
+              // For the import-card ledger a connection card can now open in place: its rows are
+              // categorizable, which is the whole reason to open it here rather than send the user
+              // to the Import / Export page to find the card.
+              categories={categories}
+              onAddCategory={category => setCategories(prev => (
+                prev.some(existing => existing.id === category.id) ? prev : [...prev, category]
+              ))}
               // The same panel the Accounts tab opens, from the same handler — a connection's account list
               // is a place a user wants to look at the account, not a dead end that sends them elsewhere.
               onOpenAccountDetail={openAccountDetail}

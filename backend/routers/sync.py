@@ -186,6 +186,18 @@ _MAX_PAGES_PER_CALL = 50  # safety cap (≤ 25k txns/request) so a misbehaving h
 # window and prune the rest so repeated dev syncs can't grow the table unbounded.
 _SYNC_LOG_RETENTION = 500
 
+# How many row ids a sync may record on `connection.last_sync_summary` for its "review what just arrived"
+# report. Above this the ids are dropped and the connection card's arrow opens the import card itself
+# instead — which is the right answer by construction rather than a degradation: the only pull that
+# exceeds the cap is a first backfill, and a backfill already lands on ONE dedicated "Initial import"
+# card that isolates it exactly. A routine sync is tens of rows and never comes near this.
+#
+# The cap is a judgement about the *report*, not a limit of the query: past a few hundred rows nobody is
+# categorizing them one by one in a drawer, they want the card. It also bounds a blob that rides
+# `GET /api/providers`, which is polled while a sync runs — which is why `list_connections` sends only
+# the count, never the ids (see `_last_sync_summary`).
+_SCOPED_SYNC_ROW_CAP = 250
+
 
 def _utcnow_iso() -> str:
     # Note %S before the fractional %f: Python's %f is *microseconds*, not SQLite's seconds.fraction, so
@@ -283,11 +295,22 @@ def _card_counts(conn, card_added: dict, baseline: dict) -> list[dict]:
         delta = n - baseline.get(card_id, 0)
         if delta <= 0:
             continue
-        row = conn.execute("SELECT filename FROM import_batch WHERE id = ?", (card_id,)).fetchone()
+        row = conn.execute(
+            "SELECT filename, imported_at FROM import_batch WHERE id = ?", (card_id,)).fetchone()
         # The filename is the card's user-visible label ("SimpleFIN Bridge · August 2026"), which is the
         # whole point: this has to be matchable by eye against the history page. The id is a last resort for
         # a card deleted between the write and the read.
-        out.append({"card": row["filename"] if row else card_id, "added": delta})
+        #
+        # `id`/`imported_at` ride along for the connection card's summary, which opens these cards directly
+        # in the shared import-card ledger rather than sending the user to the history page to find them.
+        # `imported_at` is the CARD's creation — when its month first received rows — not this sync's time:
+        # a monthly card outlives the pull that opens it, and the ledger's header states the card's own age.
+        out.append({
+            "card":        row["filename"] if row else card_id,
+            "added":       delta,
+            "id":          card_id,
+            "imported_at": row["imported_at"] if row else None,
+        })
     return sorted(out, key=lambda c: (-c["added"], c["card"]))
 
 
@@ -551,6 +574,27 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
         error=entry.get("error"), mode=entry.get("mode"),
         already_held=unexplained, became_complete=bool(entry.get("became_complete")),
     )
+    # The cards this pull wrote to, so the connection card can open the import ledger in place. Kept as a
+    # list because ONE pull routinely writes to two cards: a sync files each row under its own transaction
+    # month, so for a few days after a rollover the tail of last month arrives alongside this month.
+    cards = [
+        {"id": c["id"], "label": c["card"], "added": c["added"], "imported_at": c.get("imported_at")}
+        for c in (entry.get("card_counts") or []) if c.get("id")
+    ]
+    # The rows this pull added or revised, so the ledger can be scoped to "what just arrived" and the user
+    # can categorize them where they are standing. Dropped wholesale past the cap rather than truncated: a
+    # partial list is a report that quietly lies about its own extent, and the card it falls back to is the
+    # better answer at that size anyway (see `_SCOPED_SYNC_ROW_CAP`).
+    #
+    # Deliberately NOT copied to `connection_sync_log`. That table is a 500-row ring buffer, so the ids
+    # would be retained 500 times over for a report only the newest pull can serve; and a user-facing
+    # report may not rest on something `DELETE /sync/diagnostics` erases — the same reason the outcome
+    # word lives here rather than being derived from the log.
+    #
+    # Deduped: a walking adapter's overlapping pages can add a row and then revise it within one call, so
+    # the same id reaches `touched_ids` twice. `dict.fromkeys` keeps arrival order, which is the order the
+    # rows are most usefully read in.
+    row_ids = list(dict.fromkeys(entry.get("row_ids") or []))
     summary = {
         "at":       entry.get("started_at"),
         "mode":     entry.get("mode"),
@@ -562,6 +606,8 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
         # re-derived because the card reads this summary and nothing else: it has no cursor, no per-call
         # row set, and no way to tell routine overlap from a collision on its own.
         "already_held_unexplained": unexplained,
+        "cards":    cards,
+        "row_ids":  row_ids if len(row_ids) <= _SCOPED_SYNC_ROW_CAP else None,
     }
     conn.execute(
         "UPDATE connection SET last_sync_outcome = ?, last_sync_summary = ? WHERE id = ?",
@@ -1267,6 +1313,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             # The card tallies are call-wide and accumulate across connections, so this row's share of them
             # is a difference, exactly as the count deltas above are.
             card_added0 = dict(card_added)
+            # Same reason, as a slice rather than a difference: `touched_ids` is append-only within a call,
+            # so this connection's share is everything appended from here on.
+            touched0 = len(touched_ids)
 
             def _record(*, error=None, became_complete=False):
                 entry = {
@@ -1313,6 +1362,13 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # to reconcile this row against the history page and against the provider's own limits.
                     "card_counts":      _card_counts(conn, card_added, card_added0),
                     "requested_windows": list(requested_windows),
+                    # The rows this connection added or revised, for the connection card's "review what
+                    # just arrived" report. `touched_ids` is exactly added + advanced-pending + modified —
+                    # the same scope the recurring rescan uses — and deliberately excludes `removed`, which
+                    # trashes rows: a report cannot show them, and offering to categorize a row that has
+                    # left the ledger would be nonsense. Consumed only by the connection summary; the log
+                    # does not store it (see `_record_connection_last_sync`).
+                    "row_ids":          touched_ids[touched0:],
                 }
                 sync_diagnostics.append(entry)
                 # The durable half, written now rather than with the log at the end of the run: the log is

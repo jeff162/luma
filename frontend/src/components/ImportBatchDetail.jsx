@@ -7,12 +7,16 @@
  * Import / Export page (full file view) and from the duplicate-detection dialog's drill-
  * through arrow (file view, optionally scoped to a date range from a coverage-window match).
  *
- * Three filters all flow through the same `activeKey` into `usePagedTransactions`, which
+ * Four filters all flow through the same `activeKey` into `usePagedTransactions`, which
  * resets pagination to page 1 whenever any of them change:
  *   - the batch id itself (always present)
  *   - an optional date range from `batch._dateFilter` (set by drill-through callers; lives
  *     on the batch payload so the parent doesn't need to plumb extra props through its
  *     stacked-panel state)
+ *   - an optional sync scope from `batch._syncScope` (set by the Connections card, same
+ *     payload-carried mechanism as `_dateFilter`): narrows the card to just the rows one
+ *     sync delivered, so newly arrived transactions can be categorized where they arrived
+ *     rather than amid a whole month of the card they landed on
  *   - the user's debounced search input (the backend quick-filter: merchant / category / account /
  *     amount, plus date jumps — a full date, year, or month, or a year-less partial like a bare
  *     month or month/day that matches that calendar slot across every year)
@@ -63,6 +67,10 @@ export default function ImportBatchDetail({
   const dateFilter = batch?._dateFilter || null
   const dateStart = dateFilter?.dateStart || null
   const dateEnd   = dateFilter?.dateEnd   || null
+  // Scoped to one sync's rows. Only the connection id travels: the row ids live on the connection's stored
+  // sync summary and the server expands them, so this stays one short param on every page, sort and count
+  // rather than several kilobytes of query string.
+  const syncConnectionId = batch?._syncScope?.connectionId || null
 
   // Reviewing rows here (categorizing, bulk/row-menu "Mark reviewed", detail-panel edits) clears their
   // needs_review flag, which the parent import card surfaces as its "N to review" pill. Those clears
@@ -95,12 +103,18 @@ export default function ImportBatchDetail({
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: IMPORT_BATCH_DETAIL_TABLE_PREF_KEY,
   })
+  // The panel's scope, in one place: the list, the count and "select all matching" must resolve the same
+  // set or a bulk edit reaches rows the list never showed.
+  const scopeParams = useMemo(() => ({
+    import_batch_id: batch.id,
+    ...(syncConnectionId ? { sync_connection_id: syncConnectionId } : {}),
+    ...(dateStart ? { date_start: dateStart } : {}),
+    ...(dateEnd   ? { date_end:   dateEnd   } : {}),
+    ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
+  }), [batch.id, syncConnectionId, dateStart, dateEnd, debouncedFilter])
   const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
-      import_batch_id: batch.id,
-      ...(dateStart ? { date_start: dateStart } : {}),
-      ...(dateEnd   ? { date_end:   dateEnd   } : {}),
-      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
+      ...scopeParams,
       limit,
       offset,
       sort_by: sort.key,
@@ -109,7 +123,7 @@ export default function ImportBatchDetail({
       ...result,
       transactions: (result?.transactions || []).map(withSourceAccountLabel),
     }))
-  ), [batch.id, dateStart, dateEnd, debouncedFilter])
+  ), [scopeParams])
   const {
     rows,
     setRows,
@@ -118,7 +132,7 @@ export default function ImportBatchDetail({
     sortState,
     onSort,
   } = usePagedTransactions({
-    activeKey: `${batch.id}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
+    activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
     loadPage,
   })
 
@@ -128,12 +142,7 @@ export default function ImportBatchDetail({
     rows,
     setRows,
     total: totalCount,
-    filterParams: {
-      import_batch_id: batch.id,
-      ...(dateStart ? { date_start: dateStart } : {}),
-      ...(dateEnd ? { date_end: dateEnd } : {}),
-      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
-    },
+    filterParams: scopeParams,
     categories,
     onRowsTrashed: count => setTotalCount(prev => Math.max(0, prev - count)),
   })
@@ -142,10 +151,7 @@ export default function ImportBatchDetail({
     let cancelled = false
     setCountLoading(true)
     api.getTransactions({
-      import_batch_id: batch.id,
-      ...(dateStart ? { date_start: dateStart } : {}),
-      ...(dateEnd   ? { date_end:   dateEnd   } : {}),
-      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
+      ...scopeParams,
       limit: 1,
       offset: 0,
     }).then(result => {
@@ -158,7 +164,7 @@ export default function ImportBatchDetail({
       setCountLoading(false)
     })
     return () => { cancelled = true }
-  }, [batch.id, dateStart, dateEnd, debouncedFilter])
+  }, [scopeParams])
 
   // Rows this file imported that were later removed as confirmed duplicates (via the duplicate
   // report's Discard new / Replace existing, or an account merge). They are trashed, so they
@@ -202,7 +208,15 @@ export default function ImportBatchDetail({
         Imported {(batch.imported_at || '').slice(0, 16).replace('T', ' ')}
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
-        {countLoading ? 'Loading imported transactions…' : `${totalCount} imported transaction${totalCount === 1 ? '' : 's'} from this file${dateFilterLabel}`}
+        {countLoading
+          ? 'Loading imported transactions…'
+          // Scoped views say what they are scoped to, because the count no longer describes the card named
+          // directly above it: a sync files its rows onto the card for their month, which by then usually
+          // holds earlier rows from earlier syncs. Saying "from this file" over a subset would misreport
+          // both the card and the sync.
+          : syncConnectionId
+            ? `${totalCount} transaction${totalCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}${dateFilterLabel}`
+            : `${totalCount} imported transaction${totalCount === 1 ? '' : 's'} from this file${dateFilterLabel}`}
       </div>
     </>
   )
