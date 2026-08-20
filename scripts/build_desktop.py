@@ -14,7 +14,6 @@ Run from anywhere: `python scripts/build_desktop.py [--skip-frontend]`.
 """
 
 import argparse
-import json
 import platform
 import shutil
 import subprocess
@@ -23,6 +22,10 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from backend import runtime_config  # noqa: E402  (needs ROOT on the path first)
+
 SPEC = ROOT / "scripts" / "luma.spec"
 BUILD_DIR = ROOT / "build" / "pyinstaller"
 DIST_DIR = ROOT / "dist"
@@ -48,7 +51,9 @@ def _run(command: list[str], cwd: Path) -> None:
 
 
 def _version() -> str:
-    return json.loads((ROOT / "frontend" / "package.json").read_text())["version"]
+    """The same constant the running app reports, so an artifact can never be named for one version and
+    report another."""
+    return runtime_config.APP_VERSION
 
 
 def _platform_tag() -> str:
@@ -111,6 +116,18 @@ def _package(executable: Path) -> Path:
     return archive
 
 
+def build(skip_frontend: bool = False) -> Path:
+    """Build the artifact and return its path. The entry point `release.py` uses, so the two cannot
+    disagree about where the zip lands or what it is called."""
+    if skip_frontend:
+        if not (ROOT / "frontend" / "dist" / "index.html").is_file():
+            raise SystemExit("--skip-frontend was given but frontend/dist holds no build.")
+    else:
+        _build_frontend()
+
+    return _package(_build_executable())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the standalone Luma executable and portable zip.")
     parser.add_argument(
@@ -120,13 +137,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.skip_frontend:
-        if not (ROOT / "frontend" / "dist" / "index.html").is_file():
-            raise SystemExit("--skip-frontend was given but frontend/dist holds no build.")
-    else:
-        _build_frontend()
-
-    archive = _package(_build_executable())
+    archive = build(skip_frontend=args.skip_frontend)
     size_mb = archive.stat().st_size / (1024 * 1024)
     print(f"\nBuilt {archive.relative_to(ROOT)} ({size_mb:.1f} MB)")
     return 0

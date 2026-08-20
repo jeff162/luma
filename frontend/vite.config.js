@@ -49,6 +49,11 @@ export default defineConfig(({ mode }) => {
     if (process.env[key]) processEnvOverrides[key] = process.env[key]
   }
   const env = { ...frontendEnv, ...rootEnv, ...processEnvOverrides }
+  const appVersion = env.VITE_APP_VERSION || packageJson.version
+  if (!appVersion) {
+    throw new Error('No application version: set VITE_APP_VERSION, or a "version" in frontend/package.json.')
+  }
+
   const frontendPort = Number(env.FRONTEND_PORT || 5173)
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8000}`
 
@@ -68,7 +73,11 @@ export default defineConfig(({ mode }) => {
       include: ['src/**/*.test.{js,jsx}'],
     },
     define: {
-      __APP_VERSION__: JSON.stringify(env.VITE_APP_VERSION || packageJson.version || '0.2.0'),
+      // No literal fallback on purpose. A stale hardcoded version is worse than a failed build: it ships
+      // a UI reporting a version the API and the artifact filename disagree with, and nothing surfaces
+      // it. The authoritative value is APP_VERSION in backend/runtime_config.py, which
+      // backend/tests/test_app_version.py holds this package.json in step with.
+      __APP_VERSION__: JSON.stringify(appVersion),
     },
     build: {
       rollupOptions: {

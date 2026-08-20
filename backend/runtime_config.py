@@ -22,6 +22,17 @@ from pathlib import Path
 
 DEFAULT_APP_NAME = "Luma"
 
+# The version the running application reports, and the one the packaged artifact is named for. Stated
+# here rather than in either packaging manifest because this module is the one place both can reach: it
+# is imported before anything else in the backend, and it is inside the frozen bundle, where
+# `frontend/package.json` and `pyproject.toml` are not.
+#
+# Those two manifests still carry their own copy — npm and Python packaging each read theirs before any
+# code runs, so neither can derive it — and `backend/tests/test_app_version.py` fails if the three ever
+# disagree. That check is the whole mechanism: a version bump touches three files on purpose, and
+# missing one is a failing test rather than a release named differently from what it reports.
+APP_VERSION = "0.2.0"
+
 # Built-in defaults, stated once. The database modules resolve their own location at import time (before
 # anything else runs, so they cannot wait for the resolver), and `app_config`'s registry reads the same
 # constants — so the default a running instance uses and the default its configuration report claims can

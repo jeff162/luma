@@ -277,6 +277,23 @@ folder moves the data with it. Each platform's artifact has to be built on that 
 
 The build is unsigned, so Windows and macOS warn on first run.
 
+### Cutting a release
+
+`scripts/release.py` gates the build on the things that are quiet when they go wrong, then produces a
+checksummed artifact:
+
+```bash
+backend/venv/bin/python scripts/release.py --set-version 0.3.0   # rewrite all version declarations
+backend/venv/bin/python scripts/release.py --check               # gates only, no build
+backend/venv/bin/python scripts/release.py                       # gate, build, checksum
+```
+
+The gates are that every version declaration agrees and that the working tree is clean, so an artifact
+can be traced back to a commit. `--allow-dirty` skips the second for a throwaway build.
+
+Tagging, CHANGELOG edits, and signing are deliberately left to a person. Since cross-building is not
+possible, each platform's zip is produced by running this on that platform and collecting the results.
+
 ## Testing
 
 Luma currently has a small set of test paths that are useful for catching regressions:

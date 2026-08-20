@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from backend import app_config, spa
+from backend import app_config, runtime_config, spa
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, connections, auth, categories, currency, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
 init_control_db()
 config = app_config.resolve()
 
-app = FastAPI(title=config.app_name, version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=config.app_name, version=runtime_config.APP_VERSION, lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
     SessionMiddleware,

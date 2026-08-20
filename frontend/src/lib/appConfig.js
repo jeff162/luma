@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export const APP_NAME = String(import.meta.env.VITE_APP_NAME || 'Luma').trim() || 'Luma'
-export const APP_VERSION = String(__APP_VERSION__ || '0.2.0').trim() || '0.2.0'
+export const APP_VERSION = String(__APP_VERSION__).trim()
 
 export const IMPORT_CATEGORY_USAGE_MODE_ALL = 'all'
 export const IMPORT_CATEGORY_USAGE_MODE_NONE = 'none'

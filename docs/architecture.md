@@ -925,3 +925,5 @@ Opening a browser is convenience, not contract. No opener on any platform report
 - **Shared detail-panel behavior:** update `detailShared.jsx`
 
 - **User-facing setup or behavior changes:** update `README.md` and possibly `CHANGELOG.md`
+
+- **Version bump:** `APP_VERSION` in `backend/runtime_config.py` is authoritative — the API reports it and the packaged artifact is named for it. `frontend/package.json` and `backend/pyproject.toml` carry their own copy because npm and Python packaging each read theirs before any of our code runs, so neither can derive it. `backend/version_sources.py` is the single statement of where those literals live, shared by `backend/tests/test_app_version.py` (which fails when they disagree, and if the literal reappears in application code) and `scripts/release.py --set-version` (which rewrites all three together). Rewrites are targeted substitutions rather than parse-and-reserialize, so a version bump stays a reviewable one-line diff per file.
