@@ -45,7 +45,7 @@ export default defineConfig(({ mode }) => {
   // the Playwright E2E harness pin its own isolated ports/proxy without editing the developer's .env).
   // Normal `npm run dev` sets none of these, so its behavior is unchanged.
   const processEnvOverrides = {}
-  for (const key of ['FRONTEND_PORT', 'BACKEND_PORT', 'VITE_API_PROXY_TARGET']) {
+  for (const key of ['FRONTEND_PORT', 'FRONTEND_HOST', 'BACKEND_PORT', 'VITE_API_PROXY_TARGET']) {
     if (process.env[key]) processEnvOverrides[key] = process.env[key]
   }
   const env = { ...frontendEnv, ...rootEnv, ...processEnvOverrides }
@@ -55,6 +55,12 @@ export default defineConfig(({ mode }) => {
   }
 
   const frontendPort = Number(env.FRONTEND_PORT || 5173)
+  // Loopback unless FRONTEND_HOST says otherwise. The dev server used to bind every interface, which put
+  // it on the LAN by default — and an esbuild advisory (GHSA-67mh-4wv8-2f99) lets any page the developer
+  // visits read from it, so the wide bind is worth opting into rather than out of. `localhost` and not
+  // `127.0.0.1`: the browser's origin becomes the WebAuthn Relying Party id, and an address is not a
+  // domain, so the numeric form disables passkey vault slots in development.
+  const frontendHost = env.FRONTEND_HOST || 'localhost'
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8000}`
 
   return {
@@ -103,7 +109,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      host: '0.0.0.0',
+      host: frontendHost,
       port: frontendPort,
       proxy: {
         '/api': apiProxyTarget

@@ -26,7 +26,7 @@ const managedServers = externalBaseURL
         command: 'npm run dev',
         // Win over the developer's .env via vite.config's process-env precedence: own port + proxy to
         // the isolated backend rather than the real one.
-        env: { FRONTEND_PORT: String(E2E_FRONTEND_PORT), BACKEND_PORT: String(E2E_BACKEND_PORT) },
+        env: { FRONTEND_PORT: String(E2E_FRONTEND_PORT), FRONTEND_HOST: '127.0.0.1', BACKEND_PORT: String(E2E_BACKEND_PORT) },
         url: `http://127.0.0.1:${E2E_FRONTEND_PORT}`,
         reuseExistingServer: false,
         timeout: 60_000,

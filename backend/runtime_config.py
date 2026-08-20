@@ -43,6 +43,10 @@ CONTROL_DB_FILENAME = "luma-control.db"
 DB_FILENAME = "luma-data.db"
 DEFAULT_BACKEND_PORT = "8000"
 DEFAULT_FRONTEND_PORT = "5173"
+# Loopback, so the dev server is not on the LAN unless someone asks for it. `localhost` rather than
+# `127.0.0.1` because the browser's origin becomes the WebAuthn Relying Party id, and an address is not
+# a domain — binding the numeric form would silently disable passkey vault slots in development.
+DEFAULT_FRONTEND_HOST = "localhost"
 DEFAULT_FRONTEND_DOCKER_PORT = "3000"
 DEFAULT_BACKEND_READY_TIMEOUT = "180"
 

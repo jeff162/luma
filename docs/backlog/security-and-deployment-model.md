@@ -374,6 +374,34 @@ the security profile (a recommendation, not a transport guarantee: deriving `Sec
 users out when a network-profile install runs plain HTTP) and **not** hardcoded (breaks one topology).
 Behind Caddy, run uvicorn with `--proxy-headers` so `request.url.scheme` reflects the external scheme.
 
+### What the two development servers bind to (settled 2026-08-20)
+
+The dev backend and the dev frontend bind differently, and the reasons are not the same one. Recorded
+because the backend's wide bind looks like an oversight and is not — a future reader "fixing" it would
+remove the only way the networked half of the model gets exercised.
+
+**The backend keeps `--host 0.0.0.0` in the launch scripts.** LAN reachability is a supported
+deployment, not an accident: `network_private` is half the deployment model, and topology is a *detected
+per-request fact* rather than a stored mode, so the same install has to be able to answer as loopback
+from its own box and as networked from another. A socket pinned to loopback would make that case
+unreachable and untestable. The exposure it creates is precisely the one the permissible-HTTP rule
+governs and `transport.py` warns about at runtime, which is the layer where it belongs.
+
+**The frontend dev server binds loopback by default** (`FRONTEND_HOST`, default `localhost`), where it
+used to bind every interface from three places at once — `vite.config.js`, the `--host` flag in the
+`dev` script, and another `--host` in `start_frontend.sh`. Nothing in this model asked for that. The
+reason to narrow it is not Luma's perimeter at all: **GHSA-67mh-4wv8-2f99** is a flaw in esbuild that
+lets any website the developer visits send requests to the Vite dev server and read the responses. That
+is a third-party toolchain hole on the developer's machine, outside what this document reasons about,
+and it is not fixable short of a major Vite upgrade — so the bind is the thing to narrow. Testing from a
+phone stays available as `FRONTEND_HOST=0.0.0.0`, one env value rather than an edit.
+
+`localhost` and not `127.0.0.1` is deliberate in both the dev default and the packaged launcher: the
+browser's origin becomes the WebAuthn Relying Party id, an RP id must be a domain, and the numeric form
+silently disables every passkey vault slot. See
+[`deployment-topologies.md`](deployment-topologies.md) for the same constraint in the packaged build.
+
+
 ### Topology is detected, not a chosen profile (refinement, 2026-07-31)
 
 Separate **detected facts** from **declared intent**; only the latter is a real question to put to the

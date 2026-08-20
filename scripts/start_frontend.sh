@@ -73,4 +73,4 @@ cd "$FRONTEND_DIR"
 echo "Checking/installing frontend dependencies. This can take a minute on first run..."
 npm install --no-audit --no-fund
 echo "Starting frontend"
-npm run dev -- --host
+npm run dev

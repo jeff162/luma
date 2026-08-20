@@ -39,6 +39,7 @@ from backend.runtime_config import (
     DEFAULT_BACKEND_READY_TIMEOUT,
     DEFAULT_DATA_DIR,
     DEFAULT_FRONTEND_DOCKER_PORT,
+    DEFAULT_FRONTEND_HOST,
     DEFAULT_FRONTEND_PORT,
     env_file_path,
     generate_session_secret,
@@ -197,6 +198,13 @@ SETTINGS: tuple[Setting, ...] = (
         label="Frontend port",
         help="Port to connect to from a browser.",
         default=DEFAULT_FRONTEND_PORT,
+    ),
+    Setting(
+        key="frontend_host",
+        env_var="FRONTEND_HOST",
+        label="Frontend bind address",
+        help="Address the development server listens on. Loopback by default; set to 0.0.0.0 to reach it from another device on the network.",
+        default=DEFAULT_FRONTEND_HOST,
     ),
     Setting(
         key="frontend_docker_port",
