@@ -25,6 +25,12 @@ Three decisions carry the design:
 - **The printed URL is the contract; opening a browser is a convenience.** No opener on any platform
   reports success usefully, so the outcome is never claimed and a failure to open must not read as the
   app having failed to start.
+- **A wrapper that dies takes the server with it.** The macOS bundle is a small native application that
+  owns the Dock icon and launches this one as a child (see `macos/`). Force-quitting it gives it no
+  chance to clean up, so the child watches for the parent's death directly: the wrapper holds the write
+  end of a pipe and hands over the read end, and a read that returns *zero bytes* means every write end
+  is closed, which can only happen once the wrapper is gone. The kernel guarantees that even for SIGKILL,
+  which is what makes it a dead man's switch rather than a courtesy.
 - **Where there is no console, the output goes to a file.** A macOS `.app` started from Finder has no
   terminal attached, which turns that contract into nothing at all: the URL is invisible, and — the part
   that actually matters — a failure to start presents as an icon that bounces once and disappears. So a
@@ -40,6 +46,7 @@ really there.
 import argparse
 import os
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -61,6 +68,11 @@ BROWSER_HOST = "localhost"
 
 LOCK_FILENAME = "luma-desktop.lock"
 LOG_FILENAME = "luma-desktop.log"
+# Set by the macOS wrapper to declare that this process's stdin is the read end of a pipe it holds open.
+# Required rather than inferred: `something | luma` from a shell also hands over a pipe, one that is
+# already at EOF, and inferring from the file descriptor alone would exit instantly on startup for no
+# visible reason.
+PARENT_PIPE_ENV = "LUMA_PARENT_PIPE"
 HEALTH_TIMEOUT_SECONDS = 1.0
 STARTUP_TIMEOUT_SECONDS = 60.0
 # Appended to across runs, so a failure that happened yesterday is still readable, but not without
@@ -70,6 +82,34 @@ LOG_MAX_BYTES = 1024 * 1024
 
 def _lock_path() -> Path:
     return runtime_config.data_dir() / LOCK_FILENAME
+
+
+def _parent_pipe_is_attached() -> bool:
+    """Whether a parent has wired up the death-watch described in the module docstring. Both halves are
+    required: the declaration, and stdin actually being a pipe."""
+    if not runtime_config.truthy(os.environ.get(PARENT_PIPE_ENV)):
+        return False
+    try:
+        return stat.S_ISFIFO(os.fstat(0).st_mode)
+    except OSError:
+        return False
+
+
+def _watch_for_parent_exit(server: uvicorn.Server, fd: int = 0) -> None:
+    """Block until the parent's write end closes, then ask for the same graceful stop everything else
+    asks for.
+
+    Only a *zero-length* read means that: it is the end-of-file every write end being closed produces,
+    and the parent is the only holder of one. Bytes arriving would mean somebody wrote something, which
+    nothing does — but treating any completed read as death would turn a stray byte into a shutdown."""
+    while True:
+        try:
+            if os.read(fd, 1) == b"":
+                break
+        except OSError:
+            # The descriptor went away underneath us, which is the same news by a different route.
+            break
+    server.should_exit = True
 
 
 def _started_by_launch_services() -> bool:
@@ -257,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
     # takes — so in-flight requests finish, the lockfile is cleared by the `finally` below, and the
     # response saying "stopping" is delivered before anything closes.
     app_control.register_shutdown_handler(lambda: setattr(server, "should_exit", True))
+
+    if _parent_pipe_is_attached():
+        threading.Thread(target=_watch_for_parent_exit, args=(server,), daemon=True).start()
     if not args.no_browser:
         threading.Thread(target=_open_browser_when_ready, args=(server, url), daemon=True).start()
 

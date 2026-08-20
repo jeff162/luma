@@ -175,7 +175,12 @@ came from, so the resolved data directory stays visible rather than inferred and
    macOS. **Verified in CI on 2026-08-20:** the release workflow runs green on Linux and Windows —
    tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
 
-   macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
+   **The Dock work (2026-08-20) is built but unverified** — the native wrapper, the pipe death-watch, and
+  the bundle assembly have never been compiled or run, since this machine has no Swift toolchain and no
+  Mac. CI will prove the build and the server; the Dock icon, Quit, Command-Q and the two death-watches
+  can only be checked by hand.
+
+  macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
    (x64) — go green, smoke tests included, which settles the one thing that could not be reasoned out in
    advance: PyInstaller puts `sys._MEIPASS` inside the `.app` where `bundle_root()` looks for it, so the
    bundled SPA and the distribution-form marker are both readable from within the bundle.
@@ -221,22 +226,38 @@ Four things that are decided rather than discoverable, and that a build has to g
   user will see, so a startup failure presents as a bouncing icon and nothing else. A log file in the
   data directory is what replaces it. The URL itself is already recoverable — `luma-desktop.lock`
   records the port.
-- **`console=True` makes the bundle invisible.** Found the hard way on the first real run: PyInstaller
-  translates it into `LSBackgroundOnly=True`, so the app has no Dock icon, no sign it is running, and
-  nothing to quit — the process is only findable through `ps`. The flag buys nothing on macOS anyway
-  (there is no terminal to attach to), so the bundle is built `console=False`. On macOS that changes
-  only the Info.plist; the executable inside the bundle stays runnable from a shell.
+- **A Python process cannot be a macOS application.** Two failed attempts established the shape.
+  `console=True` makes PyInstaller write `LSBackgroundOnly=True`, so the app has no Dock icon, no sign
+  it is running, and nothing to quit — findable only through `ps`. Turning it off produced a Dock icon
+  that **bounced for minutes** and then offered only Force Quit, because LaunchServices expects a regular
+  application to check in with the window server and this one never does; the bounce is the launch
+  timeout, and the missing Quit is macOS knowing an Apple Event will not be answered. There is no
+  setting between the two.
+
+  The resolution is a small native wrapper (`macos/main.swift`) that *is* the application, with the
+  Python build as its child; `scripts/build_desktop.py` assembles the bundle around it and PyInstaller
+  emits a plain onedir tree. Rejected alternative: pyobjc inside the Python process, which would mean a
+  large macOS-only dependency plus moving uvicorn off the main thread — where it sits precisely so
+  Ctrl+C is clean — and would fork the one launcher all three platforms share. The wrapper confines
+  every macOS-specific concern to the macOS artifact instead.
 - **The application had no icon at all**, nor even a favicon. `assets/luma-icon.svg` is now the single
   source, with `scripts/build_icons.py` deriving the committed `.icns`, `.ico` and favicons — full-bleed
   for Windows and the browser, inset to Apple's 824-of-1024 grid for macOS, since an icon that fills its
   canvas sits visibly larger than its neighbours in the Dock.
-- **Quitting needed its own answer.** A Dock "Quit" is an Apple Event, and answering one requires a
-  Cocoa event loop — which would mean pyobjc plus moving uvicorn off the main thread, where it sits
-  precisely so Ctrl+C is clean. Disproportionate for one gesture, so the Dock's Quit degrades to Force
-  Quit (safe: SQLite is crash-safe and a stale lockfile is already expected) and the *graceful* path is
-  a "Shut down Luma" control in the app itself. That path is not a macOS consolation prize — it is the
-  answer on Windows and Linux too, where the alternative was "find the terminal and press Ctrl+C". See
-  *Packaged builds* in [`architecture.md`](../architecture.md) for the capability gating.
+- **Quitting is answered twice over, in both directions.** In the app, "Shut down Luma" asks the server
+  to stop — not a macOS consolation prize but the answer on Windows and Linux too, where the alternative
+  was "find the terminal and press Ctrl+C"; see *Packaged builds* in
+  [`architecture.md`](../architecture.md) for how the capability is gated so a LAN deployment never
+  offers it. On macOS the wrapper adds Dock Quit and Command-Q, sending SIGTERM into that same path.
+
+  Neither process is left behind when the other goes first. The wrapper holds the write end of a pipe
+  whose read end is the child's stdin; a **zero-length** read there means every write end is closed,
+  which the kernel guarantees even under SIGKILL — the case a force-quit wrapper cannot clean up after
+  itself. In the other direction the wrapper's termination handler quits the app, so a server that
+  exited on its own does not leave a dead icon in the Dock. Only end-of-file counts: treating any
+  completed read as death would turn a stray byte into a shutdown, and the arrangement is declared by an
+  environment variable rather than inferred, since `something | luma` also hands over a pipe — one
+  already at EOF, which would exit instantly on startup.
 
 **The quarantine step has to be documented, and the familiar gesture is wrong.** Control-click → Open no
 longer bypasses Gatekeeper for unsigned applications on macOS 15 Sequoia. The path that works is to

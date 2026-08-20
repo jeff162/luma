@@ -9,6 +9,8 @@ import os
 import socket
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -175,3 +177,62 @@ def test_the_log_sits_with_the_data_rather_than_with_the_application():
         for descriptor, target in zip(saved, (1, 2)):
             os.dup2(descriptor, target)
             os.close(descriptor)
+
+
+def _watch_until_eof(write_fd: int, read_fd: int, *, send: bytes = b""):
+    """Run the watcher against a real pipe and return the server object it acted on. The write end is
+    closed here, standing in for the parent process dying."""
+    server = mock.Mock(should_exit=False)
+    watcher = threading.Thread(target=desktop._watch_for_parent_exit, args=(server, read_fd))
+    watcher.start()
+    try:
+        if send:
+            os.write(write_fd, send)
+            # Long enough for a watcher that mistakes any read for death to have acted on it.
+            time.sleep(0.05)
+            assert server.should_exit is False, "a byte on the pipe is not the parent dying"
+    finally:
+        os.close(write_fd)
+    watcher.join(timeout=5)
+    assert not watcher.is_alive()
+    return server
+
+
+def test_the_server_stops_when_the_parent_lets_go_of_the_pipe():
+    """The dead man's switch. The kernel closes the write end however the parent died, including under
+    SIGKILL, which is the case the wrapper cannot clean up after itself."""
+    read_fd, write_fd = os.pipe()
+    try:
+        assert _watch_until_eof(write_fd, read_fd).should_exit is True
+    finally:
+        os.close(read_fd)
+
+
+def test_bytes_on_the_pipe_are_not_mistaken_for_the_parent_dying():
+    """Only end-of-file means every write end is closed. A read that merely *completed* does not."""
+    read_fd, write_fd = os.pipe()
+    try:
+        assert _watch_until_eof(write_fd, read_fd, send=b"x").should_exit is True
+    finally:
+        os.close(read_fd)
+
+
+def test_the_watch_is_declared_rather_than_inferred():
+    """`something | luma` hands over a pipe that is already at EOF. Inferring the arrangement from the
+    file descriptor alone would shut the app down the instant it started, with nothing to explain it."""
+    read_fd, write_fd = os.pipe()
+    try:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(desktop.PARENT_PIPE_ENV, None)
+            with mock.patch.object(desktop.os, "fstat", return_value=os.fstat(read_fd)):
+                assert desktop._parent_pipe_is_attached() is False
+
+        with mock.patch.dict(os.environ, {desktop.PARENT_PIPE_ENV: "1"}, clear=False):
+            with mock.patch.object(desktop.os, "fstat", return_value=os.fstat(read_fd)):
+                assert desktop._parent_pipe_is_attached() is True
+            # Declared, but stdin is not a pipe — nothing to watch.
+            with mock.patch.object(desktop.os, "fstat", return_value=os.stat(__file__)):
+                assert desktop._parent_pipe_is_attached() is False
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)

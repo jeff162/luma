@@ -16,7 +16,9 @@ The environment is made self-contained rather than inherited: a fake home (and `
 means the assertion is against a known path and the run leaves nothing behind on the machine.
 
 On macOS the artifact is a `.dmg` rather than a zip, and it is installed the way a person would — the
-image is mounted, the bundle copied off it, and the image unmounted — before anything is launched.
+image is mounted, the bundle copied off it, and the image unmounted — before anything is launched. What
+is launched there is the *server* inside the bundle rather than the bundle itself: the native wrapper is
+a Dock application, and the half of it worth automating is the half that answers HTTP.
 
     python scripts/smoke_artifact.py --form portable
     python scripts/smoke_artifact.py --form installed
@@ -109,9 +111,21 @@ def _unpack_disk_image(image: Path, into: Path) -> Path:
     finally:
         subprocess.run(["hdiutil", "detach", str(mount)], check=False, capture_output=True)
 
-    executable = installed / "Contents" / "MacOS" / "luma"
+    # `Contents/MacOS` holds the native wrapper that macOS launches; the server it supervises lives in
+    # `Contents/Resources/server`. Both are checked, since a bundle missing either is broken in a way
+    # that would otherwise surface only on someone's desktop.
+    wrapper = installed / "Contents" / "MacOS" / "Luma"
+    if not wrapper.is_file():
+        raise SystemExit(f"No application wrapper at {wrapper} — the bundle layout is wrong.")
+    if not (installed / "Contents" / "Info.plist").is_file():
+        raise SystemExit(f"No Info.plist in {installed} — macOS would refuse to launch this.")
+
+    # The *server* is what gets launched here, not the wrapper. Driving a Dock application from CI would
+    # test the part that cannot be automated while skipping the part that can, and running the server
+    # directly is also what leaves its output on the pipe this harness reads.
+    executable = installed / "Contents" / "Resources" / "server" / "luma"
     if not executable.is_file():
-        raise SystemExit(f"No executable at {executable} — the bundle layout is not what was expected.")
+        raise SystemExit(f"No server executable at {executable} — the bundle layout is wrong.")
     executable.chmod(executable.stat().st_mode | 0o755)
     return executable
 

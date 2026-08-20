@@ -27,6 +27,7 @@ Run from anywhere: `python scripts/build_desktop.py [--form portable|installed] 
 import argparse
 import os
 import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,16 @@ from backend.runtime_config import (  # noqa: E402
 SPEC = ROOT / "scripts" / "luma.spec"
 BUILD_DIR = ROOT / "build" / "pyinstaller"
 DIST_DIR = ROOT / "dist"
+
+# The native macOS wrapper — the thing macOS actually launches. See `macos/main.swift`.
+SWIFT_SOURCE = ROOT / "macos" / "main.swift"
+MACOS_ICON = ROOT / "assets" / "luma.icns"
+# A namespace actually controlled, rather than an invented reverse-DNS name. macOS keys LaunchServices
+# registration and the preferences domain off this, so two applications sharing one interfere.
+BUNDLE_IDENTIFIER = "io.github.jeff162.luma"
+# The oldest macOS the artifact claims to support. Stated rather than left to the build machine, which
+# would otherwise quietly raise the floor whenever the runner image moves.
+MINIMUM_MACOS = "11.0"
 
 # The line about where data lives is the reason there are two of these rather than one with a
 # substitution: it is the whole difference between the forms, and it is the thing someone reads this
@@ -105,12 +116,12 @@ Data lives in ~/Library/Application Support/{DEFAULT_APP_NAME}, and stays there 
 replaced or deleted. Startup messages, including the address in use, are written to luma-desktop.log in
 that same folder — an application started from Finder has no terminal to print them to.
 
-To stop it, use "Shut down {DEFAULT_APP_NAME}" at the bottom of the navigation panel inside the app. That
-is the clean way, and it works the same on every platform.
+To stop it, quit {DEFAULT_APP_NAME} from the Dock, or press Command-Q. Either shuts the server down
+cleanly. "Shut down {DEFAULT_APP_NAME}", at the bottom of the navigation panel inside the app, does the
+same thing from the browser.
 
-Quitting from the Dock also works, but {DEFAULT_APP_NAME} has no menu bar of its own to answer with, so
-macOS will most likely offer Force Quit. That is safe here — data is written as it goes and nothing is
-left half-finished — it is simply less tidy.
+{DEFAULT_APP_NAME} runs no window of its own — the browser is its interface — so the Dock icon is the
+only thing on screen when it is running.
 """
 
 
@@ -202,8 +213,9 @@ def _build_executable(form: str) -> Path:
     )
 
     if _is_macos():
-        # A directory, not a file — the spec builds a `.app` bundle here rather than a single binary.
-        built = DIST_DIR / "bin" / f"{DEFAULT_APP_NAME}.app"
+        # A directory, not a file: on macOS the spec emits a onedir tree, which becomes the payload of
+        # the application bundle assembled around the native wrapper.
+        built = DIST_DIR / "bin" / "server"
         if not built.is_dir():
             raise SystemExit(f"PyInstaller reported success but produced no {built}.")
         return built
@@ -221,6 +233,60 @@ def _artifact_name(form: str, extension: str) -> Path:
     real artifact without overwriting it."""
     suffix = "" if form == _default_form() else f"-{form}"
     return DIST_DIR / f"luma-{_version()}-{_platform_tag()}{suffix}{extension}"
+
+
+def _assemble_macos_app(server_tree: Path) -> Path:
+    """Build the application bundle: the native wrapper as its executable, the PyInstaller tree as its
+    payload, and an `Info.plist` written here rather than by PyInstaller.
+
+    The wrapper is what macOS launches. A Python process cannot check in with the window server, so an
+    application whose executable is one bounces in the Dock until LaunchServices times out and then
+    offers only Force Quit — see `macos/main.swift` for the full reasoning."""
+    bundle = DIST_DIR / "bin" / f"{DEFAULT_APP_NAME}.app"
+    shutil.rmtree(bundle, ignore_errors=True)
+    contents = bundle / "Contents"
+    macos_dir = contents / "MacOS"
+    resources = contents / "Resources"
+    macos_dir.mkdir(parents=True)
+    resources.mkdir(parents=True)
+
+    if not shutil.which("swiftc"):
+        raise SystemExit(
+            "swiftc was not found on PATH — it builds the macOS application wrapper. "
+            "Install the Xcode command line tools with: xcode-select --install"
+        )
+    _run(
+        [
+            "swiftc", "-O",
+            "-target", f"{platform.machine()}-apple-macos{MINIMUM_MACOS}",
+            str(SWIFT_SOURCE),
+            "-o", str(macos_dir / DEFAULT_APP_NAME),
+        ],
+        cwd=ROOT,
+    )
+
+    # `symlinks=True` because a PyInstaller tree contains framework symlinks; resolving them into copies
+    # both doubles the size and breaks the paths the bootloader resolves at startup.
+    shutil.copytree(server_tree, resources / "server", symlinks=True)
+    shutil.copy2(MACOS_ICON, resources / MACOS_ICON.name)
+
+    (contents / "Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleName": DEFAULT_APP_NAME,
+        "CFBundleDisplayName": DEFAULT_APP_NAME,
+        # Must match the wrapper's filename above — macOS runs whatever this names.
+        "CFBundleExecutable": DEFAULT_APP_NAME,
+        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+        "CFBundleIconFile": MACOS_ICON.name,
+        "CFBundlePackageType": "APPL",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleShortVersionString": _version(),
+        "CFBundleVersion": _version(),
+        "NSHighResolutionCapable": True,
+        "LSApplicationCategoryType": "public.app-category.finance",
+        "LSMinimumSystemVersion": MINIMUM_MACOS,
+    }))
+
+    return bundle
 
 
 def _package(built: Path, form: str) -> Path:
@@ -296,7 +362,10 @@ def build(skip_frontend: bool = False, form: str | None = None) -> Path:
     else:
         _build_frontend()
 
-    return _package(_build_executable(form), form)
+    built = _build_executable(form)
+    if _is_macos():
+        built = _assemble_macos_app(built)
+    return _package(built, form)
 
 
 def main() -> int:

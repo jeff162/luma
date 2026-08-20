@@ -342,13 +342,16 @@ xattr -dr com.apple.quarantine /Applications/Luma.app
 An application started from Finder has no terminal, so the startup messages that would otherwise carry
 the address go to `luma-desktop.log` in the data directory.
 
-**Stopping it.** "Shut down Luma", at the bottom of the navigation panel, is the graceful path and is
-present on every platform — it asks the server to finish what it is doing and exit, exactly as Ctrl+C
-does from a terminal. The Dock's Quit works too, but a Quit is an Apple Event and Luma runs no event
-loop to answer it, so macOS will most likely offer Force Quit; that is safe here — the lockfile it
-leaves behind is expected and cleared on the next start — just less tidy. Making the Dock quit
-gracefully would mean bundling a Cocoa event loop and moving uvicorn off the main thread, which costs
-considerably more than it returns.
+**Stopping it.** Quit from the Dock, press Command-Q, or use "Shut down Luma" at the bottom of the
+navigation panel — all three end in the same graceful shutdown the terminal's Ctrl+C performs.
+
+The Dock behaviour comes from a small native wrapper (`macos/main.swift`), which is what the `.app`
+actually launches; the Python server runs as its child. A Python process cannot check in with the macOS
+window server, and an application whose executable is one bounces in the Dock for the length of the
+launch timeout — minutes — before being marked as failed, at which point the Dock offers only Force
+Quit. The wrapper also means the two processes can watch each other: quitting it stops the server, and
+the server exiting (through the Shut down control, or a crash) quits the wrapper rather than leaving a
+dead icon in the Dock.
 
 ### Cutting a release
 

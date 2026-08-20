@@ -11,10 +11,13 @@
 # - **The distribution form is baked in here.** Portable and installed builds are the same binary and
 #   differ only in where writable data defaults to, so the artifact has to carry the answer rather than
 #   work it out at runtime. `LUMA_DIST_FORM` selects it and a one-word file in the bundle records it.
-# - **macOS gets a different layout.** Everywhere else this is a onefile binary; a `.app` bundle is
-#   built onedir instead, because a onefile inside a bundle would re-unpack itself to a temporary
-#   directory on every launch — slow, and the same vanishing-path problem the two roots exist to avoid,
-#   just moved inside the artifact.
+# - **macOS gets a different layout, and is not the application.** Everywhere else this is a onefile
+#   binary. On macOS it is a onedir *tree* that `scripts/build_desktop.py` places inside an application
+#   bundle built around the native wrapper in `macos/` — that wrapper is what macOS launches, owns the
+#   Dock icon, and answers Quit. So no `BUNDLE` here: PyInstaller would produce a second, competing
+#   application with an `Info.plist` we do not control. onedir rather than onefile also means the process
+#   the wrapper launches *is* the Python process, so the signal it sends on quit arrives directly instead
+#   of at a bootloader that forked.
 # - **uvicorn, plaid and truststore are collected wholesale.** Each reaches modules by name at runtime
 #   rather than by import statement — uvicorn selects its loop and protocol implementations from
 #   strings, the Plaid SDK resolves `plaid.model.*` during deserialization, and truststore picks its
@@ -55,8 +58,8 @@ if sys.platform == "darwin" and dist_form != runtime_config.DIST_FORM_INSTALLED:
 # Written into the build tree, which is gitignored, so nothing lands in the checkout that could outlive
 # the build and change how a developer's copy resolves its data directory.
 # Generated from `assets/luma-icon.svg` by `scripts/build_icons.py` and committed, so a build needs no
-# rasterizer. macOS and Windows want different shapes of the same drawing — see that script.
-MACOS_ICON = ROOT / "assets" / "luma.icns"
+# rasterizer. Only Windows needs one here — it reads the icon out of the executable — while the macOS
+# icon belongs to the application bundle and is placed there by `scripts/build_desktop.py`.
 WINDOWS_ICON = ROOT / "assets" / "luma.ico"
 
 form_marker = ROOT / "build" / "dist-form" / runtime_config.DIST_FORM_FILENAME
@@ -88,12 +91,9 @@ pyz = PYZ(analysis.pure)
 # A terminal stays attached on purpose: the startup line carries the URL, and it is the fallback
 # whenever opening a browser does not work. A windowed build would hide the one thing the user needs.
 #
-# macOS is the exception, and not for the reason it looks like. There, `console=True` makes PyInstaller
-# write `LSBackgroundOnly=True` into the bundle's Info.plist, which declares the application invisible:
-# no Dock icon, no way to see it is running, and nothing to quit. The console gains nothing there anyway
-# — a bundle started from Finder has no terminal to attach to, and `backend/desktop.py` writes to a log
-# file instead — so the flag is pure cost. Turning it off costs nothing in return: on macOS it changes
-# only the plist, leaving the executable inside the bundle just as runnable from a shell.
+# The flag has no effect on macOS now: it only ever reached the Info.plist through PyInstaller's
+# `BUNDLE`, which this no longer uses. The wrapper in `macos/` writes that plist instead, and what
+# PyInstaller produces there is a plain executable the wrapper runs as a child.
 EXE_OPTIONS = dict(
     debug=False,
     bootloader_ignore_signals=False,
@@ -110,31 +110,10 @@ EXE_OPTIONS = dict(
 )
 
 if sys.platform == "darwin":
-    # Three nested steps rather than one: EXE without the payload, COLLECT to lay the payload out beside
-    # it, BUNDLE to wrap the result in the directory structure macOS recognizes as an application.
-    exe = EXE(
-        pyz, analysis.scripts, [], exclude_binaries=True, name="luma",
-        **{**EXE_OPTIONS, "console": False},
-    )
-    collected = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="luma")
-    app = BUNDLE(
-        collected,
-        name=f"{runtime_config.DEFAULT_APP_NAME}.app",
-        icon=str(MACOS_ICON),
-        # A namespace actually controlled, rather than an invented reverse-DNS name. macOS keys a good
-        # deal off this — LaunchServices registration, and the preferences domain — so two applications
-        # sharing one would interfere with each other.
-        bundle_identifier="io.github.jeff162.luma",
-        version=runtime_config.APP_VERSION,
-        info_plist={
-            "CFBundleName": runtime_config.DEFAULT_APP_NAME,
-            "CFBundleDisplayName": runtime_config.DEFAULT_APP_NAME,
-            "CFBundleShortVersionString": runtime_config.APP_VERSION,
-            "CFBundleVersion": runtime_config.APP_VERSION,
-            "NSHighResolutionCapable": True,
-            "LSApplicationCategoryType": "public.app-category.finance",
-        },
-    )
+    # EXE without the payload, then COLLECT to lay the payload out beside it. The result is a directory
+    # named `server`, which is exactly where the wrapper looks for it inside `Contents/Resources`.
+    exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="luma", **EXE_OPTIONS)
+    collected = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="server")
 else:
     exe = EXE(
         pyz,
