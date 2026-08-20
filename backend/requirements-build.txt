@@ -1,0 +1,2 @@
+# Build-time only: packaging the standalone desktop artifact (scripts/build_desktop.py).
+pyinstaller==6.11.1

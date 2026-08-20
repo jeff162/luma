@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from backend import app_config
+from backend import app_config, spa
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, connections, auth, categories, currency, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
@@ -116,10 +116,11 @@ app.add_middleware(
 )
 
 # Empty by default, which disables cross-origin access entirely: every shipped topology serves the SPA
-# and the API on one origin (the Vite dev server and the Docker frontend both proxy `/api`), so the
-# browser never makes a cross-origin call. Since the grant is credentialed, a standing default would let
-# any page on a listed origin call this API with the session cookie attached and read the response — a
-# surface bought for nothing. `CORS_ORIGINS` is the escape hatch for a split-origin deployment.
+# and the API on one origin — dev proxies `/api` through Vite, Docker through nginx, and the standalone
+# build serves `dist/` from this very process (see `spa.py`) — so the browser never makes a cross-origin
+# call. Since the grant is credentialed, a standing default would let any page on a listed origin call
+# this API with the session cookie attached and read the response — a surface bought for nothing.
+# `CORS_ORIGINS` is the escape hatch for a split-origin deployment.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(config.cors_origins),
@@ -148,3 +149,7 @@ app.include_router(currency.router,      prefix="/api/currency",      tags=["cur
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# Last, deliberately: this registers a catch-all that would shadow every route above it.
+spa_mounted = spa.mount_spa(app)

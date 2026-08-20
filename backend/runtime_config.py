@@ -16,6 +16,7 @@ case, and the values that must persist across restarts are stored in the control
 
 import os
 import secrets
+import sys
 from pathlib import Path
 
 
@@ -54,17 +55,17 @@ def data_dir() -> Path:
     inconvenience such an install; it would silently create empty databases beside data that still
     exists, which reads as total data loss. That is why this fallback is not a deprecation to clean up
     later."""
-    return Path(os.getenv("DATA_DIR") or DEFAULT_DATA_DIR)
+    return anchor_relative(Path(os.getenv("DATA_DIR") or DEFAULT_DATA_DIR))
 
 
 def resolve_db_path() -> str:
     explicit = (os.getenv("DB_PATH") or "").strip()
-    return str(Path(explicit)) if explicit else str(data_dir() / DB_FILENAME)
+    return str(anchor_relative(Path(explicit))) if explicit else str(data_dir() / DB_FILENAME)
 
 
 def resolve_control_db_path() -> str:
     explicit = (os.getenv("CONTROL_DB_PATH") or "").strip()
-    return str(Path(explicit)) if explicit else str(data_dir() / CONTROL_DB_FILENAME)
+    return str(anchor_relative(Path(explicit))) if explicit else str(data_dir() / CONTROL_DB_FILENAME)
 
 
 def app_name() -> str:
@@ -88,15 +89,60 @@ def truthy(value: str | None, default: bool = False) -> bool:
     return default
 
 
-def project_root() -> Path:
+def is_frozen() -> bool:
+    """Whether this is a packaged build rather than a checkout. PyInstaller sets `sys.frozen`."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def bundle_root() -> Path:
+    """Where read-only resources shipped *inside* the application live — the built frontend, above all.
+
+    A checkout and a packaged build put these in different places, which is the whole reason two roots
+    exist where one used to. A onefile build unpacks itself to a temporary directory and hands its path
+    over as `sys._MEIPASS`; that directory is deleted on exit, so it is the right answer for resources
+    and the wrong one for anything that has to survive the process."""
+    if is_frozen():
+        meipass = getattr(sys, "_MEIPASS", None)
+        return Path(meipass) if meipass else Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
+
+
+def install_root() -> Path:
+    """Where the application *sits* — the directory a portable copy keeps its data and its `.env` beside.
+
+    Distinct from `bundle_root` only in a packaged build, which is why nothing needed the distinction
+    before one existed."""
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def anchor_relative(path: Path) -> Path:
+    """Resolve a configured relative path against the application rather than the working directory —
+    but only in a packaged build.
+
+    A relative `DATA_DIR` has always meant "relative to where the app was started from", which is fine
+    when it is started from a checkout and useless for something double-clicked from a file manager: the
+    working directory is then the user's home, or `/`, or wherever the shortcut pointed. Anchoring it to
+    the executable is what makes a portable copy — binary and databases in one folder — behave like one
+    thing regardless of where it is launched from.
+
+    Deliberately **not** applied to a checkout. Doing so would silently relocate the databases of every
+    existing install that runs with a relative `DATA_DIR`, which is exactly the presentation of total
+    data loss the per-file overrides exist to prevent."""
+    if is_frozen() and not path.is_absolute():
+        return install_root() / path
+    return path
 
 
 def env_file_path() -> Path:
     """The optional override file. `LUMA_ENV_FILE` redirects it — the Playwright E2E harness points it at
-    an isolated file so its throwaway database paths take effect without touching the real one."""
+    an isolated file so its throwaway database paths take effect without touching the real one.
+
+    Anchored to `install_root`, not `bundle_root`: a portable copy ships its `.env` beside the binary,
+    where the user can read and edit it. Inside the bundle it would be neither."""
     override = os.getenv("LUMA_ENV_FILE")
-    return Path(override) if override else project_root() / ".env"
+    return Path(override) if override else install_root() / ".env"
 
 
 def generate_session_secret() -> str:

@@ -244,6 +244,39 @@ An optional `.env` file overrides the handful of values that are resolved before
 the ports, the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy `.env_example` to `.env` to use it, and
 see **Settings → Configuration** for the effective value of every setting and which layer supplied it.
 
+### Running it as a single process
+
+The two-window setup above is the development arrangement. The application can also run as one
+process that serves both halves and opens a browser at itself:
+
+```bash
+cd frontend && npm run build && cd ..
+backend/venv/bin/python -m backend.desktop        # Windows: backend\venv\Scripts\python -m backend.desktop
+```
+
+It listens on loopback only, so nothing off the machine can reach it, and stops with Ctrl+C. Launching
+it again while it is already running opens a new tab against the existing instance rather than starting
+a second one. The frontend only needs rebuilding when it changes.
+
+The URL is printed on startup and is the reliable part; opening a browser is a convenience on top, and
+`--no-browser` skips it for a machine reached over SSH or without a browser installed.
+
+### Building a standalone executable
+
+`scripts/build_desktop.py` produces a single executable with the Python runtime, the backend, and the
+built frontend inside it, packaged as a portable zip:
+
+```bash
+backend/venv/bin/pip install -r backend/requirements-build.txt   # once
+backend/venv/bin/python scripts/build_desktop.py                 # add --skip-frontend to reuse frontend/dist
+```
+
+The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`. It runs on a machine with neither
+Python nor Node installed, and keeps its databases in the folder the executable sits in, so moving that
+folder moves the data with it. Each platform's artifact has to be built on that platform.
+
+The build is unsigned, so Windows and macOS warn on first run.
+
 ## Testing
 
 Luma currently has a small set of test paths that are useful for catching regressions:

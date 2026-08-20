@@ -141,10 +141,13 @@ delete the backlog file.
 - [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
   (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
   phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
-- [deployment-topologies.md](deployment-topologies.md) — **notes / not started (2026-07-30).** How Luma is
-  *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a **single-user desktop**
-  shape (pywebview / Tauri / Electron / browser-launcher), the shared `StaticFiles` SPA-serving addition,
-  and the pywebview Python/OS-webview install requirements (WebKitGTK on Linux is the wrinkle).
+- [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3
+  deferred; Shape A notes only.** How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
+  **single-user desktop** shape. The shell question is settled by passkeys — the browser-launcher wins
+  because `prf` needs a real browser, and the RP id being the *hostname* makes `localhost` (never
+  `127.0.0.1`) load-bearing, and makes mDNS + HTTPS a passkey precondition on the LAN rather than
+  polish. Also: the shared SPA-serving addition, and the portable-vs-installed rule for where the
+  databases live.
 - [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
   `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
   secret generated and stored in the control DB on first run, the blocking first-run setup screen and the

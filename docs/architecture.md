@@ -34,6 +34,10 @@ Luma is a local-first web application with:
 
 The browser talks only to the local backend API. Core application data and persistence are local; external network dependencies are limited to optional integrations such as Plaid.
 
+**Three topologies, one origin in each.** The SPA and the API always share an origin, but what puts them there differs: the Vite dev server proxies `/api` in development, nginx does it in the Docker image, and the standalone build has the backend serve `frontend/dist` itself (`backend/spa.py`) so one process is a whole application. That third shape is what makes a packaged single-user build possible, and it is also why `CORS_ORIGINS` can default to empty — no shipped topology makes a cross-origin call at all.
+
+Serving the bundle has one wrinkle worth stating, because the obvious implementation gets it wrong in a way that surfaces only as a confusing frontend error. Client routes such as `/transactions` are React Router inventions with no file behind them, so any path that does not resolve to a real file returns `index.html` — *except* under `/api`, which stays a JSON 404. Letting the fallback swallow unmatched API paths would hand `api.js` an HTML body where it parses a `detail`, turning every genuine 404 into a parse error.
+
 ## Backend structure
 
 - **`backend/main.py`:** bootstrap, middleware, and router registration
@@ -43,6 +47,10 @@ The browser talks only to the local backend API. Core application data and pers
 - **`backend/routers/`:** feature-oriented API endpoints
 
 - **`backend/services/`:** shared backend logic such as categorization and crypto helpers
+
+- **`backend/spa.py`:** serves the built frontend with the client-route fallback described above
+
+- **`backend/desktop.py`:** the standalone entry point — starts the server on loopback, opens a browser at it, and reuses a running instance rather than starting a second one onto the same databases
 
 The backend favors explicit SQL and feature-oriented router modules over a heavy ORM layer.
 
@@ -895,6 +903,16 @@ Luma is intended to run on:
 - Raspberry Pi / ARM Linux
 
 Where commands differ, the repo should provide script wrappers or document the differences clearly in `README.md`.
+
+**Running it as one thing.** `python -m backend.desktop` is the standalone mode: it serves the SPA and the API from a single process on loopback and opens a browser at it, so no second process and no proxy is involved. Two details there are load-bearing rather than incidental. The bind is `127.0.0.1` but the URL handed out is `http://localhost:<port>`, because a WebAuthn Relying Party id has to be a domain — opening the address form would disable every passkey vault slot with nothing on screen to explain why (see *Token vault & transport security* for the two preconditions). And the port is preferred-not-guaranteed, falling back to an ephemeral one when the configured port is busy; nothing durable is keyed to it, since cookies are not port-scoped and an RP id is the host alone.
+
+A lockfile in the data directory records the port so a second launch opens a tab against the running instance instead of starting a second process onto the same SQLite pair. It records a port, not a claim of liveness — it survives a crash, so `/api/health` is what settles whether the recorded instance is really there. It only sees instances the launcher started, which is why falling back off a busy configured port says so rather than doing it silently: a separately-started `uvicorn` on the same databases is exactly what that case usually means.
+
+Opening a browser is convenience, not contract. No opener on any platform reports success usefully — `webbrowser.open` returns true as soon as a child process exists, and `explorer.exe` exits non-zero even when it worked — so the outcome is never claimed and the printed URL is what the user is meant to rely on. WSL takes its own path (`wslview`, then `explorer.exe`) because `xdg-open` there walks a list of Linux browsers the distribution does not have and prints a failure for each, producing a wall of errors that reads as a crash while the server is running normally. `--no-browser` skips the attempt entirely.
+
+**Packaged builds distinguish two roots.** A checkout has one directory that is both "where the code is" and "where the app sits"; a PyInstaller onefile build does not, and conflating them loses data. `runtime_config.bundle_root()` is where resources shipped *inside* the app live — the built frontend — which in a frozen build is the temporary directory PyInstaller unpacks to and then deletes on exit. `runtime_config.install_root()` is where the executable sits, and is what a portable copy keeps its databases and its optional `.env` beside. Reading resources from the install root finds nothing; writing databases into the bundle root loses them when the app closes.
+
+`anchor_relative()` follows from that: a relative `DATA_DIR` (or `DB_PATH` / `CONTROL_DB_PATH`) resolves against the install root **in a packaged build only**, so a portable copy behaves the same however it was launched, while a checkout keeps the working-directory meaning every existing install already depends on. This is also why the portable zip ships no configuration file — the stock `DATA_DIR = "."` default already means "beside the executable" once frozen. `scripts/luma.spec` and `scripts/build_desktop.py` produce the artifact; `backend/requirements-build.txt` holds the build-only dependency, deliberately outside the runtime requirements.
 
 ## Where to change things
 
