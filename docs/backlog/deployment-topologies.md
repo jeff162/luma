@@ -68,6 +68,21 @@ with `stored=False`; the open question there is the default name when two instal
 Goal (user's words): one thing to run, instead of starting a backend and a frontend and then pointing a
 browser at them. A native window is explicitly *not* required — running in the browser is fine.
 
+### The build environment is pinned to Python 3.12–3.13
+
+Not a preference: `pydantic-core` (pinned exactly by `pydantic==2.8.2`) publishes no wheels for 3.14, so
+a 3.14 environment falls back to compiling it from source and fails somewhere that says nothing about
+the real cause. `cryptography` is fine — its wheels are `abi3` and forward-compatible — so pydantic is
+the whole of the constraint.
+
+Three things enforce it rather than describing it: `requires-python = ">=3.12,<3.14"` in
+`pyproject.toml`, a version-checked interpreter choice when either launcher builds the venv (named
+versions are tried first, so a machine whose default `python3` has moved on still gets a working
+environment), and the stated requirement in `README.md`. Lifting the ceiling is a dependency-bump
+project — upstream is ready, `pydantic-core` 2.48 ships cp314 — and it would move fastapi, pydantic and
+cryptography off their current pins, which changes the runtime under a live install. Not a packaging
+change.
+
 ### The shell decision is settled by passkeys, not by packaging
 
 Every option shares the same crux — the backend is Python, so a Python runtime plus deps (including
@@ -128,9 +143,12 @@ came from, so the resolved data directory stays visible rather than inferred and
    `architecture.md` (three topologies, the client-route fallback, the standalone run mode); what stays
    here is only what steps 2–3 still depend on.
 2. **Frozen-aware roots, PyInstaller onefile, portable zip** for Windows and Linux. *Done.*
-   `scripts/luma.spec` and `scripts/build_desktop.py`; `backend/requirements-build.txt` carries the
-   build-only dependency. Only Linux x64 has actually been built — a Windows artifact needs a Windows
-   machine or CI runner, which is the remaining piece of this step.
+   `scripts/luma.spec` and `scripts/build_desktop.py` build it, `scripts/release.py` gates and
+   checksums it, and `backend/requirements-build.txt` carries the build-only dependency.
+   `.github/workflows/release.yml` runs the whole thing per platform on a `v*` tag — a matrix rather
+   than a loop because PyInstaller cannot cross-build, and it stops at uploading artifacts because
+   publishing is a person's decision. **Only the Linux x64 artifact has actually been produced**: the
+   workflow has never run, so the Windows build and the workflow itself are both still unexercised.
 3. **Per-OS user-data default and OS installers**, macOS included. Deferred, and separable — nothing in
    steps 1–2 forecloses it.
 

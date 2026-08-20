@@ -142,7 +142,9 @@ delete the backlog file.
   (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
   phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
 - [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3
-  deferred; Shape A notes only.** How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
+  deferred; Shape A notes only.** Also records the Python 3.12–3.13 build ceiling (pydantic-core has no
+  3.14 wheels) and the tag-triggered release workflow, which has not yet run — the Windows artifact is
+  the one piece of step 2 never actually produced. How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
   **single-user desktop** shape. The shell question is settled by passkeys — the browser-launcher wins
   because `prf` needs a real browser, and the RP id being the *hostname* makes `localhost` (never
   `127.0.0.1`) load-bearing, and makes mDNS + HTTPS a passkey precondition on the LAN rather than
