@@ -105,9 +105,12 @@ delete the backlog file.
 - [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Four dashboard tag-report
   follow-ups: a Settings-page manager mirror, capturing filters in a preset, cross-user sharing
   (a real `tag_report` table), and a richer (drag/NL) report builder.
-- [dashboard-reporting.md](dashboard-reporting.md) — **deferred.** A cash-flow **Sankey**
-  visualization (its own dashboard mode), and a **Trends-tab double-count audit** to do before the
-  tag-report selector reaches Trends mode.
+- [dashboard-reporting.md](dashboard-reporting.md) — **designed, not started (2026-08-20).** Cash flow
+  as a third frame on the Expenses/Income selector — a **Sankey** for a single period, diverging bars
+  plus a net line for trends — settled on the existing `exclude_from_totals` flag rather than any new
+  transfer-pairing or per-view exclusion machinery, with a deferred `cash_date` phase for cash-basis
+  timing. Plus a **Trends-tab double-count audit** to do before the tag-report selector reaches Trends
+  mode.
 - [import-input-formats.md](import-input-formats.md) — **deferred, ranked.** New ingestion formats
   behind a shared **parse-seam extraction**: XLSX (Tier 1, reuses everything), OFX/QFX/QBO (Tier 2,
   mapping-free + FITID dedupe), and SimpleFIN (a Plaid-parallel connection/sync track).

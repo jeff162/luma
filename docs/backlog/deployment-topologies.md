@@ -147,8 +147,8 @@ came from, so the resolved data directory stays visible rather than inferred and
    checksums it, and `backend/requirements-build.txt` carries the build-only dependency.
    `.github/workflows/release.yml` runs the whole thing per platform on a `v*` tag — a matrix rather
    than a loop because PyInstaller cannot cross-build, and it stops at uploading artifacts because
-   publishing is a person's decision. **Only the Linux x64 artifact has actually been produced**: the
-   workflow has never run, so the Windows build and the workflow itself are both still unexercised.
+   publishing is a person's decision. **Both the Linux x64 and Windows artifacts have been built and
+   run**; what is still unexercised is the workflow itself, since no `v*` tag has been cut yet.
 3. **Per-OS user-data default and OS installers**, macOS included. Deferred, and separable — nothing in
    steps 1–2 forecloses it.
 
