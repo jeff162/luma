@@ -1,0 +1,119 @@
+# Builds the downloadable artifacts for a tagged release.
+#
+# The shape follows from one constraint: PyInstaller cannot cross-build, so each platform's executable
+# has to be produced on that platform. That is why this is a matrix of near-identical jobs rather than
+# one job with a loop, and why the artifacts are uploaded separately and collected afterwards.
+#
+# Three deliberate omissions:
+#
+# - **No tagging.** `scripts/release.py` does not tag either. A person decides what a release is; this
+#   workflow reacts to that decision rather than making it.
+# - **No publishing.** The jobs upload build artifacts, they do not create a GitHub Release. Publishing
+#   is outward-facing and belongs to whoever is cutting the release, who can attach these files to a
+#   release they write themselves.
+# - **No macOS.** A portable zip is the wrong shape there — a `.app` cannot hold its own writable data,
+#   and App Translocation moves a quarantined app to a path that disappears. macOS wants the installed
+#   form, which is a later step. Adding `macos-latest` to the matrix would produce an artifact whose
+#   data directory is not dependable.
+#
+# Tests gate the build rather than living inside `release.py`, which checks packaging rather than
+# correctness on purpose. This is the CI half of that split: nothing gets packaged from code whose
+# tests fail.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Backend tests
+        run: python -m pytest backend/tests
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
+      # Covers eslint, the frontend comment check, and the backend comment check. The backend one finds
+      # its own interpreter and needs no virtual environment.
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+  build:
+    name: Build ${{ matrix.os }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not cancel the others — a partial set of artifacts is still worth
+      # having while the broken platform is investigated.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Built as its own step so a bundling failure is distinguishable from a packaging one in the log.
+      # `build_desktop.py` can do this itself, but that path exists for a fresh clone rather than here.
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: npm run build
+
+      # `release.py` gates on the version declarations agreeing and on a clean working tree, then packages
+      # and writes the checksum. A fresh checkout satisfies the tree gate, and everything the build writes
+      # is gitignored, so it cannot dirty the tree mid-run.
+      - name: Package release artifact
+        run: python scripts/release.py --skip-frontend
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luma-${{ matrix.os }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error

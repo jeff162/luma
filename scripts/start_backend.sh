@@ -70,6 +70,29 @@ venv_package_hint() {
   echo "then re-run this script."
 }
 
+# The interpreter that *builds* the venv is chosen by version, not by taking whatever `python3` points
+# at. The pinned dependencies publish no wheels for 3.14 — `pydantic-core` above all — so a venv built
+# from a newer default Python installs nothing and fails partway through a source build with an error
+# that says nothing about the real cause. Explicitly-named versions are tried first so a machine whose
+# default has moved on still gets a working environment instead of a diagnosis.
+#
+# Only venv creation is pinned. `SYSTEM_PYTHON` above just opens a socket to test a port, and any
+# interpreter does that.
+python_is_supported() {
+  "$1" -c 'import sys; raise SystemExit(0 if (3, 12) <= sys.version_info < (3, 14) else 1)' >/dev/null 2>&1
+}
+
+select_venv_python() {
+  local candidate
+  for candidate in python3.12 python3.13 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && python_is_supported "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 if ! venv_is_healthy; then
   if [[ -e "$VENV_DIR" ]]; then
     echo "Backend virtual environment is missing or incomplete (no working pip) — rebuilding it..."
@@ -78,14 +101,15 @@ if ! venv_is_healthy; then
     echo "Creating backend virtual environment (first run only)..."
   fi
   cd "$BACKEND_DIR"
-  if command -v python3 >/dev/null 2>&1; then
-    VENV_CREATOR="python3"
-  elif command -v python >/dev/null 2>&1; then
-    VENV_CREATOR="python"
-  else
-    echo "Python was not found. Install Python 3.12+ and try again."
+  if ! VENV_CREATOR="$(select_venv_python)"; then
+    echo
+    echo "No supported Python was found. Luma needs Python 3.12 (3.13 also works); 3.14 is not"
+    echo "supported, because the pinned dependencies publish no wheels for it."
+    echo "Tried: python3.12, python3.13, python3, python."
     exit 1
   fi
+  echo "Using $VENV_CREATOR ($("$VENV_CREATOR" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'))"
+
   if ! "$VENV_CREATOR" -m venv venv; then
     echo
     echo "Could not create the virtual environment."

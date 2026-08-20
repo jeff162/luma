@@ -54,12 +54,27 @@ if (-not (Test-Path $venvPython)) {
   Write-Host "Creating backend virtual environment (first run only)..."
   Push-Location $backendDir
   try {
+    # The interpreter is chosen by version, not by taking whatever `python` resolves to. The pinned
+    # dependencies publish no wheels for 3.14 — `pydantic-core` above all — so a venv built from a
+    # newer default Python installs nothing and fails partway through a source build, with an error
+    # that says nothing about the real cause. `py -3.12` names the version directly; the bare-`python`
+    # fallback has to be asked, because it answers to no particular version.
+    $versionGate = 'import sys; raise SystemExit(0 if (3, 12) <= sys.version_info < (3, 14) else 1)'
     if (Get-Command py -ErrorAction SilentlyContinue) {
       & py -3.12 -m venv venv
     } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+      & python -c $versionGate
+      if ($LASTEXITCODE -ne 0) {
+        throw 'The python on PATH is not a supported version. Luma needs Python 3.12 (3.13 also works); 3.14 is not supported, because the pinned dependencies publish no wheels for it.'
+      }
       & python -m venv venv
     } else {
-      throw "Python was not found. Install Python 3.12+ and try again."
+      throw "Python was not found. Install Python 3.12 and try again."
+    }
+    # `py -3.12` exits non-zero when 3.12 is not installed, and nothing above would notice: the next
+    # command would run against a venv python that was never created.
+    if (-not (Test-Path $venvPython)) {
+      throw "The virtual environment was not created. Install Python 3.12 (3.13 also works) and try again; 3.14 is not supported."
     }
     & $venvPython -m pip install --upgrade pip | Out-Null
   } finally {

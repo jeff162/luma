@@ -208,7 +208,7 @@ Windows Task Scheduler or run inside a Linux environment.
 
 ### Requirements
 
-- Python 3.12+ — including the `venv` module. On Debian/Ubuntu/Mint install it with `sudo apt install python3-venv` (it also provides `ensurepip`, which the backend virtual environment needs).
+- Python 3.12 — the version Luma is built and tested on. 3.13 is expected to work. **3.14 is not supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies would fall back to compiling from source. The `venv` module is needed too — on Debian/Ubuntu/Mint install it with `sudo apt install python3-venv` (it also provides `ensurepip`, which the backend virtual environment needs).
 
 - Node.js 20+ (with npm) — for the frontend.
 
@@ -264,16 +264,43 @@ The URL is printed on startup and is the reliable part; opening a browser is a c
 ### Building a standalone executable
 
 `scripts/build_desktop.py` produces a single executable with the Python runtime, the backend, and the
-built frontend inside it, packaged as a portable zip:
+built frontend inside it, packaged as a portable zip.
+
+**Set up the virtual environment.** The build runs from `backend/venv/`. Launching the app once with a
+start script creates that environment already; on a checkout that has never been started, or when
+building on a fresh machine, create it directly. Pin the interpreter to 3.12 — a venv built from a
+newer default Python cannot install the pinned dependencies (see Requirements above).
+
+macOS / Linux / Raspberry Pi:
 
 ```bash
-backend/venv/bin/pip install -r backend/requirements-build.txt   # once
-backend/venv/bin/python scripts/build_desktop.py                 # add --skip-frontend to reuse frontend/dist
+python3.12 -m venv backend/venv
+backend/venv/bin/python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
 ```
+
+Windows:
+
+```bash
+py -3.12 -m venv backend\venv
+backend\venv\Scripts\python -m pip install -r backend\requirements.txt -r backend\requirements-build.txt
+```
+
+`requirements-build.txt` holds only PyInstaller and is deliberately separate from the runtime
+dependencies, so a normal install never pulls it in.
+
+**Build.**
+
+```bash
+backend/venv/bin/python scripts/build_desktop.py          # --skip-frontend reuses an existing frontend/dist
+```
+
+On Windows, substitute `backend\venv\Scripts\python` for `backend/venv/bin/python` in this command and
+the release commands below.
 
 The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`. It runs on a machine with neither
 Python nor Node installed, and keeps its databases in the folder the executable sits in, so moving that
-folder moves the data with it. Each platform's artifact has to be built on that platform.
+folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
+cannot cross-build.
 
 The build is unsigned, so Windows and macOS warn on first run.
 
@@ -291,8 +318,12 @@ backend/venv/bin/python scripts/release.py                       # gate, build, 
 The gates are that every version declaration agrees and that the working tree is clean, so an artifact
 can be traced back to a commit. `--allow-dirty` skips the second for a throwaway build.
 
-Tagging, CHANGELOG edits, and signing are deliberately left to a person. Since cross-building is not
-possible, each platform's zip is produced by running this on that platform and collecting the results.
+Each platform's zip (eg. Windows and Linux) is produced by running this on that platform and collecting the results.
+
+`.github/workflows/release.yml` does that collecting: pushing a `v*` tag runs the tests, then builds on
+Linux and Windows in parallel and uploads each zip with its checksum as a workflow artifact. It stops
+short of creating a GitHub Release, so publishing stays a deliberate act. macOS is deliberately not in
+the matrix — a portable zip is the wrong shape there, and the installed form is a later step.
 
 ## Testing
 

@@ -67,7 +67,15 @@ def _build_frontend() -> None:
     npm = shutil.which("npm")
     if npm is None:
         raise SystemExit("npm was not found on PATH — needed to build the frontend bundle.")
-    _run([npm, "run", "build"], cwd=ROOT / "frontend")
+
+    frontend = ROOT / "frontend"
+    if not (frontend / "node_modules").is_dir():
+        # A fresh clone has no node_modules, and `npm run build` there fails with "vite: not found" —
+        # which points at the build tool rather than at the missing install. `npm ci` rather than
+        # `npm install` because it installs exactly the lockfile, which is what a release wants.
+        _run([npm, "ci"], cwd=frontend)
+
+    _run([npm, "run", "build"], cwd=frontend)
 
 
 def _build_executable() -> Path:
