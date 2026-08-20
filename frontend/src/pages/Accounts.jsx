@@ -4399,7 +4399,21 @@ export default function Accounts() {
         />
       ) : null}
 
-      <div style={{ display: 'contents', visibility: (loading || !sectionStateLoaded || !sortLoaded) ? 'hidden' : 'visible' }}>
+      {/* A real box rather than `display: contents`, which this used to be. The children have to be flex
+          items of the page's column — header strip fixed, content area scrolling — and `display:
+          contents` does promote them, but it costs the promoted item its *definiteness*: WebKit stops
+          treating it as a containing block percentages can resolve against, so every `width: 100%`
+          inside the tab content computes to zero and the page collapses into a column of min-content
+          cards. Measured in Safari, 2026-08-20: this container was the correct 862px while its child's
+          computed width was 0px. It survived first paint and broke on the next subtree swap, because
+          only then did the resolution happen against a width WebKit no longer considered definite. */}
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        visibility: (loading || !sectionStateLoaded || !sortLoaded) ? 'hidden' : 'visible',
+      }}>
         <div style={{ padding: '24px 32px 0', flexShrink: 0 }}>
           <div style={{
             display: 'flex',
@@ -4455,7 +4469,16 @@ export default function Accounts() {
           ) : null}
         </div>
 
-        <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+        <div data-browser-context-passthrough="true" style={{
+          flex: 1,
+          minHeight: 0,
+          // Stated rather than inherited from `align-items: stretch`. Everything below resolves its
+          // percentages against this box, and a width that is stretched but not *definite* is what let
+          // them collapse to zero; `box-sizing: border-box` is global, so the padding stays inside it.
+          width: '100%',
+          overflowY: 'auto',
+          padding: '0 32px 32px',
+        }}>
           {tab === 'accounts' && (
             <>
               <div
