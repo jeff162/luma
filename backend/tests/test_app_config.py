@@ -263,15 +263,22 @@ class NoEnvFileTests(unittest.TestCase):
 
 class ConfigGroupingTests(unittest.TestCase):
     """Which settings the panel leads with. Placement is a property of the setting, not of its current
-    value, so the grouping cannot shift under a reader who changed nothing."""
+    value, so the grouping cannot shift under a reader who changed nothing.
+
+    Isolated like the rest of the module even though nothing here reads a stored value: building the
+    report resolves *every* setting, and the stored ones have to resolve against some control database.
+    Without one these pass on a machine that happens to have a real database on the default path and
+    fail on a fresh checkout, which is the difference between a developer's machine and CI."""
 
     def test_the_settings_an_ordinary_install_might_change_are_not_advanced(self):
-        rows = {row["key"]: row for row in app_config.effective_config()}
+        with _isolated_control_db():
+            rows = {row["key"]: row for row in app_config.effective_config()}
         for key in ("data_dir", "backend_port", "frontend_port"):
             self.assertFalse(rows[key]["advanced"], f"{key} is one of the few worth leading with")
 
     def test_startup_and_deployment_knobs_are_advanced(self):
-        rows = {row["key"]: row for row in app_config.effective_config()}
+        with _isolated_control_db():
+            rows = {row["key"]: row for row in app_config.effective_config()}
         for key in ("session_secret", "cors_origins", "developer_options", "backend_ready_timeout"):
             self.assertTrue(rows[key]["advanced"])
 

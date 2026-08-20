@@ -107,13 +107,16 @@ def test_the_frontend_is_read_from_the_bundle():
 
 def test_databases_and_env_sit_beside_the_executable():
     """The counterpart mistake: the bundle directory is deleted when the process exits, so a database
-    written there is gone the moment the app is closed."""
-    with _two_roots() as (install, bundle), _frozen(install, bundle):
-        with mock.patch.dict("os.environ", {"DATA_DIR": "."}, clear=False):
-            assert runtime_config.data_dir() == install / "."
-            assert Path(runtime_config.resolve_db_path()).parent.resolve() == install
-            assert Path(runtime_config.resolve_control_db_path()).parent.resolve() == install
+    written there is gone the moment the app is closed.
 
+    The per-file overrides are cleared rather than left alone: each of them wins over the directory
+    setting this is about, so a developer whose own environment names one would see this fail for a
+    reason that has nothing to do with the two roots."""
+    with _two_roots() as (install, bundle), _frozen(install, bundle), \
+         _env(**{**_NO_OVERRIDES, "DATA_DIR": "."}):
+        assert runtime_config.data_dir() == install / "."
+        assert Path(runtime_config.resolve_db_path()).parent.resolve() == install
+        assert Path(runtime_config.resolve_control_db_path()).parent.resolve() == install
         assert runtime_config.env_file_path() == install / ".env"
 
 

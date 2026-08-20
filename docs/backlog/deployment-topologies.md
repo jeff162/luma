@@ -171,8 +171,10 @@ came from, so the resolved data directory stays visible rather than inferred and
    from one platform in `backend/tests/test_packaged_paths.py` by faking `sys.frozen` and `sys.platform`.
    The smoke harness is written — `scripts/smoke_artifact.py`, wired into both build jobs, which also
    build an installed-form artifact on Linux only so the per-OS directory is exercised for real before
-   macOS depends on it. **Unexercised until a workflow run happens:** neither the smoke script nor the
-   release workflow itself has been run yet. Still outstanding after that: the macOS `.app`/`.dmg` and
+   macOS depends on it. The smoke script has been run on Linux against both forms and passes;
+   the release workflow's **build and smoke steps remain unexercised**, since its first run stopped in
+   the test job (on two tests that had only ever passed because a developer machine has a real control
+   database on the default path — fixed, and the class docstring now says why the isolation is needed). Still outstanding after that: the macOS `.app`/`.dmg` and
    its matrix entries. Windows and Linux installers are **not** in this step's scope — both platforms
    keep the portable zip.
 
