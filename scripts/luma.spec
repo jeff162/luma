@@ -15,11 +15,12 @@
 #   built onedir instead, because a onefile inside a bundle would re-unpack itself to a temporary
 #   directory on every launch — slow, and the same vanishing-path problem the two roots exist to avoid,
 #   just moved inside the artifact.
-# - **uvicorn and plaid are collected wholesale.** Both reach modules by name at runtime rather than by
-#   import statement — uvicorn selects its loop and protocol implementations from strings, and the Plaid
-#   SDK resolves `plaid.model.*` during deserialization. Static analysis cannot see either, and the
-#   failure arrives as an ImportError in the field rather than at build time. The rest of the backend is
-#   statically imported and needs no help.
+# - **uvicorn, plaid and truststore are collected wholesale.** Each reaches modules by name at runtime
+#   rather than by import statement — uvicorn selects its loop and protocol implementations from
+#   strings, the Plaid SDK resolves `plaid.model.*` during deserialization, and truststore picks its
+#   platform backend conditionally. Static analysis cannot see any of them, and the failure arrives as
+#   an ImportError in the field rather than at build time. The rest of the backend is statically
+#   imported and needs no help.
 
 import os
 import sys
@@ -65,7 +66,11 @@ analysis = Analysis(
         (str(ROOT / "frontend" / "dist"), "frontend/dist"),
         (str(form_marker), "."),
     ],
-    hiddenimports=collect_submodules("uvicorn") + collect_submodules("plaid"),
+    hiddenimports=(
+        collect_submodules("uvicorn")
+        + collect_submodules("plaid")
+        + collect_submodules("truststore")
+    ),
     hookspath=[],
     runtime_hooks=[],
     # Bundling the test suite would ship pytest and every fixture with the app.

@@ -6,4 +6,8 @@ python-dotenv==1.0.1
 python-multipart==0.0.9
 itsdangerous==2.2.0
 cryptography==43.0.1
+# Verifies TLS against the operating system's own certificate store instead of a CA bundle pinned here.
+# A runtime dependency rather than a packaging one: a frozen macOS build has no CA file on disk at all,
+# because the OpenSSL it carries looks where the *build* machine kept one.
+truststore==0.10.4
 segno==1.6.6

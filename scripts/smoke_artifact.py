@@ -50,6 +50,9 @@ SHUTDOWN_TIMEOUT_SECONDS = 30.0
 
 DB_FILENAMES = ("luma-data.db", "luma-control.db")
 LOCK_FILENAME = "luma-desktop.lock"
+# What `backend/main.py` prints when it cannot hand TLS verification to the operating system. Matched as
+# a substring rather than imported, to keep this script independent of the code it is testing.
+TRUST_STORE_FAILURE = "Could not use the system certificate store"
 
 FORMS = ("portable", "installed")
 # The form this platform ships, which is the one whose artifact carries no form in its name. Stated
@@ -250,6 +253,15 @@ def smoke(form: str) -> int:
             if not _wait_for_health(process):
                 exited = f" (exited {process.returncode})" if process.poll() is not None else ""
                 _report_failure(f"no healthy response within {STARTUP_TIMEOUT_SECONDS:.0f}s{exited}",
+                                log, expected)
+                return 1
+
+            # The packaged build has to be able to verify TLS, and the way that broke once was silent:
+            # the app started normally and every outbound HTTPS call failed later, in the field. The
+            # bootstrap says so on stderr when it cannot use the system trust store, and both streams
+            # are already captured here, so this costs nothing and needs no network call.
+            if TRUST_STORE_FAILURE in log.read_text(errors="replace"):
+                _report_failure("the packaged build could not use the system certificate store",
                                 log, expected)
                 return 1
 

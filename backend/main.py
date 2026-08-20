@@ -14,6 +14,8 @@ why the control database is initialized here at import rather than in the lifesp
 half of the configuration lives in it. See `app_config.py` for the layering.
 """
 
+import sys
+
 from dotenv import load_dotenv
 
 from backend.runtime_config import env_file_path
@@ -22,6 +24,30 @@ from backend.runtime_config import env_file_path
 # is present it stays authoritative over a stale shell environment (override=True), which is also what
 # lets the Playwright harness redirect LUMA_ENV_FILE at an isolated file and get its throwaway DB paths.
 load_dotenv(dotenv_path=env_file_path(), override=True)
+
+# Verify TLS against the operating system's trust store rather than a CA bundle pinned in this
+# repository. Not a preference: a packaged macOS build has no usable CA file at all, because the OpenSSL
+# inside it looks where the *build* machine kept one, and every outbound HTTPS call fails with
+# "unable to get local issuer certificate". The alternative — shipping `certifi` — would be a snapshot
+# of the world that ages, ignores roots the user installed, and keeps trusting roots the OS has since
+# distrusted.
+#
+# Placed above the other imports as a matter of course rather than to satisfy a live constraint.
+# `inject_into_ssl` replaces `ssl.SSLContext`, so a library that binds its own reference with
+# `from ssl import SSLContext` at import time would otherwise keep the original — which urllib3 does,
+# and which truststore itself rebinds explicitly, so the Plaid SDK riding on urllib3 is covered either
+# way. The placement is insurance against a future dependency that binds the name and gets no such
+# help. `backend/tests/test_system_trust_store.py` pins the outcome for both paths.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except Exception as error:  # noqa: BLE001 - see below
+    # Deliberately broad, and deliberately not fatal. This reaches into platform APIs through ctypes, so
+    # the ways it can fail are open-ended and platform-specific; a failure here leaves TLS exactly where
+    # it would have been without it, which is worth strictly more than refusing to start.
+    print(f"Could not use the system certificate store ({error}); TLS falls back to OpenSSL defaults.",
+          file=sys.stderr)
 
 from contextlib import asynccontextmanager
 

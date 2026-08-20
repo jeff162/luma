@@ -1,7 +1,8 @@
 # Deployment topologies
 
-**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20 — spine and CI
-harness verified, macOS built and awaiting its first run. Shape A not started (notes only).** How Luma
+**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20 — all four targets
+build and smoke-test green in CI; what remains is what CI cannot reach (Gatekeeper, and the
+LaunchServices log path). Shape A not started (notes only).** How Luma
 is *packaged and run* — distinct from the security model that governs *who may reach it*
 ([`security-and-deployment-model.md`](security-and-deployment-model.md)). Two target shapes, one
 codebase. Transport-security (HTTP vs HTTPS) reasoning lives in the security doc's "Transport security"
@@ -174,11 +175,29 @@ came from, so the resolved data directory stays visible rather than inferred and
    macOS. **Verified in CI on 2026-08-20:** the release workflow runs green on Linux and Windows —
    tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
 
-   macOS is **built but unverified**: the `.app`/`.dmg` packaging, the log file that replaces the absent
-   console, and the `macos-latest` / `macos-15-intel` matrix entries all exist, and nothing on them has
-   been run. Nothing on this machine can — it is WSL2, and PyInstaller cannot cross-build — so the first
-   real exercise is a CI run, and then the on-demand Mac for the Gatekeeper path, which CI cannot test
-   at all because a locally built bundle is never quarantined.
+   macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
+   (x64) — go green, smoke tests included, which settles the one thing that could not be reasoned out in
+   advance: PyInstaller puts `sys._MEIPASS` inside the `.app` where `bundle_root()` looks for it, so the
+   bundled SPA and the distribution-form marker are both readable from within the bundle.
+
+   The first macOS run found one real bug, of a kind only a packaged build on that platform can have:
+   **no certificate store**. A frozen build carries an OpenSSL whose default CA path points at the build
+   machine's layout, so every outbound HTTPS call failed with "unable to get local issuer certificate" —
+   both providers, not just the one that surfaced it, since the Plaid SDK reaches the network through
+   urllib3 and hits the same missing defaults. Fixed by verifying against the OS trust store
+   (`truststore`) rather than shipping a pinned CA bundle; see *Packaged builds* in
+   [`architecture.md`](../architecture.md). The smoke test now fails if a packaged build reports falling
+   back, which costs no network call because the bootstrap already says so on stderr.
+
+   Two things CI structurally **cannot** reach, and which the on-demand Mac still has to:
+
+   - **Gatekeeper.** A locally built bundle is never quarantined, so the refusal and the "Open Anyway"
+     path simply do not occur in CI. Only a browser-downloaded artifact carries the flag — and the
+     quarantine has to survive being unarchived, which it does through Finder and does *not* through
+     `unzip`, so testing with the wrong tool tests nothing.
+   - **The log file.** It exists for a LaunchServices start, and the smoke harness launches the
+     executable directly — which is deliberate, since it captures the output it would otherwise divert.
+     So the redirect has never actually fired.
 
    Windows and Linux installers are **not** in this step's scope — both platforms keep the portable zip.
 
