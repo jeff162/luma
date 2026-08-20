@@ -63,10 +63,27 @@ def _platform_tag() -> str:
     return f"{system}-{arch}"
 
 
+def _is_windows() -> bool:
+    return platform.system().lower() == "windows"
+
+
+def _npm() -> str:
+    """Locate npm in a form `CreateProcess` can actually start.
+
+    Node ships two things called npm on Windows: `npm.cmd`, the batch wrapper Windows can execute, and
+    an extensionless `npm` shell script for Git Bash. `shutil.which("npm")` can return the latter, and
+    launching it fails with `WinError 193: %1 is not a valid Win32 application` — an error that names
+    nothing recognizable. Asking for the executable extensions by name is what avoids it.
+    """
+    for candidate in (["npm.cmd", "npm.exe", "npm"] if _is_windows() else ["npm"]):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    raise SystemExit("npm was not found on PATH — needed to build the frontend bundle.")
+
+
 def _build_frontend() -> None:
-    npm = shutil.which("npm")
-    if npm is None:
-        raise SystemExit("npm was not found on PATH — needed to build the frontend bundle.")
+    npm = _npm()
 
     frontend = ROOT / "frontend"
     if not (frontend / "node_modules").is_dir():
@@ -101,7 +118,7 @@ def _build_executable() -> Path:
         cwd=ROOT,
     )
 
-    name = "luma.exe" if platform.system().lower() == "windows" else "luma"
+    name = "luma.exe" if _is_windows() else "luma"
     built = DIST_DIR / "bin" / name
     if not built.is_file():
         raise SystemExit(f"PyInstaller reported success but produced no {built}.")
