@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Build the standalone desktop artifact: one executable, plus the portable zip it ships in.
+"""Build the standalone desktop artifact: one executable, plus the zip it ships in.
 
-The output is deliberately *portable* rather than installed. A portable copy keeps its databases beside
-the executable, which is what `runtime_config.anchor_relative` arranges in a frozen build — so the zip
-carries no configuration file at all and the default behavior is already correct. The installed form,
-with a per-OS user-data directory, is a later step and is what would need a build-time signal to tell
-the two apart.
+Two distribution forms come out of the same code, and which one is being built is a *decision*, not
+something the running app can work out for itself:
+
+- **portable** — a zip whose databases live beside the executable, which is what
+  `runtime_config.anchor_relative` arranges in a frozen build. It carries no configuration file at all
+  because the stock `DATA_DIR = "."` default already means the right thing once frozen.
+- **installed** — databases in the per-OS user-data directory, for an artifact that an installer puts
+  somewhere the user does not own and an upgrade replaces wholesale.
+
+`--form` chooses, defaulting to whatever the platform can support: macOS is installed-only, since a
+`.app` cannot hold its own writable data. The choice reaches the artifact through `LUMA_DIST_FORM`,
+which `scripts/luma.spec` bakes into the bundle.
 
 Nothing here signs anything. An unsigned artifact carries an OS warning on first run, and someone who
 downloads one is choosing that; paying for certificates is a separate decision from being able to build.
 
-Run from anywhere: `python scripts/build_desktop.py [--skip-frontend]`.
+Run from anywhere: `python scripts/build_desktop.py [--form portable|installed] [--skip-frontend]`.
 """
 
 import argparse
+import os
 import platform
 import shutil
 import subprocess
@@ -25,12 +33,20 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backend import runtime_config  # noqa: E402  (needs ROOT on the path first)
+from backend.runtime_config import (  # noqa: E402
+    DECLARABLE_DIST_FORMS,
+    DIST_FORM_INSTALLED,
+    DIST_FORM_PORTABLE,
+)
 
 SPEC = ROOT / "scripts" / "luma.spec"
 BUILD_DIR = ROOT / "build" / "pyinstaller"
 DIST_DIR = ROOT / "dist"
 
-READ_ME = """Luma — portable build
+# The line about where data lives is the reason there are two of these rather than one with a
+# substitution: it is the whole difference between the forms, and it is the thing someone reads this
+# file to find out.
+READ_ME_PORTABLE = """Luma — portable build
 
 Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
 Press Ctrl+C in the terminal window to stop it.
@@ -44,10 +60,25 @@ Options:
 This build is unsigned, so the operating system will warn about it the first time it runs.
 """
 
+READ_ME_INSTALLED = """Luma — installed build
 
-def _run(command: list[str], cwd: Path) -> None:
+Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
+Press Ctrl+C in the terminal window to stop it.
+
+Data lives in the per-user application data directory for this operating system, not in this folder, so
+it survives replacing or moving the application. Settings -> Configuration reports the exact location in
+use. Setting DATA_DIR overrides it.
+
+Options:
+  --no-browser    start without opening a browser, and just print the address
+
+This build is unsigned, so the operating system will warn about it the first time it runs.
+"""
+
+
+def _run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
     print(f"$ {' '.join(command)}", flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def _version() -> str:
@@ -65,6 +96,17 @@ def _platform_tag() -> str:
 
 def _is_windows() -> bool:
     return platform.system().lower() == "windows"
+
+
+def _is_macos() -> bool:
+    return platform.system().lower() == "darwin"
+
+
+def _default_form() -> str:
+    """What this platform can support, which on macOS is one thing only — a `.app` cannot hold its own
+    writable data. Elsewhere the portable zip stays the default because it is the form that has actually
+    been shipped."""
+    return DIST_FORM_INSTALLED if _is_macos() else DIST_FORM_PORTABLE
 
 
 def _npm() -> str:
@@ -95,7 +137,7 @@ def _build_frontend() -> None:
     _run([npm, "run", "build"], cwd=frontend)
 
 
-def _build_executable() -> Path:
+def _build_executable(form: str) -> Path:
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
@@ -116,6 +158,9 @@ def _build_executable() -> Path:
             str(SPEC),
         ],
         cwd=ROOT,
+        # The spec runs in its own interpreter, so the form travels as an environment variable rather
+        # than an argument — PyInstaller passes nothing of its own through to a spec file.
+        env={**os.environ, "LUMA_DIST_FORM": form},
     )
 
     name = "luma.exe" if _is_windows() else "luma"
@@ -125,8 +170,12 @@ def _build_executable() -> Path:
     return built
 
 
-def _package(executable: Path) -> Path:
-    archive = DIST_DIR / f"luma-{_version()}-{_platform_tag()}.zip"
+def _package(executable: Path, form: str) -> Path:
+    # Only the portable form is named for the platform alone. An installed-form zip is a build to be
+    # tested or fed to an installer rather than a form anyone downloads, and it has to be able to sit
+    # beside a portable one without overwriting it.
+    suffix = "" if form == DIST_FORM_PORTABLE else f"-{form}"
+    archive = DIST_DIR / f"luma-{_version()}-{_platform_tag()}{suffix}.zip"
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.unlink(missing_ok=True)
 
@@ -136,35 +185,50 @@ def _package(executable: Path) -> Path:
         # arrives without it is one chmod away from working with no indication of why.
         info.external_attr = 0o755 << 16
         bundle.writestr(info, executable.read_bytes())
-        bundle.writestr("luma/README.txt", READ_ME)
+        readme = READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED
+        bundle.writestr("luma/README.txt", readme)
 
     return archive
 
 
-def build(skip_frontend: bool = False) -> Path:
+def build(skip_frontend: bool = False, form: str | None = None) -> Path:
     """Build the artifact and return its path. The entry point `release.py` uses, so the two cannot
     disagree about where the zip lands or what it is called."""
+    form = form or _default_form()
+    if form not in DECLARABLE_DIST_FORMS:
+        raise SystemExit(
+            f"Unknown distribution form {form!r}. "
+            f"Expected one of: {', '.join(sorted(DECLARABLE_DIST_FORMS))}."
+        )
+
     if skip_frontend:
         if not (ROOT / "frontend" / "dist" / "index.html").is_file():
             raise SystemExit("--skip-frontend was given but frontend/dist holds no build.")
     else:
         _build_frontend()
 
-    return _package(_build_executable())
+    return _package(_build_executable(form), form)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the standalone Luma executable and portable zip.")
+    parser = argparse.ArgumentParser(description="Build the standalone Luma executable and its zip.")
     parser.add_argument(
         "--skip-frontend",
         action="store_true",
         help="Reuse the existing frontend/dist instead of rebuilding it.",
     )
+    parser.add_argument(
+        "--form",
+        choices=sorted(DECLARABLE_DIST_FORMS),
+        default=_default_form(),
+        help="Where the built app keeps its data: beside the executable, or in the per-OS user-data "
+             "directory. Defaults to what this platform supports.",
+    )
     args = parser.parse_args()
 
-    archive = build(skip_frontend=args.skip_frontend)
+    archive = build(skip_frontend=args.skip_frontend, form=args.form)
     size_mb = archive.stat().st_size / (1024 * 1024)
-    print(f"\nBuilt {archive.relative_to(ROOT)} ({size_mb:.1f} MB)")
+    print(f"\nBuilt {archive.relative_to(ROOT)} ({args.form} form, {size_mb:.1f} MB)")
     return 0
 
 

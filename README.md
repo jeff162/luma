@@ -264,7 +264,14 @@ The URL is printed on startup and is the reliable part; opening a browser is a c
 ### Building a standalone executable
 
 `scripts/build_desktop.py` produces a single executable with the Python runtime, the backend, and the
-built frontend inside it, packaged as a portable zip.
+built frontend inside it, packaged as a zip.
+
+Two forms come out of the same code, and `--form` chooses between them. A **portable** build keeps its
+databases beside the executable, which is what the zip has always shipped; an **installed** build keeps
+them in the per-user application data directory for the operating system, which is what an artifact
+placed by an installer needs, since an upgrade replaces the application itself. The default is whichever
+form the build platform supports. Either way, Settings -> Configuration reports the directory actually
+in force.
 
 **Set up the virtual environment.** The build runs from `backend/venv/`. Launching the app once with a
 start script creates that environment already; on a checkout that has never been started, or when
@@ -297,9 +304,9 @@ backend/venv/bin/python scripts/build_desktop.py          # --skip-frontend reus
 On Windows, substitute `backend\venv\Scripts\python` for `backend/venv/bin/python` in this command and
 the release commands below.
 
-The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`. It runs on a machine with neither
-Python nor Node installed, and keeps its databases in the folder the executable sits in, so moving that
-folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
+The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-installed` appended for
+that form. It runs on a machine with neither Python nor Node installed, and a portable build keeps its
+databases in the folder the executable sits in, so moving that folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
 cannot cross-build.
 
 The build is unsigned, so Windows and macOS warn on first run.
@@ -324,6 +331,16 @@ Each platform's zip (eg. Windows and Linux) is produced by running this on that 
 Linux and Windows in parallel and uploads each zip with its checksum as a workflow artifact. It stops
 short of creating a GitHub Release, so publishing stays a deliberate act. macOS is deliberately not in
 the matrix — a portable zip is the wrong shape there, and the installed form is a later step.
+
+Each build then smoke-tests what it produced. `scripts/smoke_artifact.py` unpacks the zip, launches the
+executable with the browser suppressed, waits for the health endpoint, and asserts both databases were
+created where that distribution form promises — the one failure a unit test cannot reach, since an app
+that writes its data to the wrong place still starts perfectly well. It runs locally against anything
+already in `dist/`:
+
+```bash
+backend/venv/bin/python scripts/smoke_artifact.py --form portable
+```
 
 ## Testing
 

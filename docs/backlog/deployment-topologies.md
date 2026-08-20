@@ -1,6 +1,7 @@
 # Deployment topologies
 
-**Status: Shape B steps 1–2 done (2026-08-19); step 3 deferred. Shape A not started (notes only).** How Luma
+**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20, macOS first. Shape A
+not started (notes only).** How Luma
 is *packaged and run* — distinct from the security model that governs *who may reach it*
 ([`security-and-deployment-model.md`](security-and-deployment-model.md)). Two target shapes, one
 codebase. Transport-security (HTTP vs HTTPS) reasoning lives in the security doc's "Transport security"
@@ -117,9 +118,22 @@ branch, no platform matrix:
   "beside the executable" in a frozen build, so the existing `DATA_DIR = "."` default already lands in
   the right place; an `.env` was expected to be needed here and turned out not to be.
 - **Installed** (an OS installer) — `DATA_DIR` defaults to the per-OS user-data directory
-  (`%APPDATA%`, `~/Library/Application Support`, `~/.local/share`). Because the portable form now works
-  off the plain default, telling the two apart is the open question step 3 has to answer — a build-time
-  signal baked into the artifact, rather than anything the user configures.
+  (`%APPDATA%\Luma`, `~/Library/Application Support/Luma`, `$XDG_DATA_HOME` or `~/.local/share` plus
+  `luma`). Because the portable form works off the plain default, telling the two apart needed a
+  build-time signal rather than anything the user configures. **Settled:** `LUMA_DIST_FORM` selects the
+  form at build time, `scripts/luma.spec` writes it into the bundle as a one-word file, and
+  `runtime_config.distribution_form()` reads it back — a bundled file rather than a generated module, so
+  the signal travels inside the artifact and a build cannot leave one behind in a checkout to change how
+  a developer's copy resolves. A missing or unrecognized declaration falls back to what the platform can
+  support, which is *installed* on macOS and portable elsewhere, and the spec refuses to build a
+  portable macOS artifact at all. The same signal moves the optional `.env`, which an installed build
+  has nowhere to keep beside the executable; it resolves from `user_data_dir()` rather than `data_dir()`
+  because that file is one of the things that may *set* `DATA_DIR`. Details in
+  [`architecture.md`](../architecture.md) under *Packaged builds*.
+
+  Windows uses `%APPDATA%` (roaming) rather than `%LOCALAPPDATA%`, as first written here. Worth a second
+  look before a Windows installer ships: SQLite on a roaming profile is a real hazard in a domain
+  environment, and `platformdirs` treats local, not roaming, as the default for application data.
 
 macOS only supports the installed form. A `.app` bundle cannot hold its own writable data: writing
 inside a notarized bundle invalidates the signature, and **App Translocation** mounts a quarantined app
@@ -149,8 +163,45 @@ came from, so the resolved data directory stays visible rather than inferred and
    than a loop because PyInstaller cannot cross-build, and it stops at uploading artifacts because
    publishing is a person's decision. **Both the Linux x64 and Windows artifacts have been built and
    run**; what is still unexercised is the workflow itself, since no `v*` tag has been cut yet.
-3. **Per-OS user-data default and OS installers**, macOS included. Deferred, and separable — nothing in
-   steps 1–2 forecloses it.
+3. **Per-OS user-data default and OS installers**, macOS first. *In progress.* The platform-neutral
+   spine is in place — `distribution_form()`, `user_data_dir()`, `default_data_dir()`, the
+   `LUMA_DIST_FORM` build signal, `build_desktop.py --form`, the `.env` relocation, and a fix to the
+   configuration report, which had been resolving a relative data directory against the working
+   directory and so named a path a packaged build was not using. All three OS branches are exercised
+   from one platform in `backend/tests/test_packaged_paths.py` by faking `sys.frozen` and `sys.platform`.
+   The smoke harness is written — `scripts/smoke_artifact.py`, wired into both build jobs, which also
+   build an installed-form artifact on Linux only so the per-OS directory is exercised for real before
+   macOS depends on it. **Unexercised until a workflow run happens:** neither the smoke script nor the
+   release workflow itself has been run yet. Still outstanding after that: the macOS `.app`/`.dmg` and
+   its matrix entries. Windows and Linux installers are **not** in this step's scope — both platforms
+   keep the portable zip.
+
+### macOS specifics
+
+Four things that are decided rather than discoverable, and that a build has to get right the first time:
+
+- **Both architectures are wanted, and the Intel runner label has moved.** The `macos-13` image — the
+  last Intel one under that name — began deprecation on 22 September 2025 and was retired on 4 December
+  2025. The Intel label is now `macos-15-intel`, and GitHub has stated x86_64 support on Actions ends
+  when that image retires, around **August 2027**. So the matrix is `macos-latest` (arm64) plus
+  `macos-15-intel` (x64), with a known expiry on half of it. `_platform_tag()` in `build_desktop.py`
+  already names both correctly from `platform.machine()`.
+- **Two DMGs rather than one universal2 binary.** A universal2 build needs universal2 wheels for
+  `cryptography` and `pydantic-core`, which are not dependably published; the failure is an obscure link
+  error rather than a clear one. The cost is a "which one?" line in the README.
+- **A `.app` gets a onedir build, not onefile.** A onefile binary inside a bundle re-unpacks to a
+  temporary directory on every launch — slow, and the same vanishing-path problem in a different guise.
+- **No console when launched from Finder.** `backend/desktop.py` treats the printed URL as its contract
+  and the browser opener as a convenience on top; on macOS neither stdout nor stderr goes anywhere a
+  user will see, so a startup failure presents as a bouncing icon and nothing else. A log file in the
+  data directory is what replaces it. The URL itself is already recoverable — `luma-desktop.lock`
+  records the port.
+
+**The quarantine step has to be documented, and the familiar gesture is wrong.** Control-click → Open no
+longer bypasses Gatekeeper for unsigned applications on macOS 15 Sequoia. The path that works is to
+attempt to open, be refused, then allow it under System Settings → Privacy & Security → "Open Anyway" —
+or `xattr -dr com.apple.quarantine /Applications/Luma.app`. Documenting the old gesture would produce
+exactly the outcome this step is trying to avoid: a tester concluding the build is broken.
 
 Signing is deliberately **not** part of step 3's definition of done: unsigned artifacts carry the OS
 warning, and someone choosing to download one is choosing that. Notarization and code-signing certs can

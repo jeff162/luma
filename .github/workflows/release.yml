@@ -19,6 +19,11 @@
 # Tests gate the build rather than living inside `release.py`, which checks packaging rather than
 # correctness on purpose. This is the CI half of that split: nothing gets packaged from code whose
 # tests fail.
+#
+# The build jobs then smoke-test what they produced, because the failures packaging introduces are ones
+# no unit test can reach: a bundled resource that did not make it in, or an app that starts normally
+# while writing its databases somewhere nobody looks. `scripts/smoke_artifact.py` launches the artifact
+# and asserts where its data landed.
 
 name: Release
 
@@ -110,10 +115,25 @@ jobs:
       - name: Package release artifact
         run: python scripts/release.py --skip-frontend
 
+      - name: Smoke test the artifact
+        run: python scripts/smoke_artifact.py --form portable
+
+      # The installed form has no installer on this platform and is not shipped from here — it is built
+      # only to prove the mechanism macOS will depend on entirely. The per-OS data directory and the
+      # build-time signal that selects it are unit-tested by faking `sys.platform`, but only a real
+      # artifact can show the declaration survived the build and the frozen binary read it back. Proving
+      # that on the cheapest runner means macOS is not the first place it is ever exercised.
+      - name: Smoke test the installed form
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python scripts/build_desktop.py --skip-frontend --form installed
+          python scripts/smoke_artifact.py --form installed
+
       - uses: actions/upload-artifact@v4
         with:
           name: luma-${{ matrix.os }}
           path: |
             dist/*.zip
             dist/*.sha256
+            !dist/*-installed.zip
           if-no-files-found: error

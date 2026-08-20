@@ -38,6 +38,9 @@ APP_VERSION = "0.2.0"
 # constants — so the default a running instance uses and the default its configuration report claims can
 # never drift apart. The database *filenames* are fixed rather than configurable: the location is what
 # distinguishes one installation's data from another's.
+# Beside the executable in a packaged build, the working directory in a checkout. An *installed* build
+# replaces it with the per-OS user-data directory instead — `default_data_dir()` is what chooses between
+# the two, and is what the configuration report shows as the built-in default.
 DEFAULT_DATA_DIR = "."
 CONTROL_DB_FILENAME = "luma-control.db"
 DB_FILENAME = "luma-data.db"
@@ -70,7 +73,7 @@ def data_dir() -> Path:
     inconvenience such an install; it would silently create empty databases beside data that still
     exists, which reads as total data loss. That is why this fallback is not a deprecation to clean up
     later."""
-    return anchor_relative(Path(os.getenv("DATA_DIR") or DEFAULT_DATA_DIR))
+    return anchor_relative(Path(os.getenv("DATA_DIR") or default_data_dir()))
 
 
 def resolve_db_path() -> str:
@@ -150,14 +153,100 @@ def anchor_relative(path: Path) -> Path:
     return path
 
 
+# How a copy was distributed, which is what decides where writable data defaults to. `checkout` is a
+# working copy; the other two are what a build declares about itself.
+DIST_FORM_CHECKOUT = "checkout"
+DIST_FORM_PORTABLE = "portable"
+DIST_FORM_INSTALLED = "installed"
+# Only the two a build can declare — a checkout is recognized rather than declared.
+DECLARABLE_DIST_FORMS = frozenset({DIST_FORM_PORTABLE, DIST_FORM_INSTALLED})
+# Sits at the root of the bundle holding one of those two words, written at build time by
+# `scripts/luma.spec`. A bundled file rather than a generated module: the signal then travels inside the
+# artifact, and a build cannot leave one behind in a checkout to change how a developer's copy resolves.
+DIST_FORM_FILENAME = "distribution-form"
+
+# The directory name an installed build keeps its data under, per-OS convention. Fixed literals rather
+# than `app_name()`, which exists for white-labelling and is settable by environment variable: a display
+# setting that silently relocated the databases would present as total data loss.
+USER_DATA_DIR_NAME = "Luma"
+USER_DATA_DIR_NAME_XDG = "luma"
+
+
+def distribution_form() -> str:
+    """Which of the three forms this copy is, which is what decides where writable data defaults to —
+    not the operating system, and not anything the user configures.
+
+    A build declares itself by carrying `DIST_FORM_FILENAME` in its bundle. It has to be declared rather
+    than detected because the two forms are otherwise the same binary: nothing observable at runtime
+    distinguishes a copy that was unzipped from one that was installed.
+
+    An unreadable or unrecognized declaration falls back to the form that platform can actually support,
+    which is not the same answer everywhere. On macOS the two are not interchangeable — "beside the
+    executable" resolves inside `Luma.app/Contents/MacOS`, where writing invalidates a signature and
+    where App Translocation may have mounted the bundle read-only at a path that disappears. Guessing
+    portable there would lose data, so the guess follows the platform rather than being a fixed
+    default."""
+    if not is_frozen():
+        return DIST_FORM_CHECKOUT
+    try:
+        declared = (bundle_root() / DIST_FORM_FILENAME).read_text(encoding="utf-8").strip()
+    except OSError:
+        declared = ""
+    if declared in DECLARABLE_DIST_FORMS:
+        return declared
+    return DIST_FORM_INSTALLED if sys.platform == "darwin" else DIST_FORM_PORTABLE
+
+
+def user_data_dir() -> Path:
+    """Where an installed build keeps its data: the per-OS convention for a user's application data.
+
+    Written out rather than delegated to `platformdirs`, which would put a runtime dependency inside
+    every bundle to decide three branches whose semantics are worth stating here anyway. Each branch
+    honors the environment variable the platform defines for relocating it, since a user who has moved
+    their profile has already answered this question once.
+
+    Only consulted for the installed form. A portable copy keeps its data beside the executable and a
+    checkout uses the working directory, so neither reaches here."""
+    if sys.platform == "win32":
+        roaming = os.getenv("APPDATA")
+        base = Path(roaming) if roaming else Path.home() / "AppData" / "Roaming"
+        return base / USER_DATA_DIR_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / USER_DATA_DIR_NAME
+    # The XDG spec requires an absolute path and says to ignore the variable otherwise, which matters
+    # here because a relative one would land the databases wherever the app happened to be started from.
+    xdg = os.getenv("XDG_DATA_HOME")
+    base = Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".local" / "share"
+    return base / USER_DATA_DIR_NAME_XDG
+
+
+def default_data_dir() -> str:
+    """The built-in `DATA_DIR` default for this copy — the layer everything else overrides.
+
+    Returned as a string because it is a configuration value: `app_config` reports it as the default,
+    and the environment layer that outranks it supplies strings too."""
+    if distribution_form() == DIST_FORM_INSTALLED:
+        return str(user_data_dir())
+    return DEFAULT_DATA_DIR
+
+
 def env_file_path() -> Path:
     """The optional override file. `LUMA_ENV_FILE` redirects it — the Playwright E2E harness points it at
     an isolated file so its throwaway database paths take effect without touching the real one.
 
     Anchored to `install_root`, not `bundle_root`: a portable copy ships its `.env` beside the binary,
-    where the user can read and edit it. Inside the bundle it would be neither."""
+    where the user can read and edit it. Inside the bundle it would be neither.
+
+    An installed build has no such place — on macOS the install root is inside the `.app`, which an
+    upgrade replaces wholesale — so its `.env` lives in the user-data directory instead. Deliberately
+    `user_data_dir()` rather than `data_dir()`: this file is one of the things that may *set* `DATA_DIR`,
+    so looking for it at the configured location would make it unreachable in the one case it is for."""
     override = os.getenv("LUMA_ENV_FILE")
-    return Path(override) if override else install_root() / ".env"
+    if override:
+        return Path(override)
+    if distribution_form() == DIST_FORM_INSTALLED:
+        return user_data_dir() / ".env"
+    return install_root() / ".env"
 
 
 def generate_session_secret() -> str:

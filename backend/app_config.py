@@ -37,10 +37,11 @@ from backend.runtime_config import (
     DEFAULT_APP_NAME,
     DEFAULT_BACKEND_PORT,
     DEFAULT_BACKEND_READY_TIMEOUT,
-    DEFAULT_DATA_DIR,
     DEFAULT_FRONTEND_DOCKER_PORT,
     DEFAULT_FRONTEND_HOST,
     DEFAULT_FRONTEND_PORT,
+    anchor_relative,
+    default_data_dir,
     env_file_path,
     generate_session_secret,
     is_placeholder_session_secret,
@@ -162,7 +163,7 @@ SETTINGS: tuple[Setting, ...] = (
         env_var="DATA_DIR",
         label="Data directory",
         help="Where both databases live. The one setting to change when moving an installation's data, or to run a second installation on the same machine.",
-        default=DEFAULT_DATA_DIR,
+        default=default_data_dir,
         is_path=True,
     ),
     Setting(
@@ -170,7 +171,7 @@ SETTINGS: tuple[Setting, ...] = (
         env_var="CONTROL_DB_PATH",
         label="Control database",
         help="Contains application data, not financial data (identities, the secrets vault, etc).",
-        default=DEFAULT_DATA_DIR,
+        default=default_data_dir,
         live=lambda: control_database.CONTROL_DB_PATH,
         derived_from="data_dir",
         is_path=True,
@@ -180,7 +181,7 @@ SETTINGS: tuple[Setting, ...] = (
         env_var="DB_PATH",
         label="Financial database",
         help="Accounts, transactions, rules, categories, preferences, import history, etc. Also contains the secrets used with data connections although not the key to decrypt them.",
-        default=DEFAULT_DATA_DIR,
+        default=default_data_dir,
         live=lambda: database.DB_PATH,
         derived_from="data_dir",
         is_path=True,
@@ -331,8 +332,13 @@ def effective_config() -> list[dict]:
 
 def _absolute_display(value: str) -> str | None:
     """The absolute form of a configured path, or None when the configured value already is one. Shown
-    beside the literal value rather than replacing it, because the literal is what appears in `.env`."""
-    resolved = str(Path(value).expanduser().resolve())
+    beside the literal value rather than replacing it, because the literal is what appears in `.env`.
+
+    Resolved through `anchor_relative` rather than against the working directory, or a packaged build
+    would report a path it is not using: a relative setting means "beside the executable" once frozen,
+    while the working directory of something launched from a file manager is the user's home or `/`.
+    The whole point of showing this row is that the location stays visible rather than inferred."""
+    resolved = str(anchor_relative(Path(value).expanduser()).resolve())
     return None if resolved == value else resolved
 
 
