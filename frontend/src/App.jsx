@@ -42,7 +42,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog, Toggle } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Toggle } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -934,6 +934,12 @@ export default function App() {
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [dataProviderIntended, setDataProviderIntended] = useState(false)
   const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
+  // Stopping the whole application, offered only where it would work — see `routers/app_control.py`.
+  const [shutdownAvailable, setShutdownAvailable] = useState(false)
+  const [pendingShutdown, setPendingShutdown] = useState(false)
+  const [shuttingDown, setShuttingDown] = useState(false)
+  const [shutdownError, setShutdownError] = useState('')
+  const [appStopped, setAppStopped] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [localProfiles, setLocalProfiles] = useState([])
   const [activeLocalProfile, setActiveLocalProfile] = useState(null)
@@ -1036,6 +1042,7 @@ export default function App() {
         setSecurityProfile(status.security_profile || 'local_private')
         setDataProviderIntended(!!status.data_provider_intended)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
+        setShutdownAvailable(!!status.app_shutdown_available)
         setDbInstanceId(status.db_instance_id || '')
         // Drop a theme cache left over from a different/previous database (e.g. a recreated DB) so the
         // welcome screen — which paints before any per-profile theme loads — falls back to System
@@ -1274,6 +1281,24 @@ export default function App() {
     setCurrentUser(null)
     setTaskCount(0)
     setTopTaskSeverity(null)
+  }
+
+  async function confirmShutdownApp() {
+    setShuttingDown(true)
+    setShutdownError('')
+    try {
+      await api.shutdownApp()
+    } catch (error) {
+      setShuttingDown(false)
+      setShutdownError(error?.message || 'Could not stop the application.')
+      return
+    }
+    // The server answers before it stops, so success here means the request was accepted rather than
+    // that the process is already gone. What follows is a dead app either way — every later request
+    // fails — so the UI says so plainly instead of letting the page decay into unexplained errors.
+    setPendingShutdown(false)
+    setShuttingDown(false)
+    setAppStopped(true)
   }
 
   function handleSwitchLocalProfile() {
@@ -1590,6 +1615,32 @@ export default function App() {
                     <ImportedCategoryWorkspaceRenderer />
                     <SyncStatusRenderer />
                     <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+                    {pendingShutdown ? (
+                      <AppConfirmDialog
+                        title="Shut down Luma?"
+                        description={shutdownError
+                          ? shutdownError
+                          : 'This stops Luma on this computer, not just this session — the page stops working until it is started again. Nothing is lost: data is already saved.'}
+                        confirmLabel={shuttingDown ? 'Shutting down…' : 'Shut down Luma'}
+                        confirmVariant="danger"
+                        confirmDisabled={shuttingDown}
+                        cancelDisabled={shuttingDown}
+                        onConfirm={confirmShutdownApp}
+                        onCancel={() => { setPendingShutdown(false); setShutdownError('') }}
+                        width="min(460px, 100%)"
+                      />
+                    ) : null}
+                    {appStopped ? (
+                      // No dismiss: there is nothing to go back to, and an OK button that returned the
+                      // user to a page whose every request fails would be worse than saying so.
+                      <AppDialog
+                        title="Luma has stopped"
+                        description="This tab can be closed. Starting Luma again will bring it back with everything as it was."
+                        actions={null}
+                        onClose={null}
+                        width="min(460px, 100%)"
+                      />
+                    ) : null}
                     {pendingDemoClear ? (
                       <AppConfirmDialog
                         title="Clear demo data?"
@@ -1727,6 +1778,27 @@ export default function App() {
                               }}
                             >
                               Sign out
+                            </button>
+                          )}
+                          {/* Last, because it is the most final thing here — and named for the whole
+                              application rather than "Quit", which beside "Sign out" would read as
+                              ending the session. Absent unless the backend says stopping would work. */}
+                          {shutdownAvailable && (
+                            <button
+                              onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
+                              style={{
+                                width: '100%',
+                                marginTop: 8,
+                                background: 'none',
+                                border: '1px solid var(--border)',
+                                color: 'var(--muted)',
+                                borderRadius: 8,
+                                padding: '8px 10px',
+                                cursor: 'pointer',
+                              }}
+                              title="Stop Luma on this computer"
+                            >
+                              Shut down Luma
                             </button>
                           )}
                         </div>

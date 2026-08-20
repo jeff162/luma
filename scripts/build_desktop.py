@@ -105,8 +105,12 @@ Data lives in ~/Library/Application Support/{DEFAULT_APP_NAME}, and stays there 
 replaced or deleted. Startup messages, including the address in use, are written to luma-desktop.log in
 that same folder — an application started from Finder has no terminal to print them to.
 
-To stop it, quit {DEFAULT_APP_NAME} from the Dock. It has no menu bar of its own, so macOS may offer
-Force Quit instead; that is safe here, and nothing is left half-written.
+To stop it, use "Shut down {DEFAULT_APP_NAME}" at the bottom of the navigation panel inside the app. That
+is the clean way, and it works the same on every platform.
+
+Quitting from the Dock also works, but {DEFAULT_APP_NAME} has no menu bar of its own to answer with, so
+macOS will most likely offer Force Quit. That is safe here — data is written as it goes and nothing is
+left half-finished — it is simply less tidy.
 """
 
 

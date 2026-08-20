@@ -179,6 +179,9 @@ export const api = {
   bootstrap: (username, password, display_name) =>
     request('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ username, password, display_name }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
+  // Stops the server process itself, not the session. Only present when the desktop launcher owns the
+  // process; elsewhere the backend answers 404 and the UI never offers it.
+  shutdownApp: () => request('/app/shutdown', { method: 'POST' }),
   listUsers: () => request('/auth/users'),
   createUser: (data) => request('/auth/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

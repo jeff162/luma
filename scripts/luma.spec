@@ -54,6 +54,11 @@ if sys.platform == "darwin" and dist_form != runtime_config.DIST_FORM_INSTALLED:
 
 # Written into the build tree, which is gitignored, so nothing lands in the checkout that could outlive
 # the build and change how a developer's copy resolves its data directory.
+# Generated from `assets/luma-icon.svg` by `scripts/build_icons.py` and committed, so a build needs no
+# rasterizer. macOS and Windows want different shapes of the same drawing — see that script.
+MACOS_ICON = ROOT / "assets" / "luma.icns"
+WINDOWS_ICON = ROOT / "assets" / "luma.ico"
+
 form_marker = ROOT / "build" / "dist-form" / runtime_config.DIST_FORM_FILENAME
 form_marker.parent.mkdir(parents=True, exist_ok=True)
 form_marker.write_text(f"{dist_form}\n", encoding="utf-8")
@@ -82,9 +87,13 @@ pyz = PYZ(analysis.pure)
 
 # A terminal stays attached on purpose: the startup line carries the URL, and it is the fallback
 # whenever opening a browser does not work. A windowed build would hide the one thing the user needs.
-# It buys nothing on macOS, where a bundle started from Finder has no terminal to attach to either way
-# — `backend/desktop.py` writes to a log file there instead — but a console build is still what makes
-# the executable inside the bundle usable directly from a shell.
+#
+# macOS is the exception, and not for the reason it looks like. There, `console=True` makes PyInstaller
+# write `LSBackgroundOnly=True` into the bundle's Info.plist, which declares the application invisible:
+# no Dock icon, no way to see it is running, and nothing to quit. The console gains nothing there anyway
+# — a bundle started from Finder has no terminal to attach to, and `backend/desktop.py` writes to a log
+# file instead — so the flag is pure cost. Turning it off costs nothing in return: on macOS it changes
+# only the plist, leaving the executable inside the bundle just as runnable from a shell.
 EXE_OPTIONS = dict(
     debug=False,
     bootloader_ignore_signals=False,
@@ -103,12 +112,15 @@ EXE_OPTIONS = dict(
 if sys.platform == "darwin":
     # Three nested steps rather than one: EXE without the payload, COLLECT to lay the payload out beside
     # it, BUNDLE to wrap the result in the directory structure macOS recognizes as an application.
-    exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="luma", **EXE_OPTIONS)
+    exe = EXE(
+        pyz, analysis.scripts, [], exclude_binaries=True, name="luma",
+        **{**EXE_OPTIONS, "console": False},
+    )
     collected = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="luma")
     app = BUNDLE(
         collected,
         name=f"{runtime_config.DEFAULT_APP_NAME}.app",
-        icon=None,
+        icon=str(MACOS_ICON),
         # A namespace actually controlled, rather than an invented reverse-DNS name. macOS keys a good
         # deal off this — LaunchServices registration, and the preferences domain — so two applications
         # sharing one would interfere with each other.
@@ -131,5 +143,8 @@ else:
         analysis.datas,
         [],
         name="luma",
+        # Windows reads the icon out of the executable itself. Linux has no equivalent — a desktop entry
+        # would carry one, and the portable zip deliberately installs nothing.
+        icon=str(WINDOWS_ICON) if sys.platform == "win32" else None,
         **EXE_OPTIONS,
     )

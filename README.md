@@ -312,6 +312,13 @@ cannot cross-build.
 
 The build is unsigned, so Windows and macOS warn on first run.
 
+**Icons.** `assets/luma-icon.svg` is the source; `scripts/build_icons.py` derives the macOS `.icns`, the
+Windows `.ico`, and the browser favicons from it. The derived files are committed, so an ordinary build
+needs no rasterizer — run the script only when the artwork changes (it needs `pip install cairosvg`,
+deliberately not a project dependency). It emits two shapes of the same drawing: full-bleed for Windows
+and the browser, and inset for macOS, which since Big Sur draws every icon on a canvas larger than the
+artwork. An icon that fills its canvas sits visibly oversized in the Dock.
+
 #### macOS
 
 macOS produces `luma-<version>-macos-<arch>.dmg` instead: a `Luma.app` bundle beside a shortcut to
@@ -333,9 +340,15 @@ xattr -dr com.apple.quarantine /Applications/Luma.app
 ```
 
 An application started from Finder has no terminal, so the startup messages that would otherwise carry
-the address go to `luma-desktop.log` in the data directory. Quitting is done from the Dock; Luma has no
-menu bar of its own, so macOS may offer Force Quit instead, which is safe here — the lockfile it leaves
-behind is expected and cleared on the next start.
+the address go to `luma-desktop.log` in the data directory.
+
+**Stopping it.** "Shut down Luma", at the bottom of the navigation panel, is the graceful path and is
+present on every platform — it asks the server to finish what it is doing and exit, exactly as Ctrl+C
+does from a terminal. The Dock's Quit works too, but a Quit is an Apple Event and Luma runs no event
+loop to answer it, so macOS will most likely offer Force Quit; that is safe here — the lockfile it
+leaves behind is expected and cleared on the next start — just less tidy. Making the Dock quit
+gracefully would mean bundling a Cocoa event loop and moving uvicorn off the main thread, which costs
+considerably more than it returns.
 
 ### Cutting a release
 

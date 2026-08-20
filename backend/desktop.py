@@ -53,6 +53,7 @@ import uvicorn
 
 from backend import app_config, runtime_config, spa
 from backend.main import app, spa_mounted
+from backend.routers import app_control
 
 # Loopback is the bind; `localhost` is the name that keeps passkeys available (see module docstring).
 BIND_HOST = "127.0.0.1"
@@ -251,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
     lock.write_text(str(port))
 
     server = uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level="warning"))
+    # Only now does the app gain a way to stop itself: the capability is the *server object*, and until
+    # one exists there is nothing to ask. `should_exit` is uvicorn's graceful path — the same one Ctrl+C
+    # takes — so in-flight requests finish, the lockfile is cleared by the `finally` below, and the
+    # response saying "stopping" is delivered before anything closes.
+    app_control.register_shutdown_handler(lambda: setattr(server, "should_exit", True))
     if not args.no_browser:
         threading.Thread(target=_open_browser_when_ready, args=(server, url), daemon=True).start()
 

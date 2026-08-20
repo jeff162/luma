@@ -50,6 +50,7 @@ from backend.db.control_database import (
     update_user,
     verify_totp_code,
 )
+from backend.routers.app_control import shutdown_available
 from backend.services.preferences import (
     clear_preferences,
     get_preferences,
@@ -248,6 +249,10 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "security_profile_recommended_auth": security_guidance["recommended_auth"],
         "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
         "developer_options_enabled": developer_options_enabled,
+        # Whether this process can stop itself, which only the desktop launcher arranges. Reported here
+        # rather than probed separately because the UI has to decide whether to offer the control at all,
+        # and this payload already exists to answer that class of question in one round trip.
+        "app_shutdown_available": shutdown_available(),
         "db_instance_id": db_instance_id,
     }
     # The current identity always comes from the session (both modes). A perimeter-off session is

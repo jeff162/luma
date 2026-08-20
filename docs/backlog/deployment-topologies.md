@@ -221,6 +221,22 @@ Four things that are decided rather than discoverable, and that a build has to g
   user will see, so a startup failure presents as a bouncing icon and nothing else. A log file in the
   data directory is what replaces it. The URL itself is already recoverable — `luma-desktop.lock`
   records the port.
+- **`console=True` makes the bundle invisible.** Found the hard way on the first real run: PyInstaller
+  translates it into `LSBackgroundOnly=True`, so the app has no Dock icon, no sign it is running, and
+  nothing to quit — the process is only findable through `ps`. The flag buys nothing on macOS anyway
+  (there is no terminal to attach to), so the bundle is built `console=False`. On macOS that changes
+  only the Info.plist; the executable inside the bundle stays runnable from a shell.
+- **The application had no icon at all**, nor even a favicon. `assets/luma-icon.svg` is now the single
+  source, with `scripts/build_icons.py` deriving the committed `.icns`, `.ico` and favicons — full-bleed
+  for Windows and the browser, inset to Apple's 824-of-1024 grid for macOS, since an icon that fills its
+  canvas sits visibly larger than its neighbours in the Dock.
+- **Quitting needed its own answer.** A Dock "Quit" is an Apple Event, and answering one requires a
+  Cocoa event loop — which would mean pyobjc plus moving uvicorn off the main thread, where it sits
+  precisely so Ctrl+C is clean. Disproportionate for one gesture, so the Dock's Quit degrades to Force
+  Quit (safe: SQLite is crash-safe and a stale lockfile is already expected) and the *graceful* path is
+  a "Shut down Luma" control in the app itself. That path is not a macOS consolation prize — it is the
+  answer on Windows and Linux too, where the alternative was "find the terminal and press Ctrl+C". See
+  *Packaged builds* in [`architecture.md`](../architecture.md) for the capability gating.
 
 **The quarantine step has to be documented, and the familiar gesture is wrong.** Control-click → Open no
 longer bypasses Gatekeeper for unsigned applications on macOS 15 Sequoia. The path that works is to
