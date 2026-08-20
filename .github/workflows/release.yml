@@ -11,10 +11,14 @@
 # - **No publishing.** The jobs upload build artifacts, they do not create a GitHub Release. Publishing
 #   is outward-facing and belongs to whoever is cutting the release, who can attach these files to a
 #   release they write themselves.
-# - **No macOS.** A portable zip is the wrong shape there — a `.app` cannot hold its own writable data,
-#   and App Translocation moves a quarantined app to a path that disappears. macOS wants the installed
-#   form, which is a later step. Adding `macos-latest` to the matrix would produce an artifact whose
-#   data directory is not dependable.
+# - **No signing.** The macOS artifacts are unsigned and unnotarized, so Gatekeeper refuses them until
+#   the user allows them explicitly. The README inside the disk image says how; certificates are a
+#   recurring cost and a separate decision from being able to build.
+#
+# macOS builds both architectures. `macos-13`, the last Intel image under that name, was retired in
+# December 2025; `macos-15-intel` replaces it and is the last x86_64 image GitHub plans to offer, until
+# roughly August 2027. Two images rather than one universal2 binary, because universal2 would need
+# universal2 wheels for `cryptography` and `pydantic-core` and those are not dependably published.
 #
 # Tests gate the build rather than living inside `release.py`, which checks packaging rather than
 # correctness on purpose. This is the CI half of that split: nothing gets packaged from code whose
@@ -80,7 +84,17 @@ jobs:
       # having while the broken platform is investigated.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # `form` is the distribution form this platform ships, and therefore the one its artifact is
+        # smoke-tested as. macOS is installed-only: a `.app` cannot hold its own writable data.
+        include:
+          - os: ubuntu-latest
+            form: portable
+          - os: windows-latest
+            form: portable
+          - os: macos-latest
+            form: installed
+          - os: macos-15-intel
+            form: installed
 
     steps:
       - uses: actions/checkout@v7
@@ -116,7 +130,7 @@ jobs:
         run: python scripts/release.py --skip-frontend
 
       - name: Smoke test the artifact
-        run: python scripts/smoke_artifact.py --form portable
+        run: python scripts/smoke_artifact.py --form ${{ matrix.form }}
 
       # The installed form has no installer on this platform and is not shipped from here — it is built
       # only to prove the mechanism macOS will depend on entirely. The per-OS data directory and the
@@ -129,11 +143,12 @@ jobs:
           python scripts/build_desktop.py --skip-frontend --form installed
           python scripts/smoke_artifact.py --form installed
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: luma-${{ matrix.os }}
           path: |
             dist/*.zip
+            dist/*.dmg
             dist/*.sha256
             !dist/*-installed.zip
           if-no-files-found: error

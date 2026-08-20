@@ -25,6 +25,12 @@ Three decisions carry the design:
 - **The printed URL is the contract; opening a browser is a convenience.** No opener on any platform
   reports success usefully, so the outcome is never claimed and a failure to open must not read as the
   app having failed to start.
+- **Where there is no console, the output goes to a file.** A macOS `.app` started from Finder has no
+  terminal attached, which turns that contract into nothing at all: the URL is invisible, and — the part
+  that actually matters — a failure to start presents as an icon that bounces once and disappears. So a
+  LaunchServices start redirects both streams to a log beside the data. Detected by the environment
+  variable LaunchServices sets rather than by asking whether stdout is a terminal, since that question
+  also answers "yes, a pipe" for anything running the binary and capturing its output.
 
 The lockfile records a port, not a claim of liveness. It survives a crash or a kill, so a stale one is
 expected rather than exceptional, and `/api/health` is what settles whether the recorded instance is
@@ -53,12 +59,59 @@ BIND_HOST = "127.0.0.1"
 BROWSER_HOST = "localhost"
 
 LOCK_FILENAME = "luma-desktop.lock"
+LOG_FILENAME = "luma-desktop.log"
 HEALTH_TIMEOUT_SECONDS = 1.0
 STARTUP_TIMEOUT_SECONDS = 60.0
+# Appended to across runs, so a failure that happened yesterday is still readable, but not without
+# limit: uvicorn can be noisy when something is persistently wrong, and nothing here ever prunes.
+LOG_MAX_BYTES = 1024 * 1024
 
 
 def _lock_path() -> Path:
     return runtime_config.data_dir() / LOCK_FILENAME
+
+
+def _started_by_launch_services() -> bool:
+    """Whether macOS started this through LaunchServices — a Finder double-click, or `open`. Both leave
+    the process with no terminal, which is the case a log file exists for.
+
+    `__CFBundleIdentifier` is what LaunchServices puts in the environment on the way in. Preferred over
+    `sys.stdout.isatty()`, which is false for a pipe too: the smoke harness captures this process's
+    output, and diverting it to a file there would take away the diagnostics it exists to collect."""
+    return (
+        sys.platform == "darwin"
+        and runtime_config.is_frozen()
+        and "__CFBundleIdentifier" in os.environ
+    )
+
+
+def _redirect_output_to_log() -> Path | None:
+    """Point both streams at a log beside the data, returning where it went, or None if it could not be
+    opened — in which case the app still starts, just as silently as before.
+
+    Redirected at the file-descriptor level rather than by reassigning `sys.stdout`, so that output from
+    uvicorn's logging (configured later, against whatever fd 1 is by then) lands there too."""
+    log = runtime_config.data_dir() / LOG_FILENAME
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if log.is_file() and log.stat().st_size > LOG_MAX_BYTES:
+            log.unlink()
+        handle = open(log, "a", encoding="utf-8")
+        os.dup2(handle.fileno(), 1)
+        os.dup2(handle.fileno(), 2)
+    except OSError:
+        return None
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            # Line buffered, because the interesting case is a process that dies: block-buffered output
+            # would be discarded exactly when it is the only evidence of what happened.
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    print(f"\n--- {runtime_config.app_name()} {runtime_config.APP_VERSION} starting {time.asctime()} ---")
+    return log
 
 
 def _instance_is_live(port: int) -> bool:
@@ -169,6 +222,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Start the server and print its URL without opening a browser.",
     )
     args = parser.parse_args(argv)
+
+    # Before anything that can fail, so that what fails is written down somewhere.
+    if _started_by_launch_services():
+        _redirect_output_to_log()
 
     if not spa_mounted:
         print(

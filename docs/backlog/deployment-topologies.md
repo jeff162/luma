@@ -1,7 +1,7 @@
 # Deployment topologies
 
-**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20, macOS first. Shape A
-not started (notes only).** How Luma
+**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20 — spine and CI
+harness verified, macOS built and awaiting its first run. Shape A not started (notes only).** How Luma
 is *packaged and run* — distinct from the security model that governs *who may reach it*
 ([`security-and-deployment-model.md`](security-and-deployment-model.md)). Two target shapes, one
 codebase. Transport-security (HTTP vs HTTPS) reasoning lives in the security doc's "Transport security"
@@ -169,14 +169,18 @@ came from, so the resolved data directory stays visible rather than inferred and
    configuration report, which had been resolving a relative data directory against the working
    directory and so named a path a packaged build was not using. All three OS branches are exercised
    from one platform in `backend/tests/test_packaged_paths.py` by faking `sys.frozen` and `sys.platform`.
-   The smoke harness is written — `scripts/smoke_artifact.py`, wired into both build jobs, which also
-   build an installed-form artifact on Linux only so the per-OS directory is exercised for real before
-   macOS depends on it. The smoke script has been run on Linux against both forms and passes;
-   the release workflow's **build and smoke steps remain unexercised**, since its first run stopped in
-   the test job (on two tests that had only ever passed because a developer machine has a real control
-   database on the default path — fixed, and the class docstring now says why the isolation is needed). Still outstanding after that: the macOS `.app`/`.dmg` and
-   its matrix entries. Windows and Linux installers are **not** in this step's scope — both platforms
-   keep the portable zip.
+   The smoke harness is `scripts/smoke_artifact.py`, wired into every build job, which on Linux also
+   builds an installed-form artifact so the per-OS directory is exercised for real rather than first on
+   macOS. **Verified in CI on 2026-08-20:** the release workflow runs green on Linux and Windows —
+   tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
+
+   macOS is **built but unverified**: the `.app`/`.dmg` packaging, the log file that replaces the absent
+   console, and the `macos-latest` / `macos-15-intel` matrix entries all exist, and nothing on them has
+   been run. Nothing on this machine can — it is WSL2, and PyInstaller cannot cross-build — so the first
+   real exercise is a CI run, and then the on-demand Mac for the Gatekeeper path, which CI cannot test
+   at all because a locally built bundle is never quarantined.
+
+   Windows and Linux installers are **not** in this step's scope — both platforms keep the portable zip.
 
 ### macOS specifics
 

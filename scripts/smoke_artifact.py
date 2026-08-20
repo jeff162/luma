@@ -15,6 +15,9 @@ load-bearing rather than accidental.
 The environment is made self-contained rather than inherited: a fake home (and `%APPDATA%` on Windows)
 means the assertion is against a known path and the run leaves nothing behind on the machine.
 
+On macOS the artifact is a `.dmg` rather than a zip, and it is installed the way a person would — the
+image is mounted, the bundle copied off it, and the image unmounted — before anything is launched.
+
     python scripts/smoke_artifact.py --form portable
     python scripts/smoke_artifact.py --form installed
 """
@@ -48,13 +51,26 @@ SHUTDOWN_TIMEOUT_SECONDS = 30.0
 DB_FILENAMES = ("luma-data.db", "luma-control.db")
 LOCK_FILENAME = "luma-desktop.lock"
 
+FORMS = ("portable", "installed")
+# The form this platform ships, which is the one whose artifact carries no form in its name. Stated
+# here rather than imported for the same reason the expected directories are — see the module docstring.
+RELEASE_FORM = "installed" if sys.platform == "darwin" else "portable"
+
+
+def _form_of(artifact: Path) -> str:
+    """Which form an artifact holds, read from its name. Only a build that is *not* this platform's
+    release form says so in the filename, so anything unmarked is the release form."""
+    for form in FORMS:
+        if artifact.stem.endswith(f"-{form}"):
+            return form
+    return RELEASE_FORM
+
 
 def _archive_for(form: str) -> Path:
-    """The one zip of this form in `dist/`. Ambiguity is an error rather than a guess — picking the
+    """The one artifact of this form in `dist/`. Ambiguity is an error rather than a guess — picking the
     newest would silently smoke-test yesterday's build after today's failed."""
-    archives = sorted(DIST_DIR.glob("luma-*.zip"))
-    installed = [path for path in archives if path.stem.endswith("-installed")]
-    wanted = installed if form == "installed" else [path for path in archives if path not in installed]
+    artifacts = sorted([*DIST_DIR.glob("luma-*.zip"), *DIST_DIR.glob("luma-*.dmg")])
+    wanted = [path for path in artifacts if _form_of(path) == form]
     if not wanted:
         raise SystemExit(f"No {form} artifact in {DIST_DIR} — build one first.")
     if len(wanted) > 1:
@@ -64,6 +80,40 @@ def _archive_for(form: str) -> Path:
 
 
 def _unpack(archive: Path, into: Path) -> Path:
+    return _unpack_disk_image(archive, into) if archive.suffix == ".dmg" else _unpack_zip(archive, into)
+
+
+def _unpack_disk_image(image: Path, into: Path) -> Path:
+    """Mount the image, copy the bundle off it, and unmount — which is what dragging it to Applications
+    does, and is the state the application actually has to run in. Running it from the mounted image
+    instead would test a read-only location nobody installs to."""
+    mount = into / "mounted"
+    mount.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["hdiutil", "attach", str(image), "-nobrowse", "-readonly", "-mountpoint", str(mount)],
+        check=True, capture_output=True, text=True,
+    )
+    try:
+        bundles = sorted(mount.glob("*.app"))
+        if len(bundles) != 1:
+            raise SystemExit(f"Expected exactly one .app in {image.name}, found {len(bundles)}.")
+        if not (mount / "Applications").is_symlink():
+            raise SystemExit(f"{image.name} has no Applications symlink, so it cannot be drag-installed.")
+        installed = into / bundles[0].name
+        # `symlinks=True` for the same reason the build uses it: the bundle links Resources and
+        # Frameworks at each other, and flattening those breaks the paths resolved at startup.
+        shutil.copytree(bundles[0], installed, symlinks=True)
+    finally:
+        subprocess.run(["hdiutil", "detach", str(mount)], check=False, capture_output=True)
+
+    executable = installed / "Contents" / "MacOS" / "luma"
+    if not executable.is_file():
+        raise SystemExit(f"No executable at {executable} — the bundle layout is not what was expected.")
+    executable.chmod(executable.stat().st_mode | 0o755)
+    return executable
+
+
+def _unpack_zip(archive: Path, into: Path) -> Path:
     """Unpack, and check the executable bit was recorded on the way in.
 
     `ZipFile.extract` drops permissions, so the bit has to be read from the entry and reapplied — which

@@ -1,11 +1,13 @@
 """Launcher decisions that are invisible until they are wrong.
 
 Each of these is a case where the obvious implementation looks fine and fails somewhere the developer
-is not: opening a browser under WSL, a lockfile left behind by a killed process, and a configured port
-that something else already holds.
+is not: opening a browser under WSL, a lockfile left behind by a killed process, a configured port that
+something else already holds, and a macOS bundle with no terminal to print to.
 """
 
+import os
 import socket
+import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -109,3 +111,67 @@ def test_ctrl_c_exits_cleanly_and_releases_the_lock():
             assert desktop.main(["--no-browser"]) == 0
 
         assert not lock.exists()
+
+
+def _launch_context(platform: str, frozen: bool, launch_services: bool):
+    """The three things that decide whether output has anywhere to go: the OS, whether this is a
+    packaged build, and whether macOS started it rather than a shell."""
+    environ = {**os.environ}
+    environ.pop("__CFBundleIdentifier", None)
+    if launch_services:
+        environ["__CFBundleIdentifier"] = "io.github.jeff162.luma"
+    return (
+        mock.patch.object(sys, "platform", platform),
+        mock.patch.object(desktop.runtime_config, "is_frozen", return_value=frozen),
+        mock.patch.dict(os.environ, environ, clear=True),
+    )
+
+
+def _asks_for_a_log(platform: str, frozen: bool, launch_services: bool) -> bool:
+    platform_patch, frozen_patch, env_patch = _launch_context(platform, frozen, launch_services)
+    with platform_patch, frozen_patch, env_patch:
+        return desktop._started_by_launch_services()
+
+
+def test_a_bundle_opened_from_finder_writes_its_output_to_a_file():
+    """The case the log exists for: no terminal is attached, so the startup line is invisible and a
+    failure to start is an icon that bounces once and disappears."""
+    assert _asks_for_a_log("darwin", frozen=True, launch_services=True) is True
+
+
+def test_running_the_binary_from_a_shell_keeps_printing_to_it():
+    """Including through a pipe. `sys.stdout.isatty()` would answer no here and divert the output of
+    anything capturing it — the smoke harness above all, which captures it precisely to report why a
+    launch failed."""
+    assert _asks_for_a_log("darwin", frozen=True, launch_services=False) is False
+
+
+def test_only_a_packaged_macos_build_ever_redirects():
+    """A checkout is run from a terminal by definition, and no other platform starts an application the
+    way LaunchServices does."""
+    assert _asks_for_a_log("darwin", frozen=False, launch_services=True) is False
+    assert _asks_for_a_log("linux", frozen=True, launch_services=True) is False
+    assert _asks_for_a_log("win32", frozen=True, launch_services=True) is False
+
+
+def test_the_log_sits_with_the_data_rather_than_with_the_application():
+    """Same reasoning as the databases: a macOS bundle is replaced wholesale by an upgrade, so anything
+    written inside it would be gone exactly when someone wanted to read it. Asserted through the real
+    redirect, since where the file lands is the whole claim.
+
+    The redirect is undone afterwards by restoring the saved descriptors — leaving pytest's own stdout
+    pointed at a temporary file would silence the rest of the run."""
+    saved = (os.dup(1), os.dup(2))
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"DATA_DIR": tmp}, clear=False):
+                written = desktop._redirect_output_to_log()
+            assert written == Path(tmp) / desktop.LOG_FILENAME
+            assert written.is_file()
+            # What lands *in* it is deliberately not asserted: pytest replaces `sys.stdout` with an
+            # object of its own that is not backed by file descriptor 1, so `print` here bypasses the
+            # redirect this test just performed. In a packaged build the two are the same file.
+    finally:
+        for descriptor, target in zip(saved, (1, 2)):
+            os.dup2(descriptor, target)
+            os.close(descriptor)

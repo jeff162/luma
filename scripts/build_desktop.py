@@ -14,6 +14,10 @@ something the running app can work out for itself:
 `.app` cannot hold its own writable data. The choice reaches the artifact through `LUMA_DIST_FORM`,
 which `scripts/luma.spec` bakes into the bundle.
 
+The container differs by platform as well. Windows and Linux get a zip holding one executable; macOS
+gets a `.app` bundle inside a `.dmg` laid out for drag-installing to Applications, which is what an
+unsigned application should be — nothing to script, and nothing that needs a certificate to run.
+
 Nothing here signs anything. An unsigned artifact carries an OS warning on first run, and someone who
 downloads one is choosing that; paying for certificates is a separate decision from being able to build.
 
@@ -35,6 +39,7 @@ sys.path.insert(0, str(ROOT))
 from backend import runtime_config  # noqa: E402  (needs ROOT on the path first)
 from backend.runtime_config import (  # noqa: E402
     DECLARABLE_DIST_FORMS,
+    DEFAULT_APP_NAME,
     DIST_FORM_INSTALLED,
     DIST_FORM_PORTABLE,
 )
@@ -73,6 +78,35 @@ Options:
   --no-browser    start without opening a browser, and just print the address
 
 This build is unsigned, so the operating system will warn about it the first time it runs.
+"""
+
+# Gatekeeper is the reason this one is long. The gesture most people know for opening an unsigned
+# application — Control-click, then Open — stopped working in macOS 15, and someone who tries it and is
+# refused concludes the download is broken rather than unsigned.
+READ_ME_MACOS = f"""{DEFAULT_APP_NAME} — macOS
+
+To install, drag {DEFAULT_APP_NAME} to the Applications folder.
+
+This build is unsigned and has not been notarized, so macOS refuses it on first launch. Opening it from
+the Finder context menu no longer works around that on macOS 15 and later. What does:
+
+  1. Double-click {DEFAULT_APP_NAME}, and dismiss the warning that appears.
+  2. Open System Settings -> Privacy & Security and scroll down to Security.
+  3. Choose "Open Anyway" beside the message naming {DEFAULT_APP_NAME}, and confirm.
+
+From a terminal, clearing the quarantine flag beforehand has the same effect:
+
+  xattr -dr com.apple.quarantine /Applications/{DEFAULT_APP_NAME}.app
+
+{DEFAULT_APP_NAME} then starts a local server and opens in the default browser. Nothing is published to
+the network: the server accepts connections from this machine only.
+
+Data lives in ~/Library/Application Support/{DEFAULT_APP_NAME}, and stays there when the application is
+replaced or deleted. Startup messages, including the address in use, are written to luma-desktop.log in
+that same folder — an application started from Finder has no terminal to print them to.
+
+To stop it, quit {DEFAULT_APP_NAME} from the Dock. It has no menu bar of its own, so macOS may offer
+Force Quit instead; that is safe here, and nothing is left half-written.
 """
 
 
@@ -163,6 +197,13 @@ def _build_executable(form: str) -> Path:
         env={**os.environ, "LUMA_DIST_FORM": form},
     )
 
+    if _is_macos():
+        # A directory, not a file — the spec builds a `.app` bundle here rather than a single binary.
+        built = DIST_DIR / "bin" / f"{DEFAULT_APP_NAME}.app"
+        if not built.is_dir():
+            raise SystemExit(f"PyInstaller reported success but produced no {built}.")
+        return built
+
     name = "luma.exe" if _is_windows() else "luma"
     built = DIST_DIR / "bin" / name
     if not built.is_file():
@@ -170,12 +211,20 @@ def _build_executable(form: str) -> Path:
     return built
 
 
-def _package(executable: Path, form: str) -> Path:
-    # Only the portable form is named for the platform alone. An installed-form zip is a build to be
-    # tested or fed to an installer rather than a form anyone downloads, and it has to be able to sit
-    # beside a portable one without overwriting it.
-    suffix = "" if form == DIST_FORM_PORTABLE else f"-{form}"
-    archive = DIST_DIR / f"luma-{_version()}-{_platform_tag()}{suffix}.zip"
+def _artifact_name(form: str, extension: str) -> Path:
+    """Only the form this platform actually ships is named for the platform alone. Anything else is a
+    build to be tested or fed elsewhere rather than downloaded, and has to be able to sit beside the
+    real artifact without overwriting it."""
+    suffix = "" if form == _default_form() else f"-{form}"
+    return DIST_DIR / f"luma-{_version()}-{_platform_tag()}{suffix}{extension}"
+
+
+def _package(built: Path, form: str) -> Path:
+    return _package_disk_image(built, form) if _is_macos() else _package_zip(built, form)
+
+
+def _package_zip(executable: Path, form: str) -> Path:
+    archive = _artifact_name(form, ".zip")
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.unlink(missing_ok=True)
 
@@ -191,9 +240,45 @@ def _package(executable: Path, form: str) -> Path:
     return archive
 
 
+def _package_disk_image(app: Path, form: str) -> Path:
+    """A `.dmg` holding the bundle, a symlink to Applications, and the notes about opening an unsigned
+    application. `hdiutil` is macOS-only, which is fine: this branch is only ever reached there."""
+    image = _artifact_name(form, ".dmg")
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.unlink(missing_ok=True)
+
+    staging = DIST_DIR / "dmg"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        # `symlinks=True` is load-bearing: a PyInstaller bundle links `Contents/Resources` and
+        # `Contents/Frameworks` at each other, and resolving those into copies would both double the
+        # size and break the paths the bootloader resolves at startup.
+        shutil.copytree(app, staging / app.name, symlinks=True)
+        (staging / "Applications").symlink_to("/Applications")
+        (staging / "README.txt").write_text(READ_ME_MACOS)
+
+        _run(
+            [
+                "hdiutil", "create",
+                "-volname", DEFAULT_APP_NAME,
+                "-srcfolder", str(staging),
+                "-ov",
+                # Compressed and read-only, which is what a distributed image should be.
+                "-format", "UDZO",
+                str(image),
+            ],
+            cwd=ROOT,
+        )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    return image
+
+
 def build(skip_frontend: bool = False, form: str | None = None) -> Path:
     """Build the artifact and return its path. The entry point `release.py` uses, so the two cannot
-    disagree about where the zip lands or what it is called."""
+    disagree about where the artifact lands or what it is called."""
     form = form or _default_form()
     if form not in DECLARABLE_DIST_FORMS:
         raise SystemExit(

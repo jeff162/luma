@@ -3,7 +3,7 @@
 # Entry point is `backend/desktop.py` — the same launcher a checkout runs with `python -m backend.desktop`.
 # Step 2 of the packaging plan changes how it is shipped, not what it does.
 #
-# Three things here are not boilerplate:
+# Four things here are not boilerplate:
 #
 # - **The built frontend is bundled as data.** `runtime_config.bundle_root()` resolves to PyInstaller's
 #   unpack directory in a frozen build, so `frontend/dist` has to land at that same relative path or the
@@ -11,6 +11,10 @@
 # - **The distribution form is baked in here.** Portable and installed builds are the same binary and
 #   differ only in where writable data defaults to, so the artifact has to carry the answer rather than
 #   work it out at runtime. `LUMA_DIST_FORM` selects it and a one-word file in the bundle records it.
+# - **macOS gets a different layout.** Everywhere else this is a onefile binary; a `.app` bundle is
+#   built onedir instead, because a onefile inside a bundle would re-unpack itself to a temporary
+#   directory on every launch — slow, and the same vanishing-path problem the two roots exist to avoid,
+#   just moved inside the artifact.
 # - **uvicorn and plaid are collected wholesale.** Both reach modules by name at runtime rather than by
 #   import statement — uvicorn selects its loop and protocol implementations from strings, and the Plaid
 #   SDK resolves `plaid.model.*` during deserialization. Static analysis cannot see either, and the
@@ -71,23 +75,56 @@ analysis = Analysis(
 
 pyz = PYZ(analysis.pure)
 
-exe = EXE(
-    pyz,
-    analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
-    [],
-    name="luma",
+# A terminal stays attached on purpose: the startup line carries the URL, and it is the fallback
+# whenever opening a browser does not work. A windowed build would hide the one thing the user needs.
+# It buys nothing on macOS, where a bundle started from Finder has no terminal to attach to either way
+# — `backend/desktop.py` writes to a log file there instead — but a console build is still what makes
+# the executable inside the bundle usable directly from a shell.
+EXE_OPTIONS = dict(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    # A terminal stays attached on purpose: the startup line carries the URL, and it is the fallback
-    # whenever opening a browser does not work. A windowed build would hide the one thing the user needs.
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
+    # Left to the build machine. Cross-building is not possible anyway, so each architecture is produced
+    # on a runner of that architecture rather than selected here.
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if sys.platform == "darwin":
+    # Three nested steps rather than one: EXE without the payload, COLLECT to lay the payload out beside
+    # it, BUNDLE to wrap the result in the directory structure macOS recognizes as an application.
+    exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="luma", **EXE_OPTIONS)
+    collected = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="luma")
+    app = BUNDLE(
+        collected,
+        name=f"{runtime_config.DEFAULT_APP_NAME}.app",
+        icon=None,
+        # A namespace actually controlled, rather than an invented reverse-DNS name. macOS keys a good
+        # deal off this — LaunchServices registration, and the preferences domain — so two applications
+        # sharing one would interfere with each other.
+        bundle_identifier="io.github.jeff162.luma",
+        version=runtime_config.APP_VERSION,
+        info_plist={
+            "CFBundleName": runtime_config.DEFAULT_APP_NAME,
+            "CFBundleDisplayName": runtime_config.DEFAULT_APP_NAME,
+            "CFBundleShortVersionString": runtime_config.APP_VERSION,
+            "CFBundleVersion": runtime_config.APP_VERSION,
+            "NSHighResolutionCapable": True,
+            "LSApplicationCategoryType": "public.app-category.finance",
+        },
+    )
+else:
+    exe = EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        name="luma",
+        **EXE_OPTIONS,
+    )

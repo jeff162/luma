@@ -304,12 +304,38 @@ backend/venv/bin/python scripts/build_desktop.py          # --skip-frontend reus
 On Windows, substitute `backend\venv\Scripts\python` for `backend/venv/bin/python` in this command and
 the release commands below.
 
-The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-installed` appended for
-that form. It runs on a machine with neither Python nor Node installed, and a portable build keeps its
-databases in the folder the executable sits in, so moving that folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
+The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-installed` appended for a
+build that is not the platform's usual form. It runs on a machine with neither Python nor Node
+installed, and a portable build keeps its databases in the folder the executable sits in, so moving that
+folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
 cannot cross-build.
 
 The build is unsigned, so Windows and macOS warn on first run.
+
+#### macOS
+
+macOS produces `luma-<version>-macos-<arch>.dmg` instead: a `Luma.app` bundle beside a shortcut to
+Applications, to be installed by dragging one onto the other. The portable form does not exist there,
+because a `.app` cannot hold its own writable data — an upgrade replaces the bundle wholesale, and a
+quarantined application may be run from a randomized read-only path that disappears afterwards. Data
+lives in `~/Library/Application Support/Luma` instead.
+
+Two architectures are published, and they are not interchangeable: `arm64` for Apple Silicon and `x64`
+for Intel. Apple menu -> About This Mac names which one a machine is.
+
+Because the build is neither signed nor notarized, macOS refuses it on first launch, and the gesture
+most people know for this — Control-click, then Open — stopped working in macOS 15. The path that does
+work is to open it, dismiss the refusal, then go to System Settings -> Privacy & Security, scroll to
+Security, and choose "Open Anyway". Clearing the flag beforehand has the same effect:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Luma.app
+```
+
+An application started from Finder has no terminal, so the startup messages that would otherwise carry
+the address go to `luma-desktop.log` in the data directory. Quitting is done from the Dock; Luma has no
+menu bar of its own, so macOS may offer Force Quit instead, which is safe here — the lockfile it leaves
+behind is expected and cleared on the next start.
 
 ### Cutting a release
 
@@ -325,12 +351,11 @@ backend/venv/bin/python scripts/release.py                       # gate, build, 
 The gates are that every version declaration agrees and that the working tree is clean, so an artifact
 can be traced back to a commit. `--allow-dirty` skips the second for a throwaway build.
 
-Each platform's zip (eg. Windows and Linux) is produced by running this on that platform and collecting the results.
+Each platform's artifact — a zip on Windows and Linux, a disk image on macOS — is produced by running this on that platform and collecting the results.
 
 `.github/workflows/release.yml` does that collecting: pushing a `v*` tag runs the tests, then builds on
-Linux and Windows in parallel and uploads each zip with its checksum as a workflow artifact. It stops
-short of creating a GitHub Release, so publishing stays a deliberate act. macOS is deliberately not in
-the matrix — a portable zip is the wrong shape there, and the installed form is a later step.
+Linux, Windows and both macOS architectures in parallel, and uploads each artifact with its checksum as
+a workflow artifact. It stops short of creating a GitHub Release, so publishing stays a deliberate act.
 
 Each build then smoke-tests what it produced. `scripts/smoke_artifact.py` unpacks the zip, launches the
 executable with the browser suppressed, waits for the health endpoint, and asserts both databases were
