@@ -27,7 +27,7 @@ import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '.
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
-import { AppConfirmDialog } from '../components/ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
@@ -41,6 +41,17 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const [ruleModalState, setRuleModalState] = useState(null)
   // Pre-removal membership snapshot backing the "Removed from recurring series · Undo" toast.
   const [recurringUndo, setRecurringUndo] = useState(null)
+  // A failed row action, surfaced by the chrome. Every action below patches the list only *after* its
+  // write resolves, so a failure has genuinely changed nothing — but silence is indistinguishable from
+  // the button not working, which is what this exists to say out loud.
+  const [actionError, setActionError] = useState(null)
+
+  function reportActionFailure(title, err) {
+    setActionError({
+      title,
+      description: `${err?.message || 'The change could not be saved.'} Nothing was changed.`,
+    })
+  }
 
   // Look up whether an existing rule already matches the right-clicked transaction, so the menu can
   // offer "Open matching rule" instead of "Create rule". The menu only opens when the host attaches
@@ -106,7 +117,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       // Trashing drops the row immediately (the one deliberate non-linger case — see ui-patterns).
       removeRow?.(target.id)
     } catch (err) {
-      console.error('Failed to send transaction to trash', err)
+      reportActionFailure('Could not send to trash', err)
     }
   }
 
@@ -117,7 +128,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       // The row lingers in place (per the linger pattern); patching the flag clears its marker.
       reconcileRow?.(target.id, { needs_review: 0 })
     } catch (err) {
-      console.error('Failed to mark transaction reviewed', err)
+      reportActionFailure('Could not mark as reviewed', err)
     }
   }
 
@@ -162,7 +173,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       })
       setRecurringUndo(snapshot)
     } catch (err) {
-      console.error('Failed to remove transaction from recurring series', err)
+      reportActionFailure('Could not remove from the recurring series', err)
     }
   }
 
@@ -183,7 +194,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
         recurring_excluded_series_name: null,
       })
     } catch (err) {
-      console.error('Failed to restore transaction to recurring series', err)
+      reportActionFailure('Could not restore to the recurring series', err)
     }
   }
 
@@ -203,7 +214,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
         recurring_excluded_series_name: null,
       })
     } catch (err) {
-      console.error('Failed to restore transaction to recurring series', err)
+      reportActionFailure('Could not restore to the recurring series', err)
     }
   }
 
@@ -236,6 +247,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     recurringUndo,
     setRecurringUndo,
     undoRemoveFromRecurring,
+    actionError,
+    setActionError,
     handleNoteSave,
     toggleTagFromModal,
     confirmTrash,
@@ -254,6 +267,7 @@ export function TransactionRowActionsChrome({ controller }) {
     ruleModalState, setRuleModalState,
     ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring, restoreToRecurring,
     recurringUndo, setRecurringUndo, undoRemoveFromRecurring,
+    actionError, setActionError,
     handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
   } = controller
@@ -356,6 +370,13 @@ export function TransactionRowActionsChrome({ controller }) {
             : "This transaction won't count toward the series across future scans."}
           onUndo={undoRemoveFromRecurring}
           onDismiss={() => setRecurringUndo(null)}
+        />
+      ) : null}
+      {actionError ? (
+        <AppNoticeDialog
+          title={actionError.title}
+          description={actionError.description}
+          onClose={() => setActionError(null)}
         />
       ) : null}
     </>

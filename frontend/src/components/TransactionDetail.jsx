@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
-import { AppConfirmDialog, Spinner } from './ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { OriginRow } from './OriginFields.jsx'
@@ -70,6 +70,9 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   // visibly growing as the payee trend and tags land (see usePanelReveal).
   const revealed = usePanelReveal(panelRef, !trendLoading && !tagsLoading)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
+  // A failed trash, surfaced rather than logged: the panel stays open and the row is untouched (the
+  // close/reconcile happen only after the delete resolves), which without a notice reads as a dead button.
+  const [trashError, setTrashError] = useState('')
   const [originExpanded, setOriginExpanded] = useState(false)
   // The editor's general rule affordance (create, or open the rule that already matches this row) — the
   // editor lacked one, forcing users through the category→toast path to author a rule.
@@ -92,7 +95,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       onReconcile?.(txn.id, null)
       onClose?.()
     } catch (err) {
-      console.error('Failed to send transaction to trash', err)
+      setTrashError(`${err?.message || 'The transaction could not be sent to trash.'} Nothing was changed.`)
     }
   }
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
@@ -616,6 +619,13 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
           width="min(520px, 100%)"
         />
       )}
+      {trashError ? (
+        <AppNoticeDialog
+          title="Could not send to trash"
+          description={trashError}
+          onClose={() => setTrashError('')}
+        />
+      ) : null}
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}

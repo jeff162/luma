@@ -19,11 +19,20 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
   const saved = value || ''
   const [draft, setDraft] = useState(saved)
   const [saving, setSaving] = useState(false)
+  // Inline rather than a dialog: this renders inside a popover and inside the detail panel, so the note
+  // to deliver — "still unsaved, here is why" — belongs next to the text it is about, not over it. It
+  // doubles as the flag that keeps the failed draft on screen; see the hydration effect.
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => {
     // Hydrate from the persisted note when it changes (after a save, or when the host swaps the
-    // target transaction), but never clobber an in-flight edit.
-    if (!saving) setDraft(saved)
+    // target transaction), but never clobber an in-flight edit — or a *failed* one. `saving` alone
+    // used to be the guard, which meant a rejected save flipped it back to false and this effect
+    // immediately overwrote the user's typed note with the unchanged persisted value: the edit was
+    // discarded, silently, at exactly the moment it needed to be kept for a retry. `saveError` is
+    // deliberately not a dependency — clearing it as the user types must not re-run the hydration
+    // it is suppressing.
+    if (!saving && !saveError) setDraft(saved)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, saving])
 
@@ -33,10 +42,11 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
   async function save(next) {
     if (saving) return
     setSaving(true)
+    setSaveError('')
     try {
       await onSave?.(next)
     } catch (err) {
-      console.error('Failed to save transaction note', err)
+      setSaveError(err?.message || 'The note could not be saved.')
     } finally {
       setSaving(false)
     }
@@ -44,6 +54,7 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
 
   function cancel() {
     setDraft(saved)
+    setSaveError('')
     onCancel?.()
   }
 
@@ -53,7 +64,7 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
         multiline
         rows={3}
         value={draft}
-        onChange={setDraft}
+        onChange={next => { setDraft(next); if (saveError) setSaveError('') }}
         onCancel={cancel}
         onBlurCommit={false}
         autoFocus={autoFocus}
@@ -130,6 +141,11 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
           </button>
         ) : null}
       </div>
+      {saveError ? (
+        <div style={{ color: 'var(--danger)', fontSize: 12 }}>
+          {saveError} The note is still unsaved.
+        </div>
+      ) : null}
     </div>
   )
 }
