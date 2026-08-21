@@ -92,13 +92,9 @@ Follow those; do not invent a fourth review idiom.
 
 ## Prerequisite decisions — settle these before writing code
 
-1. **Where attachments live: database blob or filesystem.** This is not an implementation detail. It
-   lands directly on [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md), whose
-   whole subject is making each backup's *scope* explicit — a backup that silently omits every receipt
-   is exactly the data-loss surprise that file exists to prevent. That item's phase-6 gate is now met,
-   so the sequencing is natural. Decide attachment storage **as part of** the backup-scope work, not
-   after it. A filesystem store also raises where the directory lives under the portable-vs-installed
-   rule in [`deployment-topologies.md`](deployment-topologies.md).
+1. ~~**Where attachments live: database blob or filesystem.**~~ **SETTLED 2026-08-21** — files on disk
+   under `DATA_DIR`, carried inside the backup zip as members. See *Settled: storage, sizing, and what
+   the backup carries* below, which also resolves the portable-vs-installed question for free.
 2. **What "searchable" means concretely.** Extracted text has to be reachable from somewhere. There is
    no full-text search surface today beyond the quick-filter, so this is a real decision: extend the
    existing filter, or introduce FTS over attachment text as its own surface. Sizing this is part of
@@ -106,6 +102,124 @@ Follow those; do not invent a fourth review idiom.
 3. **The extractor adapter's capability vocabulary** — text-only vs line-items vs both, and how a
    partially-capable backend degrades. Same question `building-a-connector.md` had to answer for
    providers, and the same trap: a capability that is really one backend's quirk.
+
+## Settled: storage, sizing, and what the backup carries (2026-08-21)
+
+Decision 1 below is resolved. The rest of this section records what fell out of settling it.
+
+### The assumed usage — and what happens if it is wrong
+
+**Recorded as an assumption, not a requirement.** The design intent is that documents are attached
+*rarely*, for purchases worth looking back on: a car repair, a house repair, a jewellery purchase, a
+warranty-relevant appliance. Not day-to-day living, and emphatically not a grocery receipt every week.
+
+**Nothing enforces this and nothing should.** Somebody else will use it differently, and a design that
+assumed rarity as a constraint would break for them. What the assumption does is explain the *sizing* of
+several decisions that would otherwise look arbitrary, and it is the single thing they all rest on:
+
+- no incremental or windowed backup is needed;
+- a full backup stays small enough to upload on whatever schedule the user likes;
+- a generous per-file cap is harmless, because the aggregate is small either way;
+- ingest-time downscaling is sufficient on its own, with no storage policy behind it.
+
+**What to watch for:** total document storage growing to a size where producing or uploading a backup is
+something the user has to think about. That is the falsification signal, and it is worth surfacing in the
+space-reclamation view below rather than waiting for a complaint.
+
+**If it turns out wrong**, the architecture holds and three already-identified items get promoted rather
+than anything being redesigned: the **streaming backup export** (which is being done regardless), the
+**document delta** in
+[`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — additive-only and
+tractable precisely because documents are immutable — and the **space-reclamation view**. That is the
+useful property to preserve when making further decisions here: let a heavy user be *inefficient*, never
+*broken*.
+
+### Files on disk under `DATA_DIR`, carried inside the backup zip
+
+**Not blobs in the database.** The backup payload is JSON assembled as one Python structure
+(`build_backup_data`), so a blob would have to be base64'd into it — a third larger, and every byte of
+every receipt materialized in memory during export. Files on disk keep bytes out of the JSON entirely.
+
+**Not loose files outside the backup either.** The backup is *already* a zip with multiple members
+(`_zip_members_bytes`, which the encrypted path uses for `manifest.json` + `payload.bin`), so documents
+ride as additional members. No new container, no base64, and the "your backup silently omits your
+receipts" failure never exists.
+
+Three things this settles for free:
+
+- **Portable versus installed needs no answer.** `DATA_DIR` already anchors both databases, so
+  `DATA_DIR/documents/` inherits the rule — beside the executable in a portable kit, in the per-OS user
+  directory on macOS — and **Settings → Configuration** already reports the directory in force.
+- **Which backup they ride is unambiguous.** Documents are transaction detail, not credentials, so they
+  belong to the **Financial data** bucket in
+  [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — the backup people
+  actually take.
+- **Destructive restore already has the right shape.** Restore wipes and rebuilds; clearing and
+  rewriting the documents directory from the zip is consistent with that, not a special case.
+
+Consequences to handle when building:
+
+- **Write order.** File and row cannot be one transaction. Write the file first, then the row: a file
+  with no row is inert litter, a row with no file is a broken link on screen. Drift is still possible
+  in both directions, which makes this a second consumer of
+  [`database-diagnostics.md`](database-diagnostics.md) — precisely the class of semantic inconsistency
+  the SQLite pragmas call "ok".
+- **Payload version 9 → 10.** A new table plus new zip members is an envelope change, and `version` is
+  hand-bumped with restore hard-rejecting anything it does not know. Register the migration last, per
+  the usual sequencing.
+- **The noun "attachment" is taken.** It already means *tag attachment* in the restore-ordering prose in
+  `data-model.md` ("tag definitions before any attachment"). Call these **documents** — it also reads
+  better for a repair invoice. This file keeps its name for continuity; the code should not.
+
+### Downscale images at ingest
+
+A receipt photographed at 12 MP is ~4 MB; re-encoded at ~1600px on the long edge at JPEG q80 it is
+~300 KB, still legible and still fine for OCR, which gains nothing above roughly 300 DPI at text size.
+That is better than a 10× reduction and it is worth doing **on its own merits** — there is no reason to
+keep a 12 MP original of a receipt — independently of any storage pressure.
+
+Adds **Pillow** as a dependency (accepted). It bundles with PyInstaller, so the kits are unaffected. The
+re-encode is deliberately lossy and one-way at ingest.
+
+PDFs pass through unchanged: re-rendering needs far more machinery, and digital invoices are small
+anyway. The per-file cap is what covers a pathological scan.
+
+### A per-file cap, generous rather than rationing
+
+Around 25 MB, applied to everything, mostly biting scanned PDFs. It exists to stop pathology, not to
+ration — **a cap that rejects is a dead end** for someone photographing a receipt with the phone they
+own, which is the other reason images are downscaled rather than refused.
+
+### Do not sunset originals on a timer
+
+Considered and rejected: deleting originals after some age, keeping the extracted text. **The economics
+run backwards.** Digital PDFs are 100–500 KB with a *perfect* text layer — cheap to keep, and discarding
+one loses the itemization layout and letterhead that make it evidence rather than a paraphrase. Photos
+and scans are the megabyte files, but their text comes from OCR, the least reliable extraction, and they
+are exactly the documents whose original matters most for a warranty claim or a disputed charge. A
+timer would preferentially delete the originals whose text substitutes are least trustworthy.
+
+It also collides with a stated design principle — destructive operations are rare, announced and
+reversible — and interacts badly with backups, since an older backup restores files that were already
+sunset.
+
+Two things are kept from the idea:
+
+- **A choice at ingest**, for someone who knows at the moment of attaching that they only want it
+  searchable: keep the original, or keep only the extracted text. Explicit, and costs nothing.
+- **A user-driven cleanup view**, on the user's own schedule rather than a policy — see below.
+
+### Space reclamation, chosen not scheduled
+
+Show what storage is actually being used and let the user decide: total document storage, broken down
+by age ("2.1 GB in documents older than 10 years"), largest originals first, and which ones have
+extracted text that would survive dropping the original. The action is explicit and per-selection.
+Maybe they want to keep everything, which is fine; maybe they do not, which is also fine.
+
+**Where it lives is open.** It fits this feature, but it is equally a *database maintenance* surface,
+and [`database-diagnostics.md`](database-diagnostics.md) is already the home for "what is the state of
+the stored data" — which would also let it sit beside the orphan reconciliation the write-order note
+above requires. Decide when either is built; do not build two.
 
 ## Phases
 

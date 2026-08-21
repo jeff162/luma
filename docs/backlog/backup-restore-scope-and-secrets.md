@@ -161,6 +161,74 @@ re-establishes both coverage and rows together. Flagged rather than folded into 
 it changes what a restore does to the credential side of the split, which is this document's subject and
 has its own blast radius.
 
+## Documents ride the data backup as zip members (settled 2026-08-21)
+
+Receipts and invoices ([`transaction-attachments.md`](transaction-attachments.md)) are stored as files
+under `DATA_DIR/documents/` and carried **inside the backup zip as additional members**, not base64'd
+into the JSON payload. The container already supports this — `_zip_members_bytes` is what the encrypted
+path uses for `manifest.json` + `payload.bin`.
+
+They belong to the **Financial data** bucket above: transaction detail, not credentials. That is
+deliberate and load-bearing — it is the backup people actually take, and a backup that silently omitted
+every receipt is precisely the failure this document exists to prevent.
+
+Consequences: payload **version 9 → 10** (a new table plus new members is an envelope change), and
+restore's existing destructive semantics extend to clearing and rewriting the documents directory from
+the zip.
+
+## The export builds the whole backup in memory — a defect, not a constraint
+
+`export_backup` calls `json.dumps(build_backup_data(conn))`, zips the result into a `BytesIO`, and
+returns `StreamingResponse(iter([content]))` — a single yield of an already-finished blob, so the
+streaming is nominal. At peak the payload dict, its JSON string and the zip bytes are all live; on the
+encrypted path the ciphertext joins them.
+
+**This already scales with the ledger and always has.** It is not caused by documents; documents would
+make it acute. Nothing in this project should degrade as the transaction count grows — the windowing
+work exists for exactly that reason — so this is a defect to fix rather than a ceiling to design
+around. Rework the export to stream to a temp file (or chunk into the zip) instead of assembling in
+RAM, on both the plain and encrypted paths.
+
+Cheap detail worth taking at the same time: the payload is serialized with `indent=2`, pretty-printing a
+machine-read artifact that is about to be compressed — inflating the largest string in the process for
+no reader's benefit.
+
+## Windowed and incremental backups — what is cheap and what is not
+
+**Proposed:** rather than a full backup every time, allow a date-scoped one (year to date, past year) so
+a full encrypted backup can sit on a cloud server with small increments layered on top.
+
+**The blocker is that there is no change tracking.** `txn` has no `updated_at` — its only timestamps are
+`date`, `authorized_date`, `trashed_at` and `suspect_resolved_at`. So a "past year" backup slices by
+*transaction date*, not by *when the row changed*:
+
+- a 2019 charge recategorized this morning is absent from it, so full + incremental restores the stale
+  2019 categorization;
+- a 2019 row trashed today is likewise absent, and an additive incremental cannot express a deletion at
+  all.
+
+Date-windowed is therefore a **slice**, useful for export or sharing, and *not* a basis for disaster
+recovery. True incrementality needs `updated_at` on every table plus delete tombstones, with every write
+site maintaining them — a real schema change with a permanent maintenance burden.
+
+**The decomposition that avoids all of it:** the two halves have opposite properties, and only one needs
+incrementality.
+
+| half | mutable? | size | approach |
+| --- | --- | --- | --- |
+| Ledger | yes, anywhere in history | small once zipped | **always full** — cheap enough to upload on any schedule |
+| Documents | **no** — immutable once written | large, grows forever | **delta** — send only ids the target lacks |
+
+A document never changes after ingest, so "which files does this backup already have" is answerable by
+id alone, with no change tracking and no correctness risk. That delivers the cloud story — one big
+encrypted full backup, then increments that are mostly just new receipts — while the ledger stays a
+full, always-correct snapshot.
+
+Restoring a chain still needs design (the compatibility guard's `instance_id` / `schema_version` checks
+would have to apply across files, and restore is currently wipe-and-rebuild with **no merge mode** —
+"restore on top" today means restoring into a non-empty database, which still replaces). But the
+document delta is additive-only, which is the tractable half.
+
 ## Open questions
 
 - **Restore-all and the perimeter:** offer-with-confirmation (recommended) vs. an automatic reset. The

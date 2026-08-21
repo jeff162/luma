@@ -27,7 +27,7 @@ Landed in the working tree, uncommitted at the time of writing:
 
 ## Features
 
-Four, all with designs already written. Named scope is what ships for the release; anything else in
+Five, all with designs already written. Named scope is what ships for the release; anything else in
 those files stays deferred.
 
 ### 1. Receipts and invoices — attachment phase 1
@@ -41,10 +41,13 @@ transaction, and **tier-1 PDF text extraction** so an attached invoice is search
 **This one is promised by the README already**, so it is the only feature whose absence would make a
 shipped document wrong. Its scope was deliberately written to the free tiers for that reason.
 
-**Blocked on a decision, not on code:** where attachments live (database blob or filesystem). That
-belongs to [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md),
-whose phase-6 gate is now met. **A first release that stores attachments somewhere the backup does not
-carry would ship a data-loss surprise into the artifact people download.** Settle it first.
+**Storage decision settled 2026-08-21:** files on disk under `DATA_DIR/documents/`, carried inside the
+backup zip as members, riding the **Financial data** backup. That also resolves portable-vs-installed
+for free (`DATA_DIR` already anchors both databases). Images are downscaled at ingest (Pillow, accepted);
+a ~25 MB per-file cap covers pathological scans. Payload version 9 → 10. Details and the rejected
+alternatives are in the backlog file.
+
+**It gained a prerequisite instead** — see feature 5.
 
 ### 2. Recurring anomaly signals
 
@@ -93,13 +96,30 @@ recovery codes mean most never reach it. Argument against: it is net-new surface
 Also in this file and worth taking regardless, being small: `VaultDecryptError` is unclassified and
 reports as a generic sync failure instead of "reconnect needed".
 
+### 5. Streaming backup export
+
+[`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md) → *The
+export builds the whole backup in memory*.
+
+`export_backup` assembles the entire payload as a Python structure, serializes it to one JSON string,
+zips that into a `BytesIO`, and returns it as a single yield — so peak memory holds all of them at once,
+and the encrypted path adds the ciphertext on top. **This already scales with the ledger and always
+has**; documents would make it acute rather than causing it.
+
+It is on this list because *"nothing should degrade as the transaction count grows"* is a project
+principle — the list windowing exists for that reason — and because shipping documents on top of it
+would turn a latent problem into a reported one. Rework both paths to stream to a temp file instead of
+assembling in RAM, and drop the `indent=2` that inflates the largest string for a machine reader.
+
+**Prerequisite for feature 1**, and worth doing regardless of it.
+
 ## Release mechanics
 
 - **Test the Windows and Linux kits.** Only macOS has been exercised. Both are portable zips, so the
   test is: unzip, run, confirm the databases land beside the executable and the app opens.
 - **Screenshots.** The README has none, and it is a dashboard-driven visual application whose whole job
   is letting someone decide quickly. This will cost more prospective users than any missing document.
-  **Deliberately last, after all four features land** — cash-flow reporting adds a whole dashboard frame
+  **Deliberately last, after every feature lands** — cash-flow reporting adds a whole dashboard frame
   and recurring anomalies change what the surfaces show, so anything shot earlier would be reshot.
 - **Cut the release.** `docs/releasing.md` has the checklist. Note that CI does **not** publish —
   attaching the four artifacts and their `.sha256` files to a written release is a manual step, and
@@ -111,9 +131,10 @@ reports as a generic sync failure instead of "reconnect needed".
 
 ## Sequencing
 
-1. **Settle attachment storage** with the backup-scope work. It blocks feature 1 and nothing else waits
-   on it, so it is the only thing that has to happen early.
-2. **Features in any order** — they do not touch each other. Recurring anomalies are the cheapest and
+1. **Streaming backup export (5) before receipts (1).** The storage decision is settled, but shipping
+   documents onto an in-memory export is what would make that defect user-visible. Nothing else waits on
+   either.
+2. **The other three in any order** — they do not touch each other. Recurring anomalies are the cheapest and
    most visible; vault recovery is the one whose absence is a real hazard; attachments are the one the
    README already promises.
 3. **Kit testing** — independent of the features, so it can happen whenever a build is convenient.

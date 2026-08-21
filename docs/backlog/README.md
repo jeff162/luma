@@ -22,7 +22,7 @@ splits the main docs by question — structure, field semantics, UI behavior, co
 than by feature.
 
 > **Before going public:** [`../pre-release.md`](../pre-release.md) holds the committed, blocking
-> plan — four features drawn from the files below, plus the release mechanics. Items named there are
+> plan — five features drawn from the files below, plus the release mechanics. Items named there are
 > scoped: only part of `dashboard-reporting.md` and `recurring-detection.md` is in that scope.
 
 ## Items
