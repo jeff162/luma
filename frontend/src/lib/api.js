@@ -10,7 +10,24 @@
  * identity header: selecting an identity (or signing in) establishes the session server-side.
  */
 
+import { noteRequestFailure } from './backendLiveness'
+
 const BASE = '/api'
+
+// Every request in this module goes out through here, so that the one place that cares — the
+// backend-liveness watch — learns when a call never reached a server at all. `fetch` rejects rather
+// than resolving in exactly that case, and until now each of those rejections was handled (or not) by
+// whichever call site happened to make it, so the news that the process had stopped was thrown away as
+// many times as there were callers. Failures are re-thrown unchanged: this observes, it does not
+// handle.
+async function trackedFetch(input, init) {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    noteRequestFailure(error)
+    throw error
+  }
+}
 
 // Single app-wide "something was persisted" signal. Every successful mutation pings it: all non-GET
 // requests through `request()` below, plus the multipart upload helpers (import/run, restore) that
@@ -47,7 +64,7 @@ function buildResponseError(body, status) {
 
 async function request(path, options = {}) {
   const { suppressMutationSignal = false, ...fetchOptions } = options
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await trackedFetch(`${BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
       ...fetchOptions.headers,
@@ -570,7 +587,7 @@ export const api = {
   previewCsv: (file) => {
     const fd = new FormData()
     fd.append('file', file)
-    return fetch('/api/import-export/preview', { method: 'POST', body: fd }).then(async res => {
+    return trackedFetch('/api/import-export/preview', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         const error = new Error(err.detail || 'Request failed')
@@ -584,7 +601,7 @@ export const api = {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('config', JSON.stringify(config))
-    return fetch('/api/import-export/run', { method: 'POST', body: fd }).then(async res => {
+    return trackedFetch('/api/import-export/run', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         throw buildResponseError(err, res.status)
@@ -610,7 +627,7 @@ export const api = {
     const fd = new FormData()
     for (const f of files) fd.append('files', f)
     if (accountId) fd.append('account_id', accountId)
-    return fetch('/api/import-export/amazon/scan', { method: 'POST', body: fd }).then(async res => {
+    return trackedFetch('/api/import-export/amazon/scan', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         throw buildResponseError(err, res.status)
@@ -623,7 +640,7 @@ export const api = {
     for (const f of files) fd.append('files', f)
     fd.append('account_id', accountId)
     fd.append('apply_categorization', applyCategorization ? 'true' : 'false')
-    return fetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
+    return trackedFetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
         throw buildResponseError(err, res.status)
@@ -802,7 +819,7 @@ export const api = {
   inspectBackupFile: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await fetch('/api/import-export/restore-file/inspect', { method: 'POST', body: fd })
+    const res = await trackedFetch('/api/import-export/restore-file/inspect', { method: 'POST', body: fd })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
       const error = new Error(err.detail || 'Request failed')
@@ -817,7 +834,7 @@ export const api = {
     if (privateKeyFile) fd.append('private_key_file', privateKeyFile)
     if (privateKeyPassphrase) fd.append('private_key_passphrase', privateKeyPassphrase)
     if (force) fd.append('force', 'true')
-    const res = await fetch('/api/import-export/restore-file', { method: 'POST', body: fd })
+    const res = await trackedFetch('/api/import-export/restore-file', { method: 'POST', body: fd })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
       // The compatibility and demo-data guards return structured detail objects (409). buildResponseError
@@ -833,7 +850,7 @@ export const api = {
     // The passphrase of the vault that PRODUCED the backup — only needed for a file from another
     // install, whose ciphertext must be reopened before it can be re-keyed under this workspace.
     if (passphrase) fd.append('passphrase', passphrase)
-    const res = await fetch('/api/import-export/restore/credentials-file', { method: 'POST', body: fd })
+    const res = await trackedFetch('/api/import-export/restore/credentials-file', { method: 'POST', body: fd })
     if (!res.ok) {
       // `buildResponseError` (not a bare Error) so callers can branch on `detail.code` — this endpoint
       // answers `backup_passphrase_required` / `incorrect_backup_passphrase` / `vault_locked`.
@@ -851,7 +868,7 @@ export const api = {
 // run. Fetching keeps the response in the app's hands: failures raise the same `buildResponseError`
 // shape as every other call, and the SPA is never left.
 export async function downloadUrl(url) {
-  const res = await fetch(url)
+  const res = await trackedFetch(url)
   if (!res.ok) {
     throw buildResponseError(await res.json().catch(() => ({ detail: res.statusText })), res.status)
   }

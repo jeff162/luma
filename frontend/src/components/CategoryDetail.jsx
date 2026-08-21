@@ -76,6 +76,11 @@ export default function CategoryDetail({ category, categories = [], onClose, for
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
+    }).catch(() => {
+      // Cleared for the same reason as the account trend: the effect re-runs per category, so a kept
+      // series would be attributed to whichever category is on screen now.
+      setTrend([])
+      setTrendLoading(false)
     })
   }, [category.id, dateStart, dateEnd])
 

@@ -45,6 +45,7 @@ really there.
 
 import argparse
 import os
+import signal
 import socket
 import stat
 import subprocess
@@ -126,6 +127,17 @@ def _started_by_launch_services() -> bool:
     )
 
 
+def _has_console() -> bool:
+    """Whether anything printed here reaches a person as it happens, rather than a log file nobody is
+    watching.
+
+    Named for the console rather than for the platform, because that is what the two callers actually
+    depend on and the set can grow: today it is only the macOS bundle, but a Windows build made
+    windowless would join it. Both the decision to redirect the streams and the decision to mention
+    Ctrl+C have to come from the same answer, or a build ends up advising a keystroke into a log."""
+    return not _started_by_launch_services()
+
+
 def _redirect_output_to_log() -> Path | None:
     """Point both streams at a log beside the data, returning where it went, or None if it could not be
     opened — in which case the app still starts, just as silently as before.
@@ -153,6 +165,40 @@ def _redirect_output_to_log() -> Path | None:
 
     print(f"\n--- {runtime_config.app_name()} {runtime_config.APP_VERSION} starting {time.asctime()} ---")
     return log
+
+
+def _install_stop_signal_handlers(server: uvicorn.Server) -> None:
+    """Make the signals that mean "stop" end in the same graceful path everything else uses.
+
+    **SIGTERM** is already handled by uvicorn, and that is precisely the problem. `Server.capture_signals`
+    restores the *previous* handler on the way out and then re-raises what it caught, so a SIGTERM that
+    has just shut the server down cleanly is delivered a second time — to `SIG_DFL`, which terminates the
+    process on the spot, before the `finally` in `main()` clears the lockfile and before a word is
+    printed. Registering a handler here is what makes uvicorn save *this* as the previous one, so the
+    re-raise lands somewhere harmless and `run()` returns normally. That path is not exotic: it is the
+    macOS Dock's Quit and Command-Q, which reach this process as SIGTERM from the wrapper
+    (`macos/main.swift`), and `systemctl stop` in the LAN shape.
+
+    **SIGHUP** is not in uvicorn's `HANDLED_SIGNALS`, so there is nothing to defuse and this is the only
+    handler it will ever have. Without one, closing the terminal a portable build was started from kills
+    it outright — the same silent death, by a different route. Windows has no such signal, hence the
+    guard.
+
+    **SIGINT is deliberately absent.** Its default handler raises `KeyboardInterrupt`, which `main()`
+    already catches, so the re-raise is survived without help. Taking it over would only make Ctrl+C
+    *before* uvicorn installs its own handlers do nothing at all, which is strictly worse.
+
+    Requesting the stop rather than ignoring the signal is what covers the window before uvicorn's
+    handlers exist: a quit arriving during a slow startup is honoured at the first check instead of being
+    swallowed, which is the difference between the app closing and the macOS wrapper waiting out its kill
+    timer."""
+
+    def request_stop(_signum, _frame):
+        server.should_exit = True
+
+    signal.signal(signal.SIGTERM, request_stop)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, request_stop)
 
 
 def _instance_is_live(port: int) -> bool:
@@ -265,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Before anything that can fail, so that what fails is written down somewhere.
-    if _started_by_launch_services():
+    if not _has_console():
         _redirect_output_to_log()
 
     if not spa_mounted:
@@ -292,18 +338,27 @@ def main(argv: list[str] | None = None) -> int:
     lock.write_text(str(port))
 
     server = uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level="warning"))
-    # Only now does the app gain a way to stop itself: the capability is the *server object*, and until
-    # one exists there is nothing to ask. `should_exit` is uvicorn's graceful path — the same one Ctrl+C
-    # takes — so in-flight requests finish, the lockfile is cleared by the `finally` below, and the
-    # response saying "stopping" is delivered before anything closes.
+    # Four different pieces of news, one way to act on them. The in-app control, a stop signal, and the
+    # parent wrapper's death all set `server.should_exit`, which is uvicorn's graceful shutdown — the same
+    # one Ctrl+C takes — so in-flight requests finish, the `finally` below clears the lockfile, and a
+    # response already on its way out (the one saying "stopping") is delivered before anything closes.
+    # None of them can be registered any earlier: the capability *is* the server object, and until one
+    # exists there is nothing to ask.
     app_control.register_shutdown_handler(lambda: setattr(server, "should_exit", True))
+    _install_stop_signal_handlers(server)
 
     if _parent_pipe_is_attached():
         threading.Thread(target=_watch_for_parent_exit, args=(server,), daemon=True).start()
     if not args.no_browser:
         threading.Thread(target=_open_browser_when_ready, args=(server, url), daemon=True).start()
 
-    print(f"Luma is running at {url} — press Ctrl+C to stop.")
+    # Ctrl+C is advice only where somebody is watching a terminal. Where this is going to a log instead,
+    # the address is the whole of what the line is for, and how to stop a windowless build is documented
+    # beside it (`READ_ME_MACOS` in `scripts/build_desktop.py`) and offered inside the app.
+    if _has_console():
+        print(f"Luma is running at {url} — press Ctrl+C to stop.")
+    else:
+        print(f"Luma is running at {url}")
     try:
         # Blocking, and in the main thread on purpose: uvicorn installs the signal handlers that make
         # Ctrl+C a clean shutdown rather than an abandoned server thread.
@@ -311,8 +366,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         # Not an error path. `Server.capture_signals` restores the previous SIGINT handler and then
         # re-raises the signal into it, so a graceful shutdown that has already finished still arrives
-        # here as a KeyboardInterrupt. Ctrl+C is the documented way to stop — printing a stack trace for
-        # it would report the advertised exit as a crash.
+        # here as a KeyboardInterrupt. Ctrl+C is an advertised way to stop — printing a stack trace for
+        # it would report a clean exit as a crash.
         pass
     finally:
         lock.unlink(missing_ok=True)

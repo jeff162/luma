@@ -188,6 +188,12 @@ export default function AccountDetail({ account, categories = [], onClose, force
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
+    }).catch(() => {
+      // Clear rather than keep: this effect re-runs when the account changes, so a failure that left the
+      // previous series up would label one account's history with another's name. An empty chart is the
+      // honest answer, and a spinner that never stops is the one thing it must not be.
+      setTrend([])
+      setTrendLoading(false)
     })
   }, [account.id, dateStart, dateEnd, sourceCsv])
 

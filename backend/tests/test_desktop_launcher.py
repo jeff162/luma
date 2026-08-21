@@ -6,6 +6,7 @@ something else already holds, and a macOS bundle with no terminal to print to.
 """
 
 import os
+import signal
 import socket
 import sys
 import tempfile
@@ -113,6 +114,87 @@ def test_ctrl_c_exits_cleanly_and_releases_the_lock():
             assert desktop.main(["--no-browser"]) == 0
 
         assert not lock.exists()
+
+
+def _stop_signal_reaches_the_server(signum: int) -> bool:
+    """Send `signum` to this process with the launcher's handlers installed, and report whether the
+    server was asked to stop. Surviving the call at all is half the assertion: the default disposition
+    for both of these signals terminates the process outright, so a test that merely fails would instead
+    take the whole run down with it."""
+    server = mock.Mock(should_exit=False)
+    previous = signal.getsignal(signum)
+    try:
+        desktop._install_stop_signal_handlers(server)
+        signal.raise_signal(signum)
+        return server.should_exit is True
+    finally:
+        signal.signal(signum, previous)
+
+
+def test_sigterm_stops_the_server_instead_of_killing_the_process():
+    """The macOS Dock's Quit and Command-Q arrive here as SIGTERM, and so does `systemctl stop`. uvicorn
+    handles the signal and then re-raises it into whatever handler was installed beforehand, so with none
+    of our own the second delivery reaches `SIG_DFL` and terminates the process where it stands — after a
+    clean shutdown, but before the lockfile is released or a word is printed. Registering a handler is
+    what gives that re-raise somewhere harmless to land."""
+    assert _stop_signal_reaches_the_server(signal.SIGTERM)
+
+
+def test_a_closed_terminal_stops_the_server_rather_than_killing_it():
+    """SIGHUP is not in uvicorn's `HANDLED_SIGNALS`, so unlike SIGTERM there is nothing to defuse and
+    this is the only handler it will ever have. Without one, closing the window a portable build was
+    started from kills it outright, leaving the lockfile behind."""
+    if not hasattr(signal, "SIGHUP"):
+        return  # Windows has no such signal; the launcher guards for the same reason.
+    assert _stop_signal_reaches_the_server(signal.SIGHUP)
+
+
+def test_ctrl_c_is_left_to_python():
+    """Deliberately not taken over. Its default handler raises `KeyboardInterrupt`, which `main` already
+    catches, so the re-raise is survived without help — while a handler of ours would silently swallow a
+    Ctrl+C arriving *before* uvicorn installs its own, which is strictly worse than the status quo."""
+    server = mock.Mock(should_exit=False)
+    before = signal.getsignal(signal.SIGINT)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    try:
+        desktop._install_stop_signal_handlers(server)
+        assert signal.getsignal(signal.SIGINT) is before
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+
+
+def _startup_line(has_console: bool) -> str:
+    stopped = mock.Mock()
+    stopped.run.return_value = None
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.object(desktop, "spa_mounted", True), \
+             mock.patch.object(desktop, "_has_console", return_value=has_console), \
+             mock.patch.object(desktop, "_redirect_output_to_log", return_value=None), \
+             mock.patch.object(desktop, "_install_stop_signal_handlers"), \
+             mock.patch.object(desktop, "_lock_path", return_value=Path(tmp) / "luma-desktop.lock"), \
+             mock.patch.object(desktop, "_running_instance_port", return_value=None), \
+             mock.patch.object(desktop, "_choose_port", return_value=8123), \
+             mock.patch.object(desktop.uvicorn, "Server", return_value=stopped), \
+             mock.patch("builtins.print") as printed:
+            assert desktop.main(["--no-browser"]) == 0
+    return next(
+        call.args[0] for call in printed.call_args_list
+        if call.args and str(call.args[0]).startswith("Luma is running")
+    )
+
+
+def test_a_windowless_build_is_not_told_to_press_ctrl_c():
+    """Where the output is going to a log file, there is no terminal to press it in — and the log is read
+    after the fact, by someone who cannot act on advice addressed to a session that never existed. How to
+    stop a bundle is documented beside it and offered inside the app."""
+    assert desktop._has_console() is True  # This test run has one.
+    assert "Ctrl+C" not in _startup_line(has_console=False)
+
+
+def test_a_terminal_start_still_says_how_to_stop_it():
+    """The other half of the same claim: suppressing the advice everywhere would take it away from the
+    two platforms where it is the only way out of a foreground process."""
+    assert "Ctrl+C" in _startup_line(has_console=True)
 
 
 def _launch_context(platform: str, frozen: bool, launch_services: bool):

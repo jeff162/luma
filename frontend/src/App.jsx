@@ -9,6 +9,7 @@ import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api } from './lib/api.js'
+import { BACKEND_STOPPED_EVENT, announceBackendStopped, watchBackendLiveness } from './lib/backendLiveness.js'
 import { applyLedgerCurrency } from './lib/moneyDisplay.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
@@ -1029,6 +1030,20 @@ export default function App() {
     refs: [navProfileMenuRef],
   })
 
+  // Before anything else, and unconditionally: a backend that stops does so regardless of whether
+  // anyone is signed in, and the tab that has to be told may be sitting on the sign-in screen. The
+  // failed requests that carry the news arrive from the api layer (see `lib/backendLiveness.js` for why
+  // there is no heartbeat behind this).
+  useEffect(() => {
+    const stopWatching = watchBackendLiveness()
+    const onStopped = () => setAppStopped(true)
+    window.addEventListener(BACKEND_STOPPED_EVENT, onStopped)
+    return () => {
+      window.removeEventListener(BACKEND_STOPPED_EVENT, onStopped)
+      stopWatching()
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
 
@@ -1296,9 +1311,12 @@ export default function App() {
     // The server answers before it stops, so success here means the request was accepted rather than
     // that the process is already gone. What follows is a dead app either way — every later request
     // fails — so the UI says so plainly instead of letting the page decay into unexplained errors.
+    // Announced rather than set directly: every other tab is about to lose the same backend, and this
+    // is the one moment where that is known rather than discovered. The announcement comes back to
+    // this tab through the same listener that serves the others.
     setPendingShutdown(false)
     setShuttingDown(false)
-    setAppStopped(true)
+    announceBackendStopped()
   }
 
   function handleSwitchLocalProfile() {

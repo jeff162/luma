@@ -1,8 +1,8 @@
 # Deployment topologies
 
 **Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20 — all four targets
-build and smoke-test green in CI; what remains is what CI cannot reach (Gatekeeper, and the
-LaunchServices log path). Shape A not started (notes only).** How Luma
+build and smoke-test green in CI, and the shutdown paths are answered in code; what remains is what CI
+cannot reach (Gatekeeper, the LaunchServices log path, and the Dock's Quit end to end). Shape A not started (notes only).** How Luma
 is *packaged and run* — distinct from the security model that governs *who may reach it*
 ([`security-and-deployment-model.md`](security-and-deployment-model.md)). Two target shapes, one
 codebase. Transport-security (HTTP vs HTTPS) reasoning lives in the security doc's "Transport security"
@@ -176,11 +176,40 @@ came from, so the resolved data directory stays visible rather than inferred and
    tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
 
    **The Dock work (2026-08-20) builds and launches.** The Swift wrapper compiles, the bundle assembles,
-  and the app runs once ad-hoc signed (see the signing entry below — the first build failed as
-  "damaged"). What has *not* been confirmed either way: whether the Dock icon appears without the
-  launch bounce, whether Quit and Command-Q shut down cleanly, and whether the two death-watches behave
-  — wrapper force-quit stopping the server, and the server exiting quitting the wrapper. **Shutdown
-  behaviour is the open thread**, and this machine cannot check any of it: no Swift toolchain, no Mac.
+   and the app runs once ad-hoc signed (see the signing entry below — the first build failed as
+   "damaged").
+
+   **The shutdown thread is closed in code (2026-08-20), unverified on a Mac.** It opened with an
+   observation that reads as cosmetic and was not: an in-app shutdown logged "Luma has stopped.", and a
+   Dock Quit logged nothing at all. The cause was one line of uvicorn — `Server.capture_signals` restores
+   the *previous* handler on the way out and then re-raises the signal it caught, so the SIGTERM the
+   wrapper sends is delivered a second time, to `SIG_DFL`, and kills the process where it stands: after
+   the clean shutdown, but before the lockfile is released or a word is printed. Ctrl+C escaped it only
+   because Python's default SIGINT handler raises an exception the launcher already catches. Three things
+   followed from fixing it, all recorded under *Packaged builds* in
+   [`architecture.md`](../architecture.md): the handlers themselves (SIGTERM defused, SIGHUP given the
+   one it never had, SIGINT deliberately left alone), the startup line no longer advising Ctrl+C into a
+   log nobody can press it in, and the discovery that the stale lockfile left by every Dock Quit had the
+   same single cause.
+
+   **Telling the browser was the other half, and needed no polling.** Only the tab that pressed the
+   button knew; every other tab, and every shutdown that did not come from a browser at all, decayed into
+   silent failures. The signal turned out to exist already and to be free — a request to a port nothing
+   is listening on is refused immediately — and the "endless loading" that looked like a missing request
+   timeout was a missing *rejection path* at the call sites, the rejection having been arriving in
+   milliseconds and being dropped. So: `frontend/src/lib/backendLiveness.js` acts on the failure,
+   `BroadcastChannel` fans it out to the other tabs, a probe on returning to visibility covers the idle
+   tab (the Dock-Quit case, and equally a machine waking from sleep), and a sweep fixed the load sites
+   whose spinner could never stop. **A blanket request timeout was considered and rejected**: what it
+   would catch is a *stalled* connection rather than a refused one, which the visibility probe already
+   covers, and applying one across the api layer would have to carve out every legitimately long request
+   (sync, import, backup, demo load) — a list that breaks a real feature whenever it is wrong.
+
+   What still needs the Mac, none of it checkable here (no Swift toolchain, no Mac): whether the Dock
+   icon appears without the launch bounce; whether Quit and Command-Q shut down cleanly *and leave "Luma
+   has stopped." in the log*, which is the specific claim the signal fix makes; and whether the two
+   death-watches behave — wrapper force-quit stopping the server, and the server exiting quitting the
+   wrapper.
 
   macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
    (x64) — go green, smoke tests included, which settles the one thing that could not be reasoned out in
@@ -262,6 +291,9 @@ Four things that are decided rather than discoverable, and that a build has to g
   was "find the terminal and press Ctrl+C"; see *Packaged builds* in
   [`architecture.md`](../architecture.md) for how the capability is gated so a LAN deployment never
   offers it. On macOS the wrapper adds Dock Quit and Command-Q, sending SIGTERM into that same path.
+
+  That SIGTERM needs the launcher to hold a handler of its own, or uvicorn re-raises it into `SIG_DFL`
+  and the process dies before it can clean up — the defect described in step 3 above.
 
   Neither process is left behind when the other goes first. The wrapper holds the write end of a pipe
   whose read end is the child's stdin; a **zero-length** read there means every write end is closed,

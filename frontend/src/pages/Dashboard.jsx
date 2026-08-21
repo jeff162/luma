@@ -2083,7 +2083,11 @@ export default function Dashboard() {
     if (dateResolving) return
     setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null); setOtherDrillDepth(0)
-    loadSingleTotals().then(() => setLoading(false))
+    // A rejection here used to strand the spinner forever, because nothing cleared it: the dashboard sat
+    // loading with no error and no way out but a reload. What is on screen stays on screen — the loaders
+    // write their state only on success — and the app's own unreachable-backend handling says so when
+    // that is the reason.
+    loadSingleTotals().catch(() => { }).then(() => setLoading(false))
   }, [mode, loadSingleTotals, dateResolving])
 
   // Recategorizing (here or from a detail panel) changes the aggregates, so refresh the breakdown/trend
@@ -2127,13 +2131,13 @@ export default function Dashboard() {
     if (mode !== 'compare' || !periodA || !periodB) return
     setLoading(true)
     setCmpLevel('groups'); setCmpGroup(null)
-    loadCompareTotals().then(() => setLoading(false))
+    loadCompareTotals().catch(() => { }).then(() => setLoading(false))
   }, [mode, periodA, periodB, loadCompareTotals])
 
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
-    loadTrendSeries().then(() => setTrendLoading(false))
+    loadTrendSeries().catch(() => { }).then(() => setTrendLoading(false))
   }, [mode, loadTrendSeries])
 
   useEffect(() => {
@@ -2158,10 +2162,15 @@ export default function Dashboard() {
     // Selecting the group keys the paged group-transaction list (usePagedTransactions), which fetches on
     // its own; here we only need the category breakdown that the pie/list render from.
     setSelectedGroup(groupRow)
-    const rows = await api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
-    setCatRows(rows)
-    setLevel('categories')
-    setDrillLoading(false)
+    // `finally`, so a failure propagates exactly as it did before — the spinner is the only thing this
+    // changes. `setLevel` not having run is what leaves the view where it started.
+    try {
+      const rows = await api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
+      setCatRows(rows)
+      setLevel('categories')
+    } finally {
+      setDrillLoading(false)
+    }
   }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters])
 
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
@@ -2230,14 +2239,17 @@ export default function Dashboard() {
       cmpGroupsB.find(r => r.group_id === groupId) || group
     setDrillLoading(true)
     setCmpGroup(groupRow)
-    const [a, b] = await Promise.all([
-      fetchPeriodCatTotals(periodA, groupId, accountId, tagIds, ownerIds, summaryFilters),
-      fetchPeriodCatTotals(periodB, groupId, accountId, tagIds, ownerIds, summaryFilters),
-    ])
-    setCmpCatsA(a)
-    setCmpCatsB(b)
-    setCmpLevel('categories')
-    setDrillLoading(false)
+    try {
+      const [a, b] = await Promise.all([
+        fetchPeriodCatTotals(periodA, groupId, accountId, tagIds, ownerIds, summaryFilters),
+        fetchPeriodCatTotals(periodB, groupId, accountId, tagIds, ownerIds, summaryFilters),
+      ])
+      setCmpCatsA(a)
+      setCmpCatsB(b)
+      setCmpLevel('categories')
+    } finally {
+      setDrillLoading(false)
+    }
   }
 
   const pieGroupRows = viewIsIncome ? incomeRows : groupRows

@@ -183,6 +183,11 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       if (rows.length > 0) {
         setSelectedMonth(rows[rows.length - 1].month)
       }
+    }).catch(() => {
+      // Cleared for the same reason as the account trend: the effect re-runs per payee, so a kept series
+      // would be shown under a different payee's name.
+      setTrend([])
+      setTrendLoading(false)
     })
   }, [payee, dateStart, dateEnd, showPayeeActivity])
 
