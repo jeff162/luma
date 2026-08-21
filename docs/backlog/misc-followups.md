@@ -90,3 +90,32 @@ beyond, with the full stamp on the `title` either way.
 (diagnostics, log rows, export metadata) want the absolute form unconditionally. Changing the shared
 function would change all of them at once. If picked up: survey the call sites first, and expect the
 answer to be a *second* formatter for freshness lines rather than a change to this one.
+
+## Detail-panel trend fetches have no stale-response guard
+
+**Context.** The trend effects in `AccountDetail.jsx`, `CategoryDetail.jsx` and `TransactionDetail.jsx`
+fetch on every change of subject with no `cancelled` flag, so two responses in flight can land out of
+order and paint an older subject's series over a newer one. `detailShared.jsx` and
+`ImportBatchDetail.jsx` both already do this correctly and are the pattern to copy.
+
+**Why deferred.** Noticed on 2026-08-20 while adding the missing rejection paths to those same three
+effects, which was a different defect (a spinner that could never stop) with a different fix. Widening
+that sweep into a race-condition fix would have mixed two changes in one pass.
+
+**Size.** Small — a `let cancelled = false`, a guard in each of the two callbacks, and a cleanup return,
+three times over.
+
+## A request that stalls mid-interaction still hangs
+
+**Context.** `lib/backendLiveness.js` catches a *refused* connection instantly, and its
+visibility/gesture probes catch a machine that woke up to a dead socket. What nothing catches is a
+request that is accepted and then stalls with no visibility change to trigger a probe — the page waits
+on it indefinitely, as it always has.
+
+**Why deferred.** A blanket `AbortSignal.timeout` on the api layer was considered and rejected on
+2026-08-20: it would have to exempt every legitimately long request (sync, import, backup, demo load),
+and that carve-out list breaks a real feature whenever it is wrong or goes stale. An opt-in `timeoutMs`
+on `request()` is the shape that would work, added per-call where a caller knows its own duration.
+
+**Trigger.** Worth doing if a stalled request is ever actually observed; not worth building the
+machinery speculatively.

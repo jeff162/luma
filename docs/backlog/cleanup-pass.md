@@ -55,6 +55,11 @@ deliberate sweep — all five still present as of 2026-06-24):
 - `frontend/src/components/ImportCategoryMappingWorkspaceLegacy.jsx`
 - `frontend/src/lib/importCategoryMappingStateLegacy.js`
 
+Worth knowing before reusing either category picker rather than deleting it: `handleSave` in both has
+no rejection path, so a failed create leaves the dialog stuck on "Saving…" with the button disabled and
+no way out. Found during the 2026-08-20 sweep that fixed the same shape everywhere it was live, and
+deliberately not fixed here, since fixing code nothing renders only makes it look maintained.
+
 Also the unused `NoteCell` in `TransactionRow.jsx`. (The orphaned `backend/routers/categorizer.py`
 duplicate was already deleted.)
 

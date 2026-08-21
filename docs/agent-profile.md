@@ -214,6 +214,16 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 ## Verification And Tests
 
+- **Where the only verification path is the user's own machine, batch the whole change set before
+  handing it over, and exhaust what can be checked here first.** The macOS artifact is the live case:
+  the agent may not drive the app at all, and the user's loop is build → download → install → run,
+  which is slow enough that they will say so and then wait for everything before testing once. That
+  makes a round trip expensive rather than merely inconvenient, so tests, lint and a real build are not
+  a formality before the handoff — they are the only feedback available, and every defect they can
+  reach is one the user does not spend a cycle finding. Land the sequence complete, then state the
+  specific falsifiable claims to look for (for a shutdown fix: this exact line in this exact log), so
+  one pass produces a usable answer rather than "it didn't seem to work".
+
 - Test by value, not by reflex. Invest in recurrence-prone bugs, invariants, contracts, and
   cross-component behavior; do not assume every local fix needs a dedicated test.
 
