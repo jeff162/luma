@@ -1,9 +1,25 @@
 # Backlog
 
 Deferred and parked work that is **not** blocking current features. Each file is one initiative,
-written so it can be picked up cold. This is a living list: when an item ships, fold its durable
-"what it is and why" into the main docs (`architecture.md` / `data-model.md` / `ui-patterns.md`) and
-delete the backlog file.
+written so it can be picked up cold.
+
+**When an item ships**, fold its durable "what it is and why" into the main docs (`architecture.md` /
+`data-model.md` / `ui-patterns.md` / `shared-components.md`) — those are what the read-first rule makes
+someone open, so that is where a rule has to live to be found. Then either delete the backlog file or,
+if it still holds something the main docs should not carry, move its entry to **Completed** below.
+
+**What the main docs should not carry is the record of what was deliberately *not* done** — the
+obstacles, the rejected shapes, the "don't redo this" notes. Those answer a question nobody asks until
+they are already proposing the thing, so a doc read never surfaces them. Two habits make them reachable
+anyway, and both are load-bearing: the main-doc paragraph **links back** to the backlog file for depth
+(ten such links exist today), and the **code carries the decision at the site** — the header comment on
+`ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed", which
+no document could.
+
+**Why many small files rather than one long one:** an agent (or a person) picking up one initiative
+should be able to read one file, not scan a monolith for the paragraph that applies. The same reasoning
+splits the main docs by question — structure, field semantics, UI behavior, component choice — rather
+than by feature.
 
 ## Items
 
@@ -24,20 +40,18 @@ delete the backlog file.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams.
-- [list-virtualization.md](list-virtualization.md) — **scale/perf, deferred.** Render-window the large
-  lists (duplicate-rows dialog first, then `TransactionListTable` / the ledger) so DOM node count is
-  bounded by the viewport, not the dataset. Built into the shared table shells; preserves sticky pill
-  header, column-pref grid template, and select-all-matching bulk edit.
 - [recurring-detection.md](recurring-detection.md) — **follow-ups to a shipped feature.** The recurring-
-  series subsystem is live (detect + list + curate); deferred pieces are the per-import matching hook,
-  the anomaly/forecast signals (upcoming / missed / new / price-change), and a "Mark as recurring" row
-  action in the shared transaction context menu.
+  series subsystem is live (detect + list + curate), and the "Mark as recurring" row action has since
+  shipped in the shared context menu (`markRecurringFromMenu`). Deferred pieces are the per-import
+  matching hook and the anomaly/forecast signals (upcoming / missed / new / price-change).
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
-- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **backlog, not started
-  (2026-07-20).** Generalize "restrict to PayPal/Amazon" from per-account-id scoping to **account *type***
+- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **parts 1–2 implemented
+  (2026-07-21, migration v13); part 3 deferred.** The account *type* axis exists — PayPal is an account
+  type and rules match and rank on `account_type` — so what remains is the filtering/search half.
+  Generalize "restrict to PayPal/Amazon" from per-account-id scoping to **account *type***
   as a first-class axis for rules (and filtering/search): add PayPal as an account type, add an
   account-type rule criterion (parallel to the existing account-id one), and structured account-type
   filters — with a `accttype:`/`acctname:` tag grammar flagged as the harder free-text-search piece.
@@ -120,30 +134,14 @@ delete the backlog file.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [security-and-deployment-model.md](security-and-deployment-model.md) — **COMPLETE (2026-08-13); every
-  phase built.** The settled security/deployment design: drop multi-tenant hosted;
-  one shared workspace with multiple login identities (login = perimeter, admin gates settings not data);
-  provider credentials protected by **multi-wrap envelope encryption** (one workspace DEK reachable through
-  a per-user slot guarded by a passphrase or a WebAuthn-PRF **passkey** — separate from login). Also
-  generalizes to **provider-agnostic connections** (a `connection`/adapter seam, Plaid then SimpleFIN; app
-  credentials moved from `.env` into the vault; connections stay on the Accounts → Connections tab), and
-  carries the **transport-security policy** (HTTP-vs-HTTPS per topology). The final phases (4–5) replaced
-  the planned bearer-secret **invite ceremony** with **keypair slots** — a slot owns an X25519 keypair
-  rather than wrapping the DEK directly, so access can be granted from a public key alone. That made
-  enrollment "enrol → approve" with no secret in transit, and made **key rotation** able to preserve every
-  remaining member, which the original design could not do at all. Read that section before reintroducing
-  any invite/bearer-code design.
-- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **parked, do after phase 6
-  (2026-08-01).** Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
+- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **unblocked: the phase-6
+  gate is MET and the credentials-backup piece has landed (2026-08-10).** What remains is the scope/UX
+  half. Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
   secrets** backup — the control DB (identities, perimeter, `vault_slot`) **plus** the data DB's vaulted
   tokens, which phase 3 made cryptographically coupled (ciphertext in data DB, keys in control DB). Adds a
   sectioned **back up all**, moves recipient management onto the Backup page, and a **restore flow that asks
   how to reconcile identities** (always preserves the current admin → no self-lockout, no silent perimeter
-  overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh. Waits on phase 6 (app creds into the
-  vault).
-- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
-  (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
-  phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
+  overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh.
 - [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3
   deferred; Shape A notes only.** Also records the Python 3.12–3.13 build ceiling (pydantic-core has no
   3.14 wheels) and the tag-triggered release workflow, which has not yet run — the Windows artifact is
@@ -153,16 +151,11 @@ delete the backlog file.
   `127.0.0.1`) load-bearing, and makes mDNS + HTTPS a passkey precondition on the LAN rather than
   polish. Also: the shared SPA-serving addition, and the portable-vs-installed rule for where the
   databases live.
-- [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
-  `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
-  secret generated and stored in the control DB on first run, the blocking first-run setup screen and the
-  `.env`-writing endpoints removed, and the launchers no longer creating the file. The irreducible env
-  core is DB paths / ports / launcher knobs / the developer gate (the "two installations on one host"
-  case). Settings → Configuration reports every effective value and its layer. The doc keeps the
-  decisions and one deliberate follow-up (an mDNS service name, env-only like the ports).
-- [i18n-display-formatting.md](i18n-display-formatting.md) — **deferred.** Tier-1 currency-symbol +
-  number/date **formatting** (not translation): a display bucket (cosmetic) and a free-text-parse bucket
-  (the quick-filter date/amount ambiguity — the only correctness risk).
+- [i18n-display-formatting.md](i18n-display-formatting.md) — **currency half shipped (2026-08-08); the
+  date/number half deferred.** Tier-1 **formatting**, not translation. The ledger-currency setting and
+  its display path landed (`lib/moneyDisplay.js`, `services/ledger_currency.py`); what remains is the
+  number/date display bucket (cosmetic) and the free-text-parse bucket (the quick-filter date/amount
+  ambiguity — the only correctness risk).
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
@@ -177,8 +170,47 @@ delete the backlog file.
   before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms
   on a 60 MB DB; note the former does **not** cover foreign keys). The larger half is an invariant
   checker for the semantic inconsistencies those pragmas call "ok" — kept deliberately separate.
-- [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file;
-  currently the unwritten CHANGELOG entry for the category-owner → tag migration.
+- [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file:
+  the unwritten CHANGELOG entry for the category-owner → tag migration, a denser Connections-tab card
+  layout, SimpleFIN's 90-day window becoming a silent cap, whether timestamps should ever be relative,
+  and the stalled-request gap a blanket request timeout was rejected for.
+
+## Completed (kept for the record)
+
+Shipped work whose durable rules now live in the main docs. These files are kept because they still
+carry something the main docs should not — a rejected design, an obstacle list, a "read this before
+reintroducing X". Nothing here is pending.
+
+- [list-virtualization.md](list-virtualization.md) — **effectively complete (2026-07-19); kept for its
+  notes.** `MatchReport`, `TransactionListTable`, the Transactions ledger and the Rules list all window
+  through the shared `WindowedRows`. The durable rules live in `ui-patterns.md` (windowing needs a
+  content-independent column geometry; sort/selection stay driven from the full list; no scanning
+  row-id helpers; no `content-visibility` on a windowed row). What this file still holds is the record
+  of the one list left unwindowed **on purpose** — `ImportRuleSuggestionReview` — and the four
+  obstacles a future attempt would have to clear.
+- [security-and-deployment-model.md](security-and-deployment-model.md) — **COMPLETE (2026-08-13); every
+  phase built.** The settled security/deployment design: drop multi-tenant hosted;
+  one shared workspace with multiple login identities (login = perimeter, admin gates settings not data);
+  provider credentials protected by **multi-wrap envelope encryption** (one workspace DEK reachable through
+  a per-user slot guarded by a passphrase or a WebAuthn-PRF **passkey** — separate from login). Also
+  generalizes to **provider-agnostic connections** (a `connection`/adapter seam, Plaid then SimpleFIN; app
+  credentials moved from `.env` into the vault; connections stay on the Accounts → Connections tab), and
+  carries the **transport-security policy** (HTTP-vs-HTTPS per topology). The final phases (4–5) replaced
+  the planned bearer-secret **invite ceremony** with **keypair slots** — a slot owns an X25519 keypair
+  rather than wrapping the DEK directly, so access can be granted from a public key alone. That made
+  enrollment "enrol → approve" with no secret in transit, and made **key rotation** able to preserve every
+  remaining member, which the original design could not do at all. Read that section before reintroducing
+  any invite/bearer-code design.
+- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
+  (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
+  phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
+- [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
+  `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
+  secret generated and stored in the control DB on first run, the blocking first-run setup screen and the
+  `.env`-writing endpoints removed, and the launchers no longer creating the file. The irreducible env
+  core is DB paths / ports / launcher knobs / the developer gate (the "two installations on one host"
+  case). Settings → Configuration reports every effective value and its layer. The doc keeps the
+  decisions and one deliberate follow-up (an mDNS service name, env-only like the ports).
 
 ## Related (already tracked elsewhere)
 
