@@ -91,20 +91,6 @@ beyond, with the full stamp on the `title` either way.
 function would change all of them at once. If picked up: survey the call sites first, and expect the
 answer to be a *second* formatter for freshness lines rather than a change to this one.
 
-## Detail-panel trend fetches have no stale-response guard
-
-**Context.** The trend effects in `AccountDetail.jsx`, `CategoryDetail.jsx` and `TransactionDetail.jsx`
-fetch on every change of subject with no `cancelled` flag, so two responses in flight can land out of
-order and paint an older subject's series over a newer one. `detailShared.jsx` and
-`ImportBatchDetail.jsx` both already do this correctly and are the pattern to copy.
-
-**Why deferred.** Noticed on 2026-08-20 while adding the missing rejection paths to those same three
-effects, which was a different defect (a spinner that could never stop) with a different fix. Widening
-that sweep into a race-condition fix would have mixed two changes in one pass.
-
-**Size.** Small — a `let cancelled = false`, a guard in each of the two callbacks, and a cleanup return,
-three times over.
-
 ## A request that stalls mid-interaction still hangs
 
 **Context.** `lib/backendLiveness.js` catches a *refused* connection instantly, and its

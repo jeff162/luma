@@ -67,21 +67,25 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   } = usePagedTransactions({ activeKey, loadPage })
 
   useEffect(() => {
+    let cancelled = false
     setTrendLoading(true)
     // The caller owns the date scope: Dashboard/Transactions pass their global filter; pages without a
     // filter bar (Categories) pass nothing. With no explicit range we anchor the 36-month window to the
     // category's most recent activity (not today) so an old category still shows its latest 3 years
     // instead of an empty chart.
     api.getMonthlyTrend(36, category.id, undefined, dateStart || undefined, dateEnd || undefined, undefined, undefined, undefined, (dateStart || dateEnd) ? {} : { anchor: 'latest' }).then(rows => {
+      if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
     }).catch(() => {
+      if (cancelled) return
       // Cleared for the same reason as the account trend: the effect re-runs per category, so a kept
       // series would be attributed to whichever category is on screen now.
       setTrend([])
       setTrendLoading(false)
     })
+    return () => { cancelled = true }
   }, [category.id, dateStart, dateEnd])
 
   // Reserve the full 7-row list height for year/all-time (their lists scroll at DETAIL_LIST_MAX_HEIGHT

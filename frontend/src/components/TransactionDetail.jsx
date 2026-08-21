@@ -176,19 +176,23 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     // all-time activity would include transactions outside the curated files), skip the trend fetch
     // entirely — it isn't shown, and skipping it also removes an extra paint stage.
     if (!showPayeeActivity) { setTrendLoading(false); return }
+    let cancelled = false
     setTrendLoading(true)
     api.getPayeeTrend(payee, dateStart || undefined, dateEnd || undefined).then(rows => {
+      if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) {
         setSelectedMonth(rows[rows.length - 1].month)
       }
     }).catch(() => {
+      if (cancelled) return
       // Cleared for the same reason as the account trend: the effect re-runs per payee, so a kept series
       // would be shown under a different payee's name.
       setTrend([])
       setTrendLoading(false)
     })
+    return () => { cancelled = true }
   }, [payee, dateStart, dateEnd, showPayeeActivity])
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.

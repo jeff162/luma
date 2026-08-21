@@ -177,6 +177,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   }
 
   useEffect(() => {
+    let cancelled = false
     setTrendLoading(true)
     // Caller owns the date scope (Dashboard/Transactions pass the global filter; the Accounts page passes
     // nothing → full account history). Account scope already defaults to full history when unfiltered.
@@ -185,16 +186,19 @@ export default function AccountDetail({ account, categories = [], onClose, force
     // A 'spending' trend would hide both, falsely reporting "no activity" for, e.g., an account whose
     // imported rows all sit in type-less categories under Unassigned.
     api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'cash_flow', undefined, sourceCsv ? { source_account_ids: sourceCsv } : undefined).then(rows => {
+      if (cancelled) return
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
     }).catch(() => {
+      if (cancelled) return
       // Clear rather than keep: this effect re-runs when the account changes, so a failure that left the
       // previous series up would label one account's history with another's name. An empty chart is the
       // honest answer, and a spinner that never stops is the one thing it must not be.
       setTrend([])
       setTrendLoading(false)
     })
+    return () => { cancelled = true }
   }, [account.id, dateStart, dateEnd, sourceCsv])
 
   const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
