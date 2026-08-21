@@ -200,7 +200,13 @@ came from, so the resolved data directory stays visible rather than inferred and
    milliseconds and being dropped. So: `frontend/src/lib/backendLiveness.js` acts on the failure,
    `BroadcastChannel` fans it out to the other tabs, a probe on returning to visibility covers the idle
    tab (the Dock-Quit case, and equally a machine waking from sleep), and a sweep fixed the load sites
-   whose spinner could never stop. **A blanket request timeout was considered and rejected**: what it
+   whose spinner could never stop. Testing on the Mac then found the one path none of that covered:
+   **lazy-loaded route chunks**, which the browser fetches through its module loader rather than through
+   the api layer, so a stopped backend broke every not-yet-loaded page as a render-time crash — the
+   error boundary showing "Something went wrong" over the notice that would have explained it. Same
+   testing pass established that recovery had to be a reload rather than an unlatch, and that the
+   affordance for it should be a button rather than a sentence telling anyone to click. **A blanket
+   request timeout was considered and rejected**: what it
    would catch is a *stalled* connection rather than a refused one, which the visibility probe already
    covers, and applying one across the api layer would have to carve out every legitimately long request
    (sync, import, backup, demo load) — a list that breaks a real feature whenever it is wrong.

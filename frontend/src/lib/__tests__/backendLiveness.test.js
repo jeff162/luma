@@ -115,6 +115,71 @@ describe('backendLiveness', () => {
     expect(health).toHaveBeenCalledTimes(1)
   })
 
+  it('does not look for a return until something has gone', async () => {
+    // The gesture watch is installed for the whole life of the page but means nothing while the app is
+    // working: a probe per click would be a request for every interaction, answering a question nobody
+    // has asked.
+    const { checkForBackendReturn } = await freshModule()
+    const health = healthAnswers(true)
+
+    expect(await checkForBackendReturn()).toBe(false)
+    expect(health).not.toHaveBeenCalled()
+  })
+
+  it('reports a backend that has not come back yet', async () => {
+    // What the dialog's button needs in order to say something. A press that found nothing has to be
+    // distinguishable from a press that did nothing.
+    const { announceBackendStopped, checkForBackendReturn } = await freshModule()
+    healthAnswers(false)
+    announceBackendStopped()
+
+    expect(await checkForBackendReturn()).toBe(false)
+  })
+
+  it('announces the backend coming back', async () => {
+    // Reported rather than acted on: reloading is the app's decision, and the same event carries it to
+    // the tab that found out and the tabs that were told.
+    const { announceBackendStopped, checkForBackendReturn } = await freshModule()
+    let returned = 0
+    const onReturned = () => { returned += 1 }
+    window.addEventListener('luma:backend-returned', onReturned)
+    try {
+      healthAnswers(false)
+      announceBackendStopped()
+      const health = healthAnswers(true)
+
+      expect(await checkForBackendReturn()).toBe(true)
+      expect(health).toHaveBeenCalledTimes(1)
+      expect(returned).toBe(1)
+    } finally {
+      window.removeEventListener('luma:backend-returned', onReturned)
+    }
+  })
+
+  it('asks once when the button and a stray click land together', async () => {
+    const { announceBackendStopped, checkForBackendReturn } = await freshModule()
+    healthAnswers(false)
+    announceBackendStopped()
+    const health = healthAnswers(false)
+
+    await Promise.all([checkForBackendReturn(), checkForBackendReturn(), checkForBackendReturn()])
+
+    expect(health).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands a failed module load back to the caller as a settled probe', async () => {
+    // The error boundary awaits this to decide which panel to show, so it has to resolve even for the
+    // errors that are none of this module's business — otherwise a real crash waits forever behind a
+    // placeholder.
+    const { noteRequestFailure } = await freshModule()
+    healthAnswers(true)
+
+    const ignored = new Error('Request failed')
+    ignored.status = 404
+    await expect(noteRequestFailure(ignored)).resolves.toBeUndefined()
+    await expect(noteRequestFailure(new TypeError('Importing a module script failed.'))).resolves.toBeUndefined()
+  })
+
   it('announces a shutdown it asked for without probing', async () => {
     // The one case where the outcome is known rather than discovered: the server accepted the request
     // and is on its way down. Probing would only ask a process that is mid-exit whether it has exited.

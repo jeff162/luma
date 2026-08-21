@@ -9,7 +9,15 @@ import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import { api } from './lib/api.js'
-import { BACKEND_STOPPED_EVENT, announceBackendStopped, watchBackendLiveness } from './lib/backendLiveness.js'
+import {
+  BACKEND_RETURNED_EVENT,
+  BACKEND_STOPPED_EVENT,
+  announceBackendStopped,
+  backendHasStopped,
+  checkForBackendReturn,
+  noteRequestFailure,
+  watchBackendLiveness,
+} from './lib/backendLiveness.js'
 import { applyLedgerCurrency } from './lib/moneyDisplay.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
@@ -43,7 +51,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog, AppDialog, Toggle } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, DialogActions, Toggle } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -51,35 +59,156 @@ import {
   SUPPORTED_DATA_PROVIDERS,
 } from './lib/appConfig.js'
 
+// Shown in two places that cannot share a component: the dialog below, which renders inside the app,
+// and the error boundary's fallback, which renders in place of it. Sharing the words is what keeps the
+// two from drifting apart.
+const BACKEND_STOPPED_TITLE = 'Luma has stopped'
+const BACKEND_STOPPED_BODY = 'Starting Luma again brings this tab back with everything as it was.'
+const BACKEND_ABSENT_BODY = `Luma is not answering yet. ${BACKEND_STOPPED_BODY}`
+
+/* The button beside the notice, and the state it needs.
+ *
+ * A press that found nothing has to say so: the probe is fast enough that without a reported outcome
+ * the button would look like it had done nothing at all. A press that *does* find the backend says
+ * nothing here, because the answer to that is the page reloading. */
+function useBackendReturnCheck() {
+  const [checking, setChecking] = useState(false)
+  const [stillAbsent, setStillAbsent] = useState(false)
+
+  async function check() {
+    setChecking(true)
+    setStillAbsent(false)
+    const alive = await checkForBackendReturn()
+    setChecking(false)
+    if (!alive) setStillAbsent(true)
+  }
+
+  return { checking, stillAbsent, check }
+}
+
+/* The error boundary's version of the notice. Deliberately plain markup rather than `AppDialog`: this
+ * renders *outside* every provider, and a fallback that depended on one would throw while handling an
+ * error, which is the one place a component must not. */
+function BackendStoppedNotice() {
+  const { checking, stillAbsent, check } = useBackendReturnCheck()
+  return (
+    <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
+      <h2 style={{ marginBottom: 12 }}>{BACKEND_STOPPED_TITLE}</h2>
+      <p style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 20, maxWidth: 460 }}>
+        {stillAbsent ? BACKEND_ABSENT_BODY : BACKEND_STOPPED_BODY}
+      </p>
+      <button
+        onClick={check}
+        disabled={checking}
+        style={{
+          padding: '8px 18px',
+          cursor: checking ? 'default' : 'pointer',
+          borderRadius: 6,
+          border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
+          background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
+          color: 'var(--text)',
+          fontWeight: 600,
+        }}
+      >
+        {checking ? 'Checking…' : 'Check again'}
+      </button>
+    </div>
+  )
+}
+
+/* The in-app notice. No dismiss, because there is nothing behind it to go back to — every request the
+ * page could make now fails. The button is the whole affordance: it says a check is worth making
+ * without a line of prose telling anyone to click, and clicks anywhere are watched silently besides. */
+function BackendStoppedDialog() {
+  const { checking, stillAbsent, check } = useBackendReturnCheck()
+  return (
+    <AppDialog
+      title={BACKEND_STOPPED_TITLE}
+      description={stillAbsent ? BACKEND_ABSENT_BODY : BACKEND_STOPPED_BODY}
+      onClose={null}
+      width="min(460px, 100%)"
+      actions={
+        <DialogActions>
+          <Button small onClick={check} disabled={checking}>
+            {checking ? 'Checking…' : 'Check again'}
+          </Button>
+        </DialogActions>
+      }
+    />
+  )
+}
+
+/** Whether the browser failed to load a code-split route chunk, as opposed to the app throwing.
+ *
+ * Every engine words this differently and none of them expose a code, so matching the message is the
+ * only option available. A miss costs the calmer of two panels, not correctness. */
+function isModuleLoadError(error) {
+  if (error?.name === 'ChunkLoadError') return true
+  return /dynamically imported module|importing a module script failed/i.test(String(error?.message || ''))
+}
+
+/*
+ * Last-resort UI, and the one place that has to tell a crash from a departed server.
+ *
+ * A route chunk is fetched by the browser's module loader rather than by anything in `lib/api.js`, so a
+ * backend that has stopped fails `lazy()` imports without the liveness watch hearing about it — which
+ * is how a stopped server showed "Something went wrong" over the whole app instead of the notice that
+ * explains it. The error alone cannot settle which it is: a stale chunk hash after a rebuild fails
+ * identically against a perfectly live server. So a module-load failure is reported to the watch and
+ * the probe decides, and until it answers this renders neither verdict — guessing wrong would put an
+ * alarming red panel over a working app, or hide a real crash behind a calm explanation.
+ */
 class AppErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null } }
-  static getDerivedStateFromError(e) { return { error: e } }
+  constructor(props) {
+    super(props)
+    this.state = { error: null, settled: true, stopped: backendHasStopped() }
+    // Another tab, or this one's own probe, may reach the verdict after the fallback is already up.
+    this.handleStopped = () => this.setState({ stopped: true })
+  }
+
+  static getDerivedStateFromError(e) {
+    return { error: e, settled: !isModuleLoadError(e) }
+  }
+
+  componentDidMount() { window.addEventListener(BACKEND_STOPPED_EVENT, this.handleStopped) }
+
+  componentWillUnmount() { window.removeEventListener(BACKEND_STOPPED_EVENT, this.handleStopped) }
+
+  componentDidCatch(error) {
+    if (!isModuleLoadError(error)) return
+    noteRequestFailure(error).then(() => this.setState({ settled: true }))
+  }
+
   render() {
-    if (this.state.error) {
-      return (
-        <div data-browser-context-passthrough="true" style={{ padding: 40, fontFamily: 'sans-serif' }}>
-          <h2 style={{ color: 'var(--danger)', marginBottom: 12 }}>Something went wrong</h2>
-          <pre data-browser-context-passthrough="true" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
-            {this.state.error?.message}
-          </pre>
-          <button
-            onClick={() => this.setState({ error: null })}
-            style={{
-              padding: '8px 18px',
-              cursor: 'pointer',
-              borderRadius: 6,
-              border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
-              background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
-              color: 'var(--text)',
-              fontWeight: 600,
-            }}
-          >
-            Try again
-          </button>
-        </div>
-      )
-    }
-    return this.props.children
+    // Only ever in place of a crash. A backend that stops while the app is rendering fine is the
+    // dialog's business, and replacing a working page with this panel would take away everything the
+    // user can still read.
+    if (this.state.error && this.state.stopped) return <BackendStoppedNotice />
+    if (!this.state.error) return this.props.children
+    if (!this.state.settled) return <RouteLoadingFallback />
+
+    return (
+      <div data-browser-context-passthrough="true" style={{ padding: 40, fontFamily: 'sans-serif' }}>
+        <h2 style={{ color: 'var(--danger)', marginBottom: 12 }}>Something went wrong</h2>
+        <pre data-browser-context-passthrough="true" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
+          {this.state.error?.message}
+        </pre>
+        <button
+          onClick={() => this.setState({ error: null, settled: true })}
+          style={{
+            padding: '8px 18px',
+            cursor: 'pointer',
+            borderRadius: 6,
+            border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
+            background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
+            color: 'var(--text)',
+            fontWeight: 600,
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    )
   }
 }
 
@@ -123,17 +252,28 @@ const NAV_LINKS = [
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
 const DATA_PROVIDER_STARTUP_ROUTE = '/accounts'
-const loadDashboardPage = () => import('./pages/Dashboard.jsx')
-const loadTransactionsPage = () => import('./pages/Transactions.jsx')
-const loadCategoriesPage = () => import('./pages/Categories.jsx')
-const loadRulesPage = () => import('./pages/Rules.jsx')
-const loadAccountsPage = () => import('./pages/Accounts.jsx')
-const loadSettingsPage = () => import('./pages/Settings.jsx')
-const loadImportExportPage = () => import('./pages/ImportExport.jsx')
-const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
-const loadTasksPage = () => import('./pages/Tasks.jsx')
-const loadRecurringPage = () => import('./pages/Recurring.jsx')
-const loadHelpPage = () => import('./pages/Help.jsx')
+// Route chunks come from the same server as the data, and the browser's module loader is not something
+// `lib/api.js` can see — so without this a stopped backend breaks every not-yet-loaded page with the
+// liveness watch none the wiser. Reported and re-thrown unchanged: `lazy()` still needs the rejection,
+// and the prefetcher still discards it.
+function routeChunk(load) {
+  return () => load().catch(error => {
+    noteRequestFailure(error)
+    throw error
+  })
+}
+
+const loadDashboardPage = routeChunk(() => import('./pages/Dashboard.jsx'))
+const loadTransactionsPage = routeChunk(() => import('./pages/Transactions.jsx'))
+const loadCategoriesPage = routeChunk(() => import('./pages/Categories.jsx'))
+const loadRulesPage = routeChunk(() => import('./pages/Rules.jsx'))
+const loadAccountsPage = routeChunk(() => import('./pages/Accounts.jsx'))
+const loadSettingsPage = routeChunk(() => import('./pages/Settings.jsx'))
+const loadImportExportPage = routeChunk(() => import('./pages/ImportExport.jsx'))
+const loadImportRuleSuggestionsPage = routeChunk(() => import('./pages/ImportRuleSuggestions.jsx'))
+const loadTasksPage = routeChunk(() => import('./pages/Tasks.jsx'))
+const loadRecurringPage = routeChunk(() => import('./pages/Recurring.jsx'))
+const loadHelpPage = routeChunk(() => import('./pages/Help.jsx'))
 const Dashboard = lazy(loadDashboardPage)
 const Transactions = lazy(loadTransactionsPage)
 const Categories = lazy(loadCategoriesPage)
@@ -1037,9 +1177,15 @@ export default function App() {
   useEffect(() => {
     const stopWatching = watchBackendLiveness()
     const onStopped = () => setAppStopped(true)
+    // A reload rather than an unlatch: a restart may be on a different port, under a different session,
+    // against a different database, and every value on screen was read from the process that has gone.
+    // Nothing here is unsaved — mutations went to the server — so there is nothing to weigh against it.
+    const onReturned = () => window.location.reload()
     window.addEventListener(BACKEND_STOPPED_EVENT, onStopped)
+    window.addEventListener(BACKEND_RETURNED_EVENT, onReturned)
     return () => {
       window.removeEventListener(BACKEND_STOPPED_EVENT, onStopped)
+      window.removeEventListener(BACKEND_RETURNED_EVENT, onReturned)
       stopWatching()
     }
   }, [])
@@ -1648,17 +1794,7 @@ export default function App() {
                         width="min(460px, 100%)"
                       />
                     ) : null}
-                    {appStopped ? (
-                      // No dismiss: there is nothing to go back to, and an OK button that returned the
-                      // user to a page whose every request fails would be worse than saying so.
-                      <AppDialog
-                        title="Luma has stopped"
-                        description="This tab can be closed. Starting Luma again will bring it back with everything as it was."
-                        actions={null}
-                        onClose={null}
-                        width="min(460px, 100%)"
-                      />
-                    ) : null}
+                    {appStopped ? <BackendStoppedDialog /> : null}
                     {pendingDemoClear ? (
                       <AppConfirmDialog
                         title="Clear demo data?"
