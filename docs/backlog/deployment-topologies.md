@@ -211,6 +211,14 @@ came from, so the resolved data directory stays visible rather than inferred and
    covers, and applying one across the api layer would have to carve out every legitimately long request
    (sync, import, backup, demo load) — a list that breaks a real feature whenever it is wrong.
 
+   **The release workflow can build one platform on demand.** `workflow_dispatch` takes a `platform`
+   choice, and a `plan` job turns it into the build matrix — so testing on a machine that is in front of
+   somebody no longer means waiting on all four. A tag push carries no inputs and therefore still builds
+   everything. The matrix has to be *computed* rather than filtered: a job-level `if` cannot see the
+   `matrix` context, and filtering an `os` dimension while leaving `include` in place re-adds the
+   excluded platforms, since an include entry that cannot merge into a remaining combination is appended
+   as a new one.
+
    What still needs the Mac, none of it checkable here (no Swift toolchain, no Mac): whether the Dock
    icon appears without the launch bounce; whether Quit and Command-Q shut down cleanly *and leave "Luma
    has stopped." in the log*, which is the specific claim the signal fix makes; and whether the two

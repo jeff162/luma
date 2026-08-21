@@ -20,6 +20,14 @@
 # roughly August 2027. Two images rather than one universal2 binary, because universal2 would need
 # universal2 wheels for `cryptography` and `pydantic-core` and those are not dependably published.
 #
+# A manual run can build a single platform instead of all four, which is for testing an artifact on a
+# machine that is in front of somebody — the Intel Mac above all, which is otherwise only ever built
+# blind. That is why the matrix comes from the `plan` job rather than being written out here: a
+# job-level `if` cannot see the `matrix` context, and filtering an `os` dimension while leaving
+# `include` in place re-adds the very platforms it excluded, because an include entry that cannot merge
+# into a remaining combination is appended as a new one instead. A tag push carries no inputs, so a
+# release always builds everything.
+#
 # Tests gate the build rather than living inside `release.py`, which checks packaging rather than
 # correctness on purpose. This is the CI half of that split: nothing gets packaged from code whose
 # tests fail.
@@ -36,6 +44,17 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build. A tagged release always builds all four.
+        type: choice
+        default: all
+        options:
+          - all
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+          - macos-15-intel
 
 jobs:
   test:
@@ -75,26 +94,55 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+  plan:
+    name: Choose platforms
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      # No checkout: the platform table is the whole of this job, and reading it from the workflow that
+      # is already running is one fewer thing that can be out of step with it.
+      - id: pick
+        shell: python
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          import json
+          import os
+
+          # `form` is the distribution form each platform ships, and therefore the one its artifact is
+          # smoke-tested as. macOS is installed-only: a `.app` cannot hold its own writable data.
+          targets = [
+              {"os": "ubuntu-latest", "form": "portable"},
+              {"os": "windows-latest", "form": "portable"},
+              {"os": "macos-latest", "form": "installed"},
+              {"os": "macos-15-intel", "form": "installed"},
+          ]
+
+          # A tag push carries no inputs at all, which is what makes a release build the whole set
+          # without the release path having to say so.
+          wanted = os.environ.get("PLATFORM") or "all"
+          if wanted != "all":
+              targets = [target for target in targets if target["os"] == wanted]
+              # Reachable only if the choice list above and this table have drifted apart, which would
+              # otherwise present as a build that silently produced nothing.
+              if not targets:
+                  raise SystemExit(f"No such platform: {wanted}")
+
+          print("Building: " + ", ".join(target["os"] for target in targets))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"targets={json.dumps(targets)}\n")
+
   build:
     name: Build ${{ matrix.os }}
-    needs: test
+    needs: [test, plan]
     runs-on: ${{ matrix.os }}
     strategy:
       # One platform failing should not cancel the others — a partial set of artifacts is still worth
       # having while the broken platform is investigated.
       fail-fast: false
       matrix:
-        # `form` is the distribution form this platform ships, and therefore the one its artifact is
-        # smoke-tested as. macOS is installed-only: a `.app` cannot hold its own writable data.
-        include:
-          - os: ubuntu-latest
-            form: portable
-          - os: windows-latest
-            form: portable
-          - os: macos-latest
-            form: installed
-          - os: macos-15-intel
-            form: installed
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
 
     steps:
       - uses: actions/checkout@v7
