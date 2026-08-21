@@ -16,7 +16,7 @@
 // one, so a component module was the wrong home for it in both directions.
 
 import { useEffect, useState } from 'react'
-import { Button, Input, AppDialog, DialogActions } from './ui.jsx'
+import { Button, Input, AppDialog } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
@@ -163,7 +163,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       zIndex={1400}
       width="min(460px, 100%)"
       actions={
-        <DialogActions>
+        <>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
           {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
               in does not change depending on which surface asked. */}
@@ -179,7 +179,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
                 : requesting ? 'Request access'
                   : setting ? 'Set passphrase' : 'Unlock'}
           </Button>
-        </DialogActions>
+        </>
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>

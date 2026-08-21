@@ -6,7 +6,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { SourceAccountChip, OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
@@ -645,10 +645,10 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
       onClose={onClose}
       width="min(520px, 100%)"
       actions={
-        <DialogActions>
+        <>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
           <Button small onClick={submit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
-        </DialogActions>
+        </>
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>
@@ -733,12 +733,12 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
       onClose={onClose}
       width="min(560px, 100%)"
       actions={
-        <DialogActions>
+        <>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
           <Button small onClick={submit} disabled={connecting || !token.trim()}>
             {connecting ? 'Connecting…' : 'Connect'}
           </Button>
-        </DialogActions>
+        </>
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>

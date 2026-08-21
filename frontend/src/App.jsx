@@ -51,7 +51,7 @@ import {
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog, AppDialog, Button, DialogActions, Toggle } from './components/ui.jsx'
+import { AppConfirmDialog, AppDialog, Button, Toggle } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -128,11 +128,9 @@ function BackendStoppedDialog() {
       onClose={null}
       width="min(460px, 100%)"
       actions={
-        <DialogActions>
-          <Button small onClick={check} disabled={checking}>
-            {checking ? 'Checking…' : 'Check again'}
-          </Button>
-        </DialogActions>
+        <Button small onClick={check} disabled={checking}>
+          {checking ? 'Checking…' : 'Check again'}
+        </Button>
       }
     />
   )
