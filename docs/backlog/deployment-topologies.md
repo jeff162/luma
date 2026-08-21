@@ -175,10 +175,12 @@ came from, so the resolved data directory stays visible rather than inferred and
    macOS. **Verified in CI on 2026-08-20:** the release workflow runs green on Linux and Windows —
    tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
 
-   **The Dock work (2026-08-20) is built but unverified** — the native wrapper, the pipe death-watch, and
-  the bundle assembly have never been compiled or run, since this machine has no Swift toolchain and no
-  Mac. CI will prove the build and the server; the Dock icon, Quit, Command-Q and the two death-watches
-  can only be checked by hand.
+   **The Dock work (2026-08-20) builds and launches.** The Swift wrapper compiles, the bundle assembles,
+  and the app runs once ad-hoc signed (see the signing entry below — the first build failed as
+  "damaged"). What has *not* been confirmed either way: whether the Dock icon appears without the
+  launch bounce, whether Quit and Command-Q shut down cleanly, and whether the two death-watches behave
+  — wrapper force-quit stopping the server, and the server exiting quitting the wrapper. **Shutdown
+  behaviour is the open thread**, and this machine cannot check any of it: no Swift toolchain, no Mac.
 
   macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
    (x64) — go green, smoke tests included, which settles the one thing that could not be reasoned out in
@@ -244,6 +246,17 @@ Four things that are decided rather than discoverable, and that a build has to g
   source, with `scripts/build_icons.py` deriving the committed `.icns`, `.ico` and favicons — full-bleed
   for Windows and the browser, inset to Apple's 824-of-1024 grid for macOS, since an icon that fills its
   canvas sits visibly larger than its neighbours in the Dock.
+- **The bundle has to be ad-hoc signed, and assembling it by hand loses that.** PyInstaller's `BUNDLE`
+  signs what it produces (`sign_binary(..., deep=True)`, ad-hoc when no identity is given). Building the
+  bundle around the native wrapper instead took that step with it, and the result was worse than a
+  warning: on Apple Silicon an unsigned binary does not merely go untrusted, it will not load, and a
+  quarantined bundle with no signature is reported as **"Luma is damaged and can't be opened"** — which
+  reads as a corrupt download rather than an unsigned one. `scripts/build_desktop.py` now runs
+  `codesign --force --deep --sign -` as the last step of assembly, since anything written afterwards
+  invalidates the seal. This is *not* notarization: Gatekeeper still asks for approval, and the
+  "Open Anyway" path in the README still applies. Invisible in CI, because a locally built artifact is
+  never quarantined.
+
 - **Quitting is answered twice over, in both directions.** In the app, "Shut down Luma" asks the server
   to stop — not a macOS consolation prize but the answer on Windows and Linux too, where the alternative
   was "find the terminal and press Ctrl+C"; see *Packaged builds* in
