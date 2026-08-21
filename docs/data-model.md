@@ -64,11 +64,11 @@ They are used for:
 
 - surfacing ownership-related tasks
 
-Transactions also carry `owner\_id`, denormalized from the account, so owner-based filtering is cheaper in summary queries.
+Transactions also carry `owner\_id`, denormalized from the account, so owner-based filtering is cheaper in summary queries.
 
 ## Accounts
 
-Accounts represent bank or credit accounts, typically created by a data-source connection (Plaid today) or created during CSV import.
+Accounts represent bank or credit accounts, typically created by a data-source connection (Plaid today) or created during CSV import.
 
 Important behavior:
 
@@ -181,7 +181,7 @@ Groups also carry important reporting behavior:
 
 - **`category\_type`:** typically `expense` or `income`
 
-- **`exclude\_from\_totals`:** removes that group and all descendants from charts and totals
+- **`exclude\_from\_totals`:** removes that group and all descendants from charts and totals
 
 - category appearance is derived in the UI from stable ids/names rather than stored as user-managed color metadata
 
@@ -568,7 +568,7 @@ CSV import creates supporting records for workflow and recovery:
 
 - **Import profiles:** saved mapping/setup templates for recurring CSV formats
 
-- **Import batches:** one record per import run so imported transactions can be undone
+- **Import batches:** one record per import run so imported transactions can be undone
 
 Imports use exact content hashing first for duplicate detection, then can fall back to narrower cross-source heuristics when an import explicitly links a new account to an existing account/group for duplicate comparison.
 
@@ -930,4 +930,4 @@ A few behavior rules matter across the whole app:
 
 - category grouping is only two levels deep
 
-If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.
+If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.

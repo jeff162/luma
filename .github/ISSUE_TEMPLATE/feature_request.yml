@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a capability or a change to how something works
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing, two things worth knowing — both save time on scope that will not be taken:
+
+        - **Luma deliberately has no budgeting and no net worth tracking.** See *What Luma is not* in
+          the [README](../blob/main/README.md). Those are scope decisions, not gaps.
+        - **Much of the obvious work is already designed and queued** in
+          [`docs/backlog/`](../tree/main/docs/backlog). If an idea is already there, commenting on the
+          existing plan is more useful than a new issue.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation that prompted it, rather than the solution. What is hard to do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would it look like?
+      description: Optional. If there is a shape in mind, describe it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What is the current workaround?
+      description: How the problem is handled today, if at all.
+    validations:
+      required: false

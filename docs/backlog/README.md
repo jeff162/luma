@@ -21,6 +21,10 @@ should be able to read one file, not scan a monolith for the paragraph that appl
 splits the main docs by question — structure, field semantics, UI behavior, component choice — rather
 than by feature.
 
+> **Before going public:** [`../pre-release.md`](../pre-release.md) holds the committed, blocking
+> plan — four features drawn from the files below, plus the release mechanics. Items named there are
+> scoped: only part of `dashboard-reporting.md` and `recurring-detection.md` is in that scope.
+
 ## Items
 
 - [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The
@@ -79,6 +83,17 @@ than by feature.
   the abandoned per-item-rows model. Amazon orders **pre-fill** the split by reallocating net cash across
   items in proportion to list price (list prices exclude tax/shipping/discounts, so they can't be used
   directly). Main cost is the cross-cutting reporting-expansion change.
+- [reimbursable-expenses.md](reimbursable-expenses.md) — **backlog, not started (2026-08-21).** Money
+  that leaves as an expense and returns later (tickets bought for friends, work expenses claimed back).
+  The categorization is already right; the problem is that the netting **crosses period boundaries**, so
+  a month overstates spending until the repayment lands. Models it as a **receivable category** carrying
+  the existing `exclude_from_totals` treatment — nothing is restated, nothing is asserted about a
+  repayment that may never come, and "who still owes me" is the category's sum. The design turns on the
+  **residual**: a repayment is often *not* equal (tickets resold at a loss or a profit), a short
+  repayment and an unpaid one are indistinguishable by amount, so a **settle** action is what moves the
+  leftover to a real category. Pairing is **optional and late** — needed only to settle, and served by
+  `txn_link` (`kind='reimbursement'`) rather than a new table. Downstream of
+  [transaction-splits.md](transaction-splits.md), and a second consumer justifying it.
 - [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
@@ -114,8 +129,17 @@ than by feature.
   provider whose handle is **issued** (Plaid's `item_id`) re-links in place while one whose handle is
   **derived from the credential** (SimpleFIN's access-URL hash) arrives as a new connection, stranding the
   old one's account mappings. Open: multi-user (another member's slot still opens the same DEK — that is
-  re-enrollment, phase 5, not a reset). Also flags an existing bug worth fixing regardless —
-  `VaultDecryptError` is unclassified and reports as a generic sync failure instead of "reconnect needed".
+  re-enrollment, phase 5, not a reset). **Expanded 2026-08-21:** compromise is a second, independent
+  motivation for the same reset (re-linking retires a stolen credential by re-issuing it, which beats
+  trusting a revocation call); reset should **revoke on the way out**, driven by `revokes_on_disconnect`
+  rather than by naming a provider — except in the very case that motivated this file, since revocation
+  needs a decrypted token, so a *lost*-passphrase reset can revoke nothing at all and must instruct
+  manually for every provider. That split is why the dialog asks which situation the user is in. Also adds
+  **vault recovery codes**: the 2FA sign-in path has them, the vault has none, and `vault_slot.method`
+  already generalizes to a third kind — they would give the single-user install a rung above "destroy it",
+  making the destructive reset rare rather than routine. Also flags an existing bug worth fixing regardless
+  — `VaultDecryptError` is unclassified and reports as a generic sync failure instead of "reconnect
+  needed".
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers

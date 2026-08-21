@@ -32,7 +32,7 @@ Luma is a local-first web application with:
 
 - **SQLite** as the persistent store
 
-The browser talks only to the local backend API. Core application data and persistence are local; external network dependencies are limited to optional integrations such as Plaid.
+The browser talks only to the local backend API. Core application data and persistence are local; external network dependencies are limited to optional integrations such as Plaid.
 
 **Three topologies, one origin in each.** The SPA and the API always share an origin, but what puts them there differs: the Vite dev server proxies `/api` in development, nginx does it in the Docker image, and the standalone build has the backend serve `frontend/dist` itself (`backend/spa.py`) so one process is a whole application. That third shape is what makes a packaged single-user build possible, and it is also why `CORS_ORIGINS` can default to empty — no shipped topology makes a cross-origin call at all.
 
@@ -46,29 +46,29 @@ Serving the bundle has one wrinkle worth stating, because the obvious implementa
 
 - **`backend/routers/`:** feature-oriented API endpoints
 
-- **`backend/services/`:** shared backend logic such as categorization and crypto helpers
+- **`backend/services/`:** shared backend logic such as categorization and crypto helpers
 
 - **`backend/spa.py`:** serves the built frontend with the client-route fallback described above
 
 - **`backend/desktop.py`:** the standalone entry point — starts the server on loopback, opens a browser at it, and reuses a running instance rather than starting a second one onto the same databases
 
-The backend favors explicit SQL and feature-oriented router modules over a heavy ORM layer.
+The backend favors explicit SQL and feature-oriented router modules over a heavy ORM layer.
 
 ## Frontend structure
 
 - **`frontend/src/App.jsx`:** app shell, navigation, page routing, and route-level lazy loading for the main screens
 
-- **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import / Export
+- **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import / Export
 
 - **`frontend/src/components/`:** shared UI and interaction building blocks
 
 - **`frontend/src/lib/api.js`:** central API wrapper used by the frontend
 
-- **`frontend/src/lib/FilterContext.jsx`:** shared date/account/owner/group filtering state
+- **`frontend/src/lib/FilterContext.jsx`:** shared date/account/owner/group filtering state
 
 - **`frontend/src/lib/AppSessionContext.jsx`:** shared bootstrap/session metadata such as the active preference subject and database instance id so pages can reuse shell-loaded auth state instead of re-fetching it
 
-The frontend mixes page-specific screens with a small set of shared interaction surfaces:
+The frontend mixes page-specific screens with a small set of shared interaction surfaces:
 
 - **`TransactionRow.jsx`:** shared transaction display/editing behavior
 
@@ -76,11 +76,11 @@ The frontend mixes page-specific screens with a small set of shared interaction�
 
 - **`components/ui.jsx`:** shared visual primitives for cards, buttons, floating panels, overlays, form control styling, and everyday confirm/notice/text-entry dialogs
 
-- **`lib/uiInteractions.js`:** shared interaction hooks for dismissible layers, popups, escape handling, and transient text editing
+- **`lib/uiInteractions.js`:** shared interaction hooks for dismissible layers, popups, escape handling, and transient text editing
 
-- **`components/TransientTextInput.jsx`:** shared single-field transient edit control used when Enter/blur should commit and Escape should cancel back to the pre-edit value
+- **`components/TransientTextInput.jsx`:** shared single-field transient edit control used when Enter/blur should commit and Escape should cancel back to the pre-edit value
 
-There are shared primitives designed to create a uniform user experience. Unless a frontend interaction has special requirements, it should use the shared interaction primitives in `frontend/src/lib/uiInteractions.js` and `frontend/src/components/TransientTextInput.jsx` instead of a page-local version. Search boxes, filters, and other intentionally custom controls sometimes contain page-specific logic.
+There are shared primitives designed to create a uniform user experience. Unless a frontend interaction has special requirements, it should use the shared interaction primitives in `frontend/src/lib/uiInteractions.js` and `frontend/src/components/TransientTextInput.jsx` instead of a page-local version. Search boxes, filters, and other intentionally custom controls sometimes contain page-specific logic.
 
 The concern behind this is interaction drift. Repeated popovers, inline editors, and dismissal rules are easy to make "almost the same" on each page, which creates both subtle bugs and a less coherent product feel over time.
 
@@ -106,7 +106,7 @@ Typical request flow:
 
 5. Local state updates, often optimistically for inline edits
 
-For many inline edits, the UI updates first and the API call is fire-and-forget. This keeps interaction responsive and is acceptable because the backend remains the durable source of truth and the expected level of concurrent editing is low.
+For many inline edits, the UI updates first and the API call is fire-and-forget. This keeps interaction responsive and is acceptable because the backend remains the durable source of truth and the expected level of concurrent editing is low.
 
 This is a deliberate tradeoff toward local responsiveness. Luma is optimized for a mostly single-user, local-first workflow, so a small amount of optimistic UI is preferable to making everyday edits feel remote or form-heavy.
 
@@ -116,7 +116,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Backend:** `backend/routers/transactions.py`
 
-- **Handles:** transaction lists, category overrides, merchant name edits, and summary queries for dashboard and detail panels
+- **Handles:** transaction lists, category overrides, merchant name edits, and summary queries for dashboard and detail panels
 - **Uncategorized contract:** transactions with `category_id = NULL` stay as one stored state, while shared summaries and tree surfaces may expose separate synthetic expense and income buckets so uncategorized credits do not masquerade as expense activity
 
 - **Signed monthly totals:** `/summary/monthly-trend` returns signed sums (no `ABS()`), so refunds in an expense scope render as negative bars instead of being folded into magnitudes. A `view` query parameter (`spending` | `income` | `cash_flow`) chooses the cross-cutting frame when no category/payee scope is given; for a category scope, the sign is auto-flipped for income-type categories so received income reads as positive. The cross-cutting frames also exclude categories marked `exclude_from_totals` so transfers do not pollute dashboard totals.
@@ -197,7 +197,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Backend:** `backend/routers/import\_export/` (a package; `__init__.py` assembles one combined router and preserves the original `backend.routers.import_export` import surface)
 
-- **Handles:** CSV preview/import, saved import profiles, support undo import operations, CSV export, data backup/restore, and credentials backup/restore
+- **Handles:** CSV preview/import, saved import profiles, support undo import operations, CSV export, data backup/restore, and credentials backup/restore
 
 - **Preview contract — one parser, server-side:** the mapping table's amounts are computed by the *import's* `parse_amount`, via `POST /import-export/preview/amounts` (`preview.py`), not by the browser. A preview exists to show what the import will do, so a second implementation makes it wrong exactly where that matters: the client used to parse amounts itself and disagreed with the import on `single_unsigned` rows (it ignored the direction column, so every row rendered as a credit), on `DR`/`CR` suffixes, and on blank two-column cells. The endpoint posts the ten rows the client already holds rather than referencing the file, because `/preview` persists nothing there is a handle to re-parse and re-uploading the file on every dropdown change would be far heavier. It answers `null` — rendered as the raw cell or an em dash — for an unparseable cell or a convention whose columns aren't mapped yet. `frontend/src/lib/importExport/previewAmounts.js` owns the debounced fetch and the by-position merge, and no amount parsing at all
 
@@ -817,9 +817,9 @@ Luma uses several distinct storage layers for working state.
 
 - **Lives in:** browser `localStorage` and browser `sessionStorage`
 
-- **Lifespan:** `localStorage` survives reloads on the same browser profile until cleared; `sessionStorage` lasts only for the current browser tab/session
+- **Lifespan:** `localStorage` survives reloads on the same browser profile until cleared; `sessionStorage` lasts only for the current browser tab/session
 
-- **Contains:** browser-specific remembered identity selection (a convenience auto-select; the session cookie is the source of truth), import draft/fallback state, migration fallback values from older UI preference storage, and other machine-local or browser-local UI state that should not be treated as durable shared preference data
+- **Contains:** browser-specific remembered identity selection (a convenience auto-select; the session cookie is the source of truth), import draft/fallback state, migration fallback values from older UI preference storage, and other machine-local or browser-local UI state that should not be treated as durable shared preference data
 
 #### Frontend session state
 
@@ -827,9 +827,9 @@ Luma uses several distinct storage layers for working state.
 
 - **Lifespan:** lasts until page reload, app restart, or active user/profile change
 
-- **Contains:** in-memory copy of loaded user/profile preferences, transient edit drafts, open/closed UI state for the current interaction, and other short-lived state needed to keep interaction responsive
+- **Contains:** in-memory copy of loaded user/profile preferences, transient edit drafts, open/closed UI state for the current interaction, and other short-lived state needed to keep interaction responsive
 
-- **Key files:** `frontend/src/lib/UserPreferencesContext.jsx`, `frontend/src/lib/api.js`
+- **Key files:** `frontend/src/lib/UserPreferencesContext.jsx`, `frontend/src/lib/api.js`
 
 #### The two databases, and what separates them
 
@@ -864,7 +864,7 @@ particular field means.
 
 - **Lives in:** the data database (`luma-data.db` in the configured data directory)
 
-- **Lifespan:** durable application data until changed, deleted, restored, or replaced
+- **Lifespan:** durable application data until changed, deleted, restored, or replaced
 
 - **Contains:** everything the user enters or imports (see the separation above), plus the lifecycle rules below
 
@@ -876,17 +876,17 @@ particular field means.
 
 #### Developer reset tools
 
-When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
+When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
 
 - **`Clear browser-local state`:** clears browser `localStorage` / `sessionStorage`
 
-- **`Clear saved preferences`:** clears preference values stored in the control database
+- **`Clear saved preferences`:** clears preference values stored in the control database
 
-- **`Clear import memory`:** clears backend import-memory data stored in the main application database
+- **`Clear import memory`:** clears backend import-memory data stored in the main application database
 
 - **`Reset to first-run`:** deletes every `user_account` identity and reloads to the welcome screen. In auth mode it first turns sign-in protection off (admin-gated) — which drops to local mode so the identity endpoints are reachable and the keep-one-admin guard no longer applies — then removes all users (the current session's own identity last, so deleting it doesn't 401 the rest). Passwords/2FA/recovery codes go with the accounts. `Clear all` performs this same reset plus the preference/import-memory/browser clears.
 
-These resets remain separate because they target different storage layers with different lifespans and different effects on startup behavior.
+These resets remain separate because they target different storage layers with different lifespans and different effects on startup behavior.
 
 The separation is important because "resetting the app" can mean very different things in practice. Browser-local troubleshooting, preference cleanup, import-workflow cleanup, and resetting to first-run are all recoveries with different blast radii, so the tooling keeps them explicit instead of hiding them behind one broad reset.
 
@@ -902,7 +902,7 @@ Luma is intended to run on:
 
 - Raspberry Pi / ARM Linux
 
-Where commands differ, the repo should provide script wrappers or document the differences clearly in `README.md`.
+Where commands differ, the repo should provide script wrappers or document the differences clearly in `README.md`.
 
 **Running it as one thing.** `python -m backend.desktop` is the standalone mode: it serves the SPA and the API from a single process on loopback and opens a browser at it, so no second process and no proxy is involved. Two details there are load-bearing rather than incidental. The bind is `127.0.0.1` but the URL handed out is `http://localhost:<port>`, because a WebAuthn Relying Party id has to be a domain — opening the address form would disable every passkey vault slot with nothing on screen to explain why (see *Token vault & transport security* for the two preconditions). And the port is preferred-not-guaranteed, falling back to an ephemeral one when the configured port is busy; nothing durable is keyed to it, since cookies are not port-scoped and an RP id is the host alone.
 
@@ -940,6 +940,6 @@ The state latches, because every piece of state on screen belongs to a process t
 
 - **Shared detail-panel behavior:** update `detailShared.jsx`
 
-- **User-facing setup or behavior changes:** update `README.md` and possibly `CHANGELOG.md`
+- **User-facing setup or behavior changes:** update `README.md` and possibly `CHANGELOG.md`
 
 - **Version bump:** `APP_VERSION` in `backend/runtime_config.py` is authoritative — the API reports it and the packaged artifact is named for it. `frontend/package.json` and `backend/pyproject.toml` carry their own copy because npm and Python packaging each read theirs before any of our code runs, so neither can derive it. `backend/version_sources.py` is the single statement of where those literals live, shared by `backend/tests/test_app_version.py` (which fails when they disagree, and if the literal reappears in application code) and `scripts/release.py --set-version` (which rewrites all three together). Rewrites are targeted substitutions rather than parse-and-reserialize, so a version bump stays a reviewable one-line diff per file.

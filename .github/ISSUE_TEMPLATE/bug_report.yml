@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in Luma behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Please do not include real financial data** — no account numbers, no institution names, no
+        exported CSV rows from a real account. If a sample file is needed to reproduce the problem,
+        replace the values with invented ones first.
+
+        For a **security vulnerability**, do not open an issue — see
+        [SECURITY.md](../blob/main/SECURITY.md) for private reporting.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What was expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Import a CSV with …
+        2. Open the Transactions page and …
+        3. The category column shows …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How is Luma running?
+      description: Exposure and behavior differ meaningfully between these.
+      options:
+        - Desktop / single user on one machine
+        - LAN server reached from other devices
+        - Docker
+        - Development mode (npm run dev + uvicorn)
+        - Standalone build (macOS or Windows artifact)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data-source
+    attributes:
+      label: Where did the affected data come from?
+      options:
+        - CSV import
+        - A connected provider (Plaid)
+        - A connected provider (SimpleFIN)
+        - A marketplace importer (Amazon / PayPal)
+        - Demo data
+        - Not data-specific
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: A release tag, or the commit hash from `git rev-parse --short HEAD`.
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and browser
+      placeholder: "e.g. Windows 11, Firefox 141"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors from the console or backend log
+      description: Browser devtools console and/or the backend output. Redact anything identifying.
+      render: text
+    validations:
+      required: false

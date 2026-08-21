@@ -3,24 +3,11 @@
 All notable changes to Luma are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+This log starts at the first public release. Everything before that was pre-release development
+against a single installation, so there was no released version for a change to be *relative to* —
+the README describes what Luma currently does, and that is the more useful document for anyone
+arriving now.
+
 ---
 
 ## [Unreleased]
-
-### Added
-
-### Changed
-
-- Auth system — optional multi-user mode with session-based login and 2FA
-- Docker support via `docker-compose.yml`
-
-### Removed
-
-- Pre-auth security UI in Settings: the security-profile picker, the
-  sign-in protection toggle, and the password-policy picker were removed
-  pending decisions on the eventual security model. Supporting backend
-  endpoints (`/auth/enable`, `/auth/security-profile`,
-  `/auth/password-policy`) and the `securityProfiles.js` / `passwordPolicy.js`
-  lib helpers remain in place. The 2FA, user management, and Plaid token
-  protection sections — all gated on auth-enabled mode — are unchanged.
-  See `docs/backlog/pre-auth-security-ui.md` for rebuild notes.

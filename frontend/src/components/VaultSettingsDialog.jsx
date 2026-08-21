@@ -137,6 +137,15 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           title="Unlock methods"
           description="Any one of these opens the vault. The last one cannot be removed — there is no recovery if you lose them all."
         >
+          {/* Changing a passphrase is ordinary maintenance most of the time, so it lives here rather
+            than under a compromise heading. The one thing that is not obvious is what it does *not*
+            cover: it re-wraps this slot and leaves the key that decrypts the credentials untouched.
+            Somebody acting on an exposure needs both halves, and this is where they will start. */}
+          <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+            If an unlock method may have been exposed, changing it here is only half the fix — it retires
+            the passphrase or passkey, not the key your credentials are encrypted with. Follow it with
+            Replace the vault key below.
+          </p>
           <Row>
             <span>Passphrase</span>
             <Button variant="ghost" small style={{ marginLeft: 'auto' }} onClick={onChangePassphrase}>
@@ -226,7 +235,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
 
         <Section
           title="Replace the vault key"
-          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above, or if you think a passphrase was exposed. Everyone who still has access keeps it, and no data source needs reconnecting."
+          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. Everyone who still has access keeps it, and no data source needs reconnecting."
         >
           <div>
             <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>

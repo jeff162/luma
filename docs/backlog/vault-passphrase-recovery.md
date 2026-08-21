@@ -8,7 +8,10 @@ is an acceptable outcome to be warned about rather than engineered around — bu
 *you re-link your data sources*, and today it means *the vault is bricked and the app never says so*.
 
 This note covers what recovery costs, the one path that avoids that cost, and the two things that make a
-reset less clean than it first appears.
+reset less clean than it first appears. A 2026-08-21 pass added three more: **compromise** as a second,
+independent reason to want the same reset; how it should **revoke on the way out** (and why the case that
+motivated this file is the one where it cannot); and **recovery codes**, which the vault lacks entirely
+and which would make the destructive reset rare rather than routine.
 
 ## What is actually at stake
 
@@ -65,6 +68,103 @@ The clean-break behaviour this rests on is already designed for and pinned by
 `test_decrypt_under_a_different_dek_is_the_clean_break` in `test_vault.py`: a fresh DEK over old ciphertext
 raises `VaultDecryptError`, which the model has always described as meaning *re-link*.
 
+## A second motivation: reset as a compromise response (2026-08-21)
+
+This file was written around a **forgotten passphrase** — the dead end where no unlock secret survives.
+A leaked database or backup is a second, independent reason to want the same operation, and it argues
+the feature is worth more than the original framing suggests.
+
+For a leaked file the response is *revoke every credential, change the passphrase, replace the vault
+key* (see `SECURITY.md`). A reset does the last two implicitly and forces the first: re-linking replaces
+every credential with a **newly issued** one, which kills a stolen credential by making it obsolete
+rather than by trusting a revocation call to have worked. That is a stronger guarantee than the
+three-step sequence, at the cost of the re-linking the reset already requires.
+
+### Revoke on the way out, driven by the capability — not by naming a provider
+
+Reset should attempt provider-side revocation before clearing anything. There is no reason not to: the
+encrypted columns are cleared and every connection is flagged `reauth_required`, so the credentials are
+unusable to Luma afterwards regardless, and a re-link is mandatory either way. Revoking costs nothing
+that was not already being paid.
+
+Drive it off the existing declared capability, `revokes_on_disconnect` (`services/providers/base.py`),
+so a future provider inherits the behavior by declaring it rather than by anyone editing the reset path
+— the rule `building-a-connector.md` already sets for capabilities:
+
+- **`revokes_on_disconnect = True`** (Plaid): call `adapter.remove()` per connection. The access
+  genuinely ends and there is nothing for the user to do.
+- **`revokes_on_disconnect = False`** (SimpleFIN): nothing to call. The dialog must say so plainly —
+  the access URL stays live until the user deletes Luma's authorization at the Bridge and re-adds it.
+
+**Do not copy `disconnect`'s failure behavior.** `routers/providers.py` deliberately *keeps* the local
+connection when revocation fails, "so the user can retry rather than believe the token is dead when it
+may still be live." A reset cannot honor that — clearing the credentials is the point. So a reset
+reports **per-connection outcomes** and names the ones the user has to finish by hand, rather than
+aborting the way disconnect does.
+
+### The constraint that splits reset in two: revocation needs an unlocked vault
+
+`routers/providers.py` decrypts the credential *before* handing it to `adapter.remove()`, returning
+`423 vault_locked` when it cannot. Revoking needs the token, the token needs the DEK, the DEK needs an
+open vault — so the original motivating case is exactly the one where **no revocation is possible at
+all**:
+
+| reset because… | vault unlockable? | what reset can do |
+| --- | --- | --- |
+| the passphrase was **compromised** (still known) | yes | revoke automatically wherever `revokes_on_disconnect`; instruct manually elsewhere |
+| the passphrase is **lost** (the original case) | no | revoke nothing, for any provider — instruct manually for all of them |
+
+The user knows which situation they are in, so **the reset dialog asks**, and the two paths differ in
+what they promise. In the compromised case the vault should be unlocked first precisely so the
+revocations can run. In the lost case the "go revoke it at the provider" note becomes the general
+instruction rather than the SimpleFIN exception.
+
+## Recovery codes would shrink this feature's role — and are cheap here
+
+**The project already has recovery codes, but only for sign-in.** The 2FA path issues them, counts them
+(`recovery_code_count`), regenerates them invalidating the old set, and states they are single-use and
+shown once (`pages/Settings.jsx`, and the Help topic on sign-in protection). **The vault has no
+equivalent**, which is why the ladder in this file drops from "another member re-enrolls you" straight
+to a destructive reset — leaving the *single-user install* with no rung at all. That is the gap worth
+closing, and it would make the destructive reset genuinely rare rather than the routine answer.
+
+The architecture already generalizes to it. `vault_slot.method` is a column, not an enum baked into the
+code; passphrase and passkey slots coexist today, with `vault_slot_one_passphrase` constraining only the
+passphrase kind. A recovery-code slot is a third method with the same shape — `_derive_kek` does not
+care whether the secret it is fed is typed by a human or generated. Two properties follow:
+
+- A generated code carries **real entropy**, so the offline-attack question that hangs over a passphrase
+  slot does not arise for it, and the scrypt hardening is belt-and-braces rather than load-bearing.
+- But the vault is only as strong as its **weakest** slot. A strong recovery code does not compensate
+  for a weak passphrase; it adds a path, it does not raise the floor.
+
+### Open: single-use, and what "used" means here
+
+The convention is single-use, and it is worth being explicit about why, because the reasons transfer
+unevenly to a vault slot:
+
+1. **Replay containment** — a code is a bearer secret typed into a machine, where it can reach logs,
+   clipboards, autofill, screenshots and shoulders. Consuming it on use bounds that exposure.
+2. **Consumption is a signal** — a code the owner did not use being spent is evidence. Reusable codes
+   produce no such signal.
+3. **It stops the code becoming a de facto password.** This is the least obvious and probably the most
+   important: a reusable code is *more convenient* than the real credential, so it starts getting used
+   routinely — while being stored far less securely, printed in a drawer or photographed.
+4. **It forces regeneration**, refreshing the secret rather than letting one code live forever.
+
+The wrinkle specific to this design: a vault recovery code cannot be checked against a stored hash the
+way a 2FA code can — it must actually derive a KEK that unwraps a slot's private key. So "consumed"
+means **the slot is deleted**, a real destructive step rather than a flag. Which raises the questions to
+settle before building:
+
+- One code (one slot) or a set of N (N slots)? A set is redundancy against losing one copy; it is also
+  N independent paths to the same DEK.
+- Does using one delete just that slot, or invalidate the whole set as the 2FA regenerate does?
+- Is the natural flow *unlock with code → set a new passphrase → issue a fresh set*, with the used slot
+  dropped at the end? That mirrors what the user actually came to do.
+- Does a recovery-code slot count as "another granted slot" for the rule below that a reset must refuse
+  while one exists? It should not — it is the user's own rung, not another member's.
+
 ## The wrinkle: re-linking does not always reattach
 
 `connect` upserts on `(provider, external_id)`, so whether a re-link lands on the **existing** connection
@@ -103,6 +203,26 @@ So the reset below **must refuse while another granted slot exists**, and say th
 is the way back. Wiping credentials that are still perfectly reachable would be the worse outcome, and the
 alternative is now a real flow rather than advice. The destructive reset is only for the genuine dead end:
 the *last* slot in the workspace forgotten, with no other member who can open the vault.
+
+**Corrected 2026-08-21 — that refusal belongs to the *path*, not to reset itself.** The rule above was
+written when a forgotten passphrase was the only motivation, and scoped to that path it holds. The
+compromise motivation added earlier in this file inverts it: when the worry is that the key material is
+known to someone it should not be, another member still being able to unlock is not a reason to hold
+back — it is closer to a reason to proceed. Nobody is being asked to agree; the question is only whether
+a *free* alternative exists, and for a compromise it does not.
+
+The same question the reset dialog already asks (lost, or compromised?) decides this too:
+
+| situation | what should happen |
+| --- | --- |
+| Passphrase lost, **another granted slot exists** | **Not a reset at all.** Raise a fresh authorization request: the stuck user drops their own slot and sets a new passphrase, which re-enrols them, and any unlocked member approves it. Reset should not be offered — the credentials are still reachable and nothing needs re-linking. |
+| Passphrase lost, **no other slot and no recovery code** | **Rebuild.** The genuine dead end this file was written for, and the row that vault **recovery codes** would remove almost entirely. |
+| **Database or backup stolen**, regardless of who else holds a slot | **Rebuild, and allow it.** The point is to retire every credential by re-issuing it; another member's working slot does not make the old ones any less exposed. |
+
+Two things follow. The first row is a *redirect*, not an error — the UI should start the request rather
+than explain why the button is disabled. And reset stays **admin-gated** in every row, consistent with
+the model's "admin gates settings, not data": it destroys shared workspace state, so it is not a control
+any member should reach alone.
 
 A second consequence: **a passkey is now the cheapest insurance against this whole scenario.** A user with
 both a passphrase and a passkey has two independent ways in, and `remove_slot` refuses to leave them with

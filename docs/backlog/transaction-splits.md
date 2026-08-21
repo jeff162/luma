@@ -78,6 +78,16 @@ possibly aided by their normal rules per item name.)
 - **Reuse:** the `exclude_from_totals` mechanism (per-allocation), `category_overridden` protection semantics
   (a split resists rule reruns), the shared `CategoryPicker`, `TransactionDetail`.
 
+## A second consumer: reimbursable expenses
+
+[`reimbursable-expenses.md`](reimbursable-expenses.md) depends on this allocation table for its
+motivating case — part of an expense is reimbursable (three tickets for friends, one for me) and part is
+not. It is a second, independent consumer of the same mechanism, which is worth knowing when weighing
+whether the reporting-expansion cost is justified: it is not paid for by Amazon pre-fill alone.
+
+Nothing in that design asks anything extra of splits. It needs one allocation part to land in a holding
+category and the rest in ordinary ones, which is the base capability.
+
 ## Open questions
 
 - **Split marker vs. NULL+flag** for the parent transaction's own category, and how the ledger/filter/search

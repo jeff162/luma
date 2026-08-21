@@ -1,6 +1,6 @@
 # UI Patterns
 
-This document records the UI patterns Luma should prefer. It is not a full design system; it is a working reference for visual and interaction consistency.
+This document records the UI patterns Luma should prefer. It is not a full design system; it is a working reference for visual and interaction consistency.
 
 This document defines UI behavior and interaction patterns. For underlying data structures and system flow, see `architecture.md` and `data-model.md`.
 
@@ -40,7 +40,7 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 ## Product intent
 
-Luma should feel polished, quiet, and immediately useful. The UI should support routine work in place rather than forcing separate admin or settings flows for common actions.
+Luma should feel polished, quiet, and immediately useful. The UI should support routine work in place rather than forcing separate admin or settings flows for common actions.
 
 Polish is part of the feature, not a later cleanup step.
 
@@ -58,25 +58,25 @@ Baseline interaction expectations:
 
 - inline edit states should preserve layout stability whenever possible
 
-If the user can already see the data they need to change, prefer enabling the change in place unless there is a strong reason to route it elsewhere.
+If the user can already see the data they need to change, prefer enabling the change in place unless there is a strong reason to route it elsewhere.
 
-Shared controls should be treated as finished product surfaces, not reused snippets. If a picker, menu, overlay, inline editor, or related control appears in more than one place, viewport behavior, scroll behavior, first-paint placement, and general polish should be handled as part of the shared control, not deferred to follow-up page-specific cleanup.
+Shared controls should be treated as finished product surfaces, not reused snippets. If a picker, menu, overlay, inline editor, or related control appears in more than one place, viewport behavior, scroll behavior, first-paint placement, and general polish should be handled as part of the shared control, not deferred to follow-up page-specific cleanup.
 
 ## General principles
 
-- Keep layouts compact. Avoid large empty regions, oversized cards, and controls that read heavier than the data they edit.
+- Keep layouts compact. Avoid large empty regions, oversized cards, and controls that read heavier than the data they edit.
 
-- Treat the UI as the user's window into their data. If information is shown in its primary context, the user should usually be able to act on it there.
+- Treat the UI as the user's window into their data. If information is shown in its primary context, the user should usually be able to act on it there.
 
-- Put editing where the data is primarily viewed. If a page is the natural place to inspect a thing, prefer editing it there instead of duplicating the same controls on Settings.
+- Put editing where the data is primarily viewed. If a page is the natural place to inspect a thing, prefer editing it there instead of duplicating the same controls on Settings.
 
 - **Creating is available wherever assigning is.** Anywhere the user picks a value from a managed set — a category, a group, a tag, a note, an owner, and so on — they can also create a *new* member of that set inline, in the same control, and have it applied immediately. The user is never bounced to a separate management screen just to mint the thing they want to assign: they invent it and assign it in one motion (create a category from the category picker, a tag from the tag picker). This is a deliberate stance that the UI must not get in the way of the user's actual intent. Only *creation in service of an assignment* has to be inline — deletion, renaming, reordering, and other maintenance can live on a dedicated screen, because that is not what the user is in the middle of doing. When adding a new picker/selector for any assignable thing, include its inline create affordance from the start rather than deferring it to "manage it in Settings."
 
-- Favor consistency over novelty. When a control already exists elsewhere in the app, reuse the same interaction and styling unless there is a strong reason not to.
+- Favor consistency over novelty. When a control already exists elsewhere in the app, reuse the same interaction and styling unless there is a strong reason not to.
 
-- Keep look and feel consistent across pages. Similar data structures should use the same spacing, controls, and interaction patterns so the app feels like one coherent tool rather than a set of isolated screens.
+- Keep look and feel consistent across pages. Similar data structures should use the same spacing, controls, and interaction patterns so the app feels like one coherent tool rather than a set of isolated screens.
 
-- Treat repeated UI elements as shared product language. Trees, pills, menus, inline editors, overlays, tables, selectors, and other controls that appear on more than one page should keep the same look, spacing, and behavior unless there is a very strong reason to diverge.
+- Treat repeated UI elements as shared product language. Trees, pills, menus, inline editors, overlays, tables, selectors, and other controls that appear on more than one page should keep the same look, spacing, and behavior unless there is a very strong reason to diverge.
 
 - **Search first, then build — reuse is the default, a one-off needs justification.** *Before* writing any UI element (a list, table, panel, dialog, picker, inline editor, button), find the existing shared component — check [`shared-components.md`](shared-components.md) (the "what do I use for X?" index) or grep for the concept — and reach for it. Do this *at the moment you decide how to build*, not just once at session start; reading the docs earlier is not the same as consulting them at the build decision. If genuinely nothing fits, state why you are introducing a new component in your summary. And do not shape a bespoke backend endpoint to fit a quick UI — check whether the existing endpoint plus a filter already returns what the shared component needs. (This rule exists because a one-off transaction list was built when `TransactionListTable` already had several users — the failure was not consulting the pattern at build time, not missing knowledge.)
 
@@ -90,23 +90,23 @@ Shared controls should be treated as finished product surfaces, not reused snip
 
 - **A hint attached to a row of a scrolling list needs a dwell before it opens.** Pass `openDelay={ROW_HOVER_OPEN_DELAY_MS}` (from `ui.jsx`) to `<Tooltip>` there. With the cursor resting anywhere over the list and the rows moving under it — wheel, page-down — every row that passes counts as a fresh hover, so a zero-delay hint strobes a card per row. The dwell costs a user who deliberately stops on a row nothing and removes the flicker entirely for one who is just scrolling past. `Tooltip` also closes itself on any scroll: it is positioned once in fixed coordinates against where its trigger was, so without that it would hang detached in mid-air while the row scrolled away. **Note this is only fixable for our `<Tooltip>`** — native `title` timing is entirely browser-owned, so a hint that needs a dwell cannot stay a `title`. The Amazon reconciliation and import-detail order/charge cells are the reference case. `openDelay` defaults to 0, which is right for the common case of a small button or icon.
 
-- When a UI behavior is meant to be shared, implement the shared behavior first. Do not land a one-sided or page-specific version and plan to “sync it up” later unless the narrower scope is intentional and explicitly documented.
+- When a UI behavior is meant to be shared, implement the shared behavior first. Do not land a one-sided or page-specific version and plan to “sync it up” later unless the narrower scope is intentional and explicitly documented.
 
-- Before changing a UI interaction, decide whether it is page-specific behavior or shared product language. Shared product language should be implemented and reviewed with parity across all affected surfaces from the start.
+- Before changing a UI interaction, decide whether it is page-specific behavior or shared product language. Shared product language should be implemented and reviewed with parity across all affected surfaces from the start.
 
 - When a screen has a dedicated close action in its header or panel chrome, prefer placing that close control at the upper right unless that surface already follows a stronger established pattern.
 
 - Keep advanced and less-common settings below everyday workflows.
 
-- Use inline editing for lightweight data changes; reserve dedicated forms or modals for multi-step or higher-risk actions.
+- Use inline editing for lightweight data changes; reserve dedicated forms or modals for multi-step or higher-risk actions.
 
-- Treat transient edits as cancellable work. If a control enters a temporary edit state, the user should normally be able to back out without keeping the in-progress value, and similar transient controls should behave the same way across the app unless there is a strong reason to differ.
+- Treat transient edits as cancellable work. If a control enters a temporary edit state, the user should normally be able to back out without keeping the in-progress value, and similar transient controls should behave the same way across the app unless there is a strong reason to differ.
 
-- Let the user control presentation where it materially helps them work. This includes things like panel placement, list scrolling, filtering, and other layout choices that improve usability without turning the app into a fully user-designed interface.
+- Let the user control presentation where it materially helps them work. This includes things like panel placement, list scrolling, filtering, and other layout choices that improve usability without turning the app into a fully user-designed interface.
 
-- Remember a user's working UI state across pages when it materially helps them resume work. Things like panel open/closed state, table layout, and similar view preferences should use the shared per-user/profile preference model with local cache plus best-effort backend sync, rather than one-off page-specific persistence.
+- Remember a user's working UI state across pages when it materially helps them resume work. Things like panel open/closed state, table layout, and similar view preferences should use the shared per-user/profile preference model with local cache plus best-effort backend sync, rather than one-off page-specific persistence.
 
-- Prefer user control over hidden inference when the choice affects meaning. For example, ownership, mapping, and destructive actions should be explicit when there is more than one reasonable interpretation.
+- Prefer user control over hidden inference when the choice affects meaning. For example, ownership, mapping, and destructive actions should be explicit when there is more than one reasonable interpretation.
 
 - Long transaction ledgers should let the user change sort directly from the column headers. When the list is paged or incrementally loaded, the sort should be applied by the backend so the whole filtered result stays in one consistent order.
 
@@ -180,9 +180,9 @@ Most pages should follow this structure:
 
 3. Primary actions placed near the data they affect.
 
-4. Scroll inside long data regions when the list grows large, rather than making the whole page excessively tall.
+4. Scroll inside long data regions when the list grows large, rather than making the whole page excessively tall.
 
-Prefer page-local scrolling for long lists, with header and controls remaining visually stable above the scrolling region.
+Prefer page-local scrolling for long lists, with header and controls remaining visually stable above the scrolling region.
 
 When a page hosts several distinct management surfaces that don't need to be seen at once, prefer **in-page tabs** over a stack of collapsible cards — each surface gets the full width/height of the content area and the page reads as one thing at a time. The Import/Export page (`Import / Export / Backup`) and the Accounts page (`Accounts / Owners / Connections`) both use this: a simple tab-button row under the `PageHeader` over conditionally-rendered content. The active tab is **session-scoped** (mirrored to `sessionStorage`, not the durable preference store), so it persists while the app is open but resets to the primary tab on next launch — a within-session convenience, not a saved preference. A surface that *is* the only thing on its tab should render its content directly (or in a non-collapsible panel), not in a collapsible card — there's nothing to collapse it away from.
 
@@ -206,9 +206,9 @@ Tree views should use the same visual grammar wherever they appear.
 
 - Each child level should begin under the first letter of the label above it.
 
-- The hierarchy should read primarily through label alignment rather than heavy guide lines or decorative chrome.
+- The hierarchy should read primarily through label alignment rather than heavy guide lines or decorative chrome.
 
-- Controls that belong to a row may sit to the left of that label start, but the text alignment should define the structure of the tree.
+- Controls that belong to a row may sit to the left of that label start, but the text alignment should define the structure of the tree.
 
 - Expand/collapse controls should stay close to the label they affect.
 
@@ -300,7 +300,7 @@ For account rows, owner rows, and similar editable lists:
 
 - Sending a merged child account away should use the app trash flow rather than immediate hard deletion, with recovery managed from Settings.
 
-Inline row creation should usually happen inside the existing list, not in a detached panel above it.
+Inline row creation should usually happen inside the existing list, not in a detached panel above it.
 
 ### Inline edit commit behavior
 
@@ -419,7 +419,7 @@ If a list introduces the same kind of object the user already manages elsewhere,
 
 ## Pills and expanding selectors
 
-Use compact pill-style controls for values like owner, account type, and other small categorical fields.
+Use compact pill-style controls for values like owner, account type, and other small categorical fields.
 
 - Closed state: show the current value in a rounded pill sized to the text.
 
@@ -433,7 +433,7 @@ Use compact pill-style controls for values like owner, account type, and other 
 
 - A condition that can hold **repeated sub-values** expands in place rather than opening a separate editor: the rule editor's *Merchant Name Contains* chip (`RuleForm`) starts as one text box and grows an "and contains" row per added clause (capped, with a per-extra-clause remove and a "＋ and contains…" affordance), reading as one AND'd condition. The chip summary and the Rule Summary line render the clauses joined with "and". Keep the first clause un-removable (clearing the whole chip is the chip's own ×) so the primary value always has a stable home, mirroring how the fluid primary column works elsewhere.
 
-For category assignment, prefer the shared category picker so transaction pages, import mapping, and any future category assignment flows behave the same way.
+For category assignment, prefer the shared category picker so transaction pages, import mapping, and any future category assignment flows behave the same way.
 
 - Category pickers and the Categories page should reflect the same persisted group order so users do not learn one structure in the editor and see another while categorizing transactions.
 
@@ -453,7 +453,7 @@ Empty states should be brief and quiet.
 
 ## Drop zones and file inputs
 
-When a file-upload action is important, prefer a visible drop zone over a bare browser file input.
+When a file-upload action is important, prefer a visible drop zone over a bare browser file input.
 
 - Use the same visual pattern across the app where possible.
 
@@ -461,11 +461,11 @@ When a file-upload action is important, prefer a visible drop zone over a bare 
 
 - Keep the text concise and task-specific.
 
-- If the loaded file becomes editable text, switch to the editor after load rather than trying to keep two separate controls visible.
+- If the loaded file becomes editable text, switch to the editor after load rather than trying to keep two separate controls visible.
 
 ## Confirmation and completion flows
 
-Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.
+Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.
 
 - Use in-app confirmation overlays for destructive actions like restore.
 
@@ -473,7 +473,7 @@ Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the re
 
 - Confirmation and completion steps in the same flow should use the same visual language.
 
-- Avoid dismissing important confirmation modals by backdrop click if the user needs to make an explicit choice.
+- Avoid dismissing important confirmation modals by backdrop click if the user needs to make an explicit choice.
 
 - Success dialogs should usually have one clear next step.
 
@@ -573,9 +573,9 @@ CSV import has a few special rules:
 
 - If header rows start after line 1, surface the detected skipped-row value immediately and offer the raw file as an explicit review step rather than forcing it open by default.
 
-- If the file tail looks like footer or non-transaction data, force the user to review it before continuing.
+- If the file tail looks like footer or non-transaction data, force the user to review it before continuing.
 
-- True validation errors should open the raw viewer as well; do not bury them only in summary counts.
+- True validation errors should open the raw viewer as well; do not bury them only in summary counts.
 
 - If a file already carries meaningful categories, the import mapping screen should let the user use the categories present in the data so imported transactions can keep those categories, missing categories can be added under `Unassigned`, and the file can contribute to system-wide rule suggestions.
 
@@ -729,11 +729,11 @@ that should not outlive the session or land in a data backup.
 
 Import mapping persistence has two layers:
 
-- **Import profile/filter:** source of truth for provider-level reusable mapping behavior
+- **Import profile/filter:** source of truth for provider-level reusable mapping behavior
 
 - **Local draft:** fallback only for the no-profile/manual case
 
-When a profile matches, it should carry reusable import workspace state, including:
+When a profile matches, it should carry reusable import workspace state, including:
 
 - column mapping
 
@@ -743,7 +743,7 @@ When a profile matches, it should carry reusable import workspace state, includ
 
 - collapsed/open bucket state
 
-The local draft must not override a matched profile. It exists only so a manual/no-profile import session can resume later if the next file is still compatible.
+The local draft must not override a matched profile. It exists only so a manual/no-profile import session can resume later if the next file is still compatible.
 
 ## Ownership and tag-driven reporting
 

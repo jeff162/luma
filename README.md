@@ -1,108 +1,82 @@
 # Luma
 
-> Your financial data, without the friction.
+> Understand where the money actually went.
 
-Luma is a personal finance tool that helps you collect your financial transaction data, categorize it, and keep it organized with minimal friction.
+Luma is a local-first personal finance tool. It collects transaction data from banks, cards and CSV exports, keeps it categorized without demanding constant re-work, and answers one question well: **what was spent, on what, and how does this period compare with the last one.** Luma exists because I was a long term Mint user and Monarch has some annoying issues and I had time so I decided to see if I could build a replacement.
 
-Start with a CSV export or connect an account, clean up the categories, define rules for common transactions, and review new transactions to verify they got categorized correctly.
+## What Luma is not
 
-You stay in control — Luma makes it easy to review what changed, spot anything that looks off, and adjust when needed.
+Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it just isn’t what I use the app for and so I had no reason to implement them:
 
-Less repetition. Fewer manual fixes. Clear, usable financial data.
+- **No budgeting.** Nothing to allocate, no envelopes, no per-category targets, no alert when a category runs hot.
 
-## Why Luma?
+- **No net worth tracking.** Luma holds transactions, not balances — no asset and liability rollup, no account values over time. 
 
-Many personal finance tools follow the same basic model: import data, categorize transactions, define rules, and review the results.
+- **Investment accounts**. Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future and more complete support for Investment accounts may be added.
 
-The difference is how much friction they introduces.
+Anyone whose main requirement is either of those will be better served by some other app, or they can spend the time to add them to Luma if that feels worthwhile. 
 
-Luma is designed to reduce that friction:
+## What Luma is good at
 
-- Getting data in is quick and flexible (CSV or connected accounts)
+- **Showing where the money went** — spending by category, merchant, account or owner, with drill-down from any total to the individual transactions behind it, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
 
-- Categorizing and curating transactions happens directly where the data is
+- **Comparing periods** — the same breakdown across months or years, so a change in spending is visible rather than inferred. Year-over-year and trend comparisons are built in.
 
-- Rules are easy to create and adjust on the fly
+- **Getting data in without ceremony** — a CSV from any bank, several files at once, or a connected data source. Column mapping is remembered per source, so the second import of the same export is a drop-and-go. Amazon order history can be imported to itemize Amazon spending down to the individual items in an order.
 
-- Reviewing the data is straightforward — no digging through menus or workflows
+- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt is stored and viewable just the same; turning that one into searchable text, or any document into itemized lines, is opt-in rather than automatic.
 
-The core tasks are the same -- Luma just makes them easier to do and easier to keep the data clean over time.
+- **Re-importing without fear.** Duplicate detection runs across every source, so overlapping exports, a re-downloaded statement, or the same card arriving from two places will not double-count. No pre-planning of import windows is needed.
 
-## What does Luma do?
+- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be created from a categorization already made rather than authored cold.
 
-Luma help turn raw financial data into something organized and usable.
+- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule.
 
-The application can:
+- **Searching the history** — filter and search across the whole ledger, including exclusion filters and cross-cutting tags.
 
-- import transactions from CSV or connected accounts
+## Also included
 
-- categorize and organize data across accounts and owners
+- **Multiple owners** — track personal and shared finances across several people in one ledger, with
+  owner as a reporting axis rather than a separate set of books.
+- **Backup and restore** — export the data anywhere, with optional encryption under a key of the
+  user's choosing.
+- **Tasks** — a running list of what needs attention, such as transactions nothing has categorized.
+- **Accounts** — create, rename and merge accounts, whether they arrived from a file, a connection, or
+  by hand.
+- **Runs locally or on the network** — a single-user desktop install, or a machine on the LAN that
+  other devices reach, with a sign-in perimeter for the second case.
 
-- spot recurring charges — subscriptions, bills, taxes — automatically
+## How it works
 
-- review and maintain transaction data as new transaction data is added
+The first run creates a local user and offers a choice: load the demo data, import a CSV, or connect a data source. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
 
-- analyze spending with dashboards and drill-down views
+Two things then drive everything: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags and rules all exist to make those two better, and each can be used or ignored depending on whether it is useful:
 
-All core functionality runs locally. External integrations are optional, Luma never makes an outgoing request unless explicitly requested (eg. fetch new data, save a backup).
+- **Categories** group transactions for reporting — start from a curated starter set or build a tree from scratch.
 
-## Getting started: what to expect
+- **Tags** are cross-cutting labels (*Essential Expenses*, *Kids*, *Personal Spending, Rental expenses*) that span accounts, owners and categories, and drive their own reports.
 
-The first time Luma opens a local user needs to be created and the welcome menu offers several options to get started. Either load the demo data to explore the application or load your own data either from a csv or connect a data source. The first import is what brings the rest of the app to life; other than the user name, nothing needs to be configured before loading transaction data.
+- **Rules** pair matching criteria with actions: set the merchant name, assign a category or tag, or mark the transaction as part of a recurring series.
 
-Two things drive everything else: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags, and rules all exist to make those two better, and they can be used or not depending on whether they are helpful:
+- **Recurring** detects transactions that repeat on a schedule, and lists them as series that can be curated.
 
-- **Categories** group transactions for reporting — start from a common starter set or build your own.
+The same overview is available inside the application under **Help → How Luma works**.
 
-- **Tags** are cross-cutting labels (e.g. *Essential Expenses*, *Kids*, *Personal Spending*) that span accounts, owners, and categories, for generating custom reports.
+## Design principles
 
-- **Rules** have a set of matching criteria to select the set of transactions they apply to and a set of actions they take when they apply. The actions include setting the merchant name, assigning a category or a tag and indicating whether the transaction is part of a recurring series.
+- **Local unless told otherwise.** Everything runs on the local machine against a local SQLite database. Luma makes no outbound request except for an action the user explicitly asked for — syncing a connected source, writing a backup to a chosen location, reading a CSV off a network drive. There is no telemetry, no analytics, and nothing that phones home.
 
-- **Recurring** tries to detect transactions that repeat on a schedule — subscriptions, bills, taxes, paycheck. Rules can also indicate something is a recurring series if for some reason it was not detected automatically.
+- **Curation compounds.** Effort spent categorizing should keep paying off on data that has not arrived yet, which is what rules are for.
 
-The same overview is available any time inside the app under **Help → How Luma works**.
+- **Correctable where it is visible.** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it.
 
-## Who is this for?
-
-Luma is a good fit for people who:
-
-- want to import and organize financial data quickly
-
-- are migrating from another tool or starting fresh
-
-- want control over their data without sacrificing usability
-
-- track personal or household finances in one place
-
-Luma does not:
-
-- have any kind of support for budgeting
-
-- Interact with investment accounts other than to fetch money movement transactions.
-
-## Philosophy
-
-Luma is built on a few core principles:
-
-- Financial tools should reduce effort, not create it
-
-- The curation process should improve over time,
-
-- Data must remain under user control
-
-- Interfaces should support natural workflows
-
-- Users should be able to correct data wherever they can see it
-
-- Changes should be reversible. They are only rarely destructive.
-
-- Strong Duplicate detection across imports so adding data is not something to be feared and doesn't require any pre-planning.
+- **Reversible by default.** Destructive operations are rare, announced, and reversible where they exist at all.
 
 ## Privacy
 
-Luma is local-first by design, a the data stays locally:
+Luma is local-first by design, and the data stays local:
 
-- **The data lives on your machine** — everything is kept in a local SQLite database.
+- **The data stays on the local machine** — everything is kept in a local SQLite database.
 
 - **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how it is used.
 
@@ -110,7 +84,7 @@ Luma is local-first by design, a the data stays locally:
 
 - **Backups stay local** — exports are saved wherever the user wishes and can be encrypted if desired with a user supplied key.
 
-You decide what comes in, what stays, and what leaves. Luma is built to organize your financial data, not to collect it.
+What comes in, what stays and what leaves are all the user's decision. Luma is built to organize financial data, not to collect it.
 
 ## Security
 
@@ -120,331 +94,138 @@ Local-first also means the security model is easy to reason about — but it's w
 
 - **The optional sign-in password is network-access control, not disk encryption.** It governs who on the local network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk.
 
-- **Data-source tokens are the one secret Luma encrypts at rest.** A connected provider (such as Plaid) issues a token that grants **ongoing, read-only** access to an account's transactions and balances — it cannot move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources, and nothing else — the ledger itself is untouched by it.
+- **Data-source tokens are the one secret Luma encrypts at rest.** A connected provider issues a token that grants **ongoing **access to an account's transactions and balances — it may or may not be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources, and nothing else — the ledger itself is untouched by it.
 
-- **A household shares one vault, and each person opens it their own way.** Setting a vault passphrase on an install that already has a vault requests access; someone who can already open it approves the request. No passphrase is ever revealed to anyone else, in either direction. **Vault settings** lists everyone who can open the vault, and access can be removed there — followed by **Replace vault key** when the concern is that a key was exposed, since removing access alone does not change the key someone could already read. A **passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need an HTTPS connection to a named host; a passphrase works everywhere.)
+- **A household shares one vault, and each person opens it their own way.** A user requests access to the valult by setting a vault passphrase on an install that already has a vault password. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction. Vault passphrases are best kept in a password manager because a) they are complex and b) loosing one means the vault needs to be rebuilt (transactions are not lost, just access to the data providers). **Vault settings** lists everyone who can open the vault, and access can be removed there. **Replace vault key ** exists for when the concern is that a key was exposed, since removing access alone does not change the key someone could already read. A **passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need an HTTPS connection to a named host; a passphrase works everywhere.)
 
-- **If a database or backup is lost or copied by someone else:** the historical transactions it holds should be treated as exposed, since they were never encrypted. Any connected data source should be **revoked**, so a stolen copy can no longer pull new data, and — for a deliberate compromise — the vault key replaced from Vault settings, which re-encrypts every stored credential so an older copy of the key opens nothing. Cancelling a credential limits the damage to what was already in the copied files.
+- **If a database or backup is lost or copied by someone else: The transactions it holds should be treated as exposed. The one action that helps is revoking every connected data source which stops the copied credentials, if they can be decrypted, from pulling anything new. Luma revokes the credentials for a Plaid account when the account is disconnected in the app but SimpleFIN tokens need to be revoked using the SimpleFin web page. Revoke access for Luma and create a new token. Do this even though the credentials in the lost copy of the database are encrypted. They are protected only by the vault passphrase’s resistance to an offline attach and revoking makes that question moot. In addition the security key needs to be regenerated and the the passphrase(s) changed because they will be used to protect the new security credentials and it is possible that the stolen ones get cracked. That would only be a problem if the person with the stolen database then accessed the new database but changing them avoid this issue entirely.**
 
 - **Revoking works differently per provider, and the app says which applies.** Where a provider supports it (Plaid), **Disconnect** revokes the credential at the provider and the access genuinely ends. Some providers publish no way for another app to revoke a credential (SimpleFIN); there, Disconnect removes only Luma's copy, and revoking means signing in to the provider and doing it there. The disconnect confirmation states which of the two is about to happen, so a connection is never left live while appearing closed.
 
-## Features
+## Installing Luma
 
-Luma focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.
+Luma is distributed as a self-contained download — the Python runtime, the backend and the interface
+are all inside it, so **neither Python nor Node.js needs to be installed**. Get the current build from
+the [releases page](https://github.com/jeff162/luma/releases).
 
-### Core capabilities
+| Platform | Download | Shape |
+| --- | --- | --- |
+| Windows | `luma-<version>-windows-x64.zip` | Portable |
+| Linux | `luma-<version>-linux-x64.zip` | Portable |
+| macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
+| macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
 
-- **Import your data:** load transaction exports from any bank (CSV) or connect accounts via Plaid (optional)
+Each download has a matching `.sha256` file for anyone who wants to verify it.
 
-- **Categorize transactions:** assign categories and organize data across accounts and owners
+**The builds are unsigned.** Certificates are a recurring cost and a separate decision from being able
+to build, so Windows and macOS both object on first run. The steps below are what gets past that; the
+macOS one in particular is not the gesture most people know.
 
-- **Define rules:** automatically apply categories, renames, and tags to matching transactions as they arrive
+### Windows and Linux — portable
 
-- **Track recurring charges:** find subscriptions, bills, and taxes that repeat on a schedule, and declare one the detector misses with a rule
+Unzip the download anywhere and run the executable inside. That folder *is* the installation: the
+databases are created beside the executable, so moving the folder moves the data with it, and copying
+it to another machine carries everything across.
 
-- **Track and analyze:** view spending by category, compare periods, and drill into details
+On Windows, SmartScreen may object to an unsigned executable. Choose **More info**, then **Run anyway**.
 
-### Workflow and experience
+### macOS
 
-- **Work directly with your data:** categorize, edit, and review transactions in place
+Open the disk image and drag **Luma** onto the Applications shortcut. Pick the download matching the
+machine — Apple menu → **About This Mac** names which one it is. The two are not interchangeable.
 
-- **Low-friction rule creation:** define rules as you go, without switching contexts
+Because the build is neither signed nor notarized, macOS refuses it on first launch. **Control-click →
+Open no longer works around this on macOS 15 and later.** What does:
 
-- **Review what matters:** quickly spot uncategorized or unusual transactions and adjust as needed
+1. Double-click **Luma**, and dismiss the warning.
+2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.
+3. Choose **Open Anyway** beside the message naming Luma, and confirm.
 
-### Supporting features
-
-- **Multi-owner support:** track personal and shared finances across multiple people
-
-- **Account management:** create, rename, and manage manual or connected accounts
-
-- **Duplicate detection:** safely re-import overlapping data without duplication
-
-- **Rule suggestions:** create rules from manual categorization when useful
-
-- **Dashboards and detail panels:** explore trends with drill-down views and inline editing
-
-- **Tasks:** surface items that need attention, such as uncategorized transactions
-
-- **Backup and restore:** export data with optional encryption for secure storage
-
-- **Flexible access modes:** run locally or configure access for shared environments
-
-## Tech stack
-
-| **Layer** | **Technology** |
-| :-: | :-: |
-| Backend | Python 3.12 / FastAPI / SQLite |
-| Frontend | React 18 / Vite / Recharts |
-| Bank data | Plaid API (optional) |
-
-## Platform support
-
-Luma is intended to run on:
-
-- **Windows**
-
-- **Linux**
-
-- **macOS**
-
-- **Raspberry Pi** (Raspberry Pi OS / other ARM Linux distributions)
-
-Most of the application is cross-platform. Where setup commands differ by  
-platform, those differences are called out below.
-
-Notes:
-
-- The backend and frontend both run natively on Windows, Linux, and macOS.
-
-- Raspberry Pi is supported as a Linux target; performance depends on the Pi model,  
-storage speed, and whether it is run directly or through Docker.
-
-- Plaid sync scripts in `scripts/` are currently shell-first (`.sh`), so scheduled  
-sync examples are Linux/macOS/Raspberry Pi oriented unless adapted for  
-Windows Task Scheduler or run inside a Linux environment.
-
-## Installation
-
-### Requirements
-
-- Python 3.12 — the version Luma is built and tested on. 3.13 is expected to work. **3.14 is not supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies would fall back to compiling from source. The `venv` module is needed too — on Debian/Ubuntu/Mint install it with `sudo apt install python3-venv` (it also provides `ensurepip`, which the backend virtual environment needs).
-
-- Node.js 20+ (with npm) — for the frontend.
-
-- A Plaid account (optional, required only for automatic bank sync)
-
-### Quick start
-
-```bash
-git clone https://github.com/jeff162/luma.git
-cd luma
-```
-
-Then launch the backend and frontend together with the script for your platform:
-
-- **Windows** (Command Prompt or double-click): `scripts\start_luma.bat`
-- **Windows PowerShell**: `powershell -ExecutionPolicy Bypass -File .\scripts\start_luma.ps1`
-- **macOS / Linux / Raspberry Pi**: `bash ./scripts/start_luma.sh`
-
-The helper scripts:
-
-- create the backend virtual environment if needed (and rebuild it automatically if it is incomplete)
-
-- install backend and frontend dependencies
-
-- open separate backend and frontend windows
-
-No configuration file is needed to start. Every setting has a working default, and the values that must
-persist — the session signing secret and the session cookie name — are generated on first run and kept
-in the control database. Everything relevant to everyday use is configured in the app under **Settings**,
-including data-source credentials, which are stored in the encrypted vault.
-
-An optional `.env` file overrides the handful of values that are resolved before the app is running:
-the ports, the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy `.env_example` to `.env` to use it, and
-see **Settings → Configuration** for the effective value of every setting and which layer supplied it.
-
-### Running it as a single process
-
-The two-window setup above is the development arrangement. The application can also run as one
-process that serves both halves and opens a browser at itself:
-
-```bash
-cd frontend && npm run build && cd ..
-backend/venv/bin/python -m backend.desktop        # Windows: backend\venv\Scripts\python -m backend.desktop
-```
-
-It listens on loopback only, so nothing off the machine can reach it, and stops with Ctrl+C. Launching
-it again while it is already running opens a new tab against the existing instance rather than starting
-a second one. The frontend only needs rebuilding when it changes.
-
-The URL is printed on startup and is the reliable part; opening a browser is a convenience on top, and
-`--no-browser` skips it for a machine reached over SSH or without a browser installed.
-
-### Building a standalone executable
-
-`scripts/build_desktop.py` produces a single executable with the Python runtime, the backend, and the
-built frontend inside it, packaged as a zip.
-
-Two forms come out of the same code, and `--form` chooses between them. A **portable** build keeps its
-databases beside the executable, which is what the zip has always shipped; an **installed** build keeps
-them in the per-user application data directory for the operating system, which is what an artifact
-placed by an installer needs, since an upgrade replaces the application itself. The default is whichever
-form the build platform supports. Either way, Settings -> Configuration reports the directory actually
-in force.
-
-**Set up the virtual environment.** The build runs from `backend/venv/`. Launching the app once with a
-start script creates that environment already; on a checkout that has never been started, or when
-building on a fresh machine, create it directly. Pin the interpreter to 3.12 — a venv built from a
-newer default Python cannot install the pinned dependencies (see Requirements above).
-
-macOS / Linux / Raspberry Pi:
-
-```bash
-python3.12 -m venv backend/venv
-backend/venv/bin/python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
-```
-
-Windows:
-
-```bash
-py -3.12 -m venv backend\venv
-backend\venv\Scripts\python -m pip install -r backend\requirements.txt -r backend\requirements-build.txt
-```
-
-`requirements-build.txt` holds only PyInstaller and is deliberately separate from the runtime
-dependencies, so a normal install never pulls it in.
-
-**Build.**
-
-```bash
-backend/venv/bin/python scripts/build_desktop.py          # --skip-frontend reuses an existing frontend/dist
-```
-
-On Windows, substitute `backend\venv\Scripts\python` for `backend/venv/bin/python` in this command and
-the release commands below.
-
-The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-installed` appended for a
-build that is not the platform's usual form. It runs on a machine with neither Python nor Node
-installed, and a portable build keeps its databases in the folder the executable sits in, so moving that
-folder moves the data with it. Each platform's artifact has to be built on that platform — PyInstaller
-cannot cross-build.
-
-The build is unsigned, so Windows and macOS warn on first run.
-
-**Icons.** `assets/luma-icon.svg` is the source; `scripts/build_icons.py` derives the macOS `.icns`, the
-Windows `.ico`, and the browser favicons from it. The derived files are committed, so an ordinary build
-needs no rasterizer — run the script only when the artwork changes (it needs `pip install cairosvg`,
-deliberately not a project dependency). It emits two shapes of the same drawing: full-bleed for Windows
-and the browser, and inset for macOS, which since Big Sur draws every icon on a canvas larger than the
-artwork. An icon that fills its canvas sits visibly oversized in the Dock.
-
-#### macOS
-
-macOS produces `luma-<version>-macos-<arch>.dmg` instead: a `Luma.app` bundle beside a shortcut to
-Applications, to be installed by dragging one onto the other. The portable form does not exist there,
-because a `.app` cannot hold its own writable data — an upgrade replaces the bundle wholesale, and a
-quarantined application may be run from a randomized read-only path that disappears afterwards. Data
-lives in `~/Library/Application Support/Luma` instead.
-
-Two architectures are published, and they are not interchangeable: `arm64` for Apple Silicon and `x64`
-for Intel. Apple menu -> About This Mac names which one a machine is.
-
-Because the build is neither signed nor notarized, macOS refuses it on first launch, and the gesture
-most people know for this — Control-click, then Open — stopped working in macOS 15. The path that does
-work is to open it, dismiss the refusal, then go to System Settings -> Privacy & Security, scroll to
-Security, and choose "Open Anyway". Clearing the flag beforehand has the same effect:
+Clearing the quarantine flag beforehand has the same effect:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Luma.app
 ```
 
-An application started from Finder has no terminal, so the startup messages that would otherwise carry
-the address go to `luma-desktop.log` in the data directory.
+Unlike the portable builds, macOS keeps its data in `~/Library/Application Support/Luma`, and **it
+stays there when the application is removed** — an upgrade replaces the bundle wholesale without
+touching the databases. An application started from Finder has no terminal, so the startup messages
+that would otherwise carry the address go to `luma-desktop.log` in that directory.
 
-**Stopping it.** Quit from the Dock, press Command-Q, or use "Shut down Luma" at the bottom of the
-navigation panel — all three end in the same graceful shutdown the terminal's Ctrl+C performs.
+Quit from the Dock, with Command-Q, or with **Shut down Luma** at the bottom of the navigation panel —
+all three perform the same graceful shutdown.
 
-The Dock behaviour comes from a small native wrapper (`macos/main.swift`), which is what the `.app`
-actually launches; the Python server runs as its child. A Python process cannot check in with the macOS
-window server, and an application whose executable is one bounces in the Dock for the length of the
-launch timeout — minutes — before being marked as failed, at which point the Dock offers only Force
-Quit. The wrapper also means the two processes can watch each other: quitting it stops the server, and
-the server exiting (through the Shut down control, or a crash) quits the wrapper rather than leaving a
-dead icon in the Dock.
+### First run
 
-### Cutting a release
+Luma starts a local server and opens in the default browser. **It listens on loopback only**, so
+nothing off the machine can reach it. Launching it again while it is already running opens a new tab
+against the existing instance rather than starting a second copy.
 
-`scripts/release.py` gates the build on the things that are quiet when they go wrong, then produces a
-checksummed artifact:
+Nothing needs configuring first. Every setting has a working default, and the values that must persist
+— the session signing secret and the session cookie name — are generated on first run and kept in the
+control database. Everything relevant to everyday use is configured in the app under **Settings**,
+including data-source credentials, which are stored in the encrypted vault.
 
-```bash
-backend/venv/bin/python scripts/release.py --set-version 0.3.0   # rewrite all version declarations
-backend/venv/bin/python scripts/release.py --check               # gates only, no build
-backend/venv/bin/python scripts/release.py                       # gate, build, checksum
-```
+From there the first run is as described in *How it works* above. **Settings → Configuration** reports
+every effective setting and which layer supplied it.
 
-The gates are that every version declaration agrees and that the working tree is clean, so an artifact
-can be traced back to a commit. `--allow-dirty` skips the second for a throwaway build.
+## Running from source
 
-Each platform's artifact — a zip on Windows and Linux, a disk image on macOS — is produced by running this on that platform and collecting the results.
+Running from a checkout needs Python 3.12 and Node.js 20+, and is the arrangement for working *on*
+Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project
+conventions.
 
-`.github/workflows/release.yml` does that collecting: pushing a `v*` tag runs the tests, then builds on
-Linux, Windows and both macOS architectures in parallel, and uploads each artifact with its checksum as
-a workflow artifact. It stops short of creating a GitHub Release, so publishing stays a deliberate act.
+An optional `.env` file overrides the handful of values resolved before the app is running — the ports,
+the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy
+`.env_example` to `.env` to use it.
 
-Each build then smoke-tests what it produced. `scripts/smoke_artifact.py` unpacks the zip, launches the
-executable with the browser suppressed, waits for the health endpoint, and asserts both databases were
-created where that distribution form promises — the one failure a unit test cannot reach, since an app
-that writes its data to the wrong place still starts perfectly well. It runs locally against anything
-already in `dist/`:
+## Platform support
 
-```bash
-backend/venv/bin/python scripts/smoke_artifact.py --form portable
-```
+Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux distributions). On a Pi,
+performance depends on the model, storage speed, and whether it runs directly or through Docker.
 
-## Testing
+Python 3.12 is what Luma is built and tested on, and 3.13 is expected to work. **3.14 is not
+supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies
+would fall back to compiling from source. (This applies to running from source; the downloads carry
+their own runtime.)
 
-Luma currently has a small set of test paths that are useful for catching regressions:
+## Tech stack
 
-- **Backend duplicate-detection tests:** fixture-driven import tests live in `backend/tests/test_import_duplicate_detection.py` with anonymized CSV fixtures under `backend/tests/fixtures/import_duplicates/`
-- **Backend suspect-duplicate detection tests:** unit-style coverage of the soft-match flow (cross-account import-time flagging, payee normalization, per-pair-distinct filter via `account_pair_distinct`, broad-Keep cascade, keep/reject resolution with the `dedupe_resolved_by` provenance marker, promote-on-merge with same-batch transitivity clear, auto-restore-on-detach for auto_merge rows, user-Reject preservation across detach, conservation invariants for credit-card-reissue and N-way-merge scenarios) in `backend/tests/test_suspect_duplicates.py`
-- **Backend dedupe rule evaluator tests:** isolated tests for the per-row `evaluate_duplicate` rule chain in `backend/tests/test_evaluate_duplicate.py` — drives each rule with a programmatic `DedupeContext` so individual rule preconditions and verdict shapes can be pinned without standing up a full import
-- **Backend trash filter tests:** confirm trashed transactions disappear from `list_transactions`, `monthly_trend`, and `spending_by_group`, and that `/transactions/trash` reveals them, in `backend/tests/test_transaction_trash_filter.py`
-- **Frontend UI regression checks:** Playwright tests live in `frontend/tests/ui/` and cover a small set of import/export behaviors and smoke checks
-
-### Running the backend tests
-
-A helper script under `scripts/` wraps `python -m unittest` using the backend venv, so the same command works whether you've installed the backend deps system-wide or only inside `backend/venv/`. Tests use isolated SQLite files in `tempfile.TemporaryDirectory()`s — they do not touch the live `luma-data.db`, so they're safe to run with the backend still up.
-
-```bash
-scripts/run_tests.sh                                              # everything
-scripts/run_tests.sh backend.tests.test_suspect_duplicates        # one module
-scripts/run_tests.sh backend.tests.test_evaluate_duplicate.EvaluateDuplicateRuleTests.test_exact_hash_same_account_dominates_other_rules
-scripts/run_tests.sh -v                                           # verbose listing
-```
-
-The script requires `backend/venv/` to exist — `scripts/start_backend.sh` creates the venv on its first run and installs `backend/requirements.txt`. If a new dependency lands, re-run `start_backend.sh` once to refresh the venv before running tests again.
-
-The fixture-driven import tests run real CSV imports through the backend import logic and compare the resulting duplicate reasons and final imported ledger against expected snapshots under `backend/tests/fixtures/import_duplicates/`.
-
-### Frontend Playwright checks
-
-```bash
-cd frontend
-npm run ui:test
-```
-
-These UI tests are intentionally small and are mainly meant to catch regressions in shared behavior on important screens rather than provide exhaustive browser coverage.
-
-## Contributing
-
-Luma is an early-stage project and evolving quickly. Feedback, bug reports, and contributions are welcome.
-
-To contribute:
-
-- open an issue to discuss ideas or bugs
-
-- submit a pull request for improvements
-
-- share usage patterns and feedback
+| Layer | Technology |
+| --- | --- |
+| Backend | Python 3.12 / FastAPI / SQLite |
+| Frontend | React 18 / Vite / Recharts |
+| Bank data | Plaid or SimpleFIN (both optional) |
 
 ## Documentation
 
-Luma is built around a small set of coordinated systems. The following documents describe how those systems are structured and how they work together:
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — development setup, checks, and project conventions
+- **[SECURITY.md](SECURITY.md)** — the security model, what is in scope, and how to report a vulnerability
+- **[CHANGELOG.md](CHANGELOG.md)** — what changed between releases
+- **[docs/architecture.md](docs/architecture.md)** — application structure, data flow, and major subsystems
+- **[docs/data-model.md](docs/data-model.md)** — core entities, relationships, and the invariants that hold them together
+- **[docs/ui-patterns.md](docs/ui-patterns.md)** — interaction patterns and shared UI behavior
+- **[docs/shared-components.md](docs/shared-components.md)** — which shared component to use for what
+- **[docs/building-a-connector.md](docs/building-a-connector.md)** — adding a data source
+- **[docs/releasing.md](docs/releasing.md)** — building the downloadable artifacts and cutting a release
+- **[docs/backlog/](docs/backlog/)** — deferred and parked work, one file per initiative
 
-- **Architecture:** `docs/architecture.md` — application structure, data flow, and major subsystems
+In the application itself, **Help → How Luma works** covers the same model from the user's side.
 
-- **Data model:** `docs/data-model.md` — core entities, relationships, and invariants
+## Contributing
 
-- **UI patterns:** `docs/ui-patterns.md` — interaction patterns and shared UI behavior
+Luma is early-stage and evolving quickly. Bug reports, feedback and pull requests are welcome — open an
+issue to discuss an idea or a defect, and see [CONTRIBUTING.md](CONTRIBUTING.md) before submitting
+changes. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-These documents are intended for development and deeper understanding of how Luma works internally.
-
-For implementation details, see inline comments in the codebase, which document system behavior and invariants at the module level.
+Two things worth knowing before proposing a feature: Luma deliberately has **no budgeting and no net
+worth tracking** (see *What Luma is not* above), and much of the obvious work is already designed and
+queued in [docs/backlog/](docs/backlog/) — commenting on an existing plan is more useful than a new
+issue.
 
 ## License
 
 This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
 
-See the [LICENSE](https://chatgpt.com/c/LICENSE) file for full details.
+See the [LICENSE](LICENSE) file for full details.
+

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jeff162/luma/security/advisories/new
+    about: Report privately, never as a public issue. See SECURITY.md for what is in scope.
+  - name: Question about how something works
+    url: https://github.com/jeff162/luma/discussions
+    about: For usage questions rather than defects. The in-app Help section covers the core model.
