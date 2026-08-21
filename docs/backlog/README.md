@@ -61,6 +61,17 @@ than by feature.
   account-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are folded into
   the main docs. What remains: fold the dedicated review into the generic rule-suggestion engine (cluster by
   `Type`), and migrate the rules from account-id to account-type scope once that axis exists.
+- [transaction-attachments.md](transaction-attachments.md) — **backlog, not started (2026-08-20).**
+  Attach a receipt or invoice to a transaction — photo, PDF, screenshot, pasted clipboard content —
+  through **one format-agnostic ingestion seam**, and where possible make its text searchable. Tiered so
+  most of the value needs no network call: store-only always, **PDF text-layer extraction free and
+  unconditional** (the emailed-invoice case), local OCR as a *declared capability* (Tesseract is a system
+  binary, painful in the frozen builds), and structured line-item extraction only as an opt-in BYOK
+  adapter with per-result approval. Records why local document-ML and template-based tooling are both
+  out, and that **email means copy/paste — never a mailbox**. Key finding: tier 3 is the *same subsystem*
+  as [online-categorizer.md](online-categorizer.md) (opt-in external call, structured output,
+  approve-before-apply) and the two should be designed together. Blocked on one real decision — where
+  attachments live, which belongs to the backup-scope work.
 - [transaction-splits.md](transaction-splits.md) — **backlog, not started (2026-07-23).** Let a single
   transaction's amount be split across several categories (a Costco run, an Amazon order with mixed items).
   A **general** feature on any transaction, modeled as a `txn_split` allocation table (one ledger row, N
