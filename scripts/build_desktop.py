@@ -286,6 +286,16 @@ def _assemble_macos_app(server_tree: Path) -> Path:
         "LSMinimumSystemVersion": MINIMUM_MACOS,
     }))
 
+    # Last, because anything written into the bundle afterwards invalidates the seal.
+    #
+    # Ad-hoc (`-s -`) rather than a real identity: this is not notarization and Gatekeeper still asks
+    # the user to approve the app. What it prevents is worse than a warning — on Apple Silicon an
+    # unsigned binary does not merely go untrusted, it will not load, and a quarantined bundle with no
+    # signature is reported as *damaged*. PyInstaller's `BUNDLE` did this itself (`sign_binary(...,
+    # deep=True)`); assembling the bundle here took the step with it, and its absence is invisible
+    # until someone downloads the result.
+    _run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], cwd=ROOT)
+
     return bundle
 
 

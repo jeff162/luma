@@ -3890,6 +3890,12 @@ export default function Accounts() {
       const entry = entries[0]
       if (!entry) return
       const nextWidth = Math.round(entry.contentRect.width)
+      // A zero is the panel leaving, not the panel measuring. The observed element lives on the Accounts
+      // tab only, so switching to Owners or Connections unmounts it and the observer reports 0 on the way
+      // out — and this width is handed to the cards on *those* tabs, which would take it literally and
+      // render `width: 0px`, collapsing to their borders. Nothing that disappears has a width worth
+      // mirroring, so the last real measurement stands until a real one replaces it.
+      if (!nextWidth) return
       if (!getSectionExpanded(sectionExpandedState, 'accountList') && accountsPanelWidth && nextWidth < accountsPanelWidth) return
       // Mirror the table width into the lower cards so the page still reads as one
       // anchored column even when account rows reflow or the create row appears.
@@ -4399,21 +4405,7 @@ export default function Accounts() {
         />
       ) : null}
 
-      {/* A real box rather than `display: contents`, which this used to be. The children have to be flex
-          items of the page's column — header strip fixed, content area scrolling — and `display:
-          contents` does promote them, but it costs the promoted item its *definiteness*: WebKit stops
-          treating it as a containing block percentages can resolve against, so every `width: 100%`
-          inside the tab content computes to zero and the page collapses into a column of min-content
-          cards. Measured in Safari, 2026-08-20: this container was the correct 862px while its child's
-          computed width was 0px. It survived first paint and broke on the next subtree swap, because
-          only then did the resolution happen against a width WebKit no longer considered definite. */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        flex: 1,
-        minHeight: 0,
-        visibility: (loading || !sectionStateLoaded || !sortLoaded) ? 'hidden' : 'visible',
-      }}>
+      <div style={{ display: 'contents', visibility: (loading || !sectionStateLoaded || !sortLoaded) ? 'hidden' : 'visible' }}>
         <div style={{ padding: '24px 32px 0', flexShrink: 0 }}>
           <div style={{
             display: 'flex',
@@ -4469,16 +4461,7 @@ export default function Accounts() {
           ) : null}
         </div>
 
-        <div data-browser-context-passthrough="true" style={{
-          flex: 1,
-          minHeight: 0,
-          // Stated rather than inherited from `align-items: stretch`. Everything below resolves its
-          // percentages against this box, and a width that is stretched but not *definite* is what let
-          // them collapse to zero; `box-sizing: border-box` is global, so the padding stays inside it.
-          width: '100%',
-          overflowY: 'auto',
-          padding: '0 32px 32px',
-        }}>
+        <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
           {tab === 'accounts' && (
             <>
               <div

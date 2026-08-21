@@ -38,6 +38,22 @@ instruction and fix the drift rather than silently choosing the looser version.
   queries are for verification, stale-doc cleanup, and live-state diagnosis that the docs cannot
   answer.
 
+- **When a bug is only observable in an environment you lack, say so and propose the tooling on the
+  first round — do not theorize blind.** A Safari-only layout collapse took three rounds of hypotheses
+  built from reading source, each revised by the next data point, each costing the user a rebuild and a
+  manual inspection. All of it was avoidable: Playwright's WebKit build was already installed on the
+  dev machine, and driving the real app in it located the true cause in minutes. The rule in
+  `CLAUDE.md` forbids browser-driving to check one's *own* work, and explicitly permits it to diagnose
+  a bug the user reported that cannot be diagnosed another way — that permission is worth *asking about
+  early*, since the user's feedback was "best would have been for you to have raised this as a
+  possibility and just asked." Reproduce first, then theorize.
+
+- **A cross-browser report is a claim about sequence until proven otherwise.** That same bug was
+  reported as Safari-only and Chromium-clean; both engines in fact collapsed identically once the exact
+  click sequence was reproduced. "Works in the other browser" often means the other browser was not put
+  through the same steps, and treating it as an engine difference sends the investigation into CSS when
+  the cause is application state.
+
 - **Open the thing before reasoning about it.** The most expensive mistakes in this repo have not
   been hard problems reasoned about badly; they have been easy facts inferred from a name instead of
   read. Four in one session: using the shared `Spinner` in a status row without noticing it is a
