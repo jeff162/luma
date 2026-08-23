@@ -34,6 +34,14 @@ def _normalize_db_path(db_path: str | None = None) -> str:
     return str(Path(path))
 
 
+def current_db_path() -> str:
+    """The data DB path in force right now — the per-request override when one is set, otherwise the
+    process default. Callers that need to put a file *beside* the database (a staged backup artifact, say)
+    must use this rather than `DB_PATH` or `data_dir()`: `DB_PATH` can point outside the data directory,
+    and neither reflects an override."""
+    return _normalize_db_path()
+
+
 def set_current_db_path(db_path: str):
     return _current_db_path.set(_normalize_db_path(db_path))
 

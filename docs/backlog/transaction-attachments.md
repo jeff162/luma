@@ -136,14 +136,15 @@ useful property to preserve when making further decisions here: let a heavy user
 
 ### Files on disk under `DATA_DIR`, carried inside the backup zip
 
-**Not blobs in the database.** The backup payload is JSON assembled as one Python structure
-(`build_backup_data`), so a blob would have to be base64'd into it — a third larger, and every byte of
-every receipt materialized in memory during export. Files on disk keep bytes out of the JSON entirely.
+**Not blobs in the database.** The backup payload is JSON, so a blob would have to be base64'd into it —
+a third larger, and a receipt that has to be held whole in memory to be encoded. Files on disk keep bytes
+out of the JSON entirely, which is what lets both directions copy them straight between disk and zip
+member with a fixed buffer, at any size.
 
-**Not loose files outside the backup either.** The backup is *already* a zip with multiple members
-(`_zip_members_bytes`, which the encrypted path uses for `manifest.json` + `payload.bin`), so documents
-ride as additional members. No new container, no base64, and the "your backup silently omits your
-receipts" failure never exists.
+**Not loose files outside the backup either.** The backup is *already* a zip of many members — one per
+payload section since version 10, plus `manifest.json` + `payload.bin` on the encrypted path — so
+documents ride as additional members. No new container, no base64, and the "your backup silently omits
+your receipts" failure never exists.
 
 Three things this settles for free:
 
@@ -160,13 +161,30 @@ Three things this settles for free:
 Consequences to handle when building:
 
 - **Write order.** File and row cannot be one transaction. Write the file first, then the row: a file
-  with no row is inert litter, a row with no file is a broken link on screen. Drift is still possible
+  with no row is inert litter, a row with no file is a broken link on screen. Write to a temporary name
+  and `os.replace()` into place, so a torn write is never mistaken for a complete file — the same rule
+  the restore's documents phase depends on. Drift is still possible
   in both directions, which makes this a second consumer of
   [`database-diagnostics.md`](database-diagnostics.md) — precisely the class of semantic inconsistency
   the SQLite pragmas call "ok".
-- **Payload version 9 → 10.** A new table plus new zip members is an envelope change, and `version` is
-  hand-bumped with restore hard-rejecting anything it does not know. Register the migration last, per
-  the usual sequencing.
+- **A digest per document, recorded at ingest.** `document.sha256` is not bookkeeping — it is what lets a
+  restore tell a complete file from a torn one and resume the documents phase after a failure, what makes
+  the backup's integrity check cover the files rather than only the JSON, and what the parked document
+  delta needs to ask whether the far side's copy is intact. Settled with the backup work
+  (2026-08-23) because that work depends on it; recorded here because this is the code that must produce
+  it. It is also the natural key for noticing that the same receipt was attached twice.
+- **Payload version 9 → 10 is bumped by the streaming backup work, not by this feature.** That work
+  restructures the envelope into `meta.json` + `sections/<name>.ndjson` + `documents/<id>` for its own
+  reasons (see [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) → *Streaming
+  both directions*), and lands the container documents were always going to need. What remains here is
+  additive: the table, and the files as members. Register the migration last, per the usual sequencing.
+- **Documents are stored in the zip, not deflated.** JPEG, PNG and PDF payloads are already compressed;
+  deflating them spends CPU for nothing while the ledger sections keep compressing ~10:1.
+- **Restore's documents phase is resumable and sweeps last.** Files are outside the SQL transaction, so
+  the restore carries a `restore_state` marker committed atomically with the ledger, writes each document
+  in place, and only then removes files the restored ledger no longer references. An interrupted restore
+  therefore leaves litter rather than lost originals, and resumes by comparing the ledger's digests
+  against the directory. The design is in the backup file; what this feature owes it is the digest above.
 - **The noun "attachment" is taken.** It already means *tag attachment* in the restore-ordering prose in
   `data-model.md` ("tag definitions before any attachment"). Call these **documents** — it also reads
   better for a repair invoice. This file keeps its name for continuity; the code should not.

@@ -13,14 +13,14 @@ otherwise independent of the import-run workflow:
   accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
   the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
   the account-pair distinct assertions, recurring series (`recurring_series` + the `txn` membership
-  link), and UI/layout preferences (`ui_preference`). Restore wipes
-  and rebuilds in FK-safe order. The payload is stamped with the source `instance_id` +
-  `access_mode`; restore's compatibility guard uses these to refuse a silent cross-system/cross-mode
-  wipe (409 unless `force`) while still allowing an empty target or a same-instance self-restore.
-  (Payload is version 9; versions 7 and 8 are still accepted, with their pre-rename columns
-  translated on restore — v7's account columns `plaid_account_id`/`plaid_item_id` to the 6b-3
-  shape, and pre-v9's `plaid_transaction_id` to `external_transaction_id`. Older versions are no
-  longer accepted.)
+  link), and UI/layout preferences (`ui_preference`). Restore wipes and rebuilds inside one
+  transaction with foreign-key checks deferred, repairing dangling references at the end. The payload
+  is stamped with the source `instance_id` + `access_mode`; restore's compatibility guard uses these
+  to refuse a silent cross-system/cross-mode wipe (409 unless `force`) while still allowing an empty
+  target or a same-instance self-restore. (Payload is version 10; versions 7-9 are still accepted,
+  with their pre-rename columns translated on restore — v7's account columns
+  `plaid_account_id`/`plaid_item_id` to the 6b-3 shape, and pre-v9's `plaid_transaction_id` to
+  `external_transaction_id`. Older versions are no longer accepted.)
 - **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
   access tokens, kept deliberately separate from the regular backup so an ordinary backup never
   carries secrets (see `docs/data-model.md` → Backups).
@@ -30,6 +30,13 @@ a random AES-256-GCM content key encrypts the payload and is RSA-OAEP-wrapped pe
 backup can be decrypted by any holder of a matching private key. The crypto/zip helpers here own
 that envelope format; restore inspects an upload, decrypts if needed, and replays it.
 
+**Nothing here holds a backup in memory.** A data backup grows with the ledger, so the export streams
+rows from their cursors into zip members and the restore streams them back a line at a time, both by
+way of a staging file beside the database; the encrypted path runs the same bytes through an
+incremental cipher rather than sealing a finished blob. The CSV export follows the same rule for the
+same reason. The one deliberate exception is `build_backup_data`, which materializes a payload for
+tests and for the JSON-body restore endpoint that older backups arrive through.
+
 Depends only on `core` (and shared services); `core` never imports this module.
 """
 
@@ -38,6 +45,8 @@ import hashlib
 import io
 import json
 import os
+import tempfile
+import time
 import uuid
 import zipfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
@@ -49,13 +58,23 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.db.database import CURRENT_VERSION, get_db, get_db_instance_id, get_db_version, run_post_restore_data_init
+from backend.db.database import (
+    CURRENT_VERSION,
+    current_db_path,
+    get_db,
+    get_db_instance_id,
+    get_db_version,
+    run_post_restore_data_init,
+)
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db import control_database
 from backend.db.control_database import auth_required
 from backend.app_logging import log_warning
+from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
 from backend.services.transaction_tags import tag_filter_membership_sql
@@ -118,21 +137,14 @@ class CredentialsRestoreRequest(BaseModel):
 
 # --- Encryption envelope + archive (de)serialization -------------------------------------------
 # Encrypted archives are ZIPs of {manifest.json, payload.bin}: payload.bin is the inner backup ZIP
-# sealed with a one-shot AES-256-GCM content key, and manifest.json carries that content key
-# RSA-OAEP-wrapped once per recipient. Plaintext archives are a single JSON, optionally zipped.
+# sealed with an AES-256-GCM content key, and manifest.json carries that content key RSA-OAEP-wrapped
+# once per recipient. A version-10 plaintext archive is a ZIP of `meta.json` plus one NDJSON member
+# per section; versions 7-9 wrote a single JSON object, zipped or bare, which restore still reads.
 
 def _zip_json_bytes(filename: str, payload: dict) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(filename, json.dumps(payload, indent=2, default=str))
-    return buf.getvalue()
-
-
-def _zip_members_bytes(members: dict[str, bytes]) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for name, content in members.items():
-            zf.writestr(name, content)
     return buf.getvalue()
 
 
@@ -191,113 +203,16 @@ def _b64url_decode(value: str) -> bytes:
     return urlsafe_b64decode(value + ("=" * padding_needed))
 
 
-def _build_encrypted_backup_bytes(payload_bytes: bytes, recipients: list[dict]) -> bytes:
-    content_key = AESGCM.generate_key(bit_length=256)
-    aesgcm = AESGCM(content_key)
-    nonce = os.urandom(12)
-    encrypted_payload = aesgcm.encrypt(nonce, payload_bytes, None)
+def read_payload_bytes(content: bytes) -> dict:
+    """Decode a single-payload backup's bytes — one JSON member in a zip, or bare JSON.
 
-    manifest = {
-        "format": "luma-encrypted-backup",
-        "version": 1,
-        "cipher": "AES-256-GCM",
-        "wrapped_keys": [],
-        "nonce": urlsafe_b64encode(nonce).decode("ascii"),
-    }
-    for recipient in recipients:
-        public_key, fingerprint = _validate_backup_recipient_key(recipient["public_key"])
-        wrapped_key = public_key.encrypt(
-            content_key,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
-        manifest["wrapped_keys"].append({
-            "recipient_id": recipient["id"],
-            "label": recipient["label"],
-            "fingerprint": fingerprint,
-            "algorithm": "rsa-oaep-sha256",
-            "wrapped_key": urlsafe_b64encode(wrapped_key).decode("ascii"),
-        })
-
-    return _zip_members_bytes({
-        "manifest.json": json.dumps(manifest, indent=2).encode("utf-8"),
-        "payload.bin": encrypted_payload,
-    })
-
-
-def _inspect_backup_upload(content: bytes, upload_name: str, expected_member_prefix: str) -> dict:
-    lower_name = (upload_name or "").lower()
-    if not lower_name.endswith(".zip"):
-        payload = _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
-        return {
-            "encrypted": False,
-            "container": "json",
-            "version": payload.get("version"),
-        }
-
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            members = [name for name in zf.namelist() if not name.endswith("/")]
-            member_set = set(members)
-            has_manifest = "manifest.json" in member_set
-            has_payload = "payload.bin" in member_set
-            if has_manifest or has_payload:
-                if not (has_manifest and has_payload):
-                    raise HTTPException(status_code=400, detail="Encrypted backup ZIP must include both manifest.json and payload.bin")
-                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-                if manifest.get("format") not in {"luma-encrypted-backup", "fintrack-encrypted-backup"}:
-                    raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
-                wrapped_keys = manifest.get("wrapped_keys")
-                if not isinstance(wrapped_keys, list) or not wrapped_keys:
-                    raise HTTPException(status_code=400, detail="Encrypted backup does not contain any wrapped recipient keys")
-                recipients = []
-                for wrapped in wrapped_keys:
-                    if not isinstance(wrapped, dict):
-                        continue
-                    recipients.append({
-                        "recipient_id": wrapped.get("recipient_id"),
-                        "label": wrapped.get("label") or "Unnamed recipient",
-                        "fingerprint": wrapped.get("fingerprint"),
-                        "algorithm": wrapped.get("algorithm"),
-                    })
-                return {
-                    "encrypted": True,
-                    "container": "zip",
-                    "version": manifest.get("version"),
-                    "cipher": manifest.get("cipher"),
-                    "recipient_count": len(recipients),
-                    "recipients": recipients,
-                }
-
-        payload = _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
-        return {
-            "encrypted": False,
-            "container": "zip",
-            "version": payload.get("version"),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid ZIP backup: {exc}")
-
-
-def _load_json_or_zip_payload(content: bytes, upload_name: str, expected_member_prefix: str) -> dict:
-    lower_name = (upload_name or "").lower()
-    if lower_name.endswith(".zip"):
+    Not the path any upload takes (those are staged to a file and identified first); this is for callers
+    that already hold the bytes, such as a test reading back what an export endpoint returned.
+    """
+    if zipfile.is_zipfile(io.BytesIO(content)):
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
-                members = [name for name in zf.namelist() if not name.endswith("/")]
-                if len(members) != 1:
-                    raise HTTPException(status_code=400, detail="ZIP backup must contain exactly one file")
-                member = members[0]
-                if not member.lower().endswith(".json"):
-                    raise HTTPException(status_code=400, detail="ZIP backup must contain a JSON file")
-                if expected_member_prefix and expected_member_prefix not in member.lower():
-                    raise HTTPException(status_code=400, detail="Unexpected backup file inside ZIP")
-                return json.loads(zf.read(member).decode("utf-8"))
+                return _read_single_json_member(zf)
         except HTTPException:
             raise
         except Exception as exc:
@@ -306,55 +221,6 @@ def _load_json_or_zip_payload(content: bytes, upload_name: str, expected_member_
         return json.loads(content.decode("utf-8"))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON backup: {exc}")
-
-
-def _load_backup_payload_from_upload(
-    content: bytes,
-    upload_name: str,
-    expected_member_prefix: str,
-    private_key_bytes: Optional[bytes] = None,
-    private_key_passphrase: Optional[str] = None,
-) -> dict:
-    inspection = _inspect_backup_upload(content, upload_name, expected_member_prefix)
-    if not inspection.get("encrypted"):
-        return _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
-
-    if not private_key_bytes:
-        raise HTTPException(status_code=400, detail="Encrypted backup requires a private key file for restore")
-
-    private_key = _load_private_key(private_key_bytes, private_key_passphrase)
-    if not isinstance(private_key, rsa.RSAPrivateKey):
-        raise HTTPException(status_code=400, detail="Only RSA private keys are supported for encrypted backups")
-
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-            content_key = None
-            for wrapped in manifest.get("wrapped_keys", []):
-                wrapped_key = wrapped.get("wrapped_key")
-                if not wrapped_key:
-                    continue
-                try:
-                    content_key = private_key.decrypt(
-                        _b64url_decode(wrapped_key),
-                        padding.OAEP(
-                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                            algorithm=hashes.SHA256(),
-                            label=None,
-                        ),
-                    )
-                    break
-                except Exception:
-                    continue
-            if not content_key:
-                raise HTTPException(status_code=400, detail="Private key does not match any recipient in this backup")
-            nonce = _b64url_decode(manifest.get("nonce"))
-            payload_bytes = AESGCM(content_key).decrypt(nonce, zf.read("payload.bin"), None)
-            return _load_json_or_zip_payload(payload_bytes, "payload.zip", expected_member_prefix)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Unable to decrypt encrypted backup: {exc}")
 
 
 # --- Backup recipients (saved RSA public keys for encrypted archives) --------------------------
@@ -534,27 +400,38 @@ def export_transactions_csv(
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    with get_db() as conn:
-        rows = conn.execute(f"""
-            SELECT {', '.join(select_exprs)}
-            FROM   txn t
-            JOIN   account   a ON a.id  = t.account_id
-            LEFT JOIN account ap ON ap.id = a.parent_account_id
-            LEFT JOIN category c ON c.id  = t.category_id
-            LEFT JOIN category p ON p.id  = c.parent_id
-            LEFT JOIN owner    o ON o.id  = t.owner_id
-            {where}
-            ORDER  BY t.date DESC, t.id DESC
-        """, params).fetchall()
+    # The connection is opened *inside* the generator, not around it. A `with get_db()` block here would
+    # close before the response body is consumed, which is why this used to fetchall() the entire filtered
+    # ledger into a list first — the same "assemble it all, then pretend to stream" shape the backup export
+    # had, for the same reason and with the same fix. Rows now come off the cursor as they are written.
+    #
+    # The database path is resolved *here* and handed to the generator, never re-resolved inside it. The
+    # per-request path is a ContextVar that the auth middleware resets in a `finally` as soon as the
+    # handler returns — which is before a streaming body is consumed — so a generator that called
+    # `get_db()` with no argument would open whichever database happened to be the ambient default by
+    # then. (The backup export does not have this problem: it finishes with the database before it returns
+    # a response at all, and only a finished file is streamed.)
+    db_path = current_db_path()
 
     def generate():
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(headers)
         yield buf.getvalue(); buf.seek(0); buf.truncate()
-        for row in rows:
-            w.writerow([row[k] for k in col_keys])
-            yield buf.getvalue(); buf.seek(0); buf.truncate()
+        with get_db(db_path) as conn:
+            for row in conn.execute(f"""
+                SELECT {', '.join(select_exprs)}
+                FROM   txn t
+                JOIN   account   a ON a.id  = t.account_id
+                LEFT JOIN account ap ON ap.id = a.parent_account_id
+                LEFT JOIN category c ON c.id  = t.category_id
+                LEFT JOIN category p ON p.id  = c.parent_id
+                LEFT JOIN owner    o ON o.id  = t.owner_id
+                {where}
+                ORDER  BY t.date DESC, t.id DESC
+            """, params):
+                w.writerow([row[k] for k in col_keys])
+                yield buf.getvalue(); buf.seek(0); buf.truncate()
 
     return StreamingResponse(
         generate(),
@@ -563,7 +440,7 @@ def export_transactions_csv(
     )
 
 # Content integrity hash for the JSON backups. Embedded *in* the payload rather than added as a
-# sidecar ZIP member (the single-file ZIP contract in `_load_json_or_zip_payload` forbids a second
+# sidecar ZIP member (a pre-version-10 archive holds exactly one JSON member and no room for a second
 # member) so it travels with both zipped and bare-`.json` uploads and rides into the encrypted inner
 # `payload.bin` for free. Restore recomputes it over the payload minus this field and refuses a
 # mismatch before the destructive wipe. The hash is computed over a canonical serialization
@@ -598,118 +475,331 @@ def _verify_payload_content_hash(payload: dict) -> None:
         )
 
 
-def build_backup_data(conn) -> dict:
-    """The full app-data backup payload (everything restore rebuilds). Extracted from the export
-    endpoint so it can be exercised directly without unwrapping a StreamingResponse."""
-    def dump(table, query=None):
-        q = query or f"SELECT * FROM {table} ORDER BY rowid"
-        return [dict(r) for r in conn.execute(q).fetchall()]
+# --- The backup payload: one enumeration, two consumers -----------------------------------------
+# (section, table, query). The *section* name is the payload's field name; it outlives the table name
+# (`transactions` has been the section for `txn` across two renames), which is why both are recorded
+# here rather than derived from each other. The writer walks this in order, so members land
+# parents-first — convenient to read, though the restore transaction defers foreign-key checks and
+# does not depend on it.
+#
+# A table missing from this list is a table that is not backed up. The coverage test derives its map
+# from here and fails on any data table with no section, so adding one forces the wiring.
+BACKUP_SECTIONS = (
+    ("owners", "owner", "SELECT * FROM owner ORDER BY rowid"),
+    # Curated column list rather than SELECT *: these two tables carry columns that must not travel
+    # (and have survived renames), so the payload names exactly what it means to include.
+    ("accounts", "account",
+     "SELECT id, external_account_id, connection_id, provider, name, display_name, "
+     "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at FROM account ORDER BY rowid"),
+    ("categories", "category", "SELECT * FROM category ORDER BY rowid"),
+    ("category_rules", "category_rule", "SELECT * FROM category_rule ORDER BY rowid"),
+    ("merchant_renames", "merchant_rename", "SELECT * FROM merchant_rename ORDER BY rowid"),
+    ("csv_profiles", "csv_import_profile", "SELECT * FROM csv_import_profile ORDER BY rowid"),
+    # Provider-account mapping + the connection's coverage claim. This rides the DATA backup, not the
+    # credentials one, even though it hangs off `connection`: it holds no secret, and its coverage MUST
+    # move with the ledger. Restoring an older backup removes synced rows, so a coverage claim that
+    # survived would hard-reject the very rows a re-sync brings back; exported alongside its
+    # transactions, coverage is consistent with them by construction.
+    ("connection_accounts", "connection_account", "SELECT * FROM connection_account ORDER BY rowid"),
+    ("import_batches", "import_batch", "SELECT * FROM import_batch ORDER BY rowid"),
+    ("import_batch_accounts", "import_batch_account", "SELECT * FROM import_batch_account ORDER BY rowid"),
+    ("import_batch_duplicates", "import_batch_duplicate", "SELECT * FROM import_batch_duplicate ORDER BY rowid"),
+    ("import_workflow_states", "import_workflow_state", "SELECT * FROM import_workflow_state ORDER BY rowid"),
+    # Detected/curated recurring series. txn.recurring_series_id is the membership link back into these;
+    # recurring_membership_override carries the user's per-transaction pin/exclude corrections that
+    # survive scans.
+    ("recurring_series", "recurring_series", "SELECT * FROM recurring_series ORDER BY rowid"),
+    ("transactions", "txn",
+     "SELECT id, external_transaction_id, account_id, owner_id, "
+     "category_id, amount, merchant_name, display_name, raw_name, date, "
+     "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
+     "import_evidence_json, needs_review, recurring_series_id, "
+     "import_batch_id FROM txn ORDER BY date DESC"),
+    ("recurring_membership_overrides", "recurring_membership_override",
+     "SELECT * FROM recurring_membership_override ORDER BY rowid"),
+    # Typed transaction links (services/txn_links.py): the link rows plus their membership. Without
+    # these a restore would silently drop every link (e.g. an Amazon order's charge<->item association),
+    # the same failure the tag attachments guard against below.
+    ("txn_links", "txn_link", "SELECT * FROM txn_link ORDER BY rowid"),
+    ("txn_link_members", "txn_link_member", "SELECT * FROM txn_link_member ORDER BY rowid"),
+    # Amazon funding-source -> account map (services/amazon_funding.py): the instrument->account
+    # mappings the Amazon importer resolves charges against. Without these a restore would drop the
+    # user's funding setup and re-imports would fall back to the graceful-last-4 match.
+    ("amazon_funding_map", "amazon_funding_map", "SELECT * FROM amazon_funding_map ORDER BY rowid"),
+    # Tag system: the tag definitions plus every attachment surface (transaction, category/group,
+    # account, rule). Without these a restore silently dropped all tagging.
+    ("tags", "tag", "SELECT * FROM tag ORDER BY rowid"),
+    ("txn_tags", "txn_tag", "SELECT * FROM txn_tag ORDER BY rowid"),
+    ("category_tags", "category_tag", "SELECT * FROM category_tag ORDER BY rowid"),
+    ("account_tags", "account_tag", "SELECT * FROM account_tag ORDER BY rowid"),
+    ("rule_tags", "rule_tag", "SELECT * FROM rule_tag ORDER BY rowid"),
+    # User's explicit "these two accounts are distinct" assertions (dedupe review state).
+    ("account_pair_distinct", "account_pair_distinct", "SELECT * FROM account_pair_distinct ORDER BY rowid"),
+    # User's "these two charges are distinct" assertions from the Amazon reconciliation's
+    # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
+    ("amazon_charge_distinct", "amazon_charge_distinct", "SELECT * FROM amazon_charge_distinct ORDER BY rowid"),
+    # User "Mark reviewed" acknowledgments on the reconciliation report's reverse-scan bucket, so a
+    # restore keeps unaccounted charges the user already cleared out of the attention count.
+    ("amazon_charge_reviewed", "amazon_charge_reviewed", "SELECT * FROM amazon_charge_reviewed ORDER BY rowid"),
+    # Amazon items parked awaiting their orders file (per-item detail retained so a later orders import
+    # auto-attaches it). Without these a restore would strand a not-yet-matched items import.
+    ("amazon_pending_items", "amazon_pending_item", "SELECT * FROM amazon_pending_item ORDER BY rowid"),
+    # UI/layout preferences (page layouts, dashboard tag reports, ...), keyed by scope_id.
+    ("ui_preferences", "ui_preference", "SELECT * FROM ui_preference ORDER BY rowid"),
+)
 
-    return _stamp_content_hash({
-            "version":        9,
-            # Two independent version axes. `version` is the *payload format* (this JSON's shape),
-            # bumped by hand when the envelope changes; restore hard-rejects anything but the format
-            # it understands. `schema_version` is the *DB migration level* the data conforms to
-            # (`db_meta.version`), recorded so restore can tell an older backup (columns the schema has
-            # since added simply take their defaults) from one made by a newer build (which may carry
-            # columns/meaning this build can't represent — the restore guard refuses that downgrade
-            # unless forced). It is an additive field: older builds ignore it, and a backup written
-            # before it existed restores fine (absent → treated as "no newer-than-me claim").
-            "schema_version": get_db_version(conn),
-            "exported_at":    utcnow_iso(),
-            # System identity, so restore can tell "my own backup" from "a different system's", and
-            # which access mode it came from. Used by the restore compatibility guard.
-            "instance_id":    get_db_instance_id(conn),
-            "access_mode":    "auth" if auth_required() else "local",
-            "owners":         dump("owner"),
-            "accounts":       dump("account",
-                                   "SELECT id, external_account_id, connection_id, provider, name, display_name, "
-                                   "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at FROM account"),
-            "categories":     dump("category"),
-            "category_rules": dump("category_rule"),
-            "merchant_renames": dump("merchant_rename"),
-            "csv_profiles":   dump("csv_import_profile"),
-            # Provider-account mapping + the connection's coverage claim. This rides the DATA backup,
-            # not the credentials one, even though it hangs off `connection`: it holds no secret, and its
-            # coverage MUST move with the ledger. Restoring an older backup removes synced rows, so a
-            # coverage claim that survived would hard-reject the very rows a re-sync brings back;
-            # exported alongside its transactions, coverage is consistent with them by construction.
-            "connection_accounts": dump("connection_account"),
-            "import_batches": dump("import_batch"),
-            "import_batch_accounts": dump("import_batch_account"),
-            "import_batch_duplicates": dump("import_batch_duplicate"),
-            "import_workflow_states": dump("import_workflow_state"),
-            "transactions":   dump("txn",
-                                   "SELECT id, external_transaction_id, account_id, owner_id, "
-                                   "category_id, amount, merchant_name, display_name, raw_name, date, "
-                                   "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
-                                   "import_evidence_json, needs_review, recurring_series_id, "
-                                   "import_batch_id FROM txn ORDER BY date DESC"),
-            # Detected/curated recurring series (see recurring_series table). txn.recurring_series_id
-            # above is the membership link back into these; recurring_membership_override carries the
-            # user's per-transaction pin/exclude corrections that survive scans.
-            "recurring_series": dump("recurring_series"),
-            "recurring_membership_overrides": dump("recurring_membership_override"),
-            # Typed transaction links (services/txn_links.py): the link rows plus their membership.
-            # Without these a restore would silently drop every link (e.g. an Amazon order's charge↔item
-            # association), the same failure the tag attachments guard against above.
-            "txn_links":         dump("txn_link"),
-            "txn_link_members":  dump("txn_link_member"),
-            # Amazon funding-source → account map (services/amazon_funding.py): the instrument→account
-            # mappings the Amazon importer resolves charges against. Without these a restore would drop
-            # the user's funding setup and re-imports would fall back to the graceful-last-4 match.
-            "amazon_funding_map": dump("amazon_funding_map"),
-            # Tag system: the tag definitions plus every attachment surface (transaction, category/
-            # group, account, rule). Without these a restore silently dropped all tagging.
-            "tags":           dump("tag"),
-            "txn_tags":       dump("txn_tag"),
-            "category_tags":  dump("category_tag"),
-            "account_tags":   dump("account_tag"),
-            "rule_tags":      dump("rule_tag"),
-            # User's explicit "these two accounts are distinct" assertions (dedupe review state).
-            "account_pair_distinct": dump("account_pair_distinct"),
-            # User's "these two charges are distinct" assertions from the Amazon reconciliation's
-            # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
-            "amazon_charge_distinct": dump("amazon_charge_distinct"),
-            # User "Mark reviewed" acknowledgments on the reconciliation report's reverse-scan bucket, so a
-            # restore keeps unaccounted charges the user already cleared out of the attention count.
-            "amazon_charge_reviewed": dump("amazon_charge_reviewed"),
-            # Amazon items parked awaiting their orders file (per-item detail retained so a later orders
-            # import auto-attaches it). Without these a restore would strand a not-yet-matched items import.
-            "amazon_pending_items": dump("amazon_pending_item"),
-            # UI/layout preferences (page layouts, dashboard tag reports, …), keyed by scope_id.
-            "ui_preferences": dump("ui_preference"),
-    })
+BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTIONS)
+
+# The payload generation. Two axes, as before: `version` is the payload format (this content and these
+# section names), `schema_version` the DB migration level the rows conform to. Version 10 changed how
+# the archive is laid out — `meta.json` + one NDJSON member per section, in place of one JSON object —
+# so that neither writing nor reading a backup has to hold the whole thing in memory. The *content* of
+# a section is unchanged from 9, which is why the restore's per-section handling is shared with the
+# older versions rather than duplicated.
+BACKUP_PAYLOAD_VERSION = 10
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10)
+
+# Which of the two backups a file is. Stamped into every container the app writes and read back by the
+# identification pass below, so the restore surface can route a file rather than asking the person
+# holding it which kind they have.
+BACKUP_KIND_DATA = "data"
+BACKUP_KIND_CREDENTIALS = "credentials"
+
+# Size of the buffer used everywhere bytes are moved between a file, a zip member and a cipher. Big
+# enough that a large archive is not a syscall storm, small enough to be the whole of the memory this
+# code holds at once.
+STREAM_CHUNK_BYTES = 1 << 20
+
+META_MEMBER = "meta.json"
+
+
+def _section_member(section: str) -> str:
+    return f"sections/{section}.ndjson"
+
+
+def _canonical_json(value) -> str:
+    """The one serialization used for anything a digest is taken over: sorted keys, no incidental
+    whitespace, `default=str` for the handful of types SQLite hands back that JSON has no literal for.
+    Deliberately not pretty-printed — this is a machine-read artifact about to be compressed, and the
+    indentation was inflating the largest string in the process for no reader's benefit."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _zip_member_info(name: str, compress_type: int) -> zipfile.ZipInfo:
+    """A member with its own compression choice. Compression is per member because the archive mixes
+    kinds: the NDJSON sections compress ~10:1 and must be deflated, while already-compressed content (the
+    encrypted payload, and documents once they ride along) gains nothing and is stored.
+
+    The timestamp is **local time, deliberately** — and is not a stored timestamp, so the naive-UTC
+    convention the timestamp guard enforces does not apply here (same exception as
+    `_dated_backup_filename`, for the same reason). A ZIP entry's date is MS-DOS date/time, which carries
+    no timezone: every archive tool writes and reads it as local, so a UTC value would simply display as
+    the wrong time. `time.localtime()` is what `ZipFile.writestr` itself uses when handed a plain member
+    name, which is how these members were stamped before they needed per-member compression."""
+    info = zipfile.ZipInfo(name, date_time=time.localtime()[:6])
+    info.compress_type = compress_type
+    return info
+
+
+def backup_temp_file():
+    """A staging file for an archive being built or read, opened beside the data database.
+
+    Deliberately not the system temp directory: on many Linux installs `/tmp` is `tmpfs`, which is
+    RAM-backed, and staging there would put back exactly the memory this streaming exists to avoid. The
+    data directory is also the volume the user has already sized for their data, and the one a portable
+    install carries with it.
+
+    `TemporaryFile` has no name on disk, so an export interrupted by a crash cannot strand one."""
+    return tempfile.TemporaryFile(dir=os.path.dirname(current_db_path()) or None)
+
+
+def _stream_file_out(fileobj):
+    """Yield a staged artifact back to the client and close it afterwards — including when the client
+    disconnects mid-download, which closes the generator."""
+    try:
+        while True:
+            chunk = fileobj.read(STREAM_CHUNK_BYTES)
+            if not chunk:
+                return
+            yield chunk
+    finally:
+        fileobj.close()
+
+
+def write_backup_archive(conn, sink) -> None:
+    """Write the whole data backup into `sink` (any writable binary file object).
+
+    Rows go straight from their cursor into the zip member, one JSON object per line, so no section is
+    ever materialized as a list and the peak memory is one row plus the compressor's own buffers —
+    whatever the ledger's size. `meta.json` is written last because it carries the digest of each member,
+    which is only known once that member has been written.
+    """
+    members = {}
+    with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for section, _table, query in BACKUP_SECTIONS:
+            name = _section_member(section)
+            digest = hashlib.sha256()
+            rows = 0
+            with zf.open(_zip_member_info(name, zipfile.ZIP_DEFLATED), "w") as member:
+                for row in conn.execute(query):
+                    line = (_canonical_json(dict(row)) + "\n").encode("utf-8")
+                    digest.update(line)
+                    member.write(line)
+                    rows += 1
+            members[name] = {"sha256": digest.hexdigest(), "rows": rows}
+
+        zf.writestr(
+            _zip_member_info(META_MEMBER, zipfile.ZIP_DEFLATED),
+            _canonical_json({
+                # What this file is, so a restore surface can route it without the person holding it
+                # having to know how the two backups differ. See "Identifying a backup file".
+                "kind":           BACKUP_KIND_DATA,
+                "version":        BACKUP_PAYLOAD_VERSION,
+                # The DB migration level the rows conform to, recorded so restore can tell an older
+                # backup (columns the schema has since added simply take their defaults) from one made
+                # by a newer build (which may carry columns this build can't represent — the restore
+                # guard refuses that downgrade unless forced).
+                "schema_version": get_db_version(conn),
+                "exported_at":    utcnow_iso(),
+                # System identity, so restore can tell "my own backup" from "a different system's", and
+                # which access mode it came from. Used by the restore compatibility guard.
+                "instance_id":    get_db_instance_id(conn),
+                "access_mode":    "auth" if auth_required() else "local",
+                # A digest per member, verified on the way back in. This replaces version 9's
+                # `content_sha256` field *inside* the payload: same unsigned-checksum guarantee against
+                # accidental corruption, but checkable while streaming rather than by re-serializing the
+                # whole payload to compare one hash — and it extends to members that are not JSON at all.
+                "members":        members,
+            }).encode("utf-8"),
+        )
+
+
+def build_backup_data(conn) -> dict:
+    """The backup payload materialized as a dict — the archive read back into memory.
+
+    This is the shape versions 7-9 wrote as a single JSON object, and it remains what `POST /restore`
+    accepts. It is deliberately produced by *reading what the writer just wrote* rather than by walking
+    the tables a second time: there is one producer of a backup, so a test asserting over this dict is
+    asserting over the real export. It holds the whole payload in memory by definition, which is why
+    nothing on the export path uses it.
+
+    The archive's per-member digests do not survive being materialized — they cover member *bytes*, and
+    these are rows — so the dict carries `content_sha256` over itself instead, which is the integrity
+    check that belongs to this container and the one `POST /restore` verifies.
+    """
+    staged = io.BytesIO()
+    write_backup_archive(conn, staged)
+    staged.seek(0)
+    with zipfile.ZipFile(staged) as zf:
+        payload = dict(_read_archive_meta(zf))
+        payload.pop("members", None)
+        for section in BACKUP_SECTION_NAMES:
+            payload[section] = list(read_archive_section(zf, section))
+    return _stamp_content_hash(payload)
+
+
+def _build_encrypted_manifest(content_key: bytes, nonce: bytes, recipients: list[dict], kind: str) -> dict:
+    manifest = {
+        "format": "luma-encrypted-backup",
+        "version": 1,
+        # Outside the ciphertext deliberately: identifying the file needs no key, and saying which of the
+        # two backups it is discloses nothing the filename did not.
+        "kind": kind,
+        "cipher": "AES-256-GCM",
+        "wrapped_keys": [],
+        "nonce": urlsafe_b64encode(nonce).decode("ascii"),
+    }
+    for recipient in recipients:
+        public_key, fingerprint = _validate_backup_recipient_key(recipient["public_key"])
+        wrapped_key = public_key.encrypt(
+            content_key,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+        manifest["wrapped_keys"].append({
+            "recipient_id": recipient["id"],
+            "label": recipient["label"],
+            "fingerprint": fingerprint,
+            "algorithm": "rsa-oaep-sha256",
+            "wrapped_key": urlsafe_b64encode(wrapped_key).decode("ascii"),
+        })
+    return manifest
+
+
+def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BACKUP_KIND_DATA) -> None:
+    """Seal an already-written archive into the encrypted envelope, streaming.
+
+    The envelope format is untouched by the streaming: `AESGCM.encrypt()` is one-shot and needs both
+    plaintext and ciphertext resident, but the incremental encryptor over the same cipher emits
+    byte-identical output — the ciphertext followed by the 16-byte tag — so an archive written this way
+    is indistinguishable from one written by the one-shot API and opens with it. No manifest version
+    bump, and nothing to teach the restore side.
+    """
+    content_key = AESGCM.generate_key(bit_length=256)
+    nonce = os.urandom(12)
+    manifest = _build_encrypted_manifest(content_key, nonce, recipients, kind)
+    encryptor = Cipher(algorithms.AES(content_key), modes.GCM(nonce)).encryptor()
+
+    with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        zf.writestr(_zip_member_info("manifest.json", zipfile.ZIP_DEFLATED),
+                    json.dumps(manifest, indent=2).encode("utf-8"))
+        # Stored, not deflated: ciphertext is incompressible, so deflating it is pure CPU.
+        with zf.open(_zip_member_info("payload.bin", zipfile.ZIP_STORED), "w") as member:
+            while True:
+                chunk = source.read(STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                member.write(encryptor.update(chunk))
+            member.write(encryptor.finalize())
+            member.write(encryptor.tag)
 
 
 @router.get("/backup")
 def export_backup(encrypted: bool = Query(False)):
-    with get_db() as conn:
-        payload = build_backup_data(conn)
-        recipients = []
-        if encrypted:
+    recipients = []
+    if encrypted:
+        with get_db() as conn:
             recipients = [dict(r) for r in conn.execute("""
                 SELECT id, label, public_key
                 FROM   backup_recipient
                 WHERE  enabled = 1
                 ORDER  BY created_at DESC, label
             """).fetchall()]
-
-    if encrypted:
         if not recipients:
             raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
-        content = _build_encrypted_backup_bytes(
-            _zip_json_bytes("luma_backup.json", payload),
-            recipients,
-        )
-        filename = _dated_backup_filename("luma_backup", ".encrypted.zip")
-    else:
-        content = _zip_json_bytes("luma_backup.json", payload)
-        filename = _dated_backup_filename("luma_backup", ".zip")
+
+    artifact = backup_temp_file()
+    try:
+        with get_db() as conn:
+            write_backup_archive(conn, artifact)
+        if encrypted:
+            # The plain archive becomes the plaintext of the encrypted one; the database is no longer
+            # needed, so the connection is already closed by the time the cipher runs.
+            plain, artifact = artifact, backup_temp_file()
+            try:
+                plain.seek(0)
+                write_encrypted_archive(plain, recipients, artifact)
+            finally:
+                plain.close()
+        size = artifact.tell()
+        artifact.seek(0)
+    except BaseException:
+        artifact.close()
+        raise
+
+    filename = _dated_backup_filename("luma_backup", ".encrypted.zip" if encrypted else ".zip")
     return StreamingResponse(
-        iter([content]),
+        _stream_file_out(artifact),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Known because the artifact is complete before the first byte is sent, which is what lets a
+            # download show progress instead of an indeterminate spinner.
+            "Content-Length": str(size),
+        },
     )
 
 
@@ -742,6 +832,7 @@ def export_credentials(request: Request):
         ).fetchall()]
     user = getattr(request.state, "user", None)
     payload = _stamp_content_hash({
+        "kind":             BACKUP_KIND_CREDENTIALS,
         # v4 carries a keypair slot (the DEK sealed to a public key) where v3 carried the DEK wrapped
         # straight under the KEK. The bump is what makes an older install reject this file outright
         # rather than reporting the passphrase as wrong when it reaches material it cannot read.
@@ -795,7 +886,6 @@ def restore_target_status():
         return {"has_data": _target_has_data(conn)}
 
 
-@router.post("/restore")
 def _wipe_user_data_tables(conn):
     """Delete every user-data row in child→parent order. The single source of truth for the destructive
     wipe, shared by restore and the demo-data clear. The caller owns the transaction and must have
@@ -868,22 +958,6 @@ def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
     return kept
 
 
-def _translate_legacy_transaction_columns(transactions, backup_version):
-    """Map a pre-v9 backup's `plaid_transaction_id` onto the current `external_transaction_id`.
-
-    The column was renamed once it stopped being Plaid-specific (v26, following `plaid_account_id` →
-    `external_account_id` in v20). `insert_rows` silently drops keys the schema does not have, so without
-    this every restored transaction would come back with no provider id at all — and since that id is what
-    makes a sync idempotent, the next sync would re-add every one of them as a fresh row.
-    """
-    if backup_version is None or backup_version >= 9:
-        return transactions
-    for row in transactions:
-        if "plaid_transaction_id" in row and row.get("external_transaction_id") is None:
-            row["external_transaction_id"] = row.pop("plaid_transaction_id")
-    return transactions
-
-
 def _reconcile_restored_account_links(conn, accounts, backup_version):
     """Reconcile each restored account's connection link against the live `connection` table (which is
     credential data — never wiped or carried in the payload). Two jobs:
@@ -925,19 +999,229 @@ def _reconcile_restored_account_links(conn, accounts, backup_version):
             row["connection_id"] = None
 
 
-def restore_backup(body: RestoreRequest):
-    """
-    Destructive restore. Wipes all non-credential data and replaces with backup.
-    Plaid items / access tokens are NOT touched.
-    """
-    d = body.data
-    backup_version = d.get("version")
-    if backup_version not in (7, 8, 9):
-        raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
-    # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
-    # wiping the target. No-op for older backups that predate the hash field.
-    _verify_payload_content_hash(d)
+# --- Reading an archive back --------------------------------------------------------------------
+# The mirror of the writer: `meta.json` for the header and the per-member digests, one NDJSON member
+# per section read a line at a time. Nothing here materializes a section, which is what lets a restore
+# cost the same for a ledger of any size.
 
+def _read_archive_meta(zf) -> dict:
+    try:
+        meta = json.loads(zf.read(META_MEMBER).decode("utf-8"))
+    except KeyError:
+        raise HTTPException(status_code=400, detail="This backup is missing its meta.json — the file is not a Luma backup archive, or it is truncated.")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Unreadable backup metadata: {exc}")
+    if not isinstance(meta, dict):
+        raise HTTPException(status_code=400, detail="Unreadable backup metadata")
+    return meta
+
+
+def read_archive_section(zf, section: str):
+    """Yield a section's rows. An absent member yields nothing rather than failing: sections are added
+    over time, and a backup written before one existed is missing it in exactly this way."""
+    name = _section_member(section)
+    try:
+        member = zf.open(name)
+    except KeyError:
+        return
+    with io.TextIOWrapper(member, encoding="utf-8") as lines:
+        for line in lines:
+            line = line.strip()
+            if line:
+                yield json.loads(line)
+
+
+def verify_archive_members(zf, meta: dict) -> None:
+    """Recompute every member digest recorded in `meta.json` and refuse a mismatch.
+
+    Runs to completion *before* anything destructive, which is the whole point: a corrupted or truncated
+    download must not get as far as wiping the target. Streaming the members to hash them costs a second
+    pass over a local file — disk, not memory — and is the price of not holding the archive in RAM to
+    check it. Like the version-9 hash it replaces, this is an unsigned checksum: it detects accidental
+    corruption, not tampering.
+    """
+    members = meta.get("members")
+    if not isinstance(members, dict):
+        return
+    for name, recorded in members.items():
+        expected = (recorded or {}).get("sha256") if isinstance(recorded, dict) else None
+        if not expected:
+            continue
+        digest = hashlib.sha256()
+        try:
+            with zf.open(name) as member:
+                while True:
+                    chunk = member.read(STREAM_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"This backup is missing {name}, which its own manifest lists — the file is incomplete.")
+        if digest.hexdigest() != expected:
+            raise HTTPException(
+                status_code=400,
+                detail="This backup failed its integrity check (content hash mismatch) — the file is corrupted, truncated, or was edited after export.",
+            )
+
+
+# --- Restore ------------------------------------------------------------------------------------
+# One core, two front doors: an archive streamed member by member, and a payload handed over as a dict
+# (`POST /restore`, and every version-7-to-9 backup, whose whole payload is a single JSON object). The
+# core consumes a `section_rows(section) -> iterable of row dicts` callable so neither front door needs
+# to know how the other one gets its rows.
+
+# Rows per executemany. The batch is the only thing the insert path holds, so this is the memory
+# ceiling of a restore; large enough that the per-statement overhead disappears.
+INSERT_BATCH_ROWS = 500
+
+
+def _insert_section(conn, table, rows, transform=None) -> None:
+    """Insert a section's rows in batches, taking the column list from the first row.
+
+    Restore must survive schema drift across versions: a backup taken before a column was dropped still
+    carries that column in its payload (e.g. `category_rule.priority`, removed once rule ordering became
+    automatic). Intersecting the payload's keys with the columns the live table actually has skips a
+    since-removed column instead of failing the whole restore with "no column named ...". The inverse — a
+    backup predating a column the schema has since gained — already works: the column is simply absent
+    and takes its default.
+    """
+    live_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    columns = None
+    statement = None
+    batch = []
+    for row in rows:
+        if transform is not None:
+            row = transform(row)
+        if columns is None:
+            columns = [key for key in row.keys() if key in live_cols]
+            if not columns:
+                return
+            statement = (f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) "
+                         f"VALUES ({','.join('?' * len(columns))})")
+        batch.append([row.get(column) for column in columns])
+        if len(batch) >= INSERT_BATCH_ROWS:
+            conn.executemany(statement, batch)
+            batch.clear()
+    if batch:
+        conn.executemany(statement, batch)
+
+
+# Referential repair, expressed as SQL over the restored tables rather than as set membership over the
+# payload in memory. A backup can outlive the deletions and schema tightening that happened after it was
+# taken, so restore is best-effort: rather than failing an entire archive over one dangling reference, it
+# nulls what is optional and drops what is meaningless, then commits a consistent database.
+#
+# This runs inside the restore transaction, which defers foreign-key enforcement to commit — so rows may
+# be inserted in any order and repaired afterwards, and only the final state has to be valid. Doing it in
+# SQL is what removes the last thing a restore held in memory: the id sets it used to build per table.
+#
+# Three kinds, and the difference between the last two is a product decision, not a technicality:
+#   nullify   - the reference is optional; a broken one becomes "none" and the row stays.
+#   require   - the row is meaningless without the reference (an attachment with no transaction, a rule
+#               with no category), so it goes. A NULL counts as broken here for the same reason.
+#   drop_link - NULL is a legitimate state but a *broken* reference is not, so the row goes rather than
+#               being silently downgraded to the NULL state, which would mean something different (an
+#               Amazon funding mapping with no account is "untracked", which is not what a lost account
+#               should turn into).
+_RESTORE_NULLIFY = (
+    ("account", "owner_id", "owner"),
+    ("account", "parent_account_id", "account"),
+    ("category", "parent_id", "category"),
+    ("csv_import_profile", "account_id", "account"),
+    ("import_batch", "profile_id", "csv_import_profile"),
+    ("recurring_series", "category_id", "category"),
+    ("recurring_series", "account_id", "account"),
+    ("txn", "owner_id", "owner"),
+    ("txn", "category_id", "category"),
+    ("txn", "import_batch_id", "import_batch"),
+    ("txn", "recurring_series_id", "recurring_series"),
+)
+
+# Parents first: most of these children declare ON DELETE CASCADE, so dropping an orphaned rule or
+# transaction takes its attachments with it, and the sweeps that follow only have to catch children whose
+# parent was never inserted at all.
+_RESTORE_REQUIRE = (
+    ("category_rule", "category_id", "category"),
+    ("txn", "account_id", "account"),
+    ("import_batch_account", "batch_id", "import_batch"),
+    ("import_batch_duplicate", "batch_id", "import_batch"),
+    ("txn_tag", "txn_id", "txn"),
+    ("txn_tag", "tag_id", "tag"),
+    ("category_tag", "category_id", "category"),
+    ("category_tag", "tag_id", "tag"),
+    ("account_tag", "account_id", "account"),
+    ("account_tag", "tag_id", "tag"),
+    ("rule_tag", "rule_id", "category_rule"),
+    ("rule_tag", "tag_id", "tag"),
+    ("account_pair_distinct", "account_id_low", "account"),
+    ("account_pair_distinct", "account_id_high", "account"),
+    ("amazon_charge_distinct", "txn_id_low", "txn"),
+    ("amazon_charge_distinct", "txn_id_high", "txn"),
+    ("amazon_charge_reviewed", "txn_id", "txn"),
+    ("recurring_membership_override", "txn_id", "txn"),
+    ("recurring_membership_override", "series_id", "recurring_series"),
+    ("txn_link_member", "link_id", "txn_link"),
+    ("txn_link_member", "txn_id", "txn"),
+)
+
+_RESTORE_DROP_LINK = (
+    ("import_batch_account", "account_id", "account"),
+    # order_id is an external Amazon reference and carries no ledger FK; only the batch that parked the
+    # item can strand it, and an orphan without its batch is unreachable.
+    ("amazon_pending_item", "parked_batch_id", "import_batch"),
+    ("amazon_funding_map", "funding_account_id", "account"),
+    ("amazon_funding_map", "amazon_account_id", "account"),
+)
+
+
+def _apply_referential_rules(conn) -> None:
+    # Each rule is skipped when the live schema has no such column, for the same reason the insert path
+    # intersects payload keys with `PRAGMA table_info`: a reference these rules name can be dropped by a
+    # later migration, and a restore must not start failing on SQL about a column that no longer exists.
+    def has_column(table, column):
+        return column in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+    for table, column, parent in _RESTORE_NULLIFY:
+        if has_column(table, column):
+            conn.execute(
+                f"UPDATE {table} SET {column} = NULL "
+                f"WHERE {column} IS NOT NULL AND {column} NOT IN (SELECT id FROM {parent})"
+            )
+    for table, column, parent in _RESTORE_REQUIRE:
+        if has_column(table, column):
+            conn.execute(
+                f"DELETE FROM {table} "
+                f"WHERE {column} IS NULL OR {column} NOT IN (SELECT id FROM {parent})"
+            )
+    for table, column, parent in _RESTORE_DROP_LINK:
+        if has_column(table, column):
+            conn.execute(
+                f"DELETE FROM {table} "
+                f"WHERE {column} IS NOT NULL AND {column} NOT IN (SELECT id FROM {parent})"
+            )
+
+
+def _legacy_transaction_transform(backup_version):
+    """Map a pre-v9 backup's `plaid_transaction_id` onto the current `external_transaction_id`.
+
+    The column was renamed once it stopped being Plaid-specific (v26, following `plaid_account_id` ->
+    `external_account_id` in v20). The insert path silently drops keys the schema does not have, so
+    without this every restored transaction would come back with no provider id at all — and since that id
+    is what makes a sync idempotent, the next sync would re-add every one of them as a fresh row.
+    """
+    if backup_version is None or backup_version >= 9:
+        return None
+
+    def translate(row):
+        if "plaid_transaction_id" in row and row.get("external_transaction_id") is None:
+            row["external_transaction_id"] = row.pop("plaid_transaction_id")
+        return row
+
+    return translate
+
+
+def _restore_preflight(header: dict, force: bool) -> None:
+    """Everything that can refuse a restore, run before a single row is touched."""
     # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
     # mixing real data into a demo tenant breaks the "clear is always safe" contract. Refuse outright.
     with get_db() as conn:
@@ -947,315 +1231,450 @@ def restore_backup(body: RestoreRequest):
                 "message": "Clear the demo data before restoring a backup.",
             })
 
-    # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently
-    # replace a *different* system's existing data, or load across access modes, unless the user
-    # has explicitly confirmed (force). Allowed without confirmation: an empty target (fresh
-    # install) or restoring this system's own backup (matching instance_id) in the same mode.
-    if not body.force:
-        backup_mode = d.get("access_mode")
-        backup_instance = d.get("instance_id")
-        backup_schema = d.get("schema_version")
-        target_mode = "auth" if auth_required() else "local"
-        with get_db() as conn:
-            target_instance = get_db_instance_id(conn)
-            has_data = _target_has_data(conn)
-        reasons = []
-        if backup_mode and backup_mode != target_mode:
-            reasons.append("mode_mismatch")
-        if has_data and backup_instance != target_instance:
-            reasons.append("different_system")
-        # A backup from a *newer* schema than this build is the one direction that can lose data:
-        # restore drops columns this schema doesn't know (see insert_rows), so a column the newer
-        # build added with real content would vanish silently. Warn before that downgrade. The
-        # reverse — an older backup (or one with no schema_version) — is safe and never flagged.
-        if isinstance(backup_schema, int) and backup_schema > CURRENT_VERSION:
-            reasons.append("newer_schema")
-        if reasons:
-            raise HTTPException(status_code=409, detail={
-                "code": "restore_incompatible",
-                "reasons": sorted(set(reasons)),
-                "backup_mode": backup_mode,
-                "target_mode": target_mode,
-                "backup_schema_version": backup_schema,
-                "target_schema_version": CURRENT_VERSION,
-            })
+    # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently replace a
+    # *different* system's existing data, or load across access modes, unless the user has explicitly
+    # confirmed (force). Allowed without confirmation: an empty target (fresh install) or restoring this
+    # system's own backup (matching instance_id) in the same mode.
+    if force:
+        return
+    backup_mode = header.get("access_mode")
+    backup_instance = header.get("instance_id")
+    backup_schema = header.get("schema_version")
+    target_mode = "auth" if auth_required() else "local"
+    with get_db() as conn:
+        target_instance = get_db_instance_id(conn)
+        has_data = _target_has_data(conn)
+    reasons = []
+    if backup_mode and backup_mode != target_mode:
+        reasons.append("mode_mismatch")
+    if has_data and backup_instance != target_instance:
+        reasons.append("different_system")
+    # A backup from a *newer* schema than this build is the one direction that can lose data: restore
+    # drops columns this schema doesn't know (see _insert_section), so a column the newer build added with
+    # real content would vanish silently. Warn before that downgrade. The reverse — an older backup (or one
+    # with no schema_version) — is safe and never flagged.
+    if isinstance(backup_schema, int) and backup_schema > CURRENT_VERSION:
+        reasons.append("newer_schema")
+    if reasons:
+        raise HTTPException(status_code=409, detail={
+            "code": "restore_incompatible",
+            "reasons": sorted(set(reasons)),
+            "backup_mode": backup_mode,
+            "target_mode": target_mode,
+            "backup_schema_version": backup_schema,
+            "target_schema_version": CURRENT_VERSION,
+        })
 
-    owners = [dict(row) for row in d.get("owners", [])]
-    accounts = [dict(row) for row in d.get("accounts", [])]
-    categories = [dict(row) for row in d.get("categories", [])]
-    category_rules = [dict(row) for row in d.get("category_rules", [])]
-    merchant_renames = [dict(row) for row in d.get("merchant_renames", [])]
-    csv_profiles = [dict(row) for row in d.get("csv_profiles", [])]
-    connection_accounts = [dict(row) for row in d.get("connection_accounts", [])]
-    import_batches = [dict(row) for row in d.get("import_batches", [])]
-    import_batch_accounts = [dict(row) for row in d.get("import_batch_accounts", [])]
-    import_batch_duplicates = [dict(row) for row in d.get("import_batch_duplicates", [])]
-    import_workflow_states = [dict(row) for row in d.get("import_workflow_states", [])]
-    transactions = [dict(row) for row in d.get("transactions", [])]
-    tags = [dict(row) for row in d.get("tags", [])]
-    txn_tags = [dict(row) for row in d.get("txn_tags", [])]
-    category_tags = [dict(row) for row in d.get("category_tags", [])]
-    account_tags = [dict(row) for row in d.get("account_tags", [])]
-    rule_tags = [dict(row) for row in d.get("rule_tags", [])]
-    account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
-    amazon_charge_distinct = [dict(row) for row in d.get("amazon_charge_distinct", [])]
-    amazon_charge_reviewed = [dict(row) for row in d.get("amazon_charge_reviewed", [])]
-    amazon_pending_items = [dict(row) for row in d.get("amazon_pending_items", [])]
-    ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
-    recurring_series = [dict(row) for row in d.get("recurring_series", [])]
-    recurring_membership_overrides = [dict(row) for row in d.get("recurring_membership_overrides", [])]
-    txn_links = [dict(row) for row in d.get("txn_links", [])]
-    txn_link_members = [dict(row) for row in d.get("txn_link_members", [])]
-    amazon_funding_map = [dict(row) for row in d.get("amazon_funding_map", [])]
 
-    owner_ids = {row.get("id") for row in owners if row.get("id")}
-    account_ids = {row.get("id") for row in accounts if row.get("id")}
-    category_ids = {row.get("id") for row in categories if row.get("id")}
-    csv_profile_ids = {row.get("id") for row in csv_profiles if row.get("id")}
-    import_batch_ids = {row.get("id") for row in import_batches if row.get("id")}
+def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
+    """Wipe and rebuild every data table from `section_rows`, inside one transaction.
 
-    # Backups can outlive later deletions or schema tightening. Normalize broken foreign
-    # keys to NULL so restore stays best-effort instead of failing the entire archive.
-    def normalize_nullable_fk(rows, key, valid_ids):
-        for row in rows:
-            value = row.get(key)
-            if value and value not in valid_ids:
-                row[key] = None
+    All-or-nothing on purpose. The restore has many cross-table and self-referential foreign keys, and a
+    single correct insert order would be brittle, so the whole wipe+reload runs with foreign-key checks
+    DEFERRED to commit: rows go in in any order, dangling references are repaired afterwards, and the
+    fully-populated final state is validated as a whole when the transaction commits. Splitting this into
+    smaller committed chunks was considered and rejected — it would trade the property that a *failed*
+    restore leaves the target untouched for nothing, since an open write transaction spills to the WAL
+    rather than to memory.
 
-    normalize_nullable_fk(accounts, "owner_id", owner_ids)
-    normalize_nullable_fk(accounts, "parent_account_id", account_ids)
-    normalize_nullable_fk(categories, "owner_id", owner_ids)
-    normalize_nullable_fk(csv_profiles, "account_id", account_ids)
-    normalize_nullable_fk(import_batches, "profile_id", csv_profile_ids)
+    Two sections are materialized rather than streamed, both bounded by the size of the chart of accounts
+    rather than by the ledger: `accounts`, because its connection links are reconciled against the live
+    `connection` table as a set, and `connection_accounts`, which is reconciled against the accounts.
+    """
+    conn.execute("BEGIN")
+    conn.execute("PRAGMA defer_foreign_keys = ON")
+    _wipe_user_data_tables(conn)
 
+    _insert_section(conn, "owner", section_rows("owners"))
+
+    accounts = [dict(row) for row in section_rows("accounts")]
     for row in accounts:
-        row["display_name"] = (row.get("display_name") or row.get("name") or "").strip()
-        if not row["display_name"]:
-            row["display_name"] = row.get("name") or ""
+        row["display_name"] = (row.get("display_name") or row.get("name") or "").strip() or (row.get("name") or "")
+    # Resolve account→connection links against the live connection table: translate a v7 payload's legacy
+    # plaid_* columns and null out any connection_id absent locally.
+    _reconcile_restored_account_links(conn, accounts, backup_version)
+    _insert_section(conn, "account", accounts)
 
-    for row in categories:
-        parent_id = row.get("parent_id")
-        if parent_id and parent_id not in category_ids:
-            row["parent_id"] = None
+    # connection_account references both `account` (restored just above) and the live `connection` table
+    # (never wiped): rows whose connection is absent locally are dropped rather than inserted dangling.
+    connection_accounts = _reconcile_restored_connection_accounts(
+        conn, [dict(row) for row in section_rows("connection_accounts")], accounts
+    )
+    _insert_section(conn, "connection_account", connection_accounts)
+    del accounts, connection_accounts
 
-    category_rules = [
-        row for row in category_rules
-        if row.get("category_id") in category_ids
-    ]
+    reconciled = {"owners", "accounts", "connection_accounts"}
+    translate_transactions = _legacy_transaction_transform(backup_version)
+    for section, table, _query in BACKUP_SECTIONS:
+        if section in reconciled:
+            continue
+        _insert_section(conn, table, section_rows(section),
+                        translate_transactions if section == "transactions" else None)
 
-    # Recurring series reference category/account (both nullable, ON DELETE SET NULL). Normalize broken
-    # FKs to NULL, then drop txn membership links pointing at a series that didn't survive.
-    normalize_nullable_fk(recurring_series, "category_id", category_ids)
-    normalize_nullable_fk(recurring_series, "account_id", account_ids)
-    recurring_series_ids = {row.get("id") for row in recurring_series if row.get("id")}
+    _apply_referential_rules(conn)
 
-    normalize_nullable_fk(transactions, "owner_id", owner_ids)
-    normalize_nullable_fk(transactions, "category_id", category_ids)
-    normalize_nullable_fk(transactions, "import_batch_id", import_batch_ids)
-    normalize_nullable_fk(transactions, "recurring_series_id", recurring_series_ids)
-    transactions = [
-        row for row in transactions
-        if row.get("account_id") in account_ids
-    ]
+    # A restore is a full replacement: afterward the data *is* exactly the backup's system, so the DB
+    # adopts the backup's identity (`instance_id`) rather than keeping the target's stale one. Otherwise
+    # re-restoring the same backup would read as "a different system" even though the content is identical
+    # — the case that bites when a backup is restored into a fresh DB and then restored again. The
+    # pre-restore compatibility guard is unaffected: it compares the *incoming* backup against the
+    # *pre-restore* data to decide whether confirmation is needed; this only sets the identity the DB
+    # carries once that data is gone.
+    backup_instance_id = header.get("instance_id")
+    if backup_instance_id:
+        conn.execute(
+            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
+            (str(backup_instance_id),),
+        )
 
-    import_batch_accounts = [
-        row for row in import_batch_accounts
-        if row.get("batch_id") in import_batch_ids
-        and (not row.get("account_id") or row.get("account_id") in account_ids)
-    ]
-    import_batch_duplicates = [
-        row for row in import_batch_duplicates
-        if row.get("batch_id") in import_batch_ids
-    ]
+    # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
+    # already current, so re-running migrations would be schema-only no-ops — what's missing is the
+    # *data-init* half of every migration newer than the backup (rename provenance, account types +
+    # money-movement consolidation, last_effect_date + is_managed). Run exactly those, in order, so
+    # restored data ends up equivalent to an in-place upgrade. A backup with no/unknown schema_version
+    # (incl. pre-rebrand) is treated as Luma v1 → all post-rebrand data-init runs.
+    run_post_restore_data_init(conn, header.get("schema_version"))
 
-    # Tag attachments are dropped if either side no longer survives the restore. `rule_ids` and
-    # `txn_ids` are taken *after* the category_rule/transaction filtering above so a tag never
-    # points at a rule or transaction that didn't make it in.
-    tag_ids = {row.get("id") for row in tags if row.get("id")}
-    rule_ids = {row.get("id") for row in category_rules if row.get("id")}
-    txn_ids = {row.get("id") for row in transactions if row.get("id")}
-    txn_tags = [r for r in txn_tags if r.get("txn_id") in txn_ids and r.get("tag_id") in tag_ids]
-    category_tags = [r for r in category_tags if r.get("category_id") in category_ids and r.get("tag_id") in tag_ids]
-    account_tags = [r for r in account_tags if r.get("account_id") in account_ids and r.get("tag_id") in tag_ids]
-    rule_tags = [r for r in rule_tags if r.get("rule_id") in rule_ids and r.get("tag_id") in tag_ids]
-    account_pair_distinct = [
-        r for r in account_pair_distinct
-        if r.get("account_id_low") in account_ids and r.get("account_id_high") in account_ids
-    ]
-    amazon_charge_distinct = [
-        r for r in amazon_charge_distinct
-        if r.get("txn_id_low") in txn_ids and r.get("txn_id_high") in txn_ids
-    ]
-    amazon_charge_reviewed = [
-        r for r in amazon_charge_reviewed if r.get("txn_id") in txn_ids
-    ]
-    # A parked-items row is kept only if the import that parked it survived (an orphan without its batch is
-    # unreachable). order_id is an external Amazon reference, so it carries no ledger FK to check.
-    amazon_pending_items = [
-        r for r in amazon_pending_items
-        if not r.get("parked_batch_id") or r.get("parked_batch_id") in import_batch_ids
-    ]
-    # A pin/exclude override is meaningful only if both its transaction and its series survived.
-    recurring_membership_overrides = [
-        r for r in recurring_membership_overrides
-        if r.get("txn_id") in txn_ids and r.get("series_id") in recurring_series_ids
-    ]
-    # A link member is kept only if both its link and its transaction survived; links themselves carry
-    # no hard FK, so they restore verbatim (a link left with no members is harmless).
-    link_ids = {row.get("id") for row in txn_links if row.get("id")}
-    txn_link_members = [
-        r for r in txn_link_members
-        if r.get("link_id") in link_ids and r.get("txn_id") in txn_ids
-    ]
-    # A funding mapping is kept only if the accounts it names survived: a NULL funding account is the
-    # valid "untracked" state (keep), but a *broken* funding/override account reference means the mapping
-    # is meaningless — drop it (returning that instrument to unmapped) rather than silently flip it to
-    # untracked by normalizing the FK to NULL.
-    amazon_funding_map = [
-        r for r in amazon_funding_map
-        if (not r.get("funding_account_id") or r.get("funding_account_id") in account_ids)
-        and (not r.get("amazon_account_id") or r.get("amazon_account_id") in account_ids)
-    ]
+    # Counted from the tables rather than from what the payload offered, so the report is what actually
+    # landed — net of rows dropped as unreferenced, and of any the unique constraints ignored.
+    return {
+        section: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for section, table, _query in BACKUP_SECTIONS
+    }
+
+
+@router.post("/restore")
+def restore_backup(body: RestoreRequest):
+    """Destructive restore from a payload held in memory: version 7-9 backups, whose entire payload is one
+    JSON object, and any caller posting one directly. Credentials are never touched.
+
+    Version 10 archives have their own entry point (`restore_from_archive`) that streams instead; this one
+    is bounded by whatever the caller already materialized.
+    """
+    payload = body.data
+    backup_version = payload.get("version")
+    if backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
+        raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
+    # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
+    # wiping the target. No-op for backups that predate the hash field.
+    _verify_payload_content_hash(payload)
+    _restore_preflight(payload, body.force)
+
+    def section_rows(section):
+        return (dict(row) for row in payload.get(section) or [])
 
     with get_db() as conn:
-        # The restore has many cross-table and self-referential foreign keys (account→parent,
-        # category→import_batch, category→parent, txn→account/category/batch, tag attachments, …),
-        # and getting a single correct insert order is brittle. Instead, run the whole wipe+reload
-        # as one transaction with foreign-key checks DEFERRED to commit: rows can be inserted in any
-        # order, and the fully-populated final state is validated as a whole when get_db() commits.
-        conn.execute("BEGIN")
-        conn.execute("PRAGMA defer_foreign_keys = ON")
-        _wipe_user_data_tables(conn)
+        counts = _restore_sections(conn, payload, section_rows, backup_version)
+    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts}
 
-        def insert_rows(table, rows, exclude=()):
-            if not rows:
-                return
-            # Restore must survive schema drift across versions: a backup taken before a column was
-            # dropped still carries that column in its payload (e.g. category_rule.priority, removed
-            # once rule ordering became automatic). Intersect the payload's keys with the columns the
-            # live table actually has so a since-removed column is skipped instead of failing the whole
-            # restore with "no column named …". The inverse — a backup predating a column the schema
-            # has since gained — already works: the column is simply absent and takes its default.
-            live_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-            sample = {k: v for k, v in rows[0].items() if k not in exclude and k in live_cols}
-            cols = list(sample.keys())
-            placeholders = ",".join("?" * len(cols))
-            for row in rows:
-                vals = [row.get(c) for c in cols]
-                conn.execute(
-                    f"INSERT OR IGNORE INTO {table} ({','.join(cols)}) VALUES ({placeholders})",
-                    vals
-                )
 
-        insert_rows("owner",            owners)
-        # Resolve account→connection links against the live connection table (needs `conn`): translate a
-        # v7 payload's legacy plaid_* columns and null out any connection_id absent locally.
-        _reconcile_restored_account_links(conn, accounts, backup_version)
-        connection_accounts = _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
-        insert_rows("account",          accounts)
-        # After accounts: connection_account references both `account` (restored just above) and the
-        # live `connection` table (never wiped). _reconcile_restored_connection_accounts has already
-        # dropped rows whose connection is absent locally and re-resolved account ids.
-        insert_rows("connection_account", connection_accounts)
-        insert_rows("category",         categories)
-        insert_rows("category_rule",    category_rules)
-        # Tag definitions before any attachment (all reference tag.id); attachments after their
-        # other parent (category/account/rule) is in place.
-        insert_rows("tag",              tags)
-        insert_rows("category_tag",     category_tags)
-        insert_rows("account_tag",      account_tags)
-        insert_rows("rule_tag",         rule_tags)
-        insert_rows("account_pair_distinct", account_pair_distinct)
-        insert_rows("merchant_rename",  merchant_renames)
-        insert_rows("csv_import_profile", csv_profiles)
-        insert_rows("import_batch", import_batches)
-        insert_rows("import_batch_account", import_batch_accounts)
-        insert_rows("import_batch_duplicate", import_batch_duplicates)
-        insert_rows("import_workflow_state", import_workflow_states)
-        # After category/account (its parents), before txn (which links to it via recurring_series_id).
-        insert_rows("recurring_series", recurring_series)
-        insert_rows("txn", _translate_legacy_transaction_columns(transactions, backup_version))
-        # After both txn and recurring_series (it references each).
-        insert_rows("recurring_membership_override", recurring_membership_overrides)
-        # Links after txn (members reference txn); with deferred FK checks the order is flexible anyway.
-        insert_rows("txn_link",        txn_links)
-        insert_rows("txn_link_member", txn_link_members)
-        # References txn only (both FKs), so after txn.
-        insert_rows("amazon_charge_distinct", amazon_charge_distinct)
-        # References txn only; after txn.
-        insert_rows("amazon_charge_reviewed", amazon_charge_reviewed)
-        # References import_batch via parked_batch_id (no hard FK); after import_batch anyway.
-        insert_rows("amazon_pending_item", amazon_pending_items)
-        # References account only (both FKs); with deferred FK checks the order is flexible anyway.
-        insert_rows("amazon_funding_map", amazon_funding_map)
-        insert_rows("txn_tag",      txn_tags)
-        # No data-DB foreign keys (scope_id is a loose reference to a control-DB user/profile), so
-        # ui_preferences restore verbatim.
-        insert_rows("ui_preference", ui_preferences)
+def restore_from_archive(zf, force: bool = False) -> dict:
+    """Destructive restore straight from an opened version-10 archive, one member at a time."""
+    meta = _read_archive_meta(zf)
+    backup_version = meta.get("version")
+    if backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
+        raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
+    verify_archive_members(zf, meta)
+    _restore_preflight(meta, force)
 
-        # A restore is a full replacement: afterward the data *is* exactly the backup's system, so the
-        # DB adopts the backup's identity (`instance_id`) rather than keeping the target's stale one.
-        # Otherwise re-restoring the same backup would read as "a different system" even though the
-        # content is identical — the case that bites when a backup is restored into a fresh DB and then
-        # restored again. The pre-restore compatibility guard above is unaffected: it still compares the
-        # *incoming* backup against the *pre-restore* data to require confirmation before overwriting a
-        # different live system; this only sets the identity the DB carries once that data is gone.
-        backup_instance_id = d.get("instance_id")
-        if backup_instance_id:
-            conn.execute(
-                "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
-                (str(backup_instance_id),),
+    with get_db() as conn:
+        counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
+    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts}
+
+
+# --- Uploads: staging, decryption, and dispatch --------------------------------------------------
+# A data backup can be arbitrarily large, so an upload is spooled to a staging file beside the database
+# and read from there — never `await file.read()`, which would put the whole artifact back in memory and
+# undo the streaming on the other side of the round trip.
+
+async def _spool_upload(upload: UploadFile, sink) -> None:
+    while True:
+        chunk = await upload.read(STREAM_CHUNK_BYTES)
+        if not chunk:
+            break
+        sink.write(chunk)
+
+
+def _is_encrypted_archive(zf) -> bool:
+    names = {name for name in zf.namelist() if not name.endswith("/")}
+    has_manifest = "manifest.json" in names
+    has_payload = "payload.bin" in names
+    if has_manifest != has_payload:
+        raise HTTPException(status_code=400, detail="Encrypted backup ZIP must include both manifest.json and payload.bin")
+    return has_manifest
+
+
+def _unwrap_content_key(manifest: dict, private_key_bytes: Optional[bytes], passphrase: Optional[str]) -> bytes:
+    if not private_key_bytes:
+        raise HTTPException(status_code=400, detail="Encrypted backup requires a private key file for restore")
+    private_key = _load_private_key(private_key_bytes, passphrase)
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise HTTPException(status_code=400, detail="Only RSA private keys are supported for encrypted backups")
+    for wrapped in manifest.get("wrapped_keys", []):
+        wrapped_key = (wrapped or {}).get("wrapped_key")
+        if not wrapped_key:
+            continue
+        try:
+            return private_key.decrypt(
+                _b64url_decode(wrapped_key),
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None,
+                ),
             )
+        except Exception:
+            continue
+    raise HTTPException(status_code=400, detail="Private key does not match any recipient in this backup")
 
-        # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
-        # already current, so re-running migrations would be schema-only no-ops — what's missing is the
-        # *data-init* half of every migration newer than the backup (rename provenance, account types +
-        # money-movement consolidation, last_effect_date + is_managed). Run exactly those, in order, so
-        # restored data ends up equivalent to an in-place upgrade. A backup with no/unknown schema_version
-        # (incl. pre-rebrand) is treated as Luma v1 → all post-rebrand data-init runs.
-        run_post_restore_data_init(conn, d.get("schema_version"))
 
-    return {
-        "ok": True,
-        "restored_at": utcnow_iso(),
-        "restored_counts": {
-            "owners": len(owners),
-            "accounts": len(accounts),
-            "categories": len(categories),
-            "category_rules": len(category_rules),
-            "merchant_renames": len(merchant_renames),
-            "csv_profiles": len(csv_profiles),
-            "import_batches": len(import_batches),
-            "import_batch_accounts": len(import_batch_accounts),
-            "import_batch_duplicates": len(import_batch_duplicates),
-            "import_workflow_states": len(import_workflow_states),
-            "transactions": len(transactions),
-            "tags": len(tags),
-            "txn_tags": len(txn_tags),
-            "category_tags": len(category_tags),
-            "account_tags": len(account_tags),
-            "rule_tags": len(rule_tags),
-            "account_pair_distinct": len(account_pair_distinct),
-            "amazon_charge_distinct": len(amazon_charge_distinct),
-            "amazon_charge_reviewed": len(amazon_charge_reviewed),
-            "ui_preferences": len(ui_preferences),
-            "recurring_series": len(recurring_series),
-            "recurring_membership_overrides": len(recurring_membership_overrides),
-            "txn_links": len(txn_links),
-            "txn_link_members": len(txn_link_members),
-            "amazon_funding_map": len(amazon_funding_map),
-        },
-    }
+def decrypt_archive_to_temp(zf, private_key_bytes: Optional[bytes], passphrase: Optional[str]):
+    """Decrypt `payload.bin` into a staging file and return it, positioned at the start.
+
+    GCM authenticates only at the very end, so the decision this makes is deliberate: the plaintext is
+    written to a local staging file as it is decrypted, but the tag is verified before the caller is given
+    anything back, and a failure raises rather than returning a handle. Nothing acts on unverified
+    plaintext — the file exists but is never opened as an archive, and is discarded on the way out.
+
+    The tag is the last 16 bytes of the member. Since a zip member is read forwards, the trailing 16 bytes
+    are held back in a rolling window rather than sought to.
+    """
+    try:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Unreadable encrypted backup manifest: {exc}")
+    if manifest.get("format") not in {"luma-encrypted-backup", "fintrack-encrypted-backup"}:
+        raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
+
+    content_key = _unwrap_content_key(manifest, private_key_bytes, passphrase)
+    nonce = _b64url_decode(manifest.get("nonce"))
+    decryptor = Cipher(algorithms.AES(content_key), modes.GCM(nonce)).decryptor()
+
+    plaintext = backup_temp_file()
+    try:
+        tail = b""
+        with zf.open("payload.bin") as sealed:
+            while True:
+                chunk = sealed.read(STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                buffered = tail + chunk
+                tail = buffered[-16:]
+                body = buffered[:-16]
+                if body:
+                    plaintext.write(decryptor.update(body))
+        if len(tail) < 16:
+            raise HTTPException(status_code=400, detail="This encrypted backup is truncated — it does not carry a complete authentication tag.")
+        try:
+            plaintext.write(decryptor.finalize_with_tag(tail))
+        except InvalidTag:
+            raise HTTPException(
+                status_code=400,
+                detail="This backup failed its integrity check — the file is corrupted, truncated, or was edited after export.",
+            )
+    except BaseException:
+        plaintext.close()
+        raise
+    plaintext.seek(0)
+    return plaintext
+
+
+def _restore_from_zip(zf, force: bool) -> dict:
+    """Restore an opened backup zip, whichever generation it is: version 10 streams from its members,
+    older versions are a single JSON object that has to be read whole."""
+    if META_MEMBER in set(zf.namelist()):
+        return restore_from_archive(zf, force)
+    return restore_backup(RestoreRequest(data=_read_single_json_member(zf), force=force))
+
+
+def _single_json_member_name(zf) -> str:
+    """The sole JSON member of a pre-version-10 archive. What the member is *called* no longer decides
+    which backup it is — the payload does — so this only has to find it."""
+    members = [name for name in zf.namelist() if not name.endswith("/")]
+    if len(members) != 1:
+        raise _unrecognized_backup("A zipped backup should contain a single JSON file.")
+    if not members[0].lower().endswith(".json"):
+        raise _unrecognized_backup("A zipped backup should contain a single JSON file.")
+    return members[0]
+
+
+def _read_single_json_member(zf) -> dict:
+    member = _single_json_member_name(zf)
+    try:
+        return json.loads(zf.read(member).decode("utf-8"))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ZIP backup: {exc}")
+
+
+# --- Identifying a backup file --------------------------------------------------------------------
+# The two backups are different artifacts with different consequences — one replaces the ledger, the
+# other re-keys data-source secrets — but to the person holding the file they are both "my backup", and
+# being asked which kind it is means being asked to know how the app is split internally. So the file
+# says what it is and the app reads it, rather than the choice of upload control deciding.
+#
+# The declaration lives in three places, one per container, and in every case *outside* any ciphertext:
+# `meta.json` for a version-10 data archive, the payload itself for a credentials backup, and
+# `manifest.json` for an encrypted archive — the last of which is the point, since an encrypted backup
+# has to be identifiable before anyone has produced a private key for it. Naming the kind reveals
+# nothing the filename did not already say.
+#
+# Files written before the field exists are identified by shape instead: the section names a payload
+# carries are as good a fingerprint as a declaration, and every older format has distinctive ones.
+
+_KIND_MARKERS = (
+    # Credentials first: `plaid_items` is the v1 shape, `connections`/`provider_configs` v2+, and `vault`
+    # rides v3+. None of them appear in a data payload.
+    (BACKUP_KIND_CREDENTIALS, ("connections", "provider_configs", "plaid_items", "vault")),
+    (BACKUP_KIND_DATA, ("owners", "transactions", "accounts", "categories")),
+)
+
+
+def _payload_kind(payload: dict, member_name: str = "") -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    declared = payload.get("kind")
+    if declared in (BACKUP_KIND_DATA, BACKUP_KIND_CREDENTIALS):
+        return declared
+    for kind, markers in _KIND_MARKERS:
+        if any(marker in payload for marker in markers):
+            return kind
+    # Last resort for a file whose payload is unrecognizable but whose member name is not: both exports
+    # have always named their member, and an empty ledger's backup carries little else to go on.
+    lowered = (member_name or "").lower()
+    if "credential" in lowered:
+        return BACKUP_KIND_CREDENTIALS
+    if "backup" in lowered:
+        return BACKUP_KIND_DATA
+    return None
+
+
+def _unrecognized_backup(detail: str = "") -> HTTPException:
+    suffix = f" {detail}" if detail else ""
+    return HTTPException(
+        status_code=400,
+        detail=f"This file does not look like a {app_name()} backup.{suffix}",
+    )
+
+
+def identify_backup_zip(zf) -> dict:
+    """What this archive is, without decrypting anything or reading a whole payload."""
+    names = {name for name in zf.namelist() if not name.endswith("/")}
+    if "manifest.json" in names or "payload.bin" in names:
+        if not ("manifest.json" in names and "payload.bin" in names):
+            raise _unrecognized_backup("An encrypted backup must contain both manifest.json and payload.bin.")
+        try:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Unreadable encrypted backup manifest: {exc}")
+        if manifest.get("format") not in {"luma-encrypted-backup", "fintrack-encrypted-backup"}:
+            raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
+        wrapped_keys = manifest.get("wrapped_keys")
+        if not isinstance(wrapped_keys, list) or not wrapped_keys:
+            raise HTTPException(status_code=400, detail="Encrypted backup does not contain any wrapped recipient keys")
+        recipients = [{
+            "recipient_id": wrapped.get("recipient_id"),
+            "label": wrapped.get("label") or "Unnamed recipient",
+            "fingerprint": wrapped.get("fingerprint"),
+            "algorithm": wrapped.get("algorithm"),
+        } for wrapped in wrapped_keys if isinstance(wrapped, dict)]
+        return {
+            # Older manifests predate the field, and only data backups have ever had an encrypted
+            # variant — a credentials payload is already ciphertext and gains nothing from a second layer.
+            "kind": manifest.get("kind") or BACKUP_KIND_DATA,
+            "encrypted": True,
+            "container": "zip",
+            "version": manifest.get("version"),
+            "cipher": manifest.get("cipher"),
+            "recipient_count": len(recipients),
+            "recipients": recipients,
+        }
+
+    if META_MEMBER in names:
+        meta = _read_archive_meta(zf)
+        return {
+            "kind": meta.get("kind") or BACKUP_KIND_DATA,
+            "encrypted": False,
+            "container": "zip",
+            "version": meta.get("version"),
+        }
+
+    payload = _read_single_json_member(zf)
+    kind = _payload_kind(payload, _single_json_member_name(zf))
+    if not kind:
+        raise _unrecognized_backup()
+    return {"kind": kind, "encrypted": False, "container": "zip", "version": payload.get("version")}
+
+
+def identify_backup_file(fileobj) -> dict:
+    """Identify a staged upload, whatever container it arrived in."""
+    fileobj.seek(0)
+    if zipfile.is_zipfile(fileobj):
+        fileobj.seek(0)
+        try:
+            with zipfile.ZipFile(fileobj) as zf:
+                return identify_backup_zip(zf)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP backup: {exc}")
+    fileobj.seek(0)
+    payload = _read_bare_json(fileobj)
+    kind = _payload_kind(payload)
+    if not kind:
+        raise _unrecognized_backup()
+    return {"kind": kind, "encrypted": False, "container": "json", "version": payload.get("version")}
+
+
+def _require_kind(identification: dict, expected: str) -> None:
+    """Refuse the *other* backup in an endpoint that only handles one of them.
+
+    The unified picker routes by `kind`, so reaching this means an API caller sent the wrong file — but
+    it is also the case a person hits first when the two are confusable, and "unexpected file inside ZIP"
+    told them nothing about what they had actually chosen.
+    """
+    found = identification.get("kind")
+    if found == expected:
+        return
+    names = {BACKUP_KIND_DATA: "data backup", BACKUP_KIND_CREDENTIALS: "credentials backup"}
+    raise HTTPException(
+        status_code=400,
+        detail=f"This is a {names.get(found, 'different kind of backup')}, not a {names[expected]}.",
+    )
 
 
 @router.post("/restore-file/inspect")
 async def inspect_backup_file(file: UploadFile = File(...)):
-    content = await file.read()
-    return _inspect_backup_upload(content, file.filename or "", "backup")
+    """What the selected file is, so the restore surface can present the right flow for it rather than
+    asking the user to classify their own backup."""
+    with backup_temp_file() as staged:
+        await _spool_upload(file, staged)
+        return identify_backup_file(staged)
+
+
+def _read_bare_json(fileobj) -> dict:
+    try:
+        return json.loads(fileobj.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON backup: {exc}")
 
 
 @router.post("/restore/credentials")
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
+    # Blocked while demo data is loaded, like every other path that brings data in. This one is not merely
+    # for consistency: it inserts `connection` rows, and a linked connection is exactly what
+    # `is_demo_loadable` treats as disqualifying, so restoring here would produce the one state the demo
+    # design says cannot exist — a demo tenant with a live data source. Since "clear demo data" is allowed
+    # to wipe the whole tenant precisely because nothing non-demo can have been added, anything that
+    # connection then synced would be erased as though it were demo data.
+    with get_db() as conn:
+        if is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "demo_data_loaded",
+                "message": "Clear the demo data before restoring credentials.",
+            })
+
     d = body.data
     version = d.get("version")
     if version not in (1, 2, 3, 4):
@@ -1384,21 +1803,40 @@ async def restore_backup_file(
     private_key_passphrase: str | None = Form(None),
     force: bool = Form(False),
 ):
-    content = await file.read()
     private_key_bytes = await private_key_file.read() if private_key_file else None
-    payload = _load_backup_payload_from_upload(
-        content,
-        file.filename or "",
-        "backup",
-        private_key_bytes=private_key_bytes,
-        private_key_passphrase=private_key_passphrase,
-    )
-    return restore_backup(RestoreRequest(data=payload, force=force))
+    with backup_temp_file() as staged:
+        await _spool_upload(file, staged)
+        # Identify before anything else: a credentials backup reaching this endpoint should be told what
+        # it is, not met with a complaint about the names of the members inside it.
+        _require_kind(identify_backup_file(staged), BACKUP_KIND_DATA)
+        staged.seek(0)
+        if not zipfile.is_zipfile(staged):
+            staged.seek(0)
+            return restore_backup(RestoreRequest(data=_read_bare_json(staged), force=force))
+        staged.seek(0)
+        with zipfile.ZipFile(staged) as zf:
+            if not _is_encrypted_archive(zf):
+                return _restore_from_zip(zf, force)
+            plaintext = decrypt_archive_to_temp(zf, private_key_bytes, private_key_passphrase)
+            try:
+                with zipfile.ZipFile(plaintext) as inner:
+                    return _restore_from_zip(inner, force)
+            finally:
+                plaintext.close()
 
 
 @router.post("/restore/credentials-file")
 async def restore_credentials_file(request: Request, file: UploadFile = File(...),
                                    passphrase: str | None = Form(None)):
-    content = await file.read()
-    payload = _load_json_or_zip_payload(content, file.filename or "", "credentials")
+    with backup_temp_file() as staged:
+        await _spool_upload(file, staged)
+        _require_kind(identify_backup_file(staged), BACKUP_KIND_CREDENTIALS)
+        staged.seek(0)
+        if zipfile.is_zipfile(staged):
+            staged.seek(0)
+            with zipfile.ZipFile(staged) as zf:
+                payload = _read_single_json_member(zf)
+        else:
+            staged.seek(0)
+            payload = _read_bare_json(staged)
     return restore_credentials(CredentialsRestoreRequest(data=payload, passphrase=passphrase), request)

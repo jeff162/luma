@@ -35,7 +35,8 @@ those files stays deferred.
 [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → *Phase 1*.
 
 The ingestion seam (file drop, clipboard paste), storage, a viewer, an attachment indicator on the
-transaction, and **tier-1 PDF text extraction** so an attached invoice is searchable. Not in scope: OCR
+transaction, and **tier-1 PDF text extraction** so an attached invoice is searchable. The backup half is
+additive on top of feature 5's envelope: the table, the digest at ingest, and the files as zip members. Not in scope: OCR
 (tier 2), line-item extraction (tier 3), or anything touching splits.
 
 **This one is promised by the README already**, so it is the only feature whose absence would make a
@@ -96,20 +97,43 @@ recovery codes mean most never reach it. Argument against: it is net-new surface
 Also in this file and worth taking regardless, being small: `VaultDecryptError` is unclassified and
 reports as a generic sync failure instead of "reconnect needed".
 
-### 5. Streaming backup export
+### 5. Streaming backup — export *and* restore  ✅ *done 2026-08-23, less the documents phase*
 
-[`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md) → *The
-export builds the whole backup in memory*.
+[`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md) → *Streaming
+both directions, and the envelope that makes it possible*, which carries the settled design.
 
-`export_backup` assembles the entire payload as a Python structure, serializes it to one JSON string,
-zips that into a `BytesIO`, and returns it as a single yield — so peak memory holds all of them at once,
-and the encrypted path adds the ciphertext on top. **This already scales with the ledger and always
-has**; documents would make it acute rather than causing it.
+The export assembles the whole payload as a Python structure, serializes it to one JSON string, zips that
+into a `BytesIO` and returns it as a single yield; restore is the same defect mirrored — read whole,
+parsed whole, filtered as ~25 in-memory lists. Measured on a ~18,500-transaction ledger: **~275 MB of
+transient allocation to produce a 4.9 MB file**, ~178 MB to read one back, linear in the ledger. **This
+already scales and always has**; documents would make it acute rather than causing it.
 
 It is on this list because *"nothing should degrade as the transaction count grows"* is a project
-principle — the list windowing exists for that reason — and because shipping documents on top of it
-would turn a latent problem into a reported one. Rework both paths to stream to a temp file instead of
-assembling in RAM, and drop the `indent=2` that inflates the largest string for a machine reader.
+principle — the list windowing exists for that reason — and because shipping documents on top of it would
+turn a latent problem into a reported one.
+
+**Scope, settled 2026-08-23 and wider than first written.** Three things moved into it, each for a
+reason that made the alternative worse:
+
+- **Restore, not just export.** A ledger that can be backed up and not restored has no backup.
+- **The payload version 9 → 10 envelope** (`meta.json` + `sections/<name>.ndjson` + `documents/<id>`),
+  which feature 1 needed anyway. Taking it here is what makes the restore side streamable without an
+  incremental JSON parser that feature 1 would then delete — and it shrinks feature 1 to adding a table
+  and some members to a container already shaped for them. Versions 7–9 still restore, unchanged.
+- **The CSV export**, same defect on the same page, small.
+
+Two decisions this hands to feature 1 rather than leaving open: a **digest per document recorded at
+ingest**, and a resumable documents phase driven by a `restore_state` marker, because files are not
+transactional and a half-written restore must not cost the user their originals.
+
+**What landed:** version 10, streaming export and restore, the incremental cipher (envelope unchanged),
+referential repair as SQL, the CSV export, and — found on the way — the `POST /restore` route, whose
+decorator had drifted onto the wipe helper, leaving the JSON-body restore unrouted. Export peak on a
+~18,500-transaction ledger fell from ~275 MB to ~9 MB, restore from ~178 MB to under 2 MB.
+
+**What did not, deliberately:** `restore_state` and the resumable documents phase, which have nothing to
+guard until documents exist. They stay designed in the backlog file and belong to feature 1, along with
+the digest at ingest.
 
 **Prerequisite for feature 1**, and worth doing regardless of it.
 
@@ -131,9 +155,10 @@ assembling in RAM, and drop the `indent=2` that inflates the largest string for 
 
 ## Sequencing
 
-1. **Streaming backup export (5) before receipts (1).** The storage decision is settled, but shipping
-   documents onto an in-memory export is what would make that defect user-visible. Nothing else waits on
-   either.
+1. **Streaming backup (5) before receipts (1).** The storage decision is settled, but shipping documents
+   onto an in-memory export and restore is what would make that defect user-visible — and 5 now also owns
+   the envelope and the two document decisions that 1 builds on, so the order is a dependency rather than
+   a preference. Nothing else waits on either.
 2. **The other three in any order** — they do not touch each other. Recurring anomalies are the cheapest and
    most visible; vault recovery is the one whose absence is a real hazard; attachments are the one the
    README already promises.

@@ -66,3 +66,10 @@ branch state from the injected snapshot.
 - `docs/ui-patterns.md` — shared UI behavior & interaction models
 - `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
   building any UI element** (reuse is the default; a one-off needs justification)
+
+**What is being worked on right now** is a different kind of document from the reference docs above, and
+lives in `docs/pre-release.md` — the committed, blocking plan for making the repository public, with the
+scope boundaries for each item (several name only *part* of their backlog file) and the decisions still
+owed. Read it before picking up work, and prefer it over `docs/backlog/` for what to do next: the
+backlog is parked work, this is not. **It is self-deleting** — it says to remove it once the release
+ships, so its absence means that happened, not that it was lost.

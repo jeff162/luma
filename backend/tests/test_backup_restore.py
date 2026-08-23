@@ -11,23 +11,41 @@ isn't carried by the backup. Together they force completeness instead of relying
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
+import json
 import tempfile
 import unittest
 import uuid
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from fastapi import HTTPException
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from fastapi import HTTPException, UploadFile
 
 from backend.db import control_database
 from backend.db.control_database import auth_required
 from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import (
+    BACKUP_PAYLOAD_VERSION,
+    BACKUP_SECTION_NAMES,
     CONTENT_HASH_FIELD,
     RestoreRequest,
+    _b64url_decode,
+    _stamp_content_hash,
     _verify_payload_content_hash,
     build_backup_data,
+    export_backup,
+    inspect_backup_file,
     restore_backup,
+    restore_backup_file,
+    restore_from_archive,
+    router,
+    write_backup_archive,
 )
 from backend.routers.import_export.backup import _zip_json_bytes, _load_json_or_zip_payload
 from backend.services.categorizer import seed_default_rules
@@ -74,7 +92,10 @@ TABLE_TO_SECTION = {
 }
 
 
-class BackupRestoreTests(unittest.TestCase):
+class BackupFixtureTestCase(unittest.TestCase):
+    """The complete-coverage fixture and the plumbing to point every helper at it. Split from the
+    tests themselves so the three suites below share one fixture without re-running each other."""
+
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "backup-tests.db"
@@ -239,6 +260,8 @@ class BackupRestoreTests(unittest.TestCase):
             with get_db() as conn:
                 return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
 
+
+class BackupRestoreTests(BackupFixtureTestCase):
     def test_backup_covers_every_user_data_table(self):
         self._seed_complete()
         tables = self._user_data_tables()
@@ -486,3 +509,374 @@ class BackupRestoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# --- Version 10: the streaming archive ------------------------------------------------------------
+# The dict round trips above exercise the payload's *content*; these exercise the container the app
+# actually writes and reads — members, digests, the encrypted envelope, and the upload dispatch. The
+# distinction matters because nothing on the export path materializes a payload dict any more, so a
+# test that only ever handled one would be testing a shape no user ever receives.
+
+
+class BackupArchiveTests(BackupFixtureTestCase):
+    def _write_archive(self) -> bytes:
+        with self._use_db_path():
+            with get_db() as conn:
+                buf = io.BytesIO()
+                write_backup_archive(conn, buf)
+        return buf.getvalue()
+
+    def _restore_archive(self, archive_bytes: bytes, force: bool = False) -> dict:
+        with self._use_db_path():
+            with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+                return restore_from_archive(zf, force=force)
+
+    @staticmethod
+    def _rewrite_member(archive_bytes: bytes, member: str, content: bytes) -> bytes:
+        """Rebuild an archive with one member's bytes replaced and everything else intact — the shape a
+        corrupted download takes, as opposed to a wholesale truncation."""
+        out = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as src, zipfile.ZipFile(out, "w") as dst:
+            for name in src.namelist():
+                dst.writestr(name, content if name == member else src.read(name))
+        return out.getvalue()
+
+    def _add_recipient(self):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_pem = key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO backup_recipient (id, label, public_key, fingerprint) VALUES (?, 'Test key', ?, ?)",
+                    (str(uuid.uuid4()), public_pem, str(uuid.uuid4())),
+                )
+        private_pem = key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        return key, private_pem
+
+    def _drain(self, response) -> bytes:
+        async def pump():
+            parts = []
+            async for chunk in response.body_iterator:
+                parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+            return b"".join(parts)
+        return asyncio.new_event_loop().run_until_complete(pump())
+
+    def _upload(self, content: bytes, filename: str) -> UploadFile:
+        return UploadFile(file=io.BytesIO(content), filename=filename)
+
+    # --- the container itself --------------------------------------------------------------------
+
+    def test_export_endpoint_streams_a_complete_archive(self):
+        self._seed_complete()
+        with self._use_db_path():
+            response = export_backup(encrypted=False)
+        body = self._drain(response)
+
+        # Declared length must match what is actually sent, or a download shows a progress bar that
+        # never finishes (or truncates).
+        self.assertEqual(int(response.headers["Content-Length"]), len(body))
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            names = set(zf.namelist())
+            self.assertIn("meta.json", names)
+            for section in BACKUP_SECTION_NAMES:
+                self.assertIn(f"sections/{section}.ndjson", names,
+                              f"{section} has no member in the archive")
+            meta = json.loads(zf.read("meta.json"))
+        self.assertEqual(meta["version"], BACKUP_PAYLOAD_VERSION)
+        self.assertEqual(set(meta["members"]),
+                         {f"sections/{s}.ndjson" for s in BACKUP_SECTION_NAMES})
+
+    def test_archive_round_trip_preserves_every_table(self):
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+
+        self._restore_archive(self._write_archive())
+
+        self.assertEqual(self._counts(tables), before)
+
+    def test_archive_reports_what_actually_landed(self):
+        self._seed_complete()
+        tables = self._user_data_tables()
+        result = self._restore_archive(self._write_archive())
+        counts = result["restored_counts"]
+        after = self._counts(tables)
+        for table, section in TABLE_TO_SECTION.items():
+            self.assertEqual(counts[section], after[table],
+                             f"{section} count does not match the restored table")
+
+    def test_row_counts_are_recorded_per_member(self):
+        self._seed_complete()
+        with zipfile.ZipFile(io.BytesIO(self._write_archive())) as zf:
+            meta = json.loads(zf.read("meta.json"))
+            for name, recorded in meta["members"].items():
+                lines = [ln for ln in zf.read(name).decode().splitlines() if ln.strip()]
+                self.assertEqual(recorded["rows"], len(lines), f"{name} row count is wrong")
+
+    # --- integrity -------------------------------------------------------------------------------
+
+    def test_restore_refuses_an_archive_whose_member_was_altered(self):
+        # A content edit with the manifest left intact is exactly the accidental-corruption case the
+        # digests exist to catch: restore must refuse before touching the target.
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        archive = self._write_archive()
+        rows = [ln for ln in zipfile.ZipFile(io.BytesIO(archive)).read("sections/owners.ndjson").decode().splitlines() if ln]
+        self.assertTrue(rows, "fixture must include an owner to tamper with")
+        tampered = self._rewrite_member(
+            archive, "sections/owners.ndjson",
+            (rows[0].replace('"name":"shared"', '"name":"tampered"') + "\n").encode(),
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            self._restore_archive(tampered)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(self._counts(tables), before, "the target was modified despite the refusal")
+
+    def test_restore_refuses_an_archive_missing_a_member_its_manifest_lists(self):
+        self._seed_complete()
+        archive = self._write_archive()
+        out = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(archive)) as src, zipfile.ZipFile(out, "w") as dst:
+            for name in src.namelist():
+                if name != "sections/transactions.ndjson":
+                    dst.writestr(name, src.read(name))
+        with self.assertRaises(HTTPException) as ctx:
+            self._restore_archive(out.getvalue())
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_digest_guard_fires_only_because_the_digest_is_checked(self):
+        # The tamper test above is only meaningful if an altered member would otherwise sail through:
+        # prove the archive restores fine when the *manifest* is updated to match the edit.
+        self._seed_complete()
+        archive = self._write_archive()
+        rows = [ln for ln in zipfile.ZipFile(io.BytesIO(archive)).read("sections/owners.ndjson").decode().splitlines() if ln]
+        edited = (rows[0].replace('"name":"shared"', '"name":"renamed"') + "\n").encode()
+        tampered = self._rewrite_member(archive, "sections/owners.ndjson", edited)
+        with zipfile.ZipFile(io.BytesIO(tampered)) as zf:
+            meta = json.loads(zf.read("meta.json"))
+        meta["members"]["sections/owners.ndjson"]["sha256"] = hashlib.sha256(edited).hexdigest()
+        realigned = self._rewrite_member(tampered, "meta.json",
+                                         json.dumps(meta, sort_keys=True, separators=(",", ":")).encode())
+
+        self._restore_archive(realigned)  # must not raise
+        with self._use_db_path():
+            with get_db() as conn:
+                names = {r["name"] for r in conn.execute("SELECT name FROM owner")}
+        self.assertIn("renamed", names)
+
+    # --- the encrypted envelope ------------------------------------------------------------------
+
+    def test_encrypted_export_is_readable_by_the_one_shot_cipher(self):
+        # The streaming encryptor replaced a one-shot AESGCM.encrypt(). The claim that made that a safe
+        # swap is that the bytes are identical, so assert exactly that: the archive opens with the API
+        # the old writer used, tag and all.
+        self._seed_complete()
+        private_key, _pem = self._add_recipient()
+        with self._use_db_path():
+            response = export_backup(encrypted=True)
+        body = self._drain(response)
+
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+            sealed = zf.read("payload.bin")
+        content_key = private_key.decrypt(
+            _b64url_decode(manifest["wrapped_keys"][0]["wrapped_key"]),
+            padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+        )
+        nonce = _b64url_decode(manifest["nonce"])
+        plaintext = AESGCM(content_key).decrypt(nonce, sealed, None)
+
+        with zipfile.ZipFile(io.BytesIO(plaintext)) as inner:
+            self.assertEqual(json.loads(inner.read("meta.json"))["version"], BACKUP_PAYLOAD_VERSION)
+
+    def test_encrypted_round_trip_through_the_upload_endpoint(self):
+        self._seed_complete()
+        _key, private_pem = self._add_recipient()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        with self._use_db_path():
+            body = self._drain(export_backup(encrypted=True))
+
+        with self._use_db_path():
+            asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                file=self._upload(body, "luma_backup.encrypted.zip"),
+                private_key_file=self._upload(private_pem, "key.pem"),
+                private_key_passphrase=None,
+                force=False,
+            ))
+
+        self.assertEqual(self._counts(tables), before)
+
+    def test_encrypted_restore_refuses_a_tampered_payload(self):
+        self._seed_complete()
+        _key, private_pem = self._add_recipient()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        with self._use_db_path():
+            body = self._drain(export_backup(encrypted=True))
+        sealed = bytearray(zipfile.ZipFile(io.BytesIO(body)).read("payload.bin"))
+        sealed[len(sealed) // 2] ^= 0xFF
+        tampered = self._rewrite_member(body, "payload.bin", bytes(sealed))
+
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                    file=self._upload(tampered, "luma_backup.encrypted.zip"),
+                    private_key_file=self._upload(private_pem, "key.pem"),
+                    private_key_passphrase=None,
+                    force=False,
+                ))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(self._counts(tables), before, "the target was modified despite the refusal")
+
+    # --- the upload dispatch ---------------------------------------------------------------------
+
+    def test_upload_restores_a_version_10_archive(self):
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        archive = self._write_archive()
+        with self._use_db_path():
+            asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                file=self._upload(archive, "luma_backup.zip"),
+                private_key_file=None, private_key_passphrase=None, force=False,
+            ))
+        self.assertEqual(self._counts(tables), before)
+
+    def test_upload_still_restores_a_legacy_single_json_backup(self):
+        # A version-9 file is one JSON object in a zip, not members — the container the dispatcher has to
+        # keep recognizing for every backup anyone already holds.
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        with self._use_db_path():
+            with get_db() as conn:
+                payload = build_backup_data(conn)
+        payload["version"] = 9
+        payload.pop(CONTENT_HASH_FIELD, None)
+        legacy = _zip_json_bytes("luma_backup.json", _stamp_content_hash(payload))
+
+        with self._use_db_path():
+            asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                file=self._upload(legacy, "luma_backup.zip"),
+                private_key_file=None, private_key_passphrase=None, force=False,
+            ))
+        self.assertEqual(self._counts(tables), before)
+
+    def test_inspect_reports_the_archive_version_and_encryption(self):
+        self._seed_complete()
+        with self._use_db_path():
+            plain = asyncio.new_event_loop().run_until_complete(
+                inspect_backup_file(file=self._upload(self._write_archive(), "luma_backup.zip")))
+        self.assertEqual(plain, {"encrypted": False, "container": "zip", "version": BACKUP_PAYLOAD_VERSION})
+
+        self._add_recipient()
+        with self._use_db_path():
+            body = self._drain(export_backup(encrypted=True))
+            encrypted = asyncio.new_event_loop().run_until_complete(
+                inspect_backup_file(file=self._upload(body, "luma_backup.encrypted.zip")))
+        self.assertTrue(encrypted["encrypted"])
+        self.assertEqual(encrypted["recipient_count"], 1)
+
+    def test_restore_endpoint_is_bound_to_the_restore_handler(self):
+        # The decorator for POST /restore once sat on the wipe helper directly above the handler, which
+        # left the JSON-body restore unrouted and registered a helper taking a database connection as an
+        # HTTP endpoint. Nothing caught it because the UI only uses /restore-file.
+        routes = {route.path: route.endpoint for route in router.routes}
+        self.assertIs(routes.get("/restore"), restore_backup)
+        self.assertIs(routes.get("/backup"), export_backup)
+
+
+# --- Referential repair ---------------------------------------------------------------------------
+# A backup can outlive the deletions that happened after it was taken, so restore repairs dangling
+# references rather than failing. The rules used to be set membership over the payload in memory and are
+# now SQL over the restored tables; these pin the *decisions* (null it, or drop the row) so the
+# translation cannot quietly change one.
+
+
+class RestoreReferentialRepairTests(BackupFixtureTestCase):
+    def _restore_with(self, mutate) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                payload = build_backup_data(conn)
+        mutate(payload)
+        payload.pop(CONTENT_HASH_FIELD, None)
+        with self._use_db_path():
+            restore_backup(RestoreRequest(data=payload, force=True))
+
+    def _table_ids(self, table) -> set:
+        with self._use_db_path():
+            with get_db() as conn:
+                return {r["id"] for r in conn.execute(f"SELECT id FROM {table}")}
+
+    def test_optional_reference_is_nulled_and_the_row_survives(self):
+        self._seed_complete()
+
+        def drop_the_category(payload):
+            for row in payload["transactions"]:
+                row["category_id"] = "gone-" + str(uuid.uuid4())
+
+        self._restore_with(drop_the_category)
+        with self._use_db_path():
+            with get_db() as conn:
+                rows = conn.execute("SELECT COUNT(*) c, COUNT(category_id) named FROM txn").fetchone()
+        self.assertGreater(rows["c"], 0, "transactions must survive a missing category")
+        self.assertEqual(rows["named"], 0, "a dangling category reference must become NULL")
+
+    def test_a_row_whose_required_parent_is_gone_is_dropped(self):
+        self._seed_complete()
+        before = self._counts({"txn"})["txn"]
+
+        def orphan_one_transaction(payload):
+            payload["transactions"][0]["account_id"] = "gone-" + str(uuid.uuid4())
+
+        self._restore_with(orphan_one_transaction)
+        self.assertEqual(self._counts({"txn"})["txn"], before - 1)
+
+    def test_dropping_a_transaction_takes_its_attachments_with_it(self):
+        self._seed_complete()
+        orphaned = {"txn_id": None}
+
+        def orphan_a_tagged_transaction(payload):
+            tagged = {row["txn_id"] for row in payload["txn_tags"]}
+            victim = next(row for row in payload["transactions"] if row["id"] in tagged)
+            orphaned["txn_id"] = victim["id"]
+            victim["account_id"] = "gone-" + str(uuid.uuid4())
+
+        self._restore_with(orphan_a_tagged_transaction)
+        with self._use_db_path():
+            with get_db() as conn:
+                left = conn.execute("SELECT COUNT(*) c FROM txn_tag WHERE txn_id = ?",
+                                    (orphaned["txn_id"],)).fetchone()["c"]
+        self.assertEqual(left, 0, "a tag attachment outlived the transaction it belonged to")
+
+    def test_an_attachment_whose_tag_never_existed_is_dropped(self):
+        self._seed_complete()
+
+        def orphan_the_tag(payload):
+            for row in payload["txn_tags"]:
+                row["tag_id"] = "gone-" + str(uuid.uuid4())
+
+        self._restore_with(orphan_the_tag)
+        self.assertEqual(self._counts({"txn_tag"})["txn_tag"], 0)
+
+    def test_a_broken_funding_mapping_is_dropped_rather_than_nulled(self):
+        # NULL means "untracked", which is a different statement from "the account this pointed at is
+        # gone" — so the row goes rather than being downgraded into a claim nobody made.
+        self._seed_complete()
+        self.assertGreater(self._counts({"amazon_funding_map"})["amazon_funding_map"], 0)
+
+        def orphan_the_funding_account(payload):
+            for row in payload["amazon_funding_map"]:
+                row["funding_account_id"] = "gone-" + str(uuid.uuid4())
+
+        self._restore_with(orphan_the_funding_account)
+        self.assertEqual(self._counts({"amazon_funding_map"})["amazon_funding_map"], 0)
