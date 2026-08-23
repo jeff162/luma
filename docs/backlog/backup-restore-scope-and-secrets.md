@@ -19,7 +19,7 @@ half of the design below:
   belong in the security DB.
 
 **Still parked, unstarted:** the sectioned "back up all" artifact, the restore-time identity
-reconciliation flow, `backup_recipient` inclusion, and the data-restore cursor reset noted below.
+reconciliation flow, and `backup_recipient` inclusion.
 
 **Not parked:** *Streaming both directions*, below, is committed release work rather than backlog — see
 [`../pre-release.md`](../pre-release.md), which owns its scope boundary. It is the prerequisite for documents riding the
@@ -144,7 +144,13 @@ vault custody. Until then the "connection secrets" bucket is incomplete (the app
 outside both databases and outside any backup). Building the secrets backup before phase 6 would either
 omit app creds or special-case `.env`, both of which get cleaner once phase 6 lands — so this waits.
 
-## Discovered: a data restore leaves a connection's cursor ahead of the ledger
+## ~~Discovered: a data restore leaves a connection's cursor ahead of the ledger~~ — fixed 2026-08-23
+
+**Resolved.** A restore now clears `transactions_cursor` + `initial_sync_complete` for every connection
+inside its own transaction, so the resume point rolls back with the rows; `provider_request_budget` and
+the sync-health fields deliberately survive. The durable version is in `docs/data-model.md` → Backups.
+The rest of this section is the original analysis, kept because it records why the two halves of the
+assertion had to move together.
 
 Not introduced by the connection-mapping work, but that work made it visible and it belongs here rather
 than in the feature that surfaced it.
@@ -160,7 +166,7 @@ rides the **data** backup precisely so a restore moves coverage backward in step
 surviving claim would hard-reject the very rows a re-sync brings back). Coverage now moves correctly and
 the cursor does not — the two halves of the same assertion disagree after a restore.
 
-The fix is the one `Remove synced transactions` already uses: a data restore should reset
+The fix was the one `Remove synced transactions` already uses: a data restore resets
 `transactions_cursor` + `initial_sync_complete` for every connection, so the next sync re-backfills and
 re-establishes both coverage and rows together. Flagged rather than folded into the mapping work because
 it changes what a restore does to the credential side of the split, which is this document's subject and

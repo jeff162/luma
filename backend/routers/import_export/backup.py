@@ -1327,6 +1327,25 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
             (str(backup_instance_id),),
         )
 
+    # A connection's resume point is a *claim about data held*, and the data it described has just been
+    # replaced — so it rolls back with the rows, exactly as `Remove synced transactions` resets it after
+    # deleting them. Skipping this loses transactions silently and permanently: a delta sync asks only for
+    # changes since the cursor, so every row the restore removed sits behind it, the provider considers
+    # them delivered, and nothing local knows to ask again. It also leaves half of one assertion standing
+    # — `connection_account.coverage_*` rides the payload precisely so coverage moves backward with the
+    # ledger, and a cursor that did not move would contradict it.
+    #
+    # Every connection, not only those with rows in the backup: the whole ledger was replaced, so every
+    # claim about it is stale. `provider_request_budget` is deliberately NOT reset — spending is a record
+    # of requests actually made, which no restore can un-make (see the `connection` table's own note on
+    # why the two are separate columns), and the sync-health fields describe contact with the provider
+    # rather than data held.
+    #
+    # The cost is that the next sync is a full backfill, which on a metered provider spends budget and may
+    # pause partway. That is the correct trade: the alternative is deciding from the backup's age whether
+    # a reset is needed, and a file's age says nothing about what the provider has reported since.
+    conn.execute("UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0")
+
     # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
     # already current, so re-running migrations would be schema-only no-ops — what's missing is the
     # *data-init* half of every migration newer than the backup (rename provenance, account types +

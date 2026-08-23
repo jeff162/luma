@@ -185,6 +185,20 @@ Consequences to handle when building:
   in place, and only then removes files the restored ledger no longer references. An interrupted restore
   therefore leaves litter rather than lost originals, and resumes by comparing the ledger's digests
   against the directory. The design is in the backup file; what this feature owes it is the digest above.
+- **The browser is the last place a whole backup is resident, and documents are what make that matter.**
+  Both server directions stream, but `downloadUrl` (`lib/api.js`) fetches the artifact into a Blob before
+  saving it, so the client holds the whole thing. That is irrelevant for a ledger-only backup — measured at
+  4.9 MB for ~18,500 transactions, and roughly 50 MB extrapolated to 200k — and becomes the binding
+  constraint only once documents dominate the size. Browsers page large blobs to disk, so the curve is
+  sluggish before it is fatal, but a tab dying while saving a backup is *broken* rather than merely
+  inefficient, which is the line this feature's sizing assumption promises not to cross.
+  **The blob is deliberate and the fix is not simply "navigate instead":** a plain navigation hands the
+  response to the browser, so an error status renders as raw JSON with the app gone from under it — which
+  is why the fetch-and-save exists. The way out is to *preflight* the conditions this endpoint can fail on
+  (no enabled recipients being the main one) and then navigate, letting the browser stream to disk with its
+  own progress UI; or to pipe the response body through the File System Access API, which is better still
+  and Chromium-only. Note that until one of those lands, the `Content-Length` the export now sends buys
+  nothing visible: saving a finished blob gives the browser no streaming download to draw a bar for.
 - **The noun "attachment" is taken.** It already means *tag attachment* in the restore-ordering prose in
   `data-model.md` ("tag definitions before any attachment"). Call these **documents** — it also reads
   better for a repair invoice. This file keeps its name for continuity; the code should not.

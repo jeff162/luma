@@ -131,6 +131,11 @@ referential repair as SQL, the CSV export, and — found on the way — the `POS
 decorator had drifted onto the wipe helper, leaving the JSON-body restore unrouted. Export peak on a
 ~18,500-transaction ledger fell from ~275 MB to ~9 MB, restore from ~178 MB to under 2 MB.
 
+**Also fixed here, off-plan:** a data restore left every connection's `transactions_cursor` ahead of the
+ledger it had just rolled back, so the removed rows sat behind the resume point and no later sync would
+ever re-offer them — silent, permanent loss on the exact path this release hands to strangers. It was a
+parked item in the same backlog file; it is a handful of lines and was not worth shipping around.
+
 **What did not, deliberately:** `restore_state` and the resumable documents phase, which have nothing to
 guard until documents exist. They stay designed in the backlog file and belong to feature 1, along with
 the digest at ingest.

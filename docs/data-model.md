@@ -864,6 +864,27 @@ The **encrypted backup envelope** carries the `format` tag `"luma-encrypted-back
 
 The payload is also **stamped** with the source data DB's `instance_id` (from `db_meta`) and its `access_mode` (`local`/`auth`). Restore uses this as a **compatibility guard** so it can't silently replace the wrong system: it proceeds freely when the target is empty (no accounts/transactions — a fresh install) or when restoring this system's *own* backup (matching `instance_id`) in the same mode, but returns `409 {code: "restore_incompatible", reasons: […]}` when the target already has data and the backup came from a *different* `instance_id` (`different_system`), when the access modes differ (`mode_mismatch`), or when the backup's `schema_version` is **newer** than this build's `CURRENT_VERSION` (`newer_schema` — the lossy downgrade above). An older or absent `schema_version` is safe and never flagged. The UI turns that 409 into an explicit confirmation and retries with a `force` flag; `force` is the only way past the guard, so an accidental cross-system, cross-mode, or downgrade wipe always requires a deliberate second confirmation.
 
+**A restore rolls every connection's resume point back with the ledger.** `connection` is credential data
+on the other side of the data/credentials split, so a data restore never wipes it — but
+`transactions_cursor` + `initial_sync_complete` are not credentials, they are a *claim about data held*
+("every change the provider has reported, back to the backfill window, is in the ledger"), and the restore
+has just replaced the data that claim described. So it clears both, for every connection, inside the
+restore transaction. Without it the loss is silent and permanent: a delta sync asks only for changes
+*since* the cursor, so every row the restore removed sits behind it, the provider considers them delivered,
+and nothing local knows to ask again. It also leaves half of one assertion standing —
+`connection_account.coverage_*` rides the payload precisely so coverage moves backward in step with the
+ledger, and a cursor that stayed put would contradict it. This is the same reset `Remove synced
+transactions` performs for the same reason after deleting rows.
+
+Two things deliberately **survive** a restore, and the distinction is the one the `connection` table draws
+between adapter state that is a claim and adapter state that is a record: `provider_request_budget` is
+spending that really happened and cannot be un-made by restoring a file, and the sync-health fields
+(`last_synced_at`, `last_sync_error*`, `consecutive_sync_failures`, `reauth_required`) describe contact
+with the provider rather than data held. The cost of the reset is that the next sync is a full backfill,
+which on a metered provider spends budget and may pause partway — accepted, because the alternative is
+inferring from the backup's age whether a reset is needed, and a file's age says nothing about what the
+provider has reported since it was written.
+
 **A restore adopts the backup's `instance_id`.** Because a restore is a full replacement — it wipes the target and reloads the backup wholesale — afterward the data *is* exactly the backup's system, so the DB takes on the backup's `instance_id` rather than keeping the target's old one. (Only the identity changes; `access_mode` is a property of the deployment, not stored in the DB.) This keeps identity meaning "which data lineage this is": without it, restoring a backup into a fresh DB and then restoring the *same* backup again would wrongly trip the "different system" guard, since the fresh DB would still carry its own throwaway id. The guard itself is unaffected — it compares the *incoming* backup against the *pre-restore* data to decide whether confirmation is needed; the adoption only sets the identity the DB carries once that data has been replaced. The `instance_id` also namespaces browser-local UI caches (remembered profile, account-UI state) per database, so adopting the backup's id keeps those caches aligned with the data lineage they describe.
 
 ### Preferences

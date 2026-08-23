@@ -600,6 +600,39 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         self.assertEqual(self._counts(tables), before)
 
+    def test_restore_rolls_every_connection_cursor_back_with_the_ledger(self):
+        # A cursor is a claim about data held. The restore just replaced that data, so a surviving cursor
+        # would put every removed row behind it — a delta sync asks only for changes *since* the cursor, the
+        # provider considers them delivered, and they are silently gone. `Remove synced transactions` resets
+        # the same two columns for the same reason after deleting rows.
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE connection
+                       SET transactions_cursor = 'cursor-past-the-restored-rows',
+                           initial_sync_complete = 1,
+                           provider_request_budget = '{"spent": 41}',
+                           last_synced_at = '2026-08-20T10:00:00'"""
+                )
+
+        self._restore_archive(self._write_archive())
+
+        with self._use_db_path():
+            with get_db() as conn:
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT transactions_cursor, initial_sync_complete, provider_request_budget,"
+                    " last_synced_at FROM connection"
+                )]
+        self.assertTrue(rows, "fixture must carry a connection for this to mean anything")
+        for row in rows:
+            self.assertIsNone(row["transactions_cursor"], "a cursor outlived the rows it described")
+            self.assertEqual(row["initial_sync_complete"], 0)
+            # Spending is a record of requests actually made — no restore can un-make them, so it must
+            # survive. Sync health describes contact with the provider, not data held.
+            self.assertEqual(row["provider_request_budget"], '{"spent": 41}')
+            self.assertEqual(row["last_synced_at"], "2026-08-20T10:00:00")
+
     def test_archive_reports_what_actually_landed(self):
         self._seed_complete()
         tables = self._user_data_tables()
