@@ -22,7 +22,7 @@ from unittest import mock
 from backend.db import control_database as cdb
 from backend.db import database
 from backend.db.database import get_db
-from backend.routers.import_export.backup import _load_json_or_zip_payload
+from backend.routers.import_export.backup import read_payload_bytes
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services import crypto_service as cs
 from backend.services.providers import PlaidAdapter, UnknownProviderError, get_adapter
@@ -734,7 +734,7 @@ class CredentialBackupTests(unittest.TestCase):
 
             exported = client.get("/api/import-export/backup/credentials")
             self.assertEqual(exported.status_code, 200)
-            payload = _load_json_or_zip_payload(exported.content, "luma_credentials.zip", "luma_credentials")
+            payload = read_payload_bytes(exported.content)
             # The export carries CIPHERTEXT plus the vault material that reopens it — the token itself
             # must not be in the file (see routers/import_export/backup.py::export_credentials).
             self.assertEqual(payload["version"], 4)
@@ -759,7 +759,7 @@ class CredentialBackupTests(unittest.TestCase):
             restored = client.post("/api/import-export/restore/credentials", json={"data": legacy})
             self.assertEqual(restored.status_code, 200, restored.text)
             self.assertEqual(restored.json()["restored"], 1)
-            again = _load_json_or_zip_payload(client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials")
+            again = read_payload_bytes(client.get("/api/import-export/backup/credentials").content)
             self.assertEqual(again["connections"][0]["provider"], "plaid")
             self.assertEqual(self._stored_token(client, "item-legacy"), "tok-legacy",
                              "a legacy plaintext payload is vaulted on the way in")

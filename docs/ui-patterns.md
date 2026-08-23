@@ -463,6 +463,22 @@ When a file-upload action is important, prefer a visible drop zone over a bare b
 
 - If the loaded file becomes editable text, switch to the editor after load rather than trying to keep two separate controls visible.
 
+**One picker per *task*, not one per file format.** Where a surface accepts more than one kind of file for
+the same user intent, read the file and route on what it is rather than presenting a control per kind.
+Restore is the worked example: a data backup and a credentials backup are different artifacts with very
+different consequences, but the person holding one has "my backup" and a goal, and asking which control
+to use is asking them to know how the app is split internally. Two costs follow from getting this wrong,
+both of which the Backup/Restore tab used to pay — the wrong choice fails with an error phrased in terms
+of internals (there, the names of members inside a ZIP), and the inputs each kind needs are all on screen
+at once whether or not they apply.
+
+The shape that replaces it: one picker, an identification step, then the flow the answer implies —
+revealing only the inputs that kind needs, labelling the action for what it will do, and **naming the
+kind in the confirmation** so the routing is stated rather than assumed. This depends on the files being
+self-describing, which is a format obligation, not a UI one: see `data-model.md` → Backups. Detection
+must key on content, never on the file's name — the user renames files, and a name is not a fact about
+what is inside.
+
 ## Confirmation and completion flows
 
 Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.

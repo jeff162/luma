@@ -2,10 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The Backup / Restore tab of the Import / Export page: generate plain or
-// RSA-encrypted data and Plaid-credential backups, and restore from a backup
-// file (inspecting it first, prompting for the private key when encrypted).
-// Both destructive restores route through an in-flow confirm overlay before
-// replacing data.
+// RSA-encrypted data and data-source credential backups, and restore from a
+// backup file.
+//
+// Restore is ONE picker for both kinds of backup. The file says which it is
+// (the server reads that without decrypting, so an encrypted archive is
+// identified before any key is asked for), and the flow follows from the
+// answer: a data backup wants a private key when encrypted, a credentials
+// backup may want the vault passphrase that sealed it. Asking the user to
+// choose the right upload control first meant asking them to know how the app
+// is split internally — and picking wrong produced an error about the names of
+// members inside a ZIP. Both restores still route through the confirm overlay,
+// which names the kind it is about to restore.
 
 import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
@@ -47,7 +55,6 @@ export function BackupRestoreTab() {
   // Whether this system already holds data — drives the restore confirmation wording (strong
   // overwrite warning vs. a light "load into a fresh system"). Default to true (cautious) until known.
   const [targetHasData, setTargetHasData] = useState(true)
-  const [credsFile, setCredsFile] = useState(null)
   const [restoreInspection, setRestoreInspection] = useState(null)
   const [inspectError, setInspectError] = useState('')
   const [inspectingRestore, setInspectingRestore] = useState(false)
@@ -70,6 +77,18 @@ export function BackupRestoreTab() {
   const { mode: vaultDialog, ensureVault, closeVault } = useVaultGate(vault)
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
   const hasStoredCredentials = !!credentialBackupStatus?.has_credentials
+  // What the chosen file turned out to be. Everything below the picker — which inputs appear, what the
+  // button says and how alarming it looks, which endpoint runs — follows from this rather than from
+  // which control the file was dropped on.
+  const restoreKind = restoreInspection?.kind || null
+  const restoreIsCredentials = restoreKind === 'credentials'
+  // No restore of any kind while demo data is loaded, matching the server. Both kinds bring data in —
+  // a credentials restore creates a live data source, which is precisely the state the demo tenant is
+  // not allowed to reach — and the demo clear is only safe to erase everything because nothing
+  // non-demo can have been added.
+  const restoreBlocked = !restoreFile || restoring || inspectingRestore || !!inspectError || !restoreKind
+    || demoLoaded
+    || (restoreKind === 'data' && restoreInspection?.encrypted && !privateKeyFile)
 
   async function refreshVault() {
     const status = await api.getAuthStatus().catch(() => null)
@@ -117,6 +136,11 @@ export function BackupRestoreTab() {
     setInspectError('')
     setPrivateKeyFile(null)
     setPrivateKeyPassphrase('')
+    // A new file is a new question: whatever the previous one asked for does not carry over.
+    setNeedsBackupPassphrase(false)
+    setBackupPassphrase('')
+    setRestoreMsg(null)
+    setRestoreSuccess(null)
     if (!file) return
     setInspectingRestore(true)
     try {
@@ -202,29 +226,29 @@ export function BackupRestoreTab() {
     setRestoring(false)
   }
 
-  function requestRestore(type) {
-    if (type === 'credentials') {
-      if (!credsFile || restoring) return
+  function requestRestore() {
+    if (restoreBlocked) return
+    const name = restoreFile?.name ? ` from ${restoreFile.name}` : ''
+    if (restoreKind === 'credentials') {
       setPendingConfirm({
-        type,
-        title: 'Restore Plaid credentials?',
-        message: `This will replace the Plaid credentials currently stored in ${APP_NAME}.`,
+        type: 'credentials',
+        title: 'Restore credentials backup?',
+        message: `This will replace the data-source credentials currently stored in ${APP_NAME}${name}. Your accounts and transactions are not touched.`,
         confirmLabel: 'Restore credentials',
         variant: 'warn',
       })
       return
     }
-    if (!restoreFile || restoring || inspectingRestore || inspectError || (restoreInspection?.encrypted && !privateKeyFile)) return
     setPendingConfirm(targetHasData ? {
-      type,
+      type: 'data',
       title: 'Replace all data with this backup?',
-      message: 'This will replace accounts, categories, rules, import settings, and transactions with the selected backup.',
+      message: `This will replace accounts, categories, rules, import settings, and transactions${name}.`,
       confirmLabel: 'Restore data backup',
       variant: 'danger',
     } : {
-      type,
-      title: 'Load this backup?',
-      message: 'This system has no data yet, so this just loads the backup into it — nothing is replaced.',
+      type: 'data',
+      title: 'Load this data backup?',
+      message: `This system has no data yet, so this just loads the backup${name} into it — nothing is replaced.`,
       confirmLabel: 'Load backup',
       variant: 'warn',
       note: '',
@@ -237,7 +261,7 @@ export function BackupRestoreTab() {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No Plaid tokens.</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No data-source credentials.</div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <Button variant="ghost" disabled={downloading} onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
             <Button variant="ghost" disabled={enabledRecipients.length === 0 || downloading} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
@@ -302,18 +326,19 @@ export function BackupRestoreTab() {
           </div>
         )}
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from data backup</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Replaces all existing data from the selected backup. Plaid credentials are not affected. Encrypted backups require the matching RSA private key file.</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from backup</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
+            Choose a backup file — a data backup or a data-source credentials backup. {APP_NAME} reads
+            the file to tell which it is, and says so before restoring anything.
+          </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="file"
-              name="restore-data-backup-file"
-              aria-label="Choose data backup file to restore"
+              name="restore-backup-file"
+              aria-label="Choose backup file to restore"
               accept=".json,.zip,application/json,application/zip"
-              disabled={demoLoaded}
-              title={demoLoaded ? demoRestoreMessage : undefined}
               onChange={e => handleRestoreFileChange(e.target.files[0])}
-              style={{ fontSize: 13, cursor: demoLoaded ? 'not-allowed' : undefined }}
+              style={{ fontSize: 13 }}
             />
           </div>
           {demoLoaded && (
@@ -342,12 +367,16 @@ export function BackupRestoreTab() {
               gap: 8,
             }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>
-                {restoreInspection.encrypted ? 'Encrypted backup detected' : 'Backup file looks valid'}
+                {restoreIsCredentials
+                  ? 'Credentials backup'
+                  : restoreInspection.encrypted ? 'Encrypted data backup' : 'Data backup'}
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                {restoreInspection.encrypted
-                  ? `${restoreInspection.cipher || 'Encrypted'} backup for ${restoreInspection.recipient_count || 0} recipient${restoreInspection.recipient_count === 1 ? '' : 's'}.`
-                  : `Readable ${restoreInspection.container === 'zip' ? 'zipped' : 'plain JSON'} backup file.`}
+                {restoreIsCredentials
+                  ? 'Data-source credentials, still encrypted. Restoring replaces the credentials stored here; accounts and transactions are not touched.'
+                  : restoreInspection.encrypted
+                    ? `${restoreInspection.cipher || 'Encrypted'} backup for ${restoreInspection.recipient_count || 0} recipient${restoreInspection.recipient_count === 1 ? '' : 's'}. Restoring replaces all existing data.`
+                    : `Readable ${restoreInspection.container === 'zip' ? 'zipped' : 'plain JSON'} backup file. Restoring replaces all existing data.`}
               </div>
               {restoreInspection.encrypted && Array.isArray(restoreInspection.recipients) && restoreInspection.recipients.length > 0 && (
                 <div style={{ display: 'grid', gap: 6 }}>
@@ -388,52 +417,39 @@ export function BackupRestoreTab() {
                   Select a matching RSA private key file before restoring this backup.
                 </div>
               )}
+              {/* Only shown once the server says the file came from another install: its contents are
+                  sealed under that vault's key, so they have to be reopened with that vault's passphrase
+                  before they can be re-sealed under this one. Restoring your own backup never asks. */}
+              {restoreIsCredentials && needsBackupPassphrase && (
+                <div style={{ display: 'grid', gap: 6, maxWidth: 420 }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    This backup was made on another system. Enter the vault passphrase it was created
+                    with — not this system&apos;s.
+                  </div>
+                  <Input
+                    type="password"
+                    value={backupPassphrase}
+                    onChange={setBackupPassphrase}
+                    placeholder="Vault passphrase this backup was made with"
+                    autoFocus
+                    {...SENSITIVE_FIELD_PROPS}
+                  />
+                </div>
+              )}
             </div>
           )}
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-start' }}>
             <Button
-              variant="danger"
-              disabled={!restoreFile || restoring || inspectingRestore || !!inspectError || (restoreInspection?.encrypted && !privateKeyFile)}
-              onClick={() => requestRestore('data')}
+              variant={restoreIsCredentials ? 'ghost' : 'danger'}
+              disabled={restoreBlocked}
+              title={demoLoaded ? demoRestoreMessage : undefined}
+              onClick={requestRestore}
             >
-              {restoring ? 'Restoring…' : 'Restore data'}
+              {restoring
+                ? 'Restoring…'
+                : restoreIsCredentials ? 'Restore credentials' : 'Restore data'}
             </Button>
           </div>
-        </div>
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore Plaid credentials</div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <input
-              type="file"
-              name="restore-credentials-backup-file"
-              aria-label="Choose credentials backup file to restore"
-              accept=".json,.zip,application/json,application/zip"
-              onChange={e => setCredsFile(e.target.files[0])}
-              style={{ fontSize: 13 }}
-            />
-            <Button variant="ghost" disabled={!credsFile || restoring} onClick={() => requestRestore('credentials')}>
-              {restoring ? 'Restoring…' : 'Restore credentials'}
-            </Button>
-          </div>
-          {/* Only shown once the server says the file came from another install: its contents are sealed
-              under that vault's key, so they have to be reopened with that vault's passphrase before
-              they can be re-sealed under this one. Restoring your own backup here never asks. */}
-          {needsBackupPassphrase ? (
-            <div style={{ display: 'grid', gap: 6, marginTop: 12, maxWidth: 420 }}>
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                This backup was made on another system. Enter the vault passphrase it was created with —
-                not this system&apos;s.
-              </div>
-              <Input
-                type="password"
-                value={backupPassphrase}
-                onChange={setBackupPassphrase}
-                placeholder="Vault passphrase this backup was made with"
-                autoFocus
-                {...SENSITIVE_FIELD_PROPS}
-              />
-            </div>
-          ) : null}
         </div>
       </Card>
 
@@ -490,7 +506,7 @@ export function BackupRestoreTab() {
               </Button>
               <Button
                 variant={pendingConfirm.variant === 'danger' ? 'danger' : 'primary'}
-                onClick={() => performRestore(pendingConfirm.type === 'credentials' ? credsFile : restoreFile, pendingConfirm.type, pendingConfirm.force)}
+                onClick={() => performRestore(restoreFile, pendingConfirm.type, pendingConfirm.force)}
               >
                 {pendingConfirm.confirmLabel}
               </Button>

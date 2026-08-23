@@ -20,7 +20,7 @@ from unittest import mock
 
 from backend.db import control_database as cdb
 from backend.db import database
-from backend.routers.import_export.backup import _load_json_or_zip_payload
+from backend.routers.import_export.backup import read_payload_bytes
 from backend.services import crypto_service as cs
 from backend.services.providers import config as provider_config
 from backend.services.providers import resolve_app_config
@@ -230,8 +230,8 @@ class ProviderConfigEndpointTests(unittest.TestCase):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "app-secret"})
-            payload = _load_json_or_zip_payload(
-                client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials"
+            payload = read_payload_bytes(
+                client.get("/api/import-export/backup/credentials").content
             )
             pc = next(p for p in payload["provider_configs"] if p["provider"] == "plaid")
             self.assertEqual(pc["client_id"], "cid")

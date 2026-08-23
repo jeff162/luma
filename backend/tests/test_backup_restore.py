@@ -43,11 +43,12 @@ from backend.routers.import_export.backup import (
     inspect_backup_file,
     restore_backup,
     restore_backup_file,
+    restore_credentials_file,
     restore_from_archive,
     router,
     write_backup_archive,
 )
-from backend.routers.import_export.backup import _zip_json_bytes, _load_json_or_zip_payload
+from backend.routers.import_export.backup import _zip_json_bytes, read_payload_bytes
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
@@ -255,6 +256,9 @@ class BackupFixtureTestCase(unittest.TestCase):
             with get_db() as conn:
                 return build_backup_data(conn)
 
+    def _upload(self, content: bytes, filename: str) -> UploadFile:
+        return UploadFile(file=io.BytesIO(content), filename=filename)
+
     def _counts(self, tables) -> dict[str, int]:
         with self._use_db_path():
             with get_db() as conn:
@@ -391,9 +395,7 @@ class BackupRestoreTests(BackupFixtureTestCase):
         # would false-positive. Exercise that real path rather than hashing the in-memory dict twice.
         self._seed_complete()
         payload = self._export_payload()
-        reloaded = _load_json_or_zip_payload(
-            _zip_json_bytes("luma_backup.json", payload), "luma_backup.json.zip", "backup"
-        )
+        reloaded = read_payload_bytes(_zip_json_bytes("luma_backup.json", payload))
         _verify_payload_content_hash(reloaded)  # must not raise
         with self._use_db_path():
             self.assertTrue(restore_backup(RestoreRequest(data=reloaded))["ok"])
@@ -566,9 +568,6 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
             return b"".join(parts)
         return asyncio.new_event_loop().run_until_complete(pump())
-
-    def _upload(self, content: bytes, filename: str) -> UploadFile:
-        return UploadFile(file=io.BytesIO(content), filename=filename)
 
     # --- the container itself --------------------------------------------------------------------
 
@@ -776,7 +775,8 @@ class BackupArchiveTests(BackupFixtureTestCase):
         with self._use_db_path():
             plain = asyncio.new_event_loop().run_until_complete(
                 inspect_backup_file(file=self._upload(self._write_archive(), "luma_backup.zip")))
-        self.assertEqual(plain, {"encrypted": False, "container": "zip", "version": BACKUP_PAYLOAD_VERSION})
+        self.assertEqual(plain, {"kind": "data", "encrypted": False, "container": "zip",
+                                 "version": BACKUP_PAYLOAD_VERSION})
 
         self._add_recipient()
         with self._use_db_path():
@@ -785,6 +785,82 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 inspect_backup_file(file=self._upload(body, "luma_backup.encrypted.zip")))
         self.assertTrue(encrypted["encrypted"])
         self.assertEqual(encrypted["recipient_count"], 1)
+        # Identified without a private key: the kind rides the plaintext manifest precisely so the
+        # restore surface can name the file before anyone has produced a key for it.
+        self.assertEqual(encrypted["kind"], "data")
+
+
+# --- Telling the two backups apart -----------------------------------------------------------------
+# The restore surface routes a file by what it *is*, so this is the seam that decides which flow the
+# user gets — and the one that used to answer "Unexpected backup file inside ZIP" when someone picked
+# their credentials file in the data restore.
+
+
+class BackupIdentificationTests(BackupFixtureTestCase):
+    def _identify(self, content: bytes):
+        with self._use_db_path():
+            return asyncio.new_event_loop().run_until_complete(
+                inspect_backup_file(file=self._upload(content, "chosen.zip")))
+
+    @staticmethod
+    def _credentials_file(member="luma_credentials.json", **overrides) -> bytes:
+        payload = {"kind": "credentials", "version": 4, "connections": [], "provider_configs": []}
+        payload.update(overrides)
+        return _zip_json_bytes(member, payload)
+
+    def test_a_credentials_backup_is_identified_as_one(self):
+        self.assertEqual(self._identify(self._credentials_file())["kind"], "credentials")
+
+    def test_a_data_archive_is_identified_as_one(self):
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                buf = io.BytesIO()
+                write_backup_archive(conn, buf)
+        self.assertEqual(self._identify(buf.getvalue())["kind"], "data")
+
+    def test_older_files_without_a_kind_are_identified_by_shape(self):
+        # Every backup written before the declaration existed still has to land in the right flow, and
+        # the member name is not what decides it — the payload's own sections are.
+        credentials = self._credentials_file(member="export.json")
+        payload = json.loads(zipfile.ZipFile(io.BytesIO(credentials)).read("export.json"))
+        payload.pop("kind")
+        self.assertEqual(self._identify(_zip_json_bytes("export.json", payload))["kind"], "credentials")
+
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                legacy = build_backup_data(conn)
+        legacy.pop("kind", None)
+        legacy["version"] = 9
+        self.assertEqual(self._identify(_zip_json_bytes("export.json", legacy))["kind"], "data")
+
+    def test_a_file_that_is_not_a_backup_says_so(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self._identify(_zip_json_bytes("notes.json", {"shopping": ["milk"]}))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("does not look like", ctx.exception.detail)
+
+    def test_the_wrong_backup_in_the_data_restore_names_what_it_is(self):
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                    file=self._upload(self._credentials_file(), "luma_credentials.zip"),
+                    private_key_file=None, private_key_passphrase=None, force=False))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "This is a credentials backup, not a data backup.")
+
+    def test_the_wrong_backup_in_the_credentials_restore_names_what_it_is(self):
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                buf = io.BytesIO()
+                write_backup_archive(conn, buf)
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.new_event_loop().run_until_complete(restore_credentials_file(
+                    request=None, file=self._upload(buf.getvalue(), "luma_backup.zip"), passphrase=None))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "This is a data backup, not a credentials backup.")
 
     def test_restore_endpoint_is_bound_to_the_restore_handler(self):
         # The decorator for POST /restore once sat on the wipe helper directly above the handler, which

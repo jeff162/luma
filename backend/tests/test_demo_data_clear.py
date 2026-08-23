@@ -1,8 +1,11 @@
 """Demo-data clear: the destructive wipe and its guard.
 
 The wipe must NEVER run on real data — its only gate is the demo marker, so the load-the-marker /
-refuse-without-it contract is the safety property worth pinning. Also covers that a real data op
-(restore) is blocked while demo data is loaded, so demo and real data can't mix."""
+refuse-without-it contract is the safety property worth pinning. Also covers the gates that keep demo
+and real data from mixing — and those matter more than they look: the wipe is allowed to erase the whole
+tenant *because* nothing non-demo can have been added, so every path that brings data in has to be shut
+while the marker is set. The four here (data restore, CSV import, credentials restore, sync) are that
+set; a fifth path added without a gate is a way to lose real data to the demo clear."""
 
 import asyncio
 import json
@@ -18,7 +21,13 @@ from backend.db.database import get_db, init_db, reset_current_db_path, set_curr
 from backend.db.demo_data import is_demo_data_loaded, load_demo_data
 from backend.routers.auth import clear_demo_data_endpoint, demo_data_status
 from backend.routers.import_export import run_import
-from backend.routers.import_export.backup import RestoreRequest, restore_backup
+from backend.routers.import_export.backup import (
+    CredentialsRestoreRequest,
+    RestoreRequest,
+    restore_backup,
+    restore_credentials,
+)
+from backend.routers.sync import run_sync
 
 
 class _FakeUpload:
@@ -133,6 +142,31 @@ class DemoDataClearTests(unittest.TestCase):
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
                 restore_backup(RestoreRequest(data={"version": 7}))
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail.get("code"), "demo_data_loaded")
+
+    def test_credentials_restore_blocked_while_demo_loaded(self):
+        # Not merely for symmetry with the data restore: this path inserts `connection` rows, and a linked
+        # connection is what `is_demo_loadable` treats as disqualifying — so without the gate it is the one
+        # way to reach a demo tenant that owns a live data source, whose synced rows the demo clear would
+        # then erase as though they were demo data.
+        with get_db(str(self.db_path)) as conn:
+            load_demo_data(conn, scope_id="demo-profile")
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                restore_credentials(
+                    CredentialsRestoreRequest(data={"version": 4, "connections": [], "provider_configs": []}),
+                    None,
+                )
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail.get("code"), "demo_data_loaded")
+
+    def test_sync_blocked_while_demo_loaded(self):
+        with get_db(str(self.db_path)) as conn:
+            load_demo_data(conn, scope_id="demo-profile")
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                run_sync(days=0, connection_id=None, provider=None, full_history=False, request=None)
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertEqual(ctx.exception.detail.get("code"), "demo_data_loaded")
 

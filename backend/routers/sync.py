@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
+from backend.db.demo_data import is_demo_data_loaded
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
@@ -828,6 +829,18 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     permanently busy, which would disable "Sync now" until the staleness bound expired — a worse failure
     than the concurrent sync the marker exists to prevent.
     """
+    # Demo data blocks bringing new data in, and a sync is the most direct form of it. Nothing should be
+    # able to reach here with the marker set — a demo tenant cannot have had a connection to begin with,
+    # and the paths that could create one are all refused — so this is the backstop for that reasoning
+    # rather than a live case, and it belongs beside the other four gates instead of being the one
+    # new-data path that assumed it could never happen.
+    with get_db() as conn:
+        if is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "demo_data_loaded",
+                "message": "Clear the demo data before syncing a data source.",
+            })
+
     marked = _connections_in_scope(connection_id, provider)
     set_sync_running(marked, True)
     try:

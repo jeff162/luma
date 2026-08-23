@@ -21,7 +21,7 @@ import json
 import unittest
 
 from backend.db.database import get_db
-from backend.routers.import_export.backup import _load_json_or_zip_payload, _stamp_content_hash
+from backend.routers.import_export.backup import read_payload_bytes, _stamp_content_hash
 from backend.services import crypto_service as cs
 from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
@@ -62,7 +62,7 @@ class CredentialsBackupTests(unittest.TestCase):
     def _export(self, client) -> dict:
         r = client.get("/api/import-export/backup/credentials")
         self.assertEqual(r.status_code, 200, r.text)
-        return _load_json_or_zip_payload(r.content, "luma_credentials.zip", "luma_credentials")
+        return read_payload_bytes(r.content)
 
     def _stored_secrets(self, user_id) -> tuple[str, str]:
         """What the live DB's credentials decrypt to under THIS install's DEK."""
@@ -178,6 +178,45 @@ class CredentialsBackupTests(unittest.TestCase):
             r = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+
+    def test_restoring_the_downloaded_file_through_the_upload_endpoint(self):
+        # Every other restore test here posts a parsed payload, but the app uploads the *file* — a
+        # separate endpoint, and the one that identifies what was chosen before restoring it. Exercise
+        # the round trip the user actually performs: download the file, hand that file back.
+        with api_client() as (client, _):
+            user_id = self._seed(client)
+            exported = client.get("/api/import-export/backup/credentials")
+            self.assertEqual(exported.status_code, 200, exported.text)
+            with get_db() as conn:
+                conn.execute("DELETE FROM connection")
+                conn.execute("DELETE FROM provider_config")
+
+            r = client.post(
+                "/api/import-export/restore/credentials-file",
+                files={"file": ("luma_credentials-2026-08-23.zip", exported.content, "application/zip")},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+
+    def test_a_data_backup_uploaded_here_is_named_for_what_it_is(self):
+        # The complaint that started this: picking the wrong one of the two backups answered with a
+        # remark about the names of members inside a ZIP. Both directions must say what the file is.
+        with api_client() as (client, _):
+            self._seed(client)
+            data_backup = client.get("/api/import-export/backup")
+            self.assertEqual(data_backup.status_code, 200)
+
+            r = client.post(
+                "/api/import-export/restore/credentials-file",
+                files={"file": ("luma_backup-2026-08-23.zip", data_backup.content, "application/zip")},
+            )
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.json()["detail"], "This is a data backup, not a credentials backup.")
+
+    def test_the_exported_file_declares_that_it_is_a_credentials_backup(self):
+        with api_client() as (client, _):
+            self._seed(client)
+            self.assertEqual(self._export(client)["kind"], "credentials")
 
     def test_restoring_onto_the_same_install_works_while_locked(self):
         # Verbatim restore touches no plaintext, so it needs no unlock either.
