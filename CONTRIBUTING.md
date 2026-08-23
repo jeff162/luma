@@ -192,10 +192,35 @@ If you need to install or refresh the hook manually, run:
 ```
 
 That hook does not run the full frontend build or Playwright suite. It checks
-comment/documentation lint only for staged files:
+only staged files:
 
-- staged `frontend/*` files run `node frontend/scripts/check-comments.js`
-- staged `backend/*.py` files run `python backend/scripts/check_comments.py`
+- staged `frontend/*` files run `frontend/scripts/check-comments.js`
+- staged `backend/*.py` files run `backend/scripts/check_comments.py` (through
+  `scripts/run_backend_comment_check.js`, which finds the right Python on each
+  platform), then `scripts/check-backend-timestamps.js`
+
+### The timestamp guard
+
+Stored timestamps are naive UTC and must come from `utcnow_iso()` in
+`backend/time_utils.py`, the single chokepoint that keeps them consistent. The
+guard blocks the two calls that quietly break that: `datetime.utcnow()`
+(deprecated in 3.12+) and a no-arg `datetime.now()` (returns *local* time).
+
+A few values genuinely are local time and are not stored timestamps at all — a
+download filename the user reads as a date, or a ZIP entry's MS-DOS date/time
+field, which carries no timezone and which every archive tool writes and reads
+as local. Those take a per-line exemption with a **mandatory reason**:
+
+```python
+stamp = datetime.now()  # local-time: ZIP entry dates are MS-DOS fields with no timezone
+```
+
+The reason is required because an exemption that can be applied without saying
+why is a rubber stamp. The marker applies to its own line only, and it exempts
+`datetime.now()` alone — `datetime.utcnow()` has no local-time reading, so no
+reason makes it correct. `backend/tests/test_timestamp_guard.py` pins both
+halves; it is itself skipped by path, since a test for a lint rule has to
+contain the thing the rule forbids.
 
 You can run the same combined check manually from `frontend/`:
 
