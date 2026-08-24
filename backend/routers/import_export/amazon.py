@@ -1063,7 +1063,7 @@ _SPLIT_SUGGESTION_TOLERANCE = 0.02
 def _txn_summary(conn: sqlite3.Connection, txn_id: str) -> Optional[dict]:
     row = conn.execute(
         """SELECT t.id, t.date, t.amount, t.display_name, t.merchant_name, t.raw_name, t.account_id,
-                  t.category_source, t.imported_category, t.import_evidence_json,
+                  t.category_source, t.category_id, t.is_split, t.imported_category, t.import_evidence_json,
                   a.display_name AS account_name,
                   t.import_batch_id           AS source_batch_id,
                   ib.filename                 AS source_filename,

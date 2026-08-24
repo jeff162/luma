@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import RuleForm from './RuleForm.jsx'
@@ -48,6 +49,10 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
     loadModalData()
     return () => { cancelled = true }
   }, [state])
+
+  // Whether the load has run long enough that opening on a loading state beats showing nothing. See
+  // the paint gate below, and `useBusyIndicator`.
+  const loadSlow = useBusyIndicator(loading, { delayMs: PAINT_GATE_DELAY_MS })
 
   if (!state) return null
 
@@ -139,6 +144,13 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
       is_recurring: !!state.recurringDefault,
       cadence: 'monthly',
     }
+
+  // Opens fully formed rather than on a "Loading…" block that is then replaced by content of a
+  // different height — the panel would jump under the cursor before it could be read. Same trade the
+  // split editor and the row menu make: the wait is bounded at the app's usual ~150ms, past which the
+  // panel opens on its loading state, because a control that appears to do nothing is the worse
+  // failure. Placed here rather than beside the other early return because it reads `initialValues`.
+  if ((loading || !initialValues) && !loadSlow) return null
 
   return (
     <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">

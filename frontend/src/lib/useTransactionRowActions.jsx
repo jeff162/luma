@@ -28,6 +28,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
 import { useTags } from './useTags.js'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from './useBusyIndicator.js'
 import { txnMutations } from './txnMutations.js'
 import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -235,6 +236,27 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       ? '⚙ Open matching rule'
       : '⚙ Create rule'
 
+  // The menu waits for the rule lookup rather than painting and then rewriting one of its own items.
+  //
+  // "Create rule" and "Open matching rule" are different actions, so a menu that opens on one and
+  // silently becomes the other is showing something untrue — and the lookup is usually fast enough that
+  // the swap is over before it can be read, which leaves the user with a menu they cannot trust and no
+  // idea why. Holding the paint costs nothing at that speed: nothing is on screen to flicker yet.
+  //
+  // The readiness test includes the transaction id deliberately. `contextRuleMatch` still describes the
+  // *previously* opened row for one render after a right-click (the effect that resets it runs after
+  // render), so a check on `loading` alone would paint the new menu carrying the old row's verdict.
+  //
+  // `useBusyIndicator` supplies the escape hatch on the same threshold the rest of the app announces
+  // slowness at: if the lookup has not settled in ~150ms the menu opens anyway, showing "Loading rule…"
+  // — because at that point an unresponsive right-click is the worse defect, and a label the user has
+  // actually had time to read is allowed to change.
+  const ruleMatchReady = Boolean(menu?.txn?.id)
+    && contextRuleMatch.txnId === menu.txn.id
+    && !contextRuleMatch.loading
+  const ruleMatchSlow = useBusyIndicator(Boolean(menu?.txn?.id) && !ruleMatchReady, { delayMs: PAINT_GATE_DELAY_MS })
+  const menuReady = Boolean(menu) && (ruleMatchReady || ruleMatchSlow)
+
   function openSplitFromMenu(txn) {
     setSplitTarget(txn)
   }
@@ -254,6 +276,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     onContextMenu,
     closeMenu,
     menu,
+    menuReady,
     splitTarget,
     setSplitTarget,
     openSplitFromMenu,
@@ -292,7 +315,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
 
 export function TransactionRowActionsChrome({ controller }) {
   const {
-    menu, closeMenu, onOpenDetail,
+    menu, menuReady, closeMenu, onOpenDetail,
     setNoteTarget, setTagTarget, setPendingTrash,
     noteTarget, tagTarget, pendingTrash,
     tagModalAllTags, tagsLoading, addTagToCache,
@@ -307,7 +330,7 @@ export function TransactionRowActionsChrome({ controller }) {
 
   return (
     <>
-      {menu ? (
+      {menu && menuReady ? (
         <ContextMenu
           menu={menu}
           onClose={closeMenu}

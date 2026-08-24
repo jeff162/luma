@@ -13,6 +13,7 @@ if only one side were asserted.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 import uuid
@@ -20,7 +21,7 @@ import uuid
 from backend.db.database import SHARED_OWNER_ID
 from backend.routers.import_export.amazon import _order_evidence
 from backend.services.amazon_import import AmazonItem, AmazonOrder, parse_item_evidence
-from backend.services.txn_splits import proportional_allocation
+from backend.services.txn_splits import MAX_LABEL_LENGTH, proportional_allocation
 from backend.tests._api_client import api_client
 
 def _connect(path: str) -> sqlite3.Connection:
@@ -104,6 +105,14 @@ class ProportionalAllocationTests(unittest.TestCase):
         self.assertEqual(parts, [29.62, 88.88])
         self.assertEqual(round(sum(parts), 2), 118.50)
 
+    def test_a_multi_quantity_line_is_weighted_by_what_it_cost_not_by_one_of_them(self):
+        # The export prices *one* of a thing and counts them separately, so weighting by the unit price
+        # alone gives a line the user bought six of the same share as a line they bought one of. Six at
+        # $10 against one at $40 is 60/40 of the money, not 20/80.
+        six_at_ten, one_at_forty = 10.0 * 6, 40.0
+        parts = proportional_allocation(100.0, [six_at_ten, one_at_forty])
+        self.assertEqual(parts, [60.0, 40.0])
+
     def test_unpriced_items_come_back_null_rather_than_guessed(self):
         parts = proportional_allocation(60.0, [10.0, None, 20.0])
         self.assertIsNone(parts[1])
@@ -139,6 +148,22 @@ class ItemEvidenceRoundTripTests(unittest.TestCase):
             [(p["description"], p["price"], p["quantity"]) for p in parsed],
             [("Air Widget", 12.34, 2), ("Cable", 7.5, 1), ("Promotional Insert", None, 1)],
         )
+
+    def test_extended_price_multiplies_the_unit_price_by_the_quantity(self):
+        # `price` in the export is per unit — established against real exports, where a single-line
+        # order's amount repeatedly equals price × quantity exactly and never falls below it. This is
+        # the figure the pre-fill weights by; the raw unit price stays available beside it.
+        order = AmazonOrder(
+            order_id="ORD-3",
+            items=[
+                AmazonItem(description="Bolts", price=9.90, quantity=3),
+                AmazonItem(description="Bracket", price=40.0, quantity=1),
+                AmazonItem(description="Promo Insert", price=None, quantity=2),
+            ],
+        )
+        parsed = parse_item_evidence(_order_evidence(order))
+        self.assertEqual([p["extended_price"] for p in parsed], [29.70, 40.0, None])
+        self.assertEqual([p["price"] for p in parsed], [9.90, 40.0, None])
 
     def test_order_without_item_detail_yields_nothing_to_suggest(self):
         parsed = parse_item_evidence(_order_evidence(AmazonOrder(order_id="ORD-2", items=[])))
@@ -184,13 +209,6 @@ class SplitValidationTests(SplitFixtureMixin, unittest.TestCase):
                 ])
                 self.assertIn("90.00", detail)
 
-            with self.subTest("a category cannot appear twice"):
-                detail = self._reject(client, txn, [
-                    {"category_id": groceries, "amount": 60.0},
-                    {"category_id": groceries, "amount": 40.0},
-                ])
-                self.assertIn("only appear once", detail)
-
             with self.subTest("every part moves money the same direction"):
                 self._reject(client, txn, [
                     {"category_id": groceries, "amount": 130.0},
@@ -224,6 +242,205 @@ class SplitValidationTests(SplitFixtureMixin, unittest.TestCase):
                 {"category_id": leaves["Hardware Fixture"], "amount": 88.87},
             ]})
             self.assertEqual(response.status_code, 200, response.text)
+
+
+class SplitRepeatedCategoryTests(SplitFixtureMixin, unittest.TestCase):
+    """Two items in one order may classify alike, and the split exists to keep them apart.
+
+    A record and another record are two purchases at two prices by two artists; folding them into one
+    allocation because they share a category would discard exactly the detail a split is for. The only
+    thing that cost is a bucket's row count, which is why every summary counts distinct transactions.
+    """
+
+    def _two_music_parts(self, client, path):
+        account, _, leaves = self._seed(path)
+        txn = self._add_txn(path, account=account, amount=44.07)
+        response = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+            {"category_id": leaves["Groceries Fixture"], "amount": 13.80, "label": "First record"},
+            {"category_id": leaves["Hardware Fixture"], "amount": 14.86, "label": "A cable"},
+            {"category_id": leaves["Groceries Fixture"], "amount": 15.41, "label": "Second record"},
+        ]})
+        return response, txn, leaves
+
+    def test_two_items_may_share_a_category(self):
+        with api_client() as (client, path):
+            response, txn, _ = self._two_music_parts(client, path)
+            self.assertEqual(response.status_code, 200, response.text)
+
+            parts = client.get(f"/api/transactions/{txn}/split").json()["parts"]
+            self.assertEqual(
+                [(p["label"], p["amount"]) for p in parts],
+                [("First record", 13.80), ("A cable", 14.86), ("Second record", 15.41)],
+            )
+
+    def test_the_shared_category_totals_both_items_but_counts_one_transaction(self):
+        with api_client() as (client, path):
+            self._two_music_parts(client, path)
+            rows = client.get("/api/transactions/summary/by-category", params={"month": "2026-04"}).json()
+            by_name = {r["category_name"]: r for r in rows}
+
+            # Both allocations land in the bucket...
+            self.assertEqual(by_name["Groceries Fixture"]["total"], 29.21)
+            # ...but one transaction contributed them, and the count says so rather than reporting rows.
+            self.assertEqual(by_name["Groceries Fixture"]["count"], 1)
+            self.assertEqual(by_name["Hardware Fixture"]["count"], 1)
+
+    def test_the_group_rollup_counts_the_transaction_once_across_its_parts(self):
+        with api_client() as (client, path):
+            self._two_music_parts(client, path)
+            groups = {r["group_name"]: r for r in
+                      client.get("/api/transactions/summary/by-group", params={"month": "2026-04"}).json()}
+            self.assertEqual(groups["Household Fixture"]["total"], 44.07)
+            self.assertEqual(groups["Household Fixture"]["count"], 1)
+
+
+class SplitLabelTests(SplitFixtureMixin, unittest.TestCase):
+    """What each allocation covers, in the user's words. Descriptive only — no report reads it — but it
+    is the only record of *why* a given amount was set, so it has to survive a save."""
+
+    def test_a_label_survives_the_round_trip(self):
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0)
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0, "label": "Pantry restock"},
+                {"category_id": leaves["Hardware Fixture"], "amount": 40.0},
+            ]})
+            parts = client.get(f"/api/transactions/{txn}/split").json()["parts"]
+            self.assertEqual([p["label"] for p in parts], ["Pantry restock", None])
+
+    def test_a_label_reaches_the_ledger_row(self):
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0)
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0, "label": "Pantry restock"},
+                {"category_id": leaves["Hardware Fixture"], "amount": 40.0, "label": "Shelf brackets"},
+            ]})
+            row = next(r for r in client.get("/api/transactions").json()["transactions"] if r["id"] == txn)
+            self.assertEqual([p["label"] for p in row["split_parts"]], ["Pantry restock", "Shelf brackets"])
+
+    def test_a_pasted_item_title_is_capped_rather_than_stored_whole(self):
+        # Marketplace titles run to hundreds of characters; the stored value is bounded so a paste
+        # cannot bloat every read of the row.
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0)
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0, "label": "W" * 400},
+                {"category_id": leaves["Hardware Fixture"], "amount": 40.0, "label": "   "},
+            ]})
+            parts = client.get(f"/api/transactions/{txn}/split").json()["parts"]
+            self.assertEqual(len(parts[0]["label"]), MAX_LABEL_LENGTH)
+            self.assertIsNone(parts[1]["label"])   # whitespace is not a label
+
+    def test_the_suggestion_offers_the_item_name_as_the_label(self):
+        with api_client() as (client, path):
+            account, _, _ = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0)
+            evidence = _order_evidence(AmazonOrder(order_id="ORD-9", items=[
+                AmazonItem(description="Bolts", price=9.90, quantity=3),
+                AmazonItem(description="Bracket", price=40.0, quantity=1),
+            ]))
+            conn = _connect(path)
+            conn.execute("UPDATE txn SET import_evidence_json = ? WHERE id = ?", (json.dumps(evidence), txn))
+            conn.commit(); conn.close()
+
+            proposed = client.get(f"/api/transactions/{txn}/split/suggestion").json()
+            self.assertTrue(proposed["available"])
+            self.assertEqual([p["label"] for p in proposed["parts"]], ["Bolts", "Bracket"])
+            # Weighted by extended price (29.70 : 40.00 of 69.70) rather than by the unit prices
+            # (9.90 : 40.00 of 49.90), which would have produced 19.84 / 80.16 — so this asserts the
+            # weighting, not merely that some allocation came back.
+            self.assertEqual([p["amount"] for p in proposed["parts"]], [42.61, 57.39])
+            self.assertEqual(round(sum(p["amount"] for p in proposed["parts"]), 2), 100.0)
+
+
+class SplitSuggestionCategoryTests(SplitFixtureMixin, unittest.TestCase):
+    """An order of a dozen things should not arrive as a dozen empty pickers.
+
+    Each item's own description goes through the user's ordinary rules — their rules, not the
+    marketplace's taxonomy, which this importer deliberately ignores everywhere. It stays a proposal:
+    an item no rule claims comes back uncategorized rather than guessed at.
+    """
+
+    def _order(self, client, path, items, amount=100.0):
+        account, _, leaves = self._seed(path)
+        txn = self._add_txn(path, account=account, amount=amount)
+        evidence = _order_evidence(AmazonOrder(order_id="ORD-CAT", items=items))
+        conn = _connect(path)
+        conn.execute("UPDATE txn SET import_evidence_json = ? WHERE id = ?", (json.dumps(evidence), txn))
+        conn.commit(); conn.close()
+        return txn, leaves
+
+    def _rule(self, client, keyword, category_id):
+        r = client.post("/api/rules", json={"keyword": keyword, "category_id": category_id})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_items_arrive_categorized_by_the_users_own_rules(self):
+        with api_client() as (client, path):
+            txn, leaves = self._order(client, path, [
+                AmazonItem(description="Harborline Coffee Beans", price=25.0, quantity=1),
+                AmazonItem(description="Riverstone Socket Set", price=25.0, quantity=1),
+            ])
+            self._rule(client, "COFFEE", leaves["Groceries Fixture"])
+            self._rule(client, "SOCKET", leaves["Hardware Fixture"])
+
+            parts = client.get(f"/api/transactions/{txn}/split/suggestion").json()
+            self.assertEqual(parts["categorized"], 2)
+            self.assertEqual(
+                [p["category_id"] for p in parts["parts"]],
+                [leaves["Groceries Fixture"], leaves["Hardware Fixture"]],
+            )
+
+    def test_an_item_no_rule_claims_is_left_for_the_user(self):
+        with api_client() as (client, path):
+            txn, leaves = self._order(client, path, [
+                AmazonItem(description="Harborline Coffee Beans", price=50.0, quantity=1),
+                AmazonItem(description="Something Unfamiliar", price=50.0, quantity=1),
+            ])
+            self._rule(client, "COFFEE", leaves["Groceries Fixture"])
+
+            parts = client.get(f"/api/transactions/{txn}/split/suggestion").json()
+            self.assertEqual(parts["categorized"], 1)
+            self.assertEqual(
+                [p["category_id"] for p in parts["parts"]],
+                [leaves["Groceries Fixture"], None],
+            )
+
+    def test_two_items_may_be_proposed_into_the_same_category(self):
+        # The repeated-category rule was lifted precisely so this can happen: two records in one order
+        # are two purchases, and a proposal that had to collapse them would be unsaveable.
+        with api_client() as (client, path):
+            txn, leaves = self._order(client, path, [
+                AmazonItem(description="Harborline Trio Record", price=20.0, quantity=1),
+                AmazonItem(description="Northgate Quartet Record", price=30.0, quantity=1),
+            ])
+            self._rule(client, "RECORD", leaves["Groceries Fixture"])
+
+            proposed = client.get(f"/api/transactions/{txn}/split/suggestion").json()["parts"]
+            self.assertEqual([p["category_id"] for p in proposed],
+                             [leaves["Groceries Fixture"], leaves["Groceries Fixture"]])
+
+            saved = client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": p["category_id"], "amount": p["amount"], "label": p["label"]}
+                for p in proposed
+            ]})
+            self.assertEqual(saved.status_code, 200, saved.text)
+
+    def test_an_unpriced_item_is_not_matched_against_an_amount_it_does_not_have(self):
+        with api_client() as (client, path):
+            txn, leaves = self._order(client, path, [
+                AmazonItem(description="Harborline Coffee Beans", price=100.0, quantity=1),
+                AmazonItem(description="Coffee Promo Insert", price=None, quantity=1),
+            ])
+            self._rule(client, "COFFEE", leaves["Groceries Fixture"])
+
+            parts = client.get(f"/api/transactions/{txn}/split/suggestion").json()["parts"]
+            # The second line matches the keyword but has no share, so it is left alone rather than
+            # run through a matcher that can filter on an amount.
+            self.assertEqual([p["amount"] for p in parts], [100.0, None])
+            self.assertEqual([p["category_id"] for p in parts], [leaves["Groceries Fixture"], None])
 
 
 class SplitReportingTests(SplitFixtureMixin, unittest.TestCase):

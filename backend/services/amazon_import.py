@@ -354,9 +354,16 @@ _ITEM_QUANTITY_RE = re.compile(r"×([0-9]+)")
 def parse_item_evidence(evidence: dict) -> list[dict]:
     """Recover an order's per-item detail from a transaction's stored import evidence.
 
-    Returns one dict per item — ``{"description", "price", "quantity"}`` — with ``price`` None where the
-    export gave none (a digital or promotional line often has no list price). An order that was imported
-    from the orders file alone carries no "Item" entries at all and yields an empty list.
+    Returns one dict per item — ``{"description", "price", "quantity", "extended_price"}`` — with
+    ``price`` None where the export gave none (a digital or promotional line often has no list price).
+    An order that was imported from the orders file alone carries no "Item" entries at all and yields an
+    empty list.
+
+    ``price`` is the **unit** price, not the line total. Verified against real exports: among single-line
+    orders with quantity > 1, the transaction amount repeatedly equals ``price × quantity`` exactly and
+    never falls below it, which is only true of a per-unit figure. ``extended_price`` is that product —
+    the figure a caller weighting items against each other wants, since weighting by the unit price alone
+    silently under-counts a line the user bought several of.
 
     The prices are **list prices**, not what was paid: they exclude tax and shipping and predate any
     promo, so they do not sum to the transaction's amount and must never be used as ledger figures. Their
@@ -373,9 +380,12 @@ def parse_item_evidence(evidence: dict) -> list[dict]:
         label = value
         if "(" in value and value.rstrip().endswith(")"):
             label = value[: value.rfind("(")].strip()
+        price = float(price_match.group(1)) if price_match else None
+        quantity = int(quantity_match.group(1)) if quantity_match else 1
         items.append({
             "description": label or "item",
-            "price": float(price_match.group(1)) if price_match else None,
-            "quantity": int(quantity_match.group(1)) if quantity_match else 1,
+            "price": price,
+            "quantity": quantity,
+            "extended_price": None if price is None else round(price * quantity, 2),
         })
     return items

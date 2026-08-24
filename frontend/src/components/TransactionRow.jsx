@@ -336,7 +336,9 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       {showOriginHover ? (
         <RowTooltip
-          content={<MerchantOriginHoverCard txn={txn} />}
+          // Copyable here because this card is showing a real ledger row — the affordance says out
+          // loud what the card could always do, rather than leaving Ctrl+C to be guessed at.
+          content={<MerchantOriginHoverCard txn={txn} copyable />}
           maxWidth={380}
           // Interactive so the card's links (e.g. Amazon "View on Amazon") are reachable and clickable:
           // pointer-events stay on, and a short close grace keeps the card open while the pointer crosses
@@ -812,11 +814,21 @@ function SplitPartsHoverCard({ parts }) {
   return (
     <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
       {parts.map((part, i) => (
-        <div key={part.category_id || `part-${i}`} style={{ display: 'flex', gap: 16, justifyContent: 'space-between' }}>
-          <span>{part.category_name || 'Uncategorized'}</span>
-          <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-            {formatSignedMoneyAmount(part.amount)}
-          </span>
+        <div key={part.category_id || `part-${i}`} style={{ display: 'grid', gap: 1 }}>
+          <div style={{ display: 'flex', gap: 16, justifyContent: 'space-between' }}>
+            <span>{part.category_name || 'Uncategorized'}</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+              {formatSignedMoneyAmount(part.amount)}
+            </span>
+          </div>
+          {/* What the allocation covers, where the user recorded it. Clamped to one line: these come
+              from marketplace item titles, which are long enough to swamp the figures they annotate. */}
+          {part.label ? (
+            <span style={{
+              color: 'var(--muted)', fontSize: 11, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{part.label}</span>
+          ) : null}
         </div>
       ))}
     </div>

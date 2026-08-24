@@ -14,8 +14,8 @@
 // remaining figure has to sit in the same column as the numbers it is derived from to be read as
 // their sum.
 //
-// Validation is deliberately *not* duplicated from the backend. The sum, sign, one-category-each and
-// leaf-only rules live in services/txn_splits.py, and a save that violates one comes back as a 400
+// Validation is deliberately *not* duplicated from the backend. The sum, sign and leaf-only rules live
+// in services/txn_splits.py, and a save that violates one comes back as a 400
 // whose detail is written for the user — this shows that text. The running total is the one local
 // affordance, because it updates per keystroke and is guidance rather than a second rule.
 //
@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input } from './ui.jsx'
 
@@ -33,20 +34,30 @@ import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input } from './ui.jsx'
 const CENT = 0.005
 
 // One grid definition for the header, every row, and the totals block — the amount column only reads
-// as a column if all three agree on its width. The amount track is sized to the figures that actually
-// appear (a hand-typed "1234.56" at this font), not to the widest imaginable one: any slack in it
-// becomes dead space between the two columns, which is the whole reason the panel is narrow. The
-// category track takes what is left — comfortably past the longest seeded category name at this panel
-// width, and the picker keeps its own behavior for anything longer rather than being reshaped here.
-const GRID = 'minmax(0, 1fr) 96px 24px'
+// as a column if all of them agree on its width.
+//
+// Column order follows the ledger's: what it was, then how it is classified, then how much. A split
+// row is the same object a transaction row is, and the app's own rule is that an object should read
+// the same way wherever it appears (collaboration-notes.md → UI And Interaction Preferences). Category
+// is fixed width because its picker is a compact badge and slack there is dead space; description
+// takes what is left, being the one field whose content has no natural length.
+const GRID = 'minmax(0, 1fr) 150px 96px 24px'
+
+// The pre-fill strip's own three tracks — item, its list price, the share derived from it. Shared by
+// its heading row and its lines for the same reason GRID is: two right-aligned money columns only read
+// as columns if their headings sit exactly above them.
+const SUGGESTION_GRID = 'minmax(0, 1fr) 92px 72px'
 
 function toAmount(raw) {
   const value = Number.parseFloat(String(raw).replace(/[^0-9.-]/g, ''))
   return Number.isFinite(value) ? value : 0
 }
 
+// A split needs at least two lines to be a split; the backend enforces the same floor.
+const MIN_ROWS = 2
+
 function blankRow() {
-  return { key: `row-${Math.random().toString(36).slice(2)}`, category_id: null, amount: '' }
+  return { key: `row-${Math.random().toString(36).slice(2)}`, category_id: null, amount: '', label: '' }
 }
 
 const labelStyle = {
@@ -55,7 +66,7 @@ const labelStyle = {
 }
 
 export default function SplitEditorDialog({ txn, categories, onAddCategory, onClose, onSaved }) {
-  const [rows, setRows] = useState([blankRow(), blankRow()])
+  const [rows, setRows] = useState(() => Array.from({ length: MIN_ROWS }, blankRow))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -75,7 +86,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   const allocated = rows.reduce((sum, row) => sum + toAmount(row.amount), 0)
   const remaining = Math.round((amount - allocated) * 100) / 100
   const balanced = Math.abs(remaining) < CENT
-  const complete = balanced && rows.length >= 2
+  const complete = balanced && rows.length >= MIN_ROWS
     && rows.every(r => r.category_id && Math.abs(toAmount(r.amount)) >= CENT)
 
   // An existing split opens on its own categories; a transaction being split for the first time opens
@@ -98,13 +109,19 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
         if (split.parts?.length) {
           setRows(split.parts.map((p, i) => ({
             key: `row-${i}-${p.id}`, category_id: p.category_id, amount: String(p.amount),
+            label: p.label || '',
           })))
         } else {
-          const seeded = [blankRow(), blankRow()]
+          // Opened on as many rows as the order has items, when that is known — an order of three is
+          // three lines to categorize, and starting on two both understates the work and costs a click
+          // before it can begin. Blank, not pre-filled: putting the amounts in is what `Use items` is
+          // for, and doing it unasked would be a suggestion disguised as a confirmed choice.
+          const count = Math.max(MIN_ROWS, proposed?.available ? proposed.parts.length : 0)
+          const seeded = Array.from({ length: count }, blankRow)
           seeded[0].category_id = txn.category_id ?? null
           setRows(seeded)
         }
-        if (proposed?.available) setSuggestion(proposed.parts)
+        if (proposed?.available) setSuggestion(proposed)
       })
       .catch(err => { if (!cancelled) setError(err?.message || 'Could not load this split.') })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -119,6 +136,19 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setRemainderUndo(null)
     setRows(prev => prev.map(r => (r.key === key ? { ...r, ...patch } : r)))
   }, [])
+
+  // Nothing is shown until there is something worth showing. Opening on a bare "Loading…" and then
+  // growing — by the row count the order turned out to have, and again by the height of the pre-fill
+  // strip — makes the dialog jump twice under the cursor before it can be read. A panel that appears
+  // fully formed is the app's standing answer here (see `usePanelReveal` for the floating-panel
+  // equivalent), and at these speeds it costs nothing: there is no flicker in a surface that has not
+  // painted yet.
+  //
+  // `useBusyIndicator` bounds the wait at the same ~150ms the rest of the app announces slowness at.
+  // Past that the dialog opens on its loading state, because a Split… that appears to do nothing is
+  // the worse failure — the same trade the row menu makes before painting.
+  const loadSlow = useBusyIndicator(loading, { delayMs: PAINT_GATE_DELAY_MS })
+  if (loading && !loadSlow) return null
 
   // Put whatever is still unallocated into the amount the user picked. This is the last step of almost
   // every split and the one most likely to be got wrong by hand on a total that does not divide evenly
@@ -142,15 +172,17 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   }
 
   function applySuggestion() {
-    // The proposal carries amounts and item descriptions but no categories — those are the user's
-    // call, so each row arrives with its amount filled and its picker waiting.
+    // Categories come through where the user's own rules claimed an item, and stay empty where none
+    // did — a proposal, never a silent decision: nothing is written until Save, and every row is still
+    // editable. This is why the strip says how many were classified rather than presenting the result
+    // as finished.
     setSelectedKey(null)
     setRemainderUndo(null)
-    setRows(suggestion.map((p, i) => ({
+    setRows(suggestion.parts.map((p, i) => ({
       key: `suggested-${i}`,
-      category_id: null,
+      category_id: p.category_id ?? null,
       amount: p.amount == null ? '' : String(p.amount),
-      hint: p.description,
+      label: p.label || '',
     })))
   }
 
@@ -159,7 +191,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setError(null)
     try {
       const saved = await api.saveSplit(txn.id, rows.map(r => ({
-        category_id: r.category_id, amount: toAmount(r.amount),
+        category_id: r.category_id, amount: toAmount(r.amount), label: r.label,
       })))
       onSaved?.({ is_split: true, parts: saved.parts })
       onClose()
@@ -188,7 +220,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     <AppDialog
       title="Split across categories"
       description={txn?.display_name || txn?.merchant_name || undefined}
-      width="min(440px, 100%)"
+      width="min(600px, 100%)"
       onClose={onClose}
       actions={(
         // `small` throughout, matching the controls in the body: at this panel width the default
@@ -203,23 +235,83 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
         </>
       )}
     >
-      {loading ? <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div> : (
+      {loading ? (
+        // Reached only past the paint gate, i.e. when the load has genuinely stalled. Sized close to a
+        // small finished split so that even this path grows by a little rather than unfolding from a
+        // single line — the gate makes it rare, this makes it survivable when it happens.
+        <div style={{
+          alignItems: 'center', color: 'var(--muted)', display: 'flex', fontSize: 13,
+          justifyContent: 'center', minHeight: 240,
+        }}>Loading…</div>
+      ) : (
         <div style={{ display: 'grid', gap: 14 }}>
+          {/* Shows its working. A proposed share is otherwise an unexplained number — seeing each
+              item's list price against their total, and the paid amount it is being spread across,
+              is what lets the user judge the split rather than take it on faith. It is also where
+              the gap between the two figures (tax, shipping, a promo) becomes visible. */}
           {suggestion ? (
             <div style={{
               background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8,
-              display: 'grid', gap: 8, justifyItems: 'start', padding: '10px 12px',
+              display: 'grid', gap: 8, padding: '10px 12px',
             }}>
               <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.45 }}>
-                This order lists {suggestion.length} items. The amounts can be filled in from them,
-                spread across the items by list price.
+                This order lists {suggestion.parts.length} items totalling{' '}
+                {formatSignedMoneyAmount(suggestion.list_total)} at list. Each share below is that
+                item&apos;s portion of the {formatSignedMoneyAmount(amount)} actually paid.
+                {suggestion.categorized > 0 ? (
+                  <> Your rules categorize {suggestion.categorized} of them; the rest are left for you.</>
+                ) : null}
               </span>
-              <Button variant="ghost" small onClick={applySuggestion}>Use items</Button>
+              {/* Two columns of money need saying apart, and the sentence above already names one of
+                  them "share" — so the headings tie the prose to the figures rather than introducing
+                  new words. Each carries the longer explanation on hover, which keeps the strip short
+                  while leaving the difference discoverable. */}
+              <div style={{
+                display: 'grid', fontSize: 10, gap: 10,
+                gridTemplateColumns: SUGGESTION_GRID, ...labelStyle,
+              }}>
+                <span />
+                <span
+                  style={{ textAlign: 'right' }}
+                  title="What the order listed this item at, before tax, shipping or any discount"
+                >List</span>
+                <span
+                  style={{ textAlign: 'right' }}
+                  title="This item's portion of what was actually paid, in proportion to its list price"
+                >Share</span>
+              </div>
+              <div style={{ display: 'grid', gap: 2, maxHeight: 132, overflowY: 'auto' }}>
+                {suggestion.parts.map((part, i) => (
+                  <div
+                    key={`proposed-${i}`}
+                    style={{
+                      display: 'grid', fontSize: 11, gap: 10,
+                      gridTemplateColumns: SUGGESTION_GRID,
+                    }}
+                  >
+                    <span
+                      title={part.label}
+                      style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >{part.label}</span>
+                    <span style={{ color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
+                      {part.quantity > 1 ? `${part.quantity} × ` : ''}
+                      {formatSignedMoneyAmount(part.unit_price ?? 0)}
+                    </span>
+                    <span style={{ fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
+                      {part.amount == null ? '—' : formatSignedMoneyAmount(part.amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex' }}>
+                <Button variant="ghost" small onClick={applySuggestion}>Use items</Button>
+              </div>
             </div>
           ) : null}
 
           <div style={{ display: 'grid', gap: 6 }}>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: GRID, padding: '0 2px' }}>
+              <span style={labelStyle}>Description</span>
               <span style={labelStyle}>Category</span>
               <span style={{ ...labelStyle, textAlign: 'right' }}>Amount</span>
               <span />
@@ -227,10 +319,22 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
 
             {rows.map(row => {
               const selected = row.key === selectedKey
-              const removable = rows.length > 2
+              const removable = rows.length > MIN_ROWS
               return (
                 <div key={row.key} style={{ alignItems: 'center', display: 'grid', gap: 8, gridTemplateColumns: GRID }}>
-                  <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  {/* A marketplace item title can run past 230 characters, so the field shows a
+                      readable slice and carries the whole value in its tooltip — and is editable,
+                      because cutting one down to something a ledger can show is a thing only the user
+                      can do. */}
+                  <Input
+                    value={row.label}
+                    placeholder="Description (optional)"
+                    aria-label="Description"
+                    title={row.label || undefined}
+                    onChange={value => update(row.key, { label: value })}
+                    style={{ fontSize: 12, padding: '5px 8px' }}
+                  />
+                  <div style={{ minWidth: 0 }}>
                     <CategoryPicker
                       value={row.category_id}
                       categories={categories}
@@ -242,12 +346,6 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       // an AppDialog (1200) — it has to be raised to be visible from inside one.
                       panelZIndex={1300}
                     />
-                    {row.hint ? (
-                      <span style={{
-                        color: 'var(--muted)', fontSize: 11, overflow: 'hidden',
-                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>{row.hint}</span>
-                    ) : null}
                   </div>
                   <Input
                     value={row.amount}
@@ -289,7 +387,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                 variant="ghost"
                 style={COMPACT_ACTION_BTN_STYLE}
                 onClick={() => { setRemainderUndo(null); setRows(prev => [...prev, blankRow()]) }}
-              >+ Category</Button>
+              >+ Item</Button>
             </div>
           </div>
 
@@ -297,14 +395,14 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
               they come from and read as their total rather than as loose text. */}
           <div style={{ borderTop: '1px solid var(--border)', display: 'grid', gap: 6, paddingTop: 10 }}>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: GRID }}>
-              <span style={{ color: 'var(--muted)', fontSize: 13 }}>Transaction</span>
+              <span style={{ color: 'var(--muted)', fontSize: 13, gridColumn: 'span 2' }}>Transaction</span>
               <span style={{ color: 'var(--muted)', fontSize: 13, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
                 {formatSignedMoneyAmount(amount)}
               </span>
               <span />
             </div>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: GRID }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, gridColumn: 'span 2' }}>
                 {balanced ? 'Fully allocated' : 'Remaining'}
               </span>
               <span style={{

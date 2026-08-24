@@ -264,11 +264,15 @@ class BackupFixtureTestCase(unittest.TestCase):
                 )
                 conn.execute("UPDATE txn SET is_split = 1, category_source = 'split', category_overridden = 1 WHERE id = ?", (charge,))
                 conn.execute(
-                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order) VALUES (?, ?, ?, 20.00, 0)",
+                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order, label) "
+                    "VALUES (?, ?, ?, 20.00, 0, 'Air Widget')",
                     (str(uuid.uuid4()), charge, leaf),
                 )
+                # One labelled part and one without, so the round trip covers both states of the column
+                # rather than only the populated one.
                 conn.execute(
-                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order) VALUES (?, ?, ?, 17.32, 1)",
+                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order, label) "
+                    "VALUES (?, ?, ?, 17.32, 1, NULL)",
                     (str(uuid.uuid4()), charge, second_leaf),
                 )
 

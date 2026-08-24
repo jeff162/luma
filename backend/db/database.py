@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 39
+CURRENT_VERSION = 41
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1149,6 +1149,28 @@ def _transaction_splits(conn):
     )
 
 
+@migration(40)
+def _transaction_split_labels(conn):
+    # What each allocation covers, in the user's own words — see the baseline CREATE. Existing rows stay
+    # NULL, which reads correctly: a split made before this column existed recorded no label, as
+    # distinct from having had an empty one. Descriptive only, so nothing has to be backfilled for a
+    # report to stay right.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn_split)")}
+    if not cols or "label" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE txn_split ADD COLUMN label TEXT")
+
+
+@migration(41)
+def _split_parts_may_repeat_a_category(conn):
+    # A split records the *items* a payment covered, and two items bought together may classify into
+    # the same category — two records from one order are two purchases, not one. The unique index that
+    # forbade that is dropped; lookups reach a split's parts through idx_txn_split_txn, which stays.
+    # Nothing has to be rewritten: no stored row can violate the looser rule, and the reporting side
+    # already counts distinct transactions rather than allocation rows.
+    conn.execute("DROP INDEX IF EXISTS idx_txn_split_txn_category")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1716,14 +1738,20 @@ def init_db(db_path: str | None = None):
             -- One category allocation of a split transaction's amount. The parts of a split must sum to
             -- the transaction's amount and share its sign; that is enforced on save (see
             -- services/txn_splits.py), not by the DB, because no SQLite constraint can express a
-            -- cross-row sum. At most one part per category — two parts in one category would make a
-            -- summary bucket's COUNT(*) read as allocation rows rather than transactions.
+            -- cross-row sum. Several parts may share a category: the parts record *items*, and two
+            -- items bought together may classify alike. Summary buckets count DISTINCT transactions
+            -- so that costs nothing in reporting.
             CREATE TABLE IF NOT EXISTS txn_split (
                 id          TEXT PRIMARY KEY,
                 txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
                 category_id TEXT REFERENCES category(id) ON DELETE SET NULL,
                 amount      REAL NOT NULL,
-                sort_order  INTEGER NOT NULL DEFAULT 0
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                -- Free text naming what this allocation covers, defaulted from an imported order's
+                -- item description and meant to be cut down by the user. Descriptive only: no report,
+                -- filter or total reads it, which is why it can be edited freely without any of the
+                -- protection the category and amount carry.
+                label       TEXT
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -2092,13 +2120,11 @@ def init_db(db_path: str | None = None):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_txn_is_split ON txn(is_split) WHERE is_split = 1"
         )
-        # Every expansion of a split reaches its parts through txn_id; the uniqueness is the
-        # one-part-per-category invariant, enforced here so a concurrent double-save cannot slip a
-        # second part into a category behind the service-level check.
+        # Every expansion of a split reaches its parts through txn_id. Deliberately *not* unique on
+        # (txn_id, category_id): a split records the items a payment covered, and two of them may
+        # classify into the same category — two records from one order are two purchases, and folding
+        # them together would throw away the per-item detail the split exists to hold.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_split_txn ON txn_split(txn_id)")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_split_txn_category ON txn_split(txn_id, category_id)"
-        )
         # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
         # constrained — a row can be excluded from more than one candidate series.
         conn.execute(

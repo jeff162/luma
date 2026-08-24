@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState, useEffect, useRef } from 'react'
+import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Badge, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
@@ -24,6 +25,8 @@ function RuleModal({ prompt, onSave, onCancel }) {
   // A save that collided with another rule on the same matcher and is awaiting the user's confirm to
   // merge. Shape: { ruleData, applyToExisting, existingRuleId }.
   const [pendingMerge, setPendingMerge] = useState(null)
+  // Whether the load has run long enough that opening on a loading state beats showing nothing.
+  const loadSlow = useBusyIndicator(loading, { delayMs: PAINT_GATE_DELAY_MS })
 
   useEffect(() => {
     let cancelled = false
@@ -114,6 +117,13 @@ function RuleModal({ prompt, onSave, onCancel }) {
     setPendingMerge(null)
     onSave({ applyToExisting, ruleData, ruleId: existingRuleId, updatedExisting: true, transactionIds: applied?.transaction_ids })
   }
+
+  // Opens fully formed rather than on a "Loading…" block that is then replaced by content of a
+  // different height — the panel would jump under the cursor before it could be read. Same trade the
+  // split editor and the row menu make: `useBusyIndicator` bounds the wait at the app's usual ~150ms,
+  // past which the panel opens on its loading state, because a control that appears to do nothing is
+  // the worse failure.
+  if (loading && !loadSlow) return null
 
   return (
     <OverlayBackdrop zIndex={900} tint="rgba(0,0,0,0.5)" blur={0}>

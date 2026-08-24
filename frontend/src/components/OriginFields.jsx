@@ -6,6 +6,7 @@
 // merchant origin hover stay identical.
 
 import { getTxnFileOriginRows } from '../lib/importSourceFields.js'
+import CopyTransactionsButton from './CopyTransactionsButton.jsx'
 
 const mutedStyle = { color: 'var(--muted)' }
 
@@ -42,13 +43,27 @@ export function OriginFieldList({ rows, gap = 6, fontSize = 12 }) {
 // reveals it) followed by the from-the-file origin rows — the same set the edit panel's "Show more"
 // reveals (raw text, source description/extras, source file, imported category, source account), so the
 // captured detail is readable on hover without opening the transaction. See getTxnFileOriginRows.
-export function MerchantOriginHoverCard({ txn, onPin = null }) {
+// `copyable` puts the shared copy affordance in the card's corner. Opt-in rather than automatic for
+// two reasons: the card is also fed *partial* origin objects (the duplicate report's hard-rejected
+// rows never became transactions), where a copy would hand back a half-record; and the copy button
+// reads `useTransactionShare`, which throws where the provider is not mounted. So a caller turns it on
+// only where the object really is a ledger transaction.
+//
+// It exists because the card's text was already selectable and copyable — the card is `interactive`,
+// so Ctrl+C works — but nothing said so, which is indistinguishable from it not working. This is the
+// same content the transaction editor's copy already produces, through the same formatter.
+export function MerchantOriginHoverCard({ txn, onPin = null, copyable = false }) {
   const merchant = txn.display_name || txn.merchant_name || txn.raw_name || '—'
   const rows = getTxnFileOriginRows(txn)
   return (
     <div style={{ display: 'grid', gap: 6, maxWidth: 360 }}>
       <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ fontWeight: 600, fontSize: 12.5, wordBreak: 'break-word', minWidth: 0 }}>{merchant}</div>
+        {copyable ? (
+          <div style={{ flexShrink: 0 }}>
+            <CopyTransactionsButton txn={txn} tooltip="Copy this transaction and its source detail" />
+          </div>
+        ) : null}
         {onPin ? (
           <button
             type="button"

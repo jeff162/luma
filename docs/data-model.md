@@ -1056,11 +1056,13 @@ If any of these assumptions change, both backend queries and frontend UI logic w
 
 A purchase that spans categories — part groceries, part hardware — is held as **one ledger row with a set of allocations** (`txn_split`), never as a parent row with children. The per-item-rows model was already tried and abandoned for the marketplace importer (orders-only, 2026-07-10, see *Transaction links and Amazon order import*); reviving it here would have brought back a visible parent/child hierarchy, a double-count risk, and tree handling in editing, undo and import, to solve a problem that is really about reporting.
 
+A part also carries an optional **`label`** — free text naming what that allocation covers, defaulted from an imported order's item description and meant to be edited down by the user. It is descriptive only: no report, filter or total reads it, which is why it can be changed freely while the category and amount carry the protections below. It exists because without it a saved split is a column of amounts with no record of *why* each was set — the pre-fill's item names were visible while editing and then thrown away. Marketplace item titles routinely run past 200 characters, so the stored value is capped and every display truncates it with the full text on hover.
+
 **The invariants**, enforced on save in `services/txn_splits.py` rather than by the DB, because no SQLite constraint expresses a cross-row sum:
 
 - the parts sum to the transaction's amount, to the cent
 - every part shares the transaction's sign — `_summary_signed_total_sql` needs a bucket's type to be constant, and *Reporting assumptions* ties income groups to money-in, so a mixed-sign split would report against both. (A part representing a refunded item is a coherent future relaxation, deliberately not built.)
-- at most one part per category, so a summary bucket's `COUNT(*)` still reads as transactions rather than allocation rows
+- several parts **may** name the same category. A split records the *items* a payment covered, and two items bought together can classify alike — two records from one order are two purchases at two prices, and folding them into one allocation would discard exactly the detail a split exists to keep. The cost is that an expanded bucket holds more rows than transactions, which is paid for on the reporting side: **every summary counts `DISTINCT` transactions**, not rows. (The list endpoint keeps a row count, because its count drives pagination.) An earlier one-part-per-category rule was imposed to avoid that count change and was wrong — it traded the user's data for a query convenience
 - a part names a leaf, never a group — the same rule ordinary categorization follows
 - at least two parts; one part is a category assignment, and admitting it would leave a row flagged as split, reporting identically to an ordinary one, while being skipped by every automatic pass
 

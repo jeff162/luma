@@ -4,6 +4,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE, ROW_HOVER_OPEN_DELAY_MS } from '../ui.jsx'
+import SplitEditorDialog from '../SplitEditorDialog.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { safeExternalUrl } from '../../lib/utils.js'
@@ -218,6 +219,26 @@ function LinkChargesDialog({ order, candidates, busy, onCancel, onConfirm }) {
 // A row's bulk-eligible actions. Only row-level ones qualify: the per-copy Discard on a multi-charge row
 // names *which* copy to remove, so it has no unambiguous bulk form (its bulk equivalent is Merge). The
 // single-charge `reverse` row's button is row-level — hence "Trash" rather than "Discard" — so it does.
+// The per-row way into the split editor. Named for the row's state, like the row menu's equivalent:
+// an order already split is being adjusted, not divided again. Offered on the two kinds where the
+// order is settled enough that classifying it is the next job — a duplicate or a pending suggestion
+// wants resolving first, and a reverse-scan charge is not an order at all.
+function SplitAction({ order, busy, onOpen }) {
+  if (!order?.id) return null
+  return (
+    <Button
+      small
+      variant="ghost"
+      disabled={busy}
+      onClick={() => onOpen(order)}
+      title={order.is_split
+        ? 'Adjust how this order is divided across categories'
+        : 'Divide this order across categories, starting from its items'}
+    >{order.is_split ? 'Edit split…' : 'Split…'}</Button>
+  )
+}
+
+
 function rowActionsFor(entry) {
   if (entry.kind === 'duplicate' || entry.kind === 'duplicate_review') return entry.mergeable ? { merge: true } : {}
   if (entry.kind === 'unaccounted_duplicate') return { merge: true }
@@ -442,6 +463,25 @@ export function AmazonReconciliationDialog({
 
   // Undo a wrong pairing: detach the order's charge(s) (their categories are restored) so the order
   // returns to the unmatched path, where Link charges… can pair it correctly.
+  // Splitting an order is offered *here* because this is where orders are actually reviewed — the
+  // alternative is finding the row again in the ledger, which is the same work twice. The categories
+  // the editor's pickers need are fetched on first use rather than with the report: most sessions
+  // never split anything, and the report is already several queries deep.
+  const [splitTarget, setSplitTarget] = useState(null)
+  const [splitCategories, setSplitCategories] = useState(null)
+
+  const openSplit = async (order) => {
+    if (!splitCategories) {
+      try {
+        setSplitCategories(await api.getCategories())
+      } catch (e) {
+        setActionError(e?.message || 'Could not load categories')
+        return
+      }
+    }
+    setSplitTarget(order)
+  }
+
   const unlinkCharges = async (entry) => {
     setBusyTrash(true)
     setActionError('')
@@ -637,11 +677,12 @@ export function AmazonReconciliationDialog({
       // and drops the order back to "No charge found" where Link charges… can pair it correctly.
       if (entry.kind === 'matched') {
         return (
-          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-start' }}>
             <Button small variant="ghost" disabled={busy} onClick={() => unlinkCharges(entry)}
               title="Not this order's charge — detach it (its category is restored) and put the order back to needing a match">
               Unlink
             </Button>
+            <SplitAction order={entry.order} busy={busy} onOpen={openSplit} />
           </div>
         )
       }
@@ -655,6 +696,7 @@ export function AmazonReconciliationDialog({
             title={paymentUnmatched.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
             Link charges…
           </Button>
+          <SplitAction order={entry.order} busy={busy} onOpen={openSplit} />
           {entry.reviewed ? (
             <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this order to the attention count">Undo review</Button>
           ) : (
@@ -820,6 +862,19 @@ export function AmazonReconciliationDialog({
         busy={linking}
         onCancel={() => setLinkTarget(null)}
         onConfirm={confirmLinkCharges}
+      />
+    ) : null}
+    {splitTarget && splitCategories ? (
+      <SplitEditorDialog
+        txn={splitTarget}
+        categories={splitCategories}
+        onAddCategory={cat => setSplitCategories(prev => [...(prev || []), cat])}
+        onClose={() => setSplitTarget(null)}
+        // Reloads the report, as every other row action here does. The rows are rebuilt from the
+        // reconciliation payload rather than held locally, so patching the open row would leave the
+        // *entry* it came from stale — the row's Split…/Edit split… label is read from `entry.order`,
+        // and the editor closes on save, so there is nothing left to patch anyway.
+        onSaved={() => onReload?.()}
       />
     ) : null}
     </>

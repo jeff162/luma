@@ -149,8 +149,14 @@ Recorded so they are not re-opened; each was a real fork.
 
 - **Marker** — `txn.is_split` flag; `txn.category_id` retained as the stashed pre-split prior. (Rationale
   above.)
-- **Two parts in one category** — disallowed; merged on save. Keeps `COUNT(*)` in an expanded summary
-  bucket honest as "transactions in this bucket" rather than "allocation rows".
+- **Two parts in one category** — **allowed** (reversed 2026-08-24; it was briefly disallowed). The
+  argument for forbidding it was that an expanded bucket's `COUNT(*)` would read as allocation rows
+  rather than transactions. That is a real effect, but the fix belongs in the query — `COUNT(DISTINCT
+  t.id)`, which is the more honest reading of "how many transactions contributed" anyway — not in a
+  constraint on what the user may record. A split is a record of the *items* a payment covered: two
+  records bought in one order are two purchases at two prices by two artists, and collapsing them
+  because they share a category discards the detail the feature exists to capture. Sums were never
+  affected either way. Don't re-impose it.
 - **Sign** — every part shares the transaction's sign. `_summary_signed_total_sql` requires the bucket's
   type to be constant, and `data-model.md` → Reporting assumptions ties income groups to money-in. A
   mixed-sign split (a part representing a refunded item) is a coherent future relaxation, deliberately
@@ -176,14 +182,30 @@ So the pre-fill **reallocates the actual net cash across the items in proportion
 contribution**:
 
 ```
-allocation_i = round(net_cash × list_i / Σ list_j, 2)
+allocation_i = round(net_cash × extended_i / Σ extended_j, 2)      extended = unit price × quantity
 ```
+
+**The weight is the *extended* price, not the unit price.** The export prices one of a thing and counts
+them separately, so weighting by `price` alone gives a line the user bought six of the same share as a
+line they bought one of — and pushes the tax and shipping spread onto the single items. That `price` is
+per-unit was established empirically rather than assumed: across single-line orders with quantity > 1 in
+a real ledger, the transaction amount repeatedly equalled `price × quantity` **exactly** and never fell
+below it, which is only true of a per-unit figure. (Restricting the check to single-line orders is what
+makes it conclusive — list prices exclude tax and shipping but predate promos, so a whole-order sum can
+land either side of the total for reasons unrelated to quantity.)
 
 with the rounding remainder assigned to the largest part so the allocations sum to the amount **exactly**.
 This distributes tax/shipping/discount proportionally — a reasonable default the user can then adjust. The
-pre-fill is a *starting suggestion* on the split editor, not automatic; the user confirms or edits it. The
-marketplace's own category taxonomy stays deliberately unused — the user picks categories, possibly aided
-by their normal rules per item name.
+pre-fill is a *starting suggestion* on the split editor, not automatic; the user confirms or edits it.
+
+**Categories are proposed by running each item's own description through the user's ordinary rules.**
+That is what makes a twelve-item order tractable — otherwise it arrives as twelve empty pickers. It
+stays a proposal in both directions: a line no rule claims comes back uncategorized rather than guessed
+at, and the strip says how many were classified so the result never reads as finished. The matcher sees
+the *item's share*, not the order total, since a rule may be scoped by amount or by debit/credit and
+the line is what it would be classifying; an item the export never priced has no share and is left
+alone rather than matched against a number that does not exist. The marketplace's own category taxonomy
+stays deliberately unused, as everywhere else in this importer.
 
 ## Affected surfaces (the design pass)
 
@@ -201,6 +223,10 @@ by their normal rules per item name.
   or the allocation sum silently stops matching.
 - **Undo / re-import replace** — allocations cascade with the transaction, so batch undo needs no new
   step; the case to verify is the marketplace path, where the *linked charge* lives outside the batch.
+- **Entry points** — the editor is reachable from the transaction detail panel, the ledger row menu
+  and its `Split (N)` marker, and the **Amazon reconciliation report**, which offers it on matched and
+  no-charge-found orders. The report is where orders are actually reviewed, so making the user find the
+  row again in the ledger would be the same work twice.
 - **UI** — the split editor in `TransactionDetail.jsx`; the "Split (N)" affordance in the shared
   `CategoryCell` (`TransactionRow.jsx`), which both the ledger and the detail panel render through, so one
   change covers both; partial-amount rendering in a category-scoped list.

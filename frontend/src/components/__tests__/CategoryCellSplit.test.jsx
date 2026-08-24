@@ -48,8 +48,8 @@ describe('CategoryCell on a split transaction', () => {
         txn={{
           id: 't1', is_split: true, split_part_count: 2,
           split_parts: [
-            { category_id: 'groceries', category_name: 'Groceries', amount: 60 },
-            { category_id: 'hardware', category_name: 'Hardware', amount: -40 },
+            { category_id: 'groceries', category_name: 'Groceries', amount: 60, label: 'Pantry restock' },
+            { category_id: 'hardware', category_name: 'Hardware', amount: -40, label: null },
           ],
         }}
         categories={CATEGORIES}
@@ -67,6 +67,9 @@ describe('CategoryCell on a split transaction', () => {
     // Signed, not magnitudes — a displayed number always carries its true sign.
     expect(screen.getByText('$60.00')).toBeTruthy()
     expect(screen.getByText('-$40.00')).toBeTruthy()
+    // A part's label rides along where one was recorded, and its absence renders nothing rather than
+    // an empty line.
+    expect(screen.getByText('Pantry restock')).toBeTruthy()
   })
 
   it('opens the split editor rather than the category picker', async () => {

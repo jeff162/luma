@@ -254,6 +254,16 @@ instruction and fix the drift rather than silently choosing the looser version.
   fixture, so the guard tested nothing. Prove it by making the exact edit the guard exists to forbid,
   not by disabling the feature wholesale; the two fail differently and only the former is the claim.
 
+- **A timing threshold verified on an idle page proves nothing about a loaded one.** A paint gate
+  tuned to 150ms was confirmed twice — green tests, and a browser session driving the real app — and
+  was wrong both times, because both checks ran against a page with nothing else in flight. The defect
+  only existed under contention: the request answered in 22ms and *landed* several hundred
+  milliseconds later, queued behind the page's other requests. The user's own Network panel showed it
+  (a 22ms "Time" against a bar spanning ~220ms), and the way to get it was to ask for that number
+  rather than to re-derive confidence from a quiet environment. When a fix depends on how long
+  something takes, get the figure from the environment that reproduces the bug, and treat a clean
+  local reproduction as evidence about *that* environment only.
+
 - **Figures from a live ledger are only comparable within a single run.** The user works in the app
   while a session is open, so rows get resolved, synced, or trashed between two scans. Re-derive every
   number a comparison depends on in the same pass rather than quoting an earlier run's totals.

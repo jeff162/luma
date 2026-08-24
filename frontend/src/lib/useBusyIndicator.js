@@ -28,6 +28,17 @@ import { useEffect, useRef, useState } from 'react'
 export const BUSY_INDICATOR_DELAY_MS = 150
 export const BUSY_INDICATOR_MIN_VISIBLE_MS = 400
 
+// A much looser bound, for the *other* use of this hook: deciding when to stop hiding a surface that
+// is still loading (see ui-patterns.md → "A surface that loads when it opens paints once, fully
+// formed"). Those two questions need different numbers and conflating them is a live bug, not a
+// hypothetical. `BUSY_INDICATOR_DELAY_MS` asks "has this lasted long enough to be worth mentioning",
+// which wants to be short. A paint gate asks "has this gone wrong enough that showing a half-formed
+// surface beats showing nothing", which wants to be long — and it must be measured against *observed*
+// latency, not server time. A local request answering in 22ms routinely takes several hundred
+// milliseconds to land once it queues behind the page's other requests (Chrome caps connections per
+// host), so a 150ms gate fired on almost every open and put back the very flicker it removed.
+export const PAINT_GATE_DELAY_MS = 900
+
 export function useBusyIndicator(busy, {
   delayMs = BUSY_INDICATOR_DELAY_MS,
   minVisibleMs = BUSY_INDICATOR_MIN_VISIBLE_MS,

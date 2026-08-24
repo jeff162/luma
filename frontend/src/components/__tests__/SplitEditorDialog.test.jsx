@@ -16,6 +16,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SplitEditorDialog from '../SplitEditorDialog.jsx'
 import { api } from '../../lib/api.js'
+import { BUSY_INDICATOR_DELAY_MS, PAINT_GATE_DELAY_MS } from '../../lib/useBusyIndicator.js'
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -105,8 +106,8 @@ describe('split editor remainder gate', () => {
     await user.click(screen.getByText('Save split'))
     await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
     expect(api.saveSplit.mock.calls[0][1]).toEqual([
-      { category_id: 'groceries', amount: 60 },
-      { category_id: 'hardware', amount: 40 },
+      { category_id: 'groceries', amount: 60, label: '' },
+      { category_id: 'hardware', amount: 40, label: '' },
     ])
   })
 
@@ -118,7 +119,7 @@ describe('split editor remainder gate', () => {
     // Three rows, and the selected one is deliberately *not* the last: with only two, "the selected
     // amount" and "the last amount" are the same field, and the test would pass against the earlier
     // behavior that always filled the final row.
-    await user.click(screen.getByText('+ Category'))
+    await user.click(screen.getByText('+ Item'))
     const three = screen.getAllByLabelText('Amount')
     expect(three.length).toBe(3)
 
@@ -217,7 +218,7 @@ describe('split editor remainder gate', () => {
     await user.click(screen.getByText('Add remainder to selected'))
     expect(screen.getByText('Undo')).toBeTruthy()
 
-    await user.click(screen.getByText('+ Category'))
+    await user.click(screen.getByText('+ Item'))
     expect(screen.queryByText('Undo')).toBeNull()
   })
 
@@ -261,9 +262,10 @@ describe('split editor pre-fill', () => {
     const user = userEvent.setup()
     api.getSplitSuggestion.mockResolvedValue({
       available: true,
+      list_total: 100,
       parts: [
-        { description: 'Air Widget', amount: 70, category_id: null },
-        { description: 'Cable', amount: 30, category_id: null },
+        { label: 'Air Widget', amount: 70, category_id: null, unit_price: 35, quantity: 2, list_price: 70 },
+        { label: 'Cable', amount: 30, category_id: null, unit_price: 30, quantity: 1, list_price: 30 },
       ],
     })
     renderEditor()
@@ -273,14 +275,197 @@ describe('split editor pre-fill', () => {
     const fields = await amountFields()
     expect(fields.map(f => f.value)).toEqual(['70', '30'])
     expect(screen.getByText('Fully allocated')).toBeTruthy()
-    // The categories stay the user's call — a suggestion never picks them.
+    // Nothing was claimed by a rule here, so both pickers wait for the user.
     expect(screen.getAllByText('Choose category').length).toBe(2)
+    // Each item's name arrives as an editable label rather than a caption, since a marketplace title
+    // is what the user has to cut down to something a ledger can show.
+    expect(screen.getAllByLabelText('Description').map(f => f.value)).toEqual(['Air Widget', 'Cable'])
+  })
+
+  it('shows the list figures the shares were derived from', async () => {
+    // A proposed share is an unexplained number without the arithmetic behind it, so the strip states
+    // the list total, what was actually paid, and each item's list price beside its share.
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 100,
+      parts: [
+        { label: 'Air Widget', amount: 70, category_id: null, unit_price: 35, quantity: 2, list_price: 70 },
+        { label: 'Cable', amount: 30, category_id: null, unit_price: 30, quantity: 1, list_price: 30 },
+      ],
+    })
+    // Paid amount deliberately unequal to the list total, so the strip is shown to state both rather
+    // than one figure twice — the gap is the tax/shipping the spread has to absorb.
+    renderEditor({ txn: { ...TXN, amount: 44.07 } })
+
+    await screen.findByText('Use items')
+    // Asserted against the rendered text rather than per node: the quantity and the price are separate
+    // JSX children, so no single text node holds "2 × $35.00".
+    const shown = document.body.textContent
+    // The two totals the spread runs between: list against what was actually paid.
+    expect(shown).toContain('2 items totalling $100.00')
+    expect(shown).toContain('$44.07')
+    // A multi-quantity line states its count, so a share larger than the unit price is explicable.
+    expect(shown).toContain('2 × $35.00')
+  })
+
+  it('opens on one row per item when the order says how many there are', async () => {
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 41.48,
+      parts: [
+        { label: 'One', amount: 13.80, category_id: null, unit_price: 12.99, quantity: 1, list_price: 12.99 },
+        { label: 'Two', amount: 14.86, category_id: null, unit_price: 13.99, quantity: 1, list_price: 13.99 },
+        { label: 'Three', amount: 15.41, category_id: null, unit_price: 14.50, quantity: 1, list_price: 14.50 },
+      ],
+    })
+    render(<SplitEditorDialog txn={TXN} categories={CATEGORIES} onClose={() => {}} onSaved={() => {}} />)
+
+    const fields = await screen.findAllByLabelText('Amount')
+    expect(fields.length).toBe(3)
+    // Sized, not filled — putting the amounts in is what Use items is for.
+    expect(fields.map(f => f.value)).toEqual(['', '', ''])
+  })
+
+  it('never opens on fewer than two rows, whatever the order says', async () => {
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 12.99,
+      parts: [
+        { label: 'Only one', amount: 44.07, category_id: null, unit_price: 12.99, quantity: 1, list_price: 12.99 },
+      ],
+    })
+    render(<SplitEditorDialog txn={TXN} categories={CATEGORIES} onClose={() => {}} onSaved={() => {}} />)
+
+    expect((await screen.findAllByLabelText('Amount')).length).toBe(2)
+  })
+
+  it('names the two money columns it shows', async () => {
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 100,
+      parts: [
+        { label: 'Air Widget', amount: 70, category_id: null, unit_price: 70, quantity: 1, list_price: 70 },
+        { label: 'Cable', amount: 30, category_id: null, unit_price: 30, quantity: 1, list_price: 30 },
+      ],
+    })
+    renderEditor()
+
+    // Two columns of money beside each other are unreadable unlabelled; "Share" also ties back to the
+    // wording of the sentence above them.
+    expect(await screen.findByText('List')).toBeTruthy()
+    expect(screen.getByText('Share')).toBeTruthy()
+  })
+
+  it('fills in the categories the user\'s rules claimed, and only those', async () => {
+    const user = userEvent.setup()
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 100,
+      categorized: 1,
+      parts: [
+        { label: 'Beans', amount: 60, category_id: 'groceries', unit_price: 60, quantity: 1, list_price: 60 },
+        { label: 'Something else', amount: 40, category_id: null, unit_price: 40, quantity: 1, list_price: 40 },
+      ],
+    })
+    renderEditor()
+
+    // The strip says how much was decided, so the result never reads as finished.
+    expect(await screen.findByText(/rules categorize 1 of them/)).toBeTruthy()
+    await user.click(screen.getByText('Use items'))
+
+    // One picker filled from the rules, one still waiting — a proposal, not a decision.
+    expect(screen.getByText('Groceries')).toBeTruthy()
+    expect(screen.getAllByText('Choose category').length).toBe(1)
   })
 
   it('says nothing when there is no item detail to propose from', async () => {
     renderEditor()
     await amountFields()
     expect(screen.queryByText('Use items')).toBeNull()
+  })
+})
+
+describe('split editor labels', () => {
+  it('sends the label with the amount it annotates', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    const fields = await amountFields()
+
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Groceries'))
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Hardware'))
+    await user.type(fields[0], '60')
+    await user.type(fields[1], '40')
+
+    const labels = screen.getAllByLabelText('Description')
+    await user.type(labels[0], 'Pantry restock')
+    await user.click(screen.getByText('Save split'))
+
+    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
+    expect(api.saveSplit.mock.calls[0][1]).toEqual([
+      { category_id: 'groceries', amount: 60, label: 'Pantry restock' },
+      { category_id: 'hardware', amount: 40, label: '' },
+    ])
+  })
+
+  it('reopens an existing split on the labels it was saved with', async () => {
+    api.getSplit.mockResolvedValue({
+      txn_id: 't1', amount: 100, is_split: true,
+      parts: [
+        { id: 'p1', category_id: 'groceries', amount: 60, label: 'Pantry restock' },
+        { id: 'p2', category_id: 'hardware', amount: 40, label: null },
+      ],
+    })
+    renderEditor({ txn: { ...TXN, is_split: true } })
+    await amountFields()
+
+    expect(screen.getAllByLabelText('Description').map(f => f.value)).toEqual(['Pantry restock', ''])
+  })
+})
+
+describe('split editor opening', () => {
+  it('shows nothing until it can open fully formed', async () => {
+    // Opening on a bare "Loading…" and then growing — first by the order's row count, then by the
+    // height of the pre-fill strip — jumps the dialog twice under the cursor before it can be read.
+    let settle
+    api.getSplit.mockReturnValue(new Promise(resolve => { settle = resolve }))
+    api.getSplitSuggestion.mockResolvedValue({
+      available: true,
+      list_total: 41.48,
+      parts: [
+        { label: 'One', amount: 14.69, category_id: null, unit_price: 12.99, quantity: 1, list_price: 12.99 },
+        { label: 'Two', amount: 14.69, category_id: null, unit_price: 13.99, quantity: 1, list_price: 13.99 },
+        { label: 'Three', amount: 14.69, category_id: null, unit_price: 14.50, quantity: 1, list_price: 14.50 },
+      ],
+    })
+    renderEditor()
+
+    expect(screen.queryByText('Split across categories')).toBeNull()
+    expect(screen.queryByText('Loading…')).toBeNull()
+
+    settle({ txn_id: 't1', amount: 44.07, is_split: false, parts: [] })
+
+    // When it does appear it is already at its final size: three rows and the strip, in one paint.
+    expect(await screen.findByText('Split across categories')).toBeTruthy()
+    expect(screen.getAllByLabelText('Amount').length).toBe(3)
+    expect(screen.getByText('Use items')).toBeTruthy()
+  })
+
+  it('opens on its loading state rather than nothing when the load stalls', async () => {
+    // The bound on the wait: a Split… that appears to do nothing forever is the worse failure. The
+    // threshold is deliberately far looser than the app's "announce slowness" one — a local request
+    // answering in 22ms routinely takes hundreds of milliseconds to *land* once it queues behind the
+    // page's other requests, and a gate tuned to the shorter number fired on nearly every open.
+    api.getSplit.mockReturnValue(new Promise(() => {}))
+    renderEditor()
+
+    // Still hidden well past the announce threshold that used to release it.
+    await new Promise(r => setTimeout(r, BUSY_INDICATOR_DELAY_MS * 2))
+    expect(screen.queryByText('Loading…')).toBeNull()
+
+    await waitFor(() => expect(screen.getByText('Loading…')).toBeTruthy(),
+      { timeout: PAINT_GATE_DELAY_MS * 3 })
   })
 })
 

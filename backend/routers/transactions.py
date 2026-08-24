@@ -30,6 +30,7 @@ from backend.services.transaction_tags import (
 )
 from backend.json_utils import safe_json_dict
 from backend.services.amazon_import import parse_item_evidence
+from backend.services.categorizer import categorize_transaction, load_categorization_rules
 from backend.services.txn_splits import (
     SPLIT_CATEGORY_SOURCE,
     SplitValidationError,
@@ -79,6 +80,7 @@ class CategoryOverride(BaseModel):
 class SplitPartInput(BaseModel):
     category_id: Optional[str] = None
     amount: Optional[float] = None
+    label: Optional[str] = None
 
 
 class SplitSave(BaseModel):
@@ -253,6 +255,13 @@ def _summary_uncategorized_type_sql(level: str) -> str:
     )
 
 
+# Every summary bucket counts DISTINCT transactions, not rows. The expansion seam fans a split
+# transaction into one row per allocation, and a split may hold several allocations in the same
+# category (two records bought in one order are two items, not one) — so a plain COUNT(*) would report
+# a bucket's row count while its total reported money, and the two would disagree for the same
+# transaction. The list endpoint deliberately keeps COUNT(*): its count drives pagination, so it has to
+# count the rows it will actually return.
+#
 # Signed net for a summary bucket, following the sign convention documented at monthly_trend (see the
 # "Sign convention" note): income-type buckets negate so received income reads positive, while reverses
 # — refunds in an expense bucket, returns in an income bucket — stay negative. This deliberately replaces
@@ -1086,7 +1095,7 @@ def override_category(txn_id: str, body: CategoryOverride):
 
 # --- Splits -----------------------------------------------------------------------------------
 # Allocating one transaction's amount across several categories. The invariants (parts sum to the
-# amount, share its sign, one part per category) and the reporting expansion they feed live in
+# amount, share its sign) and the reporting expansion they feed live in
 # services/txn_splits.py; these endpoints are the editor's surface onto them.
 
 
@@ -1146,21 +1155,57 @@ def suggest_transaction_split(txn_id: str):
     """
     with get_db() as conn:
         txn = conn.execute(
-            "SELECT id, amount, import_evidence_json FROM txn WHERE id = ?", (txn_id,)
+            "SELECT id, amount, owner_id, account_id, import_evidence_json FROM txn WHERE id = ?",
+            (txn_id,),
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
         evidence = safe_json_dict(txn["import_evidence_json"])
         items = parse_item_evidence(evidence)
-        amounts = proportional_allocation(float(txn["amount"]), [i["price"] for i in items])
+        # Weighted by the *extended* list price (unit price × quantity), not the unit price: the export
+        # prices one of a thing, so weighting by it alone gives a line the user bought six of the same
+        # share as a line they bought one of, and pushes the tax/shipping spread onto the single items.
+        amounts = proportional_allocation(float(txn["amount"]), [i["extended_price"] for i in items])
         if not amounts:
             return {"available": False, "parts": []}
+        # The list figures ride along with each proposed amount so the editor can *show its working*:
+        # a share is otherwise an unexplained number, and the arithmetic behind it (this item's list
+        # price against the sum of them, applied to what was actually paid) is exactly what makes it
+        # trustworthy or obviously wrong at a glance.
+        # Each item's own description is run through the user's ordinary categorization rules, so an
+        # order of a dozen things arrives mostly classified instead of as a dozen empty pickers. The
+        # rules are the right source precisely because they are the user's — the marketplace's own
+        # taxonomy stays unused, as everywhere else in this importer.
+        #
+        # It stays a *proposal*: a line no rule claims comes back with no category rather than a guess,
+        # and nothing is written until the user saves. The item's own share is what the matcher sees,
+        # since a rule may be scoped by amount or by debit/credit and the line — not the whole order —
+        # is what it would be classifying. An item the export never priced has no share to offer, so it
+        # is left for the user rather than matched against a number that does not exist.
+        rules = load_categorization_rules(conn)
+        proposed = []
+        for item, amount in zip(items, amounts):
+            category_id = None
+            if amount is not None:
+                match = categorize_transaction(
+                    item["description"], item["description"], item["description"],
+                    amount, conn,
+                    owner_id=txn["owner_id"], account_id=txn["account_id"], rules=rules,
+                )
+                category_id = (match or {}).get("category_id")
+            proposed.append({
+                "label": item["description"],
+                "amount": amount,
+                "category_id": category_id,
+                "unit_price": item["price"],
+                "quantity": item["quantity"],
+                "list_price": item["extended_price"],
+            })
         return {
             "available": True,
-            "parts": [
-                {"description": item["description"], "amount": amount, "category_id": None}
-                for item, amount in zip(items, amounts)
-            ],
+            "list_total": round(sum(i["extended_price"] or 0 for i in items), 2),
+            "categorized": sum(1 for p in proposed if p["category_id"]),
+            "parts": proposed,
         }
 
 
@@ -1739,7 +1784,7 @@ def spending_by_category(
                 COALESCE(p.name, c.name)                      AS group_name,
                 {_summary_uncategorized_type_sql('category')} AS category_type,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
-                COUNT(*)                                      AS count
+                COUNT(DISTINCT t.id)                          AS count
             FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
@@ -1831,8 +1876,8 @@ def spending_by_tag_signature(
         _expanded = txn_effective_sql(conn, expand=True)
         rows = conn.execute(
             f"""
-            SELECT sig, SUM(net) AS net, COUNT(*) AS count FROM (
-                SELECT {sig_sql} AS sig, {signed_amount} AS net
+            SELECT sig, SUM(net) AS net, COUNT(DISTINCT txn_id) AS count FROM (
+                SELECT {sig_sql} AS sig, {signed_amount} AS net, t.id AS txn_id
                 FROM   {_expanded} t
                 LEFT JOIN category c ON c.id = t.category_id
                 LEFT JOIN category p ON p.id = c.parent_id
@@ -1918,7 +1963,7 @@ def spending_by_group(
                 NULL                                                        AS group_color,
                 {_summary_uncategorized_type_sql('group')}                       AS category_type,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('group'))} AS total,
-                COUNT(*)                                                         AS count
+                COUNT(DISTINCT t.id)                                             AS count
             FROM   {_expanded} t
             LEFT JOIN category c  ON c.id  = t.category_id
             LEFT JOIN category p  ON p.id  = c.parent_id
@@ -2002,7 +2047,7 @@ def spending_by_category_in_group(
                 {_summary_uncategorized_name_sql('category')} AS category_name,
                 NULL                                AS category_color,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
-                COUNT(*)                            AS count
+                COUNT(DISTINCT t.id)                AS count
             FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
             {where}
@@ -2183,7 +2228,7 @@ def monthly_trend(
             SELECT
                 strftime('%Y-%m', t.date) AS month,
                 ({sign_factor} * SUM(t.amount)) AS total,
-                COUNT(*)                  AS count
+                COUNT(DISTINCT t.id)      AS count
             FROM   {_expanded} t
             {join_sql}
             {where}

@@ -50,6 +50,11 @@ _CENT = 0.005
 # one while being skipped by every automatic pass.
 MIN_PARTS = 2
 
+# Marketplace item titles are routinely 200+ characters (a real one seen in the wild ran past 230),
+# which is a paragraph rather than a label. Stored text is capped so a pasted title cannot bloat every
+# read of the row; the display side truncates further and shows the whole value on hover.
+MAX_LABEL_LENGTH = 200
+
 
 class SplitValidationError(ValueError):
     """A proposed set of allocations is not a valid split. Carries a user-facing message."""
@@ -98,7 +103,7 @@ def get_split_parts(conn: sqlite3.Connection, txn_id: str) -> list[dict]:
     """One split's allocations, with their category names resolved for display."""
     rows = conn.execute(
         """
-        SELECT s.id, s.category_id, s.amount, s.sort_order,
+        SELECT s.id, s.category_id, s.amount, s.sort_order, s.label,
                c.name AS category_name, p.name AS group_name
         FROM   txn_split s
         LEFT JOIN category c ON c.id = s.category_id
@@ -126,7 +131,7 @@ def get_split_parts_map(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dic
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
         f"""
-        SELECT s.txn_id, s.category_id, s.amount, c.name AS category_name
+        SELECT s.txn_id, s.category_id, s.amount, s.label, c.name AS category_name
         FROM   txn_split s
         LEFT JOIN category c ON c.id = s.category_id
         WHERE  s.txn_id IN ({placeholders})
@@ -140,6 +145,7 @@ def get_split_parts_map(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dic
             "category_id": row["category_id"],
             "category_name": row["category_name"],
             "amount": row["amount"],
+            "label": row["label"],
         })
     return out
 
@@ -171,16 +177,10 @@ def validate_parts(conn: sqlite3.Connection, amount: float, parts: Sequence[dict
         raise SplitValidationError("A split needs at least two categories.")
 
     normalized: list[dict] = []
-    seen: set[str] = set()
     for index, part in enumerate(parts):
         category_id = part.get("category_id")
         if not category_id:
             raise SplitValidationError("Every amount in a split needs a category.")
-        if category_id in seen:
-            raise SplitValidationError(
-                "A category can only appear once in a split — combine the two into one amount."
-            )
-        seen.add(category_id)
 
         row = conn.execute(
             "SELECT parent_id, is_active FROM category WHERE id = ?", (category_id,)
@@ -207,8 +207,15 @@ def validate_parts(conn: sqlite3.Connection, amount: float, parts: Sequence[dict
             raise SplitValidationError(
                 "Every amount in a split has to move money the same direction as the transaction."
             )
+        # A free-text note naming what this allocation covers — an imported order's item description
+        # by default, which the user is expected to cut down to something readable. Purely descriptive:
+        # it never reaches a category or an amount, so nothing in reporting depends on it. Capped
+        # because a marketplace item title can run to several hundred characters.
+        label = (part.get("label") or "").strip() or None
+        if label and len(label) > MAX_LABEL_LENGTH:
+            label = label[:MAX_LABEL_LENGTH].rstrip()
         normalized.append(
-            {"category_id": category_id, "amount": part_amount, "sort_order": index}
+            {"category_id": category_id, "amount": part_amount, "sort_order": index, "label": label}
         )
 
     total = round(sum(p["amount"] for p in normalized), 2)
@@ -235,9 +242,10 @@ def save_split(conn: sqlite3.Connection, txn_id: str, parts: Sequence[dict]) -> 
 
     conn.execute("DELETE FROM txn_split WHERE txn_id = ?", (txn_id,))
     conn.executemany(
-        "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order, label) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (str(uuid.uuid4()), txn_id, p["category_id"], p["amount"], p["sort_order"])
+            (str(uuid.uuid4()), txn_id, p["category_id"], p["amount"], p["sort_order"], p["label"])
             for p in normalized
         ],
     )
