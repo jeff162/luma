@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
 // Contract for the vault gate. What matters here is not that a dialog opens but that the *caller's*
 // promise settles the right way in every exit: the bug this replaced was a gated action that opened the
 // panel and then silently dropped itself, which no assertion about the dialog would have caught.

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
 // The two rules that made a fully-successful bulk Keep report itself as a failure.
 //
 // `resolve-suspect` is issued once per selected row, but a cross-account Keep *cascades* — one call

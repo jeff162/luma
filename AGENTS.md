@@ -87,6 +87,17 @@ Before working on shared systems, persistence, or invariants — same rule — r
 
 - Do not modify working logic unless explicitly requested
 
+## License Headers
+
+The repo carries REUSE-style per-file SPDX headers (`SPDX-FileCopyrightText` plus
+`SPDX-License-Identifier: AGPL-3.0-or-later`) at the very top of a file.
+
+- Add the header to **substantive source** — files that carry real application logic worth licensing
+
+- Omit it on tests, scripts, and configuration: there is nothing meaningful to copyright in scaffolding, and the boilerplate is noise
+
+- The tree is currently consistent with this: no test, script, or config file carries a header. Keep it that way — do not add one to a new test just because older code elsewhere has it
+
 ## Local Scratch Files
 
 - Use `data/` for local helper scripts, screenshots, notes, temporary test artifacts, and other scratch files that should not be committed

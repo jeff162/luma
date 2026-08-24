@@ -258,6 +258,18 @@ instruction and fix the drift rather than silently choosing the looser version.
   while a session is open, so rows get resolved, synced, or trashed between two scans. Re-derive every
   number a comparison depends on in the same pass rather than quoting an earlier run's totals.
 
+- **The pre-commit hook only sees *staged* files, so running it proves nothing about a new one.**
+  `scripts/pre-commit.sh` reads `git diff --cached`, so an untracked file is invisible to it — and the
+  most likely file to trip a lint is the one just written. This was reported as "the hook passes" and the
+  user's very next commit failed on exactly the new file. To check work that adds files, either stage them
+  first or invoke the checkers directly with the paths (`node scripts/check-backend-timestamps.js <files>`),
+  which is what the hook does anyway.
+
+- **An assertion that cannot fail is worse than no assertion.** Before trusting a new check, ask what it
+  would take for it to go red. The concrete case: the shared `Button` never sets the DOM `disabled`
+  attribute (it dims and drops the handler), so `expect(btn.disabled).toBe(true)` passes against every
+  implementation of everything. Assert the consequence — click it, and check the call did not happen.
+
 - Prove new guards actually fire. A green result is only meaningful after seeing the same check fail
   on known-bad input. This bites hardest when **changing a default or a constant**: run the new test
   against the old value and require it to fail. A test that passes either way is not testing the

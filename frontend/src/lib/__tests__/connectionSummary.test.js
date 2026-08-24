@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
 // The provider card header's one line, and the precedence that keeps it from contradicting the button
 // sitting beside it.
 

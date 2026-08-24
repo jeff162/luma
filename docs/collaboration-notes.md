@@ -30,6 +30,8 @@ A key input to that dial: the user does not review most of the code directly and
 
 ## UI And Interaction Preferences
 
+- **Settings is a staging area, not a home.** A few things genuinely belong there, but for the most part it is where work-in-progress is parked while a feature is built — so when a surface has a natural home beside the thing it affects, put it there rather than in Settings. The worked example: backup-key management moved from Settings onto the Backup page, next to the button it is a precondition for, because it is used by nothing else and a precondition two pages from its action reads as unrelated configuration. Prefer moving over mirroring — two homes for one control is exactly the drift the code-structure preferences below warn about.
+
 - Prefer in-app dialogs, confirmations, and editing panels over browser-native `alert()`, `confirm()`, and `prompt()` when the app already has a clear visual language.
 
 - Shared UI behavior should come from shared components or shared logic, not from repeated page-specific copies that must be kept in sync manually.

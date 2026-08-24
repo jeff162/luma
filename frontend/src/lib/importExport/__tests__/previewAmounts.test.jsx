@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
 // The preview's amounts are the backend's answer, so what matters on this side is that the right
 // question gets asked and the answer survives to the row: the request refires when the convention or
 // a mapped amount column changes, a request in flight doesn't blank the amounts already on screen,
