@@ -479,6 +479,20 @@ self-describing, which is a format obligation, not a UI one: see `data-model.md`
 must key on content, never on the file's name — the user renames files, and a name is not a fact about
 what is inside.
 
+### A secret shown once must be saved before whatever depends on it exists
+
+Some values are displayed exactly once and are unrecoverable afterwards — 2FA recovery codes, and the
+private key of a generated backup keypair. For those, the order of operations *is* the safety property:
+offer the download/copy first, require an explicit acknowledgment that it was saved, and only then create
+the thing that depends on it. Creating first and revealing after leaves a window where the dependent
+object exists and its secret does not — a backup recipient whose private key was never kept means backups
+encrypted to a key nobody holds, and that is discovered on the day they are needed.
+
+Say plainly what losing it costs and that there is no reset. Offer both a download and a clipboard copy,
+with a fallback message when the clipboard is unavailable (a non-secure context or a denied permission)
+telling the user to select and copy manually — otherwise the failure is a button that silently does
+nothing. And drop the value from component state as soon as the dependent object is created.
+
 ## Confirmation and completion flows
 
 Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.

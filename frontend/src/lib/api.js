@@ -811,9 +811,18 @@ export const api = {
   getCredentialsBackupStatus: () => request('/import-export/backup/credentials/status'),
   getRestoreTargetStatus: () => request('/import-export/restore/target-status'),
   createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),
+  // Generates a keypair and stores NOTHING: the private key comes back once, in this response, and the
+  // caller submits the public half through createBackupRecipient only after the user has saved it.
+  generateBackupKeypair: (data) => request('/import-export/backup/keypair', { method: 'POST', body: JSON.stringify(data) }),
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
-  exportBackup:      (encrypted = false)  => `/api/import-export/backup${encrypted ? '?encrypted=true' : ''}`,
+  // `recipientIds` narrows an encrypted backup to a chosen subset; omitted means every enabled recipient,
+  // which is what a single-recipient install always wants.
+  exportBackup: (encrypted = false, recipientIds = null) => {
+    if (!encrypted) return '/api/import-export/backup'
+    const scope = recipientIds?.length ? `&recipients=${encodeURIComponent(recipientIds.join(','))}` : ''
+    return `/api/import-export/backup?encrypted=true${scope}`
+  },
   // No `encrypted` variant: a credentials backup is ciphertext already (see export_credentials).
   exportCredentials: ()                   => '/api/import-export/backup/credentials',
   inspectBackupFile: async (file) => {
@@ -876,17 +885,22 @@ export async function downloadUrl(url) {
   // Filename comes from Content-Disposition; the server already dates and names these.
   const disposition = res.headers.get('Content-Disposition') || ''
   const match = /filename="?([^"';]+)"?/i.exec(disposition)
+  saveBlob(blob, match ? match[1] : 'download')
+}
+
+// Hand a blob to the browser as a download. Shared rather than inlined because the revoke timing below
+// is a real trap: revoking synchronously can beat the click through in some browsers and save a
+// zero-byte file, which a second copy of this would very plausibly get wrong.
+export function saveBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob)
   try {
     const anchor = document.createElement('a')
     anchor.href = objectUrl
-    anchor.download = match ? match[1] : 'download'
+    anchor.download = filename
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
   } finally {
-    // Revoked on a turn of the event loop: revoking synchronously can beat the click through in some
-    // browsers and yield a zero-byte save.
     setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
   }
 }

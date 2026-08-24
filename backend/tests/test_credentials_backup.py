@@ -18,10 +18,13 @@ The invariant these tests defend is narrow and absolute: **no usable secret ever
 from __future__ import annotations
 
 import json
+import base64
 import unittest
 
 from backend.db.database import get_db
-from backend.routers.import_export.backup import read_payload_bytes, _stamp_content_hash
+from backend.routers.import_export.backup import (
+    CONTENT_HASH_FIELD, read_payload_bytes, _stamp_content_hash,
+)
 from backend.services import crypto_service as cs
 from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
@@ -178,6 +181,61 @@ class CredentialsBackupTests(unittest.TestCase):
             r = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+
+    def test_a_backup_predating_a_passphrase_change_still_restores_here(self):
+        # Changing a passphrase re-wraps the SAME workspace DEK and leaves stored ciphertext untouched, so
+        # an older backup's secrets are still valid on this install. It was never stranded here — only on
+        # a different install — and asking for the old passphrase to copy bytes the live key already opens
+        # is ceremony for a secret the user may no longer have.
+        with api_client() as (client, _):
+            user_id = self._seed(client)
+            payload = self._export(client)
+            changed = client.post("/api/auth/vault/change-passphrase", json={
+                "old_passphrase": PASSPHRASE, "new_passphrase": PASSPHRASE + "-rotated",
+            })
+            self.assertEqual(changed.status_code, 200, changed.text)
+            with get_db() as conn:
+                conn.execute("DELETE FROM connection")
+                conn.execute("DELETE FROM provider_config")
+
+            r = client.post("/api/import-export/restore/credentials", json={"data": payload})
+
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+
+    def test_another_members_backup_restores_without_their_passphrase(self):
+        # Every member's slot seals the same workspace DEK, so whether a restore is a byte copy is a
+        # property of the workspace, not of who exported the file. Rewriting the slot's owner stands in for
+        # a colleague's export: it is the identity mismatch that used to make this look foreign.
+        with api_client() as (client, _):
+            user_id = self._seed(client)
+            payload = self._export(client)
+            payload["vault"]["user_id"] = "some-other-member"
+            payload.pop(CONTENT_HASH_FIELD, None)
+            with get_db() as conn:
+                conn.execute("DELETE FROM connection")
+
+            r = client.post("/api/import-export/restore/credentials", json={"data": _stamp_content_hash(payload)})
+
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(user_id)[0], TOKEN)
+
+    def test_a_genuinely_foreign_backup_still_asks_and_says_whose_passphrase(self):
+        # The DEK does not open it, so a passphrase really is needed — and the message has to say *which*,
+        # because "the one it was created with" leaves someone guessing among their own.
+        with api_client() as (client, _):
+            self._seed(client)
+            payload = self._export(client)
+            payload["vault"]["user_id"] = "someone-elsewhere"
+            payload["connections"][0]["credential_enc"] = base64.urlsafe_b64encode(b"not-our-ciphertext").decode()
+            payload.pop(CONTENT_HASH_FIELD, None)
+
+            r = client.post("/api/import-export/restore/credentials", json={"data": _stamp_content_hash(payload)})
+
+            self.assertEqual(r.status_code, 400, r.text)
+            detail = r.json()["detail"]
+            self.assertEqual(detail["code"], "backup_passphrase_required")
+            self.assertIn("another install", detail["message"])
 
     def test_restoring_the_downloaded_file_through_the_upload_endpoint(self):
         # Every other restore test here posts a parsed payload, but the app uploads the *file* — a

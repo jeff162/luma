@@ -17,8 +17,9 @@
 
 import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
-import { Button, Card, Input } from '../ui.jsx'
+import { AppDialog, Button, Card, Input } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
+import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
 import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
@@ -46,7 +47,7 @@ export function BackupRestoreTab() {
   const [demoLoaded, setDemoLoaded] = useState(false)
   useEffect(() => {
     let cancelled = false
-    api.getDemoDataStatus().then(r => { if (!cancelled) setDemoLoaded(!!r?.loaded) }).catch(() => {})
+    api.getDemoDataStatus().then(r => { if (!cancelled) setDemoLoaded(!!r?.loaded) }).catch(() => { })
     return () => { cancelled = true }
   }, [])
   const [backupRecipients, setBackupRecipients] = useState([])
@@ -66,6 +67,8 @@ export function BackupRestoreTab() {
   const [pendingConfirm, setPendingConfirm] = useState(null)
   const [backupMsg, setBackupMsg] = useState(null)
   const [downloading, setDownloading] = useState(false)
+  // Non-null while the recipient picker is open, holding the ids currently ticked.
+  const [recipientChoice, setRecipientChoice] = useState(null)
   // The passphrase of the vault that produced a credentials backup — asked for only once the server
   // says the file came from elsewhere, so the ordinary "my own backup, this machine" restore never
   // sees a prompt at all.
@@ -97,7 +100,8 @@ export function BackupRestoreTab() {
   }
 
   useEffect(() => {
-    api.getBackupRecipients().then(setBackupRecipients).catch(() => { })
+    // Recipients are not fetched here: the section below owns that list and reports it up, so fetching
+    // it again would be a second request for an answer already on the page.
     api.getCredentialsBackupStatus().then(setCredentialBackupStatus).catch(() => { })
     refreshVault()
   }, [])
@@ -119,6 +123,25 @@ export function BackupRestoreTab() {
 
   // Fetch-and-save rather than navigate: a navigation hands the response to the browser, so any error
   // status renders as a raw JSON page with the app gone from under it.
+  // With one enabled recipient there is no choice to make, so the encrypted backup starts immediately.
+  // With several there is: a file going somewhere less trusted may not want every key on the list able to
+  // open it. Deliberately conditional — a dialog that shows the same single entry every time and is always
+  // accepted trains the user to dismiss it, which is worse than no dialog, since it looks like
+  // verification while being a click-through.
+  function startEncryptedBackup() {
+    if (enabledRecipients.length > 1) {
+      setRecipientChoice(enabledRecipients.map(r => r.id))
+      return
+    }
+    startDownload(api.exportBackup(true))
+  }
+
+  function confirmRecipientChoice() {
+    const chosen = recipientChoice
+    setRecipientChoice(null)
+    startDownload(api.exportBackup(true, chosen))
+  }
+
   async function startDownload(url) {
     setBackupMsg(null)
     setDownloading(true)
@@ -261,14 +284,14 @@ export function BackupRestoreTab() {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No data-source credentials.</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Contains categories, rules, owners, accounts, transactions. No data-source credentials.</div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <Button variant="ghost" disabled={downloading} onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
-            <Button variant="ghost" disabled={enabledRecipients.length === 0 || downloading} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
+            <Button variant="ghost" disabled={enabledRecipients.length === 0 || downloading} onClick={startEncryptedBackup}>Generate encrypted backup</Button>
           </div>
           {enabledRecipients.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-              Add an enabled backup recipient in Settings to enable encrypted backup creation.
+              Add an enabled backup key below to enable encrypted backup creation.
             </div>
           ) : (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
@@ -279,8 +302,7 @@ export function BackupRestoreTab() {
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-            Your data-source credentials, backed up still encrypted. There is no separate encrypted
-            version because the contents never leave the vault in the clear.
+            Encrypted data-source credentials back up.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             <Button
@@ -290,7 +312,12 @@ export function BackupRestoreTab() {
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
             {hasStoredCredentials
-              ? 'Restoring it needs the vault passphrase that was in force when it was made — that passphrase is the only thing protecting the file, so store it somewhere you would store a password.'
+              // Two facts that only bite elsewhere, and are easy to discover too late. The passphrase
+              // named is *this* user's: the file carries the exporting account's vault slot and no
+              // other, so in a shared workspace it is not interchangeable with a colleague's. Neither
+              // applies to restoring here — this install's key opens its own backups whatever the
+              // passphrase has since become — so the caveat is scoped to somewhere else.
+              ? 'Restoring this on another install requires your vault passphrase as it is right now — the file carries your key material, not another member\u2019s. Keep old passphrases after a change if older backups may be restored elsewhere.'
               : 'No stored data-source credentials exist to back up.'}
           </div>
         </div>
@@ -302,6 +329,45 @@ export function BackupRestoreTab() {
           }}>{backupMsg}</div>
         ) : null}
       </Card>
+
+      {recipientChoice ? (
+        <AppDialog
+          title="Who should be able to read this backup?"
+          description="Every key ticked here can open the file with its matching private key. The manifest names them in plain text, so the file itself says which key it needs."
+          onClose={() => setRecipientChoice(null)}
+          actions={<>
+            <Button variant="ghost" onClick={() => setRecipientChoice(null)}>Cancel</Button>
+            {/* Not "Generate backup": that is the plain-backup button on the page behind this, and two
+                controls with one label is a question about which one just ran. */}
+            <Button onClick={confirmRecipientChoice} disabled={recipientChoice.length === 0}>
+              Encrypt backup
+            </Button>
+          </>}
+        >
+          <div style={{ display: 'grid', gap: 8 }}>
+            {enabledRecipients.map(recipient => (
+              <label key={recipient.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  name={`backup-scope-${recipient.id}`}
+                  checked={recipientChoice.includes(recipient.id)}
+                  onChange={() => setRecipientChoice(prev => (
+                    prev.includes(recipient.id)
+                      ? prev.filter(id => id !== recipient.id)
+                      : [...prev, recipient.id]
+                  ))}
+                />
+                <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{recipient.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    {recipient.fingerprint}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </AppDialog>
+      ) : null}
 
       <SectionTitle>Restore</SectionTitle>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -328,8 +394,7 @@ export function BackupRestoreTab() {
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-            Choose a backup file — a data backup or a data-source credentials backup. {APP_NAME} reads
-            the file to tell which it is, and says so before restoring anything.
+            Restore a {APP_NAME} data backup or a data-source credentials backup.
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
@@ -375,7 +440,7 @@ export function BackupRestoreTab() {
                 {restoreIsCredentials
                   ? 'Data-source credentials, still encrypted. Restoring replaces the credentials stored here; accounts and transactions are not touched.'
                   : restoreInspection.encrypted
-                    ? `${restoreInspection.cipher || 'Encrypted'} backup for ${restoreInspection.recipient_count || 0} recipient${restoreInspection.recipient_count === 1 ? '' : 's'}. Restoring replaces all existing data.`
+                    ? `${restoreInspection.cipher || 'Encrypted'} backup, readable by ${restoreInspection.recipient_count || 0} backup key${restoreInspection.recipient_count === 1 ? '' : 's'}. Restoring replaces all existing data.`
                     : `Readable ${restoreInspection.container === 'zip' ? 'zipped' : 'plain JSON'} backup file. Restoring replaces all existing data.`}
               </div>
               {restoreInspection.encrypted && Array.isArray(restoreInspection.recipients) && restoreInspection.recipients.length > 0 && (
@@ -452,6 +517,13 @@ export function BackupRestoreTab() {
           </div>
         </div>
       </Card>
+
+      {/* Last of the three, deliberately. Backup leads because it is what the page is for; Restore is a
+          fixed height and keeps its heading on screen; the key list is the only section that can grow, so
+          it goes where growth pushes nothing off the page. It is also the least-visited of the three —
+          configuration for the encrypted backup above rather than an action in its own right. */}
+      <SectionTitle>Backup Encryption Keys</SectionTitle>
+      <BackupRecipients onRecipientsChange={setBackupRecipients} />
 
       {pendingConfirm && (
         <div

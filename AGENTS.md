@@ -6,14 +6,20 @@ The rules an agent most reliably talks itself out of "just this once." There is 
 enough. If a situation *feels* like it warrants an exception, that feeling **is the rule firing** —
 stop and follow the rule. Check these *before* acting, not after.
 
-1. **Never drive a browser, launch the app, or run the UI/E2E test suite to check your own work.**
+1. **Never drive a browser, launch the app, or run the Playwright/E2E suite to check your own work.**
    Confirming a change works, checking a page renders, or verifying a refactor didn't break something
    by launching the app or running **Playwright / any browser-driven test** is prohibited — hand that
    check to the user instead. *Not exceptions:* "it's a bug," "it's a big/critical refactor,"
    "Playwright is a test suite, not a browser," "just one quick look." The browser is allowed **only**
    to diagnose a specific bug the user reported that cannot be diagnosed another way — never to confirm
-   your own changes. (Backend unit tests you write and run are fine; this is about browsers and app/UI
-   driving.)
+   your own changes.
+
+   **Unit tests are fine and expected, and that includes the frontend's.** The **vitest** suite
+   (`npm test`) runs in Node/jsdom — no browser engine, no app, nothing rendered to a screen — so it is a
+   unit runner like the backend's, and leaving it unrun means shipping UI changes with nothing behind them
+   but lint and a build. What this rule forbids is the **Playwright** suite (`npm run ui:test*`) and
+   launching the app. The repo draws the same line itself — see the `test:` block in
+   `frontend/vite.config.js`.
 
 2. **A question or a bug report is not a build request.** When the user asks a question, reports what
    the app did, asks "is this right?", or muses about a direction — answer and, if useful, propose; do

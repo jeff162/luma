@@ -785,6 +785,14 @@ reaches material it cannot interpret. Consequences, each load-bearing:
   locked vault is not an error on this path. (It used to answer `423`, and because the button was a plain
   browser navigation rather than a fetch, the user got a raw JSON error page in place of the app — see
   `downloadUrl` in `lib/api.js`.)
+- **One slot, the exporting user's.** `export_vault_slot` asks for `method="passphrase"`, so the file
+  carries that account's passphrase slot and nothing else — never a passkey (its key comes from an
+  authenticator's PRF for a device-bound credential, so it cannot be reproduced during a restore
+  elsewhere), and never another member's. Consequence for a shared workspace: **cross-install**, only the
+  exporting user's passphrase opens the file. That is deliberate — each slot is an independently
+  offline-crackable wrap of the same DEK, so carrying every member's would make the file only as strong as
+  the weakest passphrase among them. The alternative is recorded in
+  `backlog/backup-restore-scope-and-secrets.md`.
 - **The slot material is what makes the file portable.** The ciphertext lives in the data DB and the key
   that opens it in the control DB (`vault_slot`), so a credentials backup carrying only one half restores
   nowhere but the install that produced it. Including it is safe *because* every part of it is guarded by
@@ -793,9 +801,19 @@ reaches material it cannot interpret. Consequences, each load-bearing:
 - **There is no encrypted variant.** A payload that is already ciphertext gains nothing from the RSA
   recipient layer, so the credentials section offers one button and no choice. (Data backups keep theirs
   — that payload really is plaintext.)
-- **Restore is where the passphrase is asked for**, and only when it must be. A file whose `vault`
-  matches the local slot (`crypto_service.vault_slot_is_local`) restores **verbatim** — the ciphertext is
-  already valid against the live DEK, so no passphrase, no unlock, no re-encryption. A file from
+- **Restore is where the passphrase is asked for**, and only when it must be. What decides that is
+  whether the file's ciphertext is **already valid under the live workspace DEK** — a property of the
+  workspace, not of who exported the file. Two checks establish it: the file carrying *this* slot
+  (`crypto_service.vault_slot_is_local`), which is cheap and works with the vault still locked; failing
+  that, trial-opening one of the file's secrets with the live DEK, which needs the vault unlocked because
+  it uses the key. Either way the rows go back **verbatim** — no passphrase, no re-encryption.
+
+  The second check is not a refinement of the first, it covers cases the first calls foreign. **Every
+  member's slot seals the same DEK**, so a colleague's backup restores verbatim on the shared install;
+  identity alone would demand their passphrase to re-key data that is already correct. And because
+  changing a passphrase re-wraps the *same* DEK, leaving stored ciphertext untouched, a backup predating a
+  passphrase change was never stranded on **this** install either — only on a different one. That is the
+  precise scope of "keep your old passphrase": it is about restoring elsewhere. A file from
   elsewhere needs the passphrase *that backup* was made with (`unwrap_dek_from_slot`, whose AAD is the
   exporting `user_id` — hence that id in the payload) **and** the local vault unlocked, because each
   secret is reopened with the backup's DEK and re-sealed under this workspace's own. A foreign slot is
@@ -861,6 +879,55 @@ endpoint refuses the other kind by name rather than by symptom.
 **Content integrity: a digest per member, and the hash it replaced.** A version-10 archive records the sha256 of each member in `meta.json`, and restore recomputes them all — in a pass of its own, *before* anything destructive — refusing a mismatch with a `400`. That is the same guarantee version 9 got from a single `content_sha256` field embedded in the payload, but checkable while streaming instead of by re-serializing the whole payload to compare one hash, and it extends to members that are not JSON at all. Versions 7-9 and the credentials backup still carry `content_sha256` over the canonical payload (sorted keys, compact separators, the hash field itself excluded), and so does any payload handed to `POST /restore` as a dict, since a materialized payload has rows rather than member bytes and needs an integrity check of its own. Either form is **optional and additive**: absent → skipped (a backup predating the field, or one a power user deliberately stripped, still restores), exactly like `schema_version`. It is deliberately an *unsigned* checksum — it detects **accidental** corruption, not tampering: anyone editing the plaintext file can recompute or drop the hash, so it makes no authenticity claim. Tamper-/authenticity-proofing is the **encrypted backup's** job: its `payload.bin` is sealed with AES-256-GCM, whose auth tag is verified at decrypt time (a stronger, keyed check), and the hash rides along inside the encrypted inner payload for free rather than being duplicated at the envelope level.
 
 The **encrypted backup envelope** carries the `format` tag `"luma-encrypted-backup"` in its `manifest.json`.
+
+**The keypair generator stores nothing.** Encrypted backups need a keypair the user owns, and producing
+one otherwise means knowing an `openssl` incantation — a barrier unrelated to the decision being made. So
+`POST /import-export/backup/keypair` will make one, with **no side effects at all**: no recipient row, no
+file, no record that it was called. The private half is returned once in that response (`Cache-Control:
+no-store`, never written to either database) and the *caller* submits the public half to
+`POST /backup/recipients` only after the user has saved it — so a recipient can never exist whose private
+key was never kept. Optionally passphrase-protected: a passphrase produces standard PKCS8
+(`BestAvailableEncryption`), so the file is readable by `openssl pkcs8` and by restore's own
+`load_pem_private_key`, and improves as the library does.
+
+Generating server-side rather than in the browser is deliberate. The browser's selling point — that the
+app never sees the private key — does not survive the observation that the app is what serves the script
+doing the generating, and it would cost hand-built PKCS8 encryption in JavaScript whose failure mode is a
+key file that only proves unreadable at restore. Here the library that writes the key is the one that
+reads it back.
+
+**The UI calls these "backup keys"; the code, the API and the file format call them recipients.** The
+divergence is deliberate, not drift: `manifest.json` writes `recipient_id` and `wrapped_keys[].label` into
+every encrypted backup ever produced, so that name is permanent in the format, while "recipient" reads as
+a person being sent something — which is wrong for what is usually your own key, kept so you can read your
+own file later. The line falls at the user-visible boundary: display text says *backup key*, and
+`backup_recipient`, `/backup/recipients`, `?recipients=` and the manifest fields keep the original name so
+the code agrees with the artifact it writes. Do not "fix" one side to match the other.
+
+**`enabled` is eligibility; the selection is per backup.** An encrypted export with no recipient list
+seals to every enabled recipient, which is what a single-recipient install always wants. Naming ids
+(`?recipients=…`) narrows it, for a file going somewhere that should not be openable by every key on the
+list — and an id that is unknown or not enabled is an **error, not a silent omission**, since encrypting
+to fewer keys than were asked for yields a file the user believes one of their keys opens and none does,
+discovered at restore. The UI asks which keys only when more than one is enabled: a dialog showing a
+single entry that is always accepted trains dismissal rather than providing verification.
+
+The public key stays retrievable from its recipient row (an **Export** action saving SPKI PEM — `.pem`,
+not `.pub`, which reads as an OpenSSH key and is a different format). That exists for one use: adding the
+same recipient on another install, which is a paste-the-public-key job. It is deliberately *not* a
+recovery path, because there is nothing to recover — a PKCS8 private key already contains its public half
+(`openssl rsa -in key.pem -pubout` reproduces it), which is also why the generator hands over the private
+key alone rather than a pair. Bundling both would imply the public half is precious and dilute the one
+message that file has to carry.
+
+**Recipient names must be unique**, compared case-insensitively on the trimmed value, on both add and
+rename. Not tidiness: the name is how a person tells two saved keys apart, since the fingerprint beside it
+is forty characters of base64 that settles nothing at a glance — so two rows sharing a name make the list
+unreadable at exactly the moment it matters, choosing which key a backup was sealed to.
+
+Keys are required to be **at least 2048-bit**, whether generated or pasted (the generator offers 2048 /
+3072 / 4096 and defaults to 4096). The floor is not ceremony: a backup is a long-lived artifact, so the
+key has to hold for however long the file sits on a drive.
 
 The payload is also **stamped** with the source data DB's `instance_id` (from `db_meta`) and its `access_mode` (`local`/`auth`). Restore uses this as a **compatibility guard** so it can't silently replace the wrong system: it proceeds freely when the target is empty (no accounts/transactions — a fresh install) or when restoring this system's *own* backup (matching `instance_id`) in the same mode, but returns `409 {code: "restore_incompatible", reasons: […]}` when the target already has data and the backup came from a *different* `instance_id` (`different_system`), when the access modes differ (`mode_mismatch`), or when the backup's `schema_version` is **newer** than this build's `CURRENT_VERSION` (`newer_schema` — the lossy downgrade above). An older or absent `schema_version` is safe and never flagged. The UI turns that 409 into an explicit confirmation and retries with a `force` flag; `force` is the only way past the guard, so an accidental cross-system, cross-mode, or downgrade wipe always requires a deliberate second confirmation.
 

@@ -118,7 +118,9 @@ instruction and fix the drift rather than silently choosing the looser version.
   specific reported bug you cannot localize any other way; it is never for re-checking UI work or a
   refactor (the user inspects that), and "it makes me surer" is not a reason. "It's a bug," "it's a
   big refactor," and "Playwright is a test, not a browser" are not exceptions — hand the check to the
-  user. (Backend unit tests you write and run are fine.)
+  user. (Unit tests you write and run are fine — the backend suite, and the frontend's vitest suite,
+  which runs in Node/jsdom rather than a browser. Run vitest after a UI change: it is the only thing
+  besides lint and a build that can catch a frontend regression without costing the user a round trip.)
 
 - If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
   the specific processes or ports launched for that session. Never use broad process-name kills.

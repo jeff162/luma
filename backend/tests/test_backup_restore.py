@@ -32,6 +32,9 @@ from backend.db.control_database import auth_required
 from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import (
     BACKUP_PAYLOAD_VERSION,
+    BackupKeypairRequest,
+    BackupRecipientCreate,
+    BackupRecipientUpdate,
     BACKUP_SECTION_NAMES,
     CONTENT_HASH_FIELD,
     RestoreRequest,
@@ -39,13 +42,16 @@ from backend.routers.import_export.backup import (
     _stamp_content_hash,
     _verify_payload_content_hash,
     build_backup_data,
+    create_backup_recipient,
     export_backup,
+    generate_backup_keypair,
     inspect_backup_file,
     restore_backup,
     restore_backup_file,
     restore_credentials_file,
     restore_from_archive,
     router,
+    update_backup_recipient,
     write_backup_archive,
 )
 from backend.routers.import_export.backup import _zip_json_bytes, read_payload_bytes
@@ -255,6 +261,14 @@ class BackupFixtureTestCase(unittest.TestCase):
         with self._use_db_path():
             with get_db() as conn:
                 return build_backup_data(conn)
+
+    def _drain(self, response) -> bytes:
+        async def pump():
+            parts = []
+            async for chunk in response.body_iterator:
+                parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+            return b"".join(parts)
+        return asyncio.new_event_loop().run_until_complete(pump())
 
     def _upload(self, content: bytes, filename: str) -> UploadFile:
         return UploadFile(file=io.BytesIO(content), filename=filename)
@@ -542,7 +556,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
                 dst.writestr(name, content if name == member else src.read(name))
         return out.getvalue()
 
-    def _add_recipient(self):
+    def _add_recipient(self, label="Test key"):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         public_pem = key.public_key().public_bytes(
             encoding=serialization.Encoding.PEM,
@@ -551,8 +565,8 @@ class BackupArchiveTests(BackupFixtureTestCase):
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO backup_recipient (id, label, public_key, fingerprint) VALUES (?, 'Test key', ?, ?)",
-                    (str(uuid.uuid4()), public_pem, str(uuid.uuid4())),
+                    "INSERT INTO backup_recipient (id, label, public_key, fingerprint) VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), label, public_pem, str(uuid.uuid4())),
                 )
         private_pem = key.private_bytes(
             encoding=serialization.Encoding.PEM,
@@ -561,20 +575,12 @@ class BackupArchiveTests(BackupFixtureTestCase):
         )
         return key, private_pem
 
-    def _drain(self, response) -> bytes:
-        async def pump():
-            parts = []
-            async for chunk in response.body_iterator:
-                parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
-            return b"".join(parts)
-        return asyncio.new_event_loop().run_until_complete(pump())
-
     # --- the container itself --------------------------------------------------------------------
 
     def test_export_endpoint_streams_a_complete_archive(self):
         self._seed_complete()
         with self._use_db_path():
-            response = export_backup(encrypted=False)
+            response = export_backup(encrypted=False, recipients=None)
         body = self._drain(response)
 
         # Declared length must match what is actually sent, or a download shows a progress bar that
@@ -713,7 +719,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         self._seed_complete()
         private_key, _pem = self._add_recipient()
         with self._use_db_path():
-            response = export_backup(encrypted=True)
+            response = export_backup(encrypted=True, recipients=None)
         body = self._drain(response)
 
         with zipfile.ZipFile(io.BytesIO(body)) as zf:
@@ -735,7 +741,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
         tables = self._user_data_tables()
         before = self._counts(tables)
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True))
+            body = self._drain(export_backup(encrypted=True, recipients=None))
 
         with self._use_db_path():
             asyncio.new_event_loop().run_until_complete(restore_backup_file(
@@ -747,13 +753,64 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         self.assertEqual(self._counts(tables), before)
 
+    def test_an_explicit_recipient_list_narrows_who_can_read_it(self):
+        # The per-backup choice: a file going somewhere that should not be openable by every key on the
+        # list. What ends up in the manifest is what the caller asked for, not everything enabled.
+        self._seed_complete()
+        self._add_recipient("Home NAS")
+        chosen, _pem = self._add_recipient("Offsite drive")
+        with self._use_db_path():
+            with get_db() as conn:
+                target = conn.execute(
+                    "SELECT id FROM backup_recipient WHERE label = 'Offsite drive'"
+                ).fetchone()["id"]
+            body = self._drain(export_backup(encrypted=True, recipients=target))
+
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+        self.assertEqual([w["label"] for w in manifest["wrapped_keys"]], ["Offsite drive"])
+        # And the key that was left out genuinely cannot open it.
+        self.assertEqual(len(manifest["wrapped_keys"]), 1)
+
+    def test_omitting_the_list_still_means_every_enabled_recipient(self):
+        self._seed_complete()
+        self._add_recipient("Home NAS")
+        self._add_recipient("Offsite drive")
+        with self._use_db_path():
+            body = self._drain(export_backup(encrypted=True, recipients=None))
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            manifest = json.loads(zf.read("manifest.json"))
+        self.assertEqual(len(manifest["wrapped_keys"]), 2)
+
+    def test_a_stale_recipient_id_is_an_error_not_a_quiet_omission(self):
+        # Encrypting to fewer keys than were asked for produces a file the user believes one of their keys
+        # opens and none does — discovered at restore, which is the worst moment.
+        self._seed_complete()
+        self._add_recipient("Home NAS")
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                export_backup(encrypted=True, recipients="not-a-real-id")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_a_disabled_recipient_cannot_be_selected(self):
+        # `enabled` is eligibility: a key switched off must not come back through an explicit id.
+        self._seed_complete()
+        self._add_recipient("Home NAS")
+        with self._use_db_path():
+            with get_db() as conn:
+                rid = conn.execute("SELECT id FROM backup_recipient").fetchone()["id"]
+                conn.execute("UPDATE backup_recipient SET enabled = 0")
+            with self.assertRaises(HTTPException) as ctx:
+                export_backup(encrypted=True, recipients=rid)
+        self.assertEqual(ctx.exception.status_code, 400)
+
     def test_encrypted_restore_refuses_a_tampered_payload(self):
         self._seed_complete()
         _key, private_pem = self._add_recipient()
         tables = self._user_data_tables()
         before = self._counts(tables)
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True))
+            body = self._drain(export_backup(encrypted=True, recipients=None))
         sealed = bytearray(zipfile.ZipFile(io.BytesIO(body)).read("payload.bin"))
         sealed[len(sealed) // 2] ^= 0xFF
         tampered = self._rewrite_member(body, "payload.bin", bytes(sealed))
@@ -813,7 +870,7 @@ class BackupArchiveTests(BackupFixtureTestCase):
 
         self._add_recipient()
         with self._use_db_path():
-            body = self._drain(export_backup(encrypted=True))
+            body = self._drain(export_backup(encrypted=True, recipients=None))
             encrypted = asyncio.new_event_loop().run_until_complete(
                 inspect_backup_file(file=self._upload(body, "luma_backup.encrypted.zip")))
         self.assertTrue(encrypted["encrypted"])
@@ -989,3 +1046,123 @@ class RestoreReferentialRepairTests(BackupFixtureTestCase):
 
         self._restore_with(orphan_the_funding_account)
         self.assertEqual(self._counts({"amazon_funding_map"})["amazon_funding_map"], 0)
+
+
+# --- The keypair generator -------------------------------------------------------------------------
+# Encrypted backups need a keypair the user owns, and producing one otherwise means knowing an openssl
+# incantation. The generator removes that barrier; these pin the two properties that make it safe to
+# offer — it keeps nothing, and what it hands back genuinely opens a backup.
+
+
+class BackupKeypairTests(BackupFixtureTestCase):
+    def _generate(self, **kwargs):
+        with self._use_db_path():
+            response = generate_backup_keypair(BackupKeypairRequest(**kwargs))
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store",
+                         "a response carrying a private key must not be cacheable")
+        return json.loads(response.body)
+
+    def _recipient_count(self) -> int:
+        with self._use_db_path():
+            with get_db() as conn:
+                return conn.execute("SELECT COUNT(*) c FROM backup_recipient").fetchone()["c"]
+
+    def test_it_returns_a_usable_pair(self):
+        result = self._generate(key_size=2048)
+        private_key = serialization.load_pem_private_key(result["private_key"].encode(), password=None)
+        public_key = serialization.load_pem_public_key(result["public_key"].encode())
+        self.assertEqual(private_key.key_size, 2048)
+        self.assertEqual(result["key_size"], 2048)
+        self.assertFalse(result["encrypted"])
+        # The halves must actually belong together, which a fingerprint comparison settles.
+        self.assertEqual(
+            public_key.public_numbers(), private_key.public_key().public_numbers()
+        )
+
+    def test_a_passphrase_actually_encrypts_the_private_key(self):
+        result = self._generate(key_size=2048, passphrase="correct horse battery staple")
+        self.assertTrue(result["encrypted"])
+        with self.assertRaises((TypeError, ValueError)):
+            serialization.load_pem_private_key(result["private_key"].encode(), password=None)
+        loaded = serialization.load_pem_private_key(
+            result["private_key"].encode(), password=b"correct horse battery staple"
+        )
+        self.assertEqual(loaded.key_size, 2048)
+
+    def test_a_blank_passphrase_is_not_a_passphrase(self):
+        # Whitespace is what a user leaves behind in an untouched field; it must not produce a key file
+        # that silently demands a passphrase of spaces.
+        result = self._generate(key_size=2048, passphrase="   ")
+        self.assertFalse(result["encrypted"])
+        serialization.load_pem_private_key(result["private_key"].encode(), password=None)
+
+    def test_generating_stores_nothing(self):
+        before = self._recipient_count()
+        self._generate(key_size=2048)
+        self._generate(key_size=2048, passphrase="x")
+        self.assertEqual(self._recipient_count(), before,
+                         "generating a keypair must not create a recipient")
+
+    def test_an_unsupported_key_size_is_refused(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self._generate(key_size=512)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_a_weak_pasted_key_is_refused(self):
+        # The floor applies to keys from anywhere, not only ones this generator made.
+        weak = rsa.generate_private_key(public_exponent=65537, key_size=1024).public_key()
+        pem = weak.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                create_backup_recipient(BackupRecipientCreate(label="Weak", public_key=pem))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("1024-bit", ctx.exception.detail)
+
+    def test_a_duplicate_name_is_refused(self):
+        # The fingerprint beside a name is forty characters of base64 and settles nothing at a glance, so
+        # two recipients sharing a name make the list unreadable exactly when it matters.
+        first = self._generate(key_size=2048)
+        second = self._generate(key_size=2048)
+        with self._use_db_path():
+            create_backup_recipient(BackupRecipientCreate(label="Home NAS", public_key=first["public_key"]))
+            with self.assertRaises(HTTPException) as ctx:
+                create_backup_recipient(BackupRecipientCreate(label="  home nas ", public_key=second["public_key"]))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("already exists", ctx.exception.detail)
+
+    def test_a_rename_cannot_collide_either(self):
+        first = self._generate(key_size=2048)
+        second = self._generate(key_size=2048)
+        with self._use_db_path():
+            create_backup_recipient(BackupRecipientCreate(label="Home NAS", public_key=first["public_key"]))
+            other = create_backup_recipient(BackupRecipientCreate(label="Offsite", public_key=second["public_key"]))
+            with self.assertRaises(HTTPException) as ctx:
+                update_backup_recipient(other["id"], BackupRecipientUpdate(label="Home NAS"))
+            self.assertEqual(ctx.exception.status_code, 400)
+            # Renaming to its own name is not a collision with itself.
+            kept = update_backup_recipient(other["id"], BackupRecipientUpdate(label="Offsite"))
+        self.assertEqual(kept["label"], "Offsite")
+
+    def test_a_generated_key_opens_a_real_encrypted_backup(self):
+        # The claim the whole feature rests on. Everything else here checks shapes; this checks that the
+        # file the user is handed actually decrypts a backup made for its public half — through the same
+        # endpoints the app calls, with a passphrase in play.
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        generated = self._generate(key_size=2048, passphrase="a passphrase")
+        with self._use_db_path():
+            create_backup_recipient(BackupRecipientCreate(label="Generated", public_key=generated["public_key"]))
+            body = self._drain(export_backup(encrypted=True, recipients=None))
+
+        with self._use_db_path():
+            asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                file=self._upload(body, "luma_backup.encrypted.zip"),
+                private_key_file=self._upload(generated["private_key"].encode(), "key.pem"),
+                private_key_passphrase="a passphrase",
+                force=False,
+            ))
+        self.assertEqual(self._counts(tables), before)

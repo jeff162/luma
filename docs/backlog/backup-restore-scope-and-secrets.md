@@ -116,8 +116,10 @@ On the Backup page, backups **named by what they protect, referencing the DB fil
   selective restore is still possible. Encrypted is the recommended default given the contents; a plain
   "backup all" is the widest-blast-radius artifact (hashes + 2FA + vault material in cleartext).
 
-Move (or mirror) the **backup-recipient management** from Settings onto the Backup page — it is used only
-by backup, so co-locating it is the obvious home.
+~~Move (or mirror) the **backup-recipient management** from Settings onto the Backup page — it is used only
+by backup, so co-locating it is the obvious home.~~ **Done 2026-08-23**: moved (not mirrored — two homes
+for one control is drift), and it gained a **keypair generator**, since requiring an `openssl` incantation
+to use encrypted backups is a barrier unrelated to the decision. See `docs/data-model.md` → Backups.
 
 ## Restore-time identity handling (decided in discussion)
 
@@ -442,6 +444,36 @@ Restoring a chain still needs design (the compatibility guard's `instance_id` / 
 would have to apply across files, and restore is currently wipe-and-rebuild with **no merge mode** —
 "restore on top" today means restoring into a non-empty database, which still replaces). But the
 document delta is additive-only, which is the tractable half.
+
+## Should a credentials backup carry every member's passphrase slot?
+
+**Open, and only meaningful once a workspace has more than one member.** The file carries one vault slot —
+the exporting user's passphrase slot — so **cross-install**, only that person's passphrase opens it. Within
+the install that made it, none of this applies: the live DEK opens its own backups, whoever exported them
+and whatever the passphrase has since become (see `data-model.md` → Backups).
+
+So the question is narrow: a shared workspace, a backup being restored somewhere else, and the person who
+exported it unavailable — gone, or having forgotten the passphrase that was in force at the time. Today
+that file is unrecoverable even though every other member holds a key to the same DEK.
+
+| | one slot (today) | every member's passphrase slot |
+| --- | --- | --- |
+| Cross-install restore | only the exporter can | any member can |
+| File's strength | that one passphrase | the **weakest** passphrase among members |
+| Attackable wraps in the file | one | one per member |
+
+The trade is real in both directions. Each slot is an independently offline-crackable wrap of the *same*
+DEK, so adding slots strictly widens the offline attack surface, and the file stops being as strong as its
+owner's passphrase and becomes as strong as the least careful member's — which no member can see or audit.
+Against that, "the person who made the backup has left" is an ordinary way to lose data, and the current
+design has no answer to it beyond taking a fresh backup while you still can.
+
+Two things worth noting before deciding. The Production vault floor already constrains how weak any
+member's passphrase can be, which narrows the weakest-link cost. And a middle option exists: let the
+*exporter choose* whose slots ride along, which keeps the default strong while making a deliberately
+shareable file possible — at the cost of a decision on a screen that currently has none.
+
+Not urgent: single-user installs are unaffected, and multi-user vaults are themselves phase 4–5 work.
 
 ## Open questions
 

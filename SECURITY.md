@@ -52,6 +52,14 @@ oversights, and reports about them will be closed with a pointer here:
 - **Serving over plain HTTP on a trusted LAN** is a supported deployment shape. The transport-security
   policy per topology is documented in the model doc below; the risk of choosing HTTP is the operator's
   to accept.
+- **An encrypted backup names its backup keys in the clear.** The manifest carries each key's name and
+  fingerprint outside the ciphertext (as `recipient_id`/`label`, the field names the format has always
+  used), so anyone holding the file can read them without any key at all. That is deliberate and
+  load-bearing: it is what lets someone restoring a backup work out *which* private key to go and find,
+  before they hold one — the alternative is a file that cannot say what would open it. The consequence to
+  know is that those names are a disclosure: a key named after a person or a place reveals that name to
+  anyone who obtains the file, while the ledger inside stays sealed. Name keys for what they are
+  (`Offsite drive`) rather than for who or where.
 - **The vault passphrase is unrecoverable by design** and is never stored. Losing every way into the
   vault means re-linking data sources; the ledger is unaffected.
 - Findings from automated scanners with no demonstrated path to impact, and vulnerabilities in

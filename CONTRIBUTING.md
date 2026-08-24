@@ -157,9 +157,24 @@ database and are safe to run with the backend still up. If a new dependency land
 For larger backend changes, also start the app and exercise the affected flow
 manually.
 
+### Frontend unit tests
+
+`vitest` is the fast lane and the one to run after any frontend change:
+
+```bash
+cd frontend
+npm test                 # the whole suite
+npm test -- Backup       # files matching a name
+```
+
+It runs in Node — pure helpers in `src/lib` need no DOM, and a test that does opts in per file with a
+`// @vitest-environment jsdom` directive — so it needs no browser and no running app. Tests live in a
+`__tests__/` folder beside the code they cover.
+
 ### UI checks
 
-Playwright is available for local UI verification from `frontend/`:
+Playwright is the end-to-end lane, driving real browsers against a running app. Available for local UI
+verification from `frontend/`:
 
 ```bash
 cd frontend

@@ -54,7 +54,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -119,6 +119,13 @@ class BackupRecipientCreate(BaseModel):
 class BackupRecipientUpdate(BaseModel):
     label: Optional[str] = None
     enabled: Optional[bool] = None
+
+
+class BackupKeypairRequest(BaseModel):
+    # Optional: an empty passphrase yields an unencrypted PKCS8 key, which is a legitimate choice for a
+    # file the user is putting somewhere already protected.
+    passphrase: Optional[str] = None
+    key_size: int = 4096
 
 
 class RestoreRequest(BaseModel):
@@ -188,10 +195,24 @@ def _rsa_fingerprint(public_key) -> str:
     return f"SHA256:{fp}"
 
 
+# Key sizes offered by the generator and required of a pasted key. The floor is not ceremony: a backup
+# is a long-lived artifact, so a key that is merely adequate today is the one that has to hold for the
+# decade the file might sit on a drive. The upper end is bounded because the size is caller-supplied and
+# generation is CPU-bound — an unbounded value is a request that ties up a worker for minutes.
+BACKUP_KEY_SIZES = (2048, 3072, 4096)
+MIN_BACKUP_KEY_BITS = 2048
+
+
 def _validate_backup_recipient_key(public_key_text: str):
     public_key = _load_public_key(public_key_text)
     if not isinstance(public_key, rsa.RSAPublicKey):
         raise HTTPException(status_code=400, detail="Only RSA public keys are supported for encrypted backups")
+    if public_key.key_size < MIN_BACKUP_KEY_BITS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This key is {public_key.key_size}-bit. Backups are long-lived, so keys must be at "
+                   f"least {MIN_BACKUP_KEY_BITS}-bit.",
+        )
     return public_key, _rsa_fingerprint(public_key)
 
 
@@ -252,6 +273,75 @@ def get_credentials_backup_status():
     }
 
 
+@router.post("/backup/keypair")
+def generate_backup_keypair(body: BackupKeypairRequest):
+    """Generate an RSA keypair for encrypting backups, and **store nothing**.
+
+    Encrypted backups need a keypair the user owns, and producing one otherwise means knowing an
+    `openssl` incantation — a barrier that has nothing to do with the decision being made. So the app
+    can make one; what it must not do is keep it.
+
+    This endpoint has no side effects at all: no recipient row, no file, no record that it was called.
+    The public half is offered back for the caller to submit to `POST /backup/recipients` *after* the
+    user has saved the private half, so a recipient can never exist whose private key was never kept —
+    which would mean backups encrypted to a key nobody holds, discovered on the day they are needed.
+
+    The private key is returned exactly once, in this response body. `no-store` keeps it out of any
+    intermediary's cache; it is never written to either database.
+
+    Generating server-side rather than in the browser is deliberate. The alternative's selling point —
+    that the app never sees the private key — does not survive scrutiny, because the app is what serves
+    the script that would do the generating. What it costs is real: hand-built PKCS8 encryption in
+    JavaScript, whose failure mode is a key file that only proves unreadable at restore. Here the
+    library that writes the key is the library that reads it back.
+    """
+    if body.key_size not in BACKUP_KEY_SIZES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Key size must be one of {', '.join(str(size) for size in BACKUP_KEY_SIZES)}.",
+        )
+    passphrase = (body.passphrase or "").strip()
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=body.key_size)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        # `BestAvailableEncryption` is PKCS8 with the strongest scheme this build of the library offers,
+        # so the file stays readable by `openssl pkcs8` and by the restore path's own
+        # `load_pem_private_key` — and improves as the library does, which a hand-rolled wrapper could not.
+        encryption_algorithm=(serialization.BestAvailableEncryption(passphrase.encode("utf-8"))
+                              if passphrase else serialization.NoEncryption()),
+    )
+    public_key = private_key.public_key()
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return JSONResponse(
+        {
+            "public_key":  public_pem.decode("ascii"),
+            "private_key": private_pem.decode("ascii"),
+            "fingerprint": _rsa_fingerprint(public_key),
+            "key_size":    body.key_size,
+            "encrypted":   bool(passphrase),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _reject_duplicate_recipient_label(conn, label: str, exclude_id: Optional[str] = None) -> None:
+    """Names are how a person tells one saved key from another — the fingerprints beside them are
+    forty characters of base64 and settle nothing at a glance. Two recipients called the same thing
+    therefore make the list unreadable at exactly the moment it matters (choosing which key a backup was
+    sealed to). Compared case-insensitively on the trimmed value, because "Home NAS" and "home nas " are
+    the same name to everyone except a string comparison."""
+    clash = conn.execute(
+        "SELECT id FROM backup_recipient WHERE LOWER(TRIM(label)) = LOWER(TRIM(?)) AND id IS NOT ?",
+        (label, exclude_id),
+    ).fetchone()
+    if clash:
+        raise HTTPException(status_code=400, detail=f'A backup key named "{label.strip()}" already exists.')
+
+
 @router.post("/backup/recipients")
 def create_backup_recipient(body: BackupRecipientCreate):
     public_key, fingerprint = _validate_backup_recipient_key(body.public_key)
@@ -263,6 +353,7 @@ def create_backup_recipient(body: BackupRecipientCreate):
         ).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail="That public key is already saved")
+        _reject_duplicate_recipient_label(conn, body.label)
         conn.execute("""
             INSERT INTO backup_recipient (id, label, public_key, fingerprint, algorithm, enabled)
             VALUES (?, ?, ?, ?, 'rsa-oaep-sha256', ?)
@@ -285,9 +376,11 @@ def update_backup_recipient(recipient_id: str, body: BackupRecipientUpdate):
             (recipient_id,),
         ).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Recipient not found")
+            raise HTTPException(status_code=404, detail="Backup key not found")
         fields, params = [], []
         if body.label is not None:
+            # A rename can collide just as an add can, and the list is no more readable for it.
+            _reject_duplicate_recipient_label(conn, body.label, exclude_id=recipient_id)
             fields.append("label = ?")
             params.append(body.label.strip())
         if body.enabled is not None:
@@ -757,19 +850,51 @@ def write_encrypted_archive(source, recipients: list[dict], sink, kind: str = BA
             member.write(encryptor.tag)
 
 
+def _recipients_for_export(conn, requested_ids: Optional[str]) -> list[dict]:
+    """The keys this backup will be readable by.
+
+    `enabled` is eligibility, not the selection: an omitted `recipients` list means "all of them", which
+    is what a single-recipient install always wants and what every caller predating the parameter expects.
+    Naming ids narrows it to those — the per-backup choice, for a file going somewhere that should not be
+    openable by every key on the list.
+
+    An id that is unknown or not enabled is an **error, not a silent omission**. Quietly encrypting to
+    fewer keys than asked for produces a file the user believes one of their keys opens and none does,
+    and they find out when they try to restore it.
+    """
+    eligible = [dict(r) for r in conn.execute("""
+        SELECT id, label, public_key
+        FROM   backup_recipient
+        WHERE  enabled = 1
+        ORDER  BY created_at DESC, label
+    """).fetchall()]
+    if requested_ids is None:
+        return eligible
+
+    wanted = [rid.strip() for rid in requested_ids.split(",") if rid.strip()]
+    by_id = {r["id"]: r for r in eligible}
+    missing = [rid for rid in wanted if rid not in by_id]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail="Some selected backup keys are no longer available — reload the page and try again.",
+        )
+    return [by_id[rid] for rid in wanted]
+
+
 @router.get("/backup")
-def export_backup(encrypted: bool = Query(False)):
-    recipients = []
+def export_backup(
+    encrypted: bool = Query(False),
+    recipients: Optional[str] = Query(
+        None, description="Comma-separated recipient ids; omitted means every enabled recipient."
+    ),
+):
+    selected = []
     if encrypted:
         with get_db() as conn:
-            recipients = [dict(r) for r in conn.execute("""
-                SELECT id, label, public_key
-                FROM   backup_recipient
-                WHERE  enabled = 1
-                ORDER  BY created_at DESC, label
-            """).fetchall()]
-        if not recipients:
-            raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
+            selected = _recipients_for_export(conn, recipients)
+        if not selected:
+            raise HTTPException(status_code=400, detail="No enabled backup keys are configured")
 
     artifact = backup_temp_file()
     try:
@@ -781,7 +906,7 @@ def export_backup(encrypted: bool = Query(False)):
             plain, artifact = artifact, backup_temp_file()
             try:
                 plain.seek(0)
-                write_encrypted_archive(plain, recipients, artifact)
+                write_encrypted_archive(plain, selected, artifact)
             finally:
                 plain.close()
         size = artifact.tell()
@@ -1444,7 +1569,7 @@ def _unwrap_content_key(manifest: dict, private_key_bytes: Optional[bytes], pass
             )
         except Exception:
             continue
-    raise HTTPException(status_code=400, detail="Private key does not match any recipient in this backup")
+    raise HTTPException(status_code=400, detail="This private key does not match any of the keys this backup was encrypted to")
 
 
 def decrypt_archive_to_temp(zf, private_key_bytes: Optional[bytes], passphrase: Optional[str]):
@@ -1591,7 +1716,7 @@ def identify_backup_zip(zf) -> dict:
             raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
         wrapped_keys = manifest.get("wrapped_keys")
         if not isinstance(wrapped_keys, list) or not wrapped_keys:
-            raise HTTPException(status_code=400, detail="Encrypted backup does not contain any wrapped recipient keys")
+            raise HTTPException(status_code=400, detail="Encrypted backup does not contain any wrapped keys")
         recipients = [{
             "recipient_id": wrapped.get("recipient_id"),
             "label": wrapped.get("label") or "Unnamed recipient",
@@ -1679,6 +1804,49 @@ def _read_bare_json(fileobj) -> dict:
         raise HTTPException(status_code=400, detail=f"Invalid JSON backup: {exc}")
 
 
+def _payload_opens_with_local_dek(user, connections: list[dict], provider_configs: list[dict]) -> bool:
+    """Whether this file's secrets are already sealed under the live workspace DEK.
+
+    One sample settles it: every secret in a file was sealed under the same DEK, so if one opens they all
+    do, and if one does not the file belongs to some other workspace key. A file with no ciphertext at all
+    (a v1/v2 plaintext payload) answers False — there is nothing to copy verbatim.
+    """
+    for c in connections:
+        if c.get("credential_enc"):
+            try:
+                crypto_service.decrypt_connection_credential(
+                    user, c["provider"], c["external_id"], c.get("credential"), c["credential_enc"],
+                )
+                return True
+            except Exception:
+                return False
+    for pc in provider_configs:
+        if pc.get("secret_enc"):
+            try:
+                crypto_service.decrypt_app_credential(
+                    user, pc["provider"], pc.get("secret"), pc["secret_enc"],
+                )
+                return True
+            except Exception:
+                return False
+    return False
+
+
+def _foreign_backup_prompt(vault: dict, user) -> str:
+    """Which passphrase to ask for, said in terms of where the file came from.
+
+    Reaching here means the live DEK does not open this file, so the passphrase wanted is never simply
+    "yours" — and "enter the passphrase this was created with" leaves someone guessing which of their own
+    passphrases that was. The slot names the account it was written for, which separates the two cases
+    worth telling apart.
+    """
+    if user and vault.get("user_id") == user.get("id"):
+        return ("This backup was made under a different vault key on this account — enter the vault "
+                "passphrase that was in force when it was created.")
+    return ("This backup came from another install — enter the vault passphrase of the install that "
+            "created it.")
+
+
 @router.post("/restore/credentials")
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     # Blocked while demo data is loaded, like every other path that brings data in. This one is not merely
@@ -1720,11 +1888,27 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version >= 2 else []
     user = getattr(request.state, "user", None)
 
-    # A file taken on THIS install needs nothing: its ciphertext is already valid against the live
-    # DEK, so the rows go back verbatim — no passphrase, no unlock, no re-encryption. Asking for a
-    # passphrase to perform a byte-for-byte copy would be ceremony, and it is the common case (restoring
-    # your own backup onto the machine that made it).
-    verbatim = encrypted and crypto_service.vault_slot_is_local(d.get("vault"), user["id"]) if user else False
+    # A file whose ciphertext is already valid here needs nothing: the rows go back verbatim — no
+    # passphrase, no re-encryption. Two ways to establish that, and the second exists because the first
+    # answers a narrower question than the one that matters.
+    #
+    #   1. The file carries *this* slot (`vault_slot_is_local`). Cheap, and works with the vault still
+    #      locked, since it compares key material rather than using it. The common case: your own backup,
+    #      onto the machine that made it.
+    #   2. The file's ciphertext opens under the live DEK. Needs the vault unlocked — it uses the key —
+    #      but it tests the property directly instead of inferring it from who exported the file.
+    #
+    # What (2) adds is everything (1) mistakes for foreign. Whether a restore is a byte copy depends on
+    # the *workspace* DEK, not on identity: every member's slot seals the same DEK, so a colleague's file
+    # restores verbatim on the shared install and (1) would have demanded their passphrase to re-key data
+    # already correct. It also covers a file predating a passphrase *change*, since changing a passphrase
+    # re-wraps the same DEK and leaves stored ciphertext untouched — so the old backup was never stranded
+    # here at all, only on a different install.
+    verbatim = False
+    if encrypted and user:
+        verbatim = crypto_service.vault_slot_is_local(d.get("vault"), user["id"])
+        if not verbatim and crypto_service.is_unlocked(user["id"]):
+            verbatim = _payload_opens_with_local_dek(user, connections, provider_configs)
 
     # Otherwise every secret has to be reopened with the key that sealed it and re-sealed under this
     # workspace's own. For an encrypted file from elsewhere that key comes from the backup's own slot +
@@ -1741,7 +1925,7 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
         if not body.passphrase:
             raise HTTPException(status_code=400, detail={
                 "code": "backup_passphrase_required",
-                "message": "Enter the vault passphrase this backup was created with.",
+                "message": _foreign_backup_prompt(vault, user),
             })
         try:
             backup_dek = crypto_service.unwrap_dek_from_slot(
