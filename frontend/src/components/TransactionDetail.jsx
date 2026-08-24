@@ -9,6 +9,7 @@ import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, AppNoticeDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import SplitEditorDialog from './SplitEditorDialog.jsx'
 import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -213,6 +214,21 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     setMonthTxns(prev => prev.map(row => (
       row.id === detailTxn.id ? { ...row, ...patch } : row
     )))
+  }
+
+  // The split editor is opened from the category field and reconciles back into the panel's own row, so
+  // the marker and the "manual/imported" note beside it reflect the save without a re-fetch.
+  const [splitEditorOpen, setSplitEditorOpen] = useState(false)
+
+  function handleSplitSaved({ is_split, parts }) {
+    const patch = {
+      is_split,
+      split_part_count: parts?.length || 0,
+      category_source: is_split ? 'split' : 'manual',
+      category_overridden: 1,
+    }
+    setDetailTxn(prev => (prev ? { ...prev, ...patch } : prev))
+    onReconcile?.(detailTxn.id, patch)
   }
 
   function handleAddCategory(cat) {
@@ -430,15 +446,27 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                     categories={detailCategories}
                     onSave={handleOverrideCategory}
                     onAddCategory={handleAddCategory}
+                    onOpenSplit={() => setSplitEditorOpen(true)}
                     onRulePrompt={p => {
                       setRulePrompt(p)
                       externalRulePrompt?.(p)
                     }}
                   />
-                  {detailTxn.category_overridden ? (
+                  {detailTxn.category_overridden && !detailTxn.is_split ? (
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>
                       {detailTxn.category_source === 'import' ? 'imported' : 'manual'}
                     </span>
+                  ) : null}
+                  {!detailTxn.is_split ? (
+                    <button
+                      type="button"
+                      onClick={() => setSplitEditorOpen(true)}
+                      title="Divide this transaction's amount across several categories"
+                      style={{
+                        background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                        color: 'var(--muted)', cursor: 'pointer', fontSize: 11, padding: '2px 8px',
+                      }}
+                    >Split…</button>
                   ) : null}
                 </div>
               </div>
@@ -656,6 +684,15 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
           state={ruleModalState}
           onClose={() => setRuleModalState(null)}
           onSaved={() => setRuleModalState(null)}
+        />
+      )}
+      {splitEditorOpen && detailTxn && (
+        <SplitEditorDialog
+          txn={detailTxn}
+          categories={detailCategories}
+          onAddCategory={handleAddCategory}
+          onClose={() => setSplitEditorOpen(false)}
+          onSaved={handleSplitSaved}
         />
       )}
     </>

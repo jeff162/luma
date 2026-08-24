@@ -27,7 +27,7 @@ Landed in the working tree, uncommitted at the time of writing:
 
 ## Features
 
-Five, all with designs already written. Named scope is what ships for the release; anything else in
+Six, all with designs already written. Named scope is what ships for the release; anything else in
 those files stays deferred.
 
 ### 1. Receipts and invoices — attachment phase 1
@@ -142,6 +142,26 @@ the digest at ingest.
 
 **Prerequisite for feature 1**, and worth doing regardless of it.
 
+### 6. Transaction splits
+
+[`backlog/transaction-splits.md`](backlog/transaction-splits.md) — the whole file; its decisions were
+settled 2026-08-23 and it is no longer a parked design.
+
+Allocating one transaction's amount across several categories: the `txn_split` table, the
+effective-category-rows expansion seam that every summary and category-scoped list reads through, the
+split editor, and the pre-fill that proposes an allocation from a marketplace order's captured per-item
+list prices. In scope for the release because it is the terminal dependency of two other initiatives —
+reimbursable expenses cannot start without it, and attachments phase 4 feeds into it — so deferring it
+defers them.
+
+**Not in scope:** rules that author splits, mixed-sign allocations, and the attachment phase-4 hand-off,
+which stays behind tiers 2 and 3 regardless.
+
+**Blast radius, stated plainly:** this is the one feature that changes numbers on surfaces that were
+already correct. Every category rollup and every category-scoped drill-down reads through the new seam,
+so a regression here is a wrong total rather than a missing feature. That is what the backup omission
+guard, the summary-endpoint tests, and a before/after comparison over a real-data copy are for.
+
 ## Release mechanics
 
 - **Test the Windows and Linux kits.** Only macOS has been exercised. Both are portable zips, so the
@@ -167,13 +187,23 @@ the digest at ingest.
 2. **The other three in any order** — they do not touch each other. Recurring anomalies are the cheapest and
    most visible; vault recovery is the one whose absence is a real hazard; attachments are the one the
    README already promises.
-3. **Kit testing** — independent of the features, so it can happen whenever a build is convenient.
-4. **Screenshots**, once every feature is in. See above: the visual surfaces change under two of them.
-5. **Cut the release, attach the artifacts, flip visibility.**
+3. **Splits (6) can run alongside any of them** — it shares no surface with the other five. It should
+   land before screenshots for the same reason cash-flow reporting does: a category drill-down looks
+   different once a split renders in it.
+4. **Kit testing** — independent of the features, so it can happen whenever a build is convenient.
+5. **Screenshots**, once every feature is in. See above: the visual surfaces change under two of them.
+6. **Cut the release, attach the artifacts, flip visibility.**
 
 ## Deliberately not in this release
 
-Named so they are not re-litigated under deadline pressure: transaction splits and reimbursable
-expenses (splits is invasive cross-cutting reporting surgery — the wrong thing to have in flight while
-strangers start reading the code), attachment tiers 2 and 3, the online categorizer, and everything else
-in `docs/backlog/`.
+Named so they are not re-litigated under deadline pressure: reimbursable expenses, attachment tiers 2
+and 3, the online categorizer, and everything else in `docs/backlog/`.
+
+**Transaction splits was moved back in, 2026-08-23.** It was deferred here on the grounds that invasive
+cross-cutting reporting surgery is the wrong thing to have in flight while strangers start reading the
+code. That concern was answered rather than overruled: the surgery turned out to be a *row-source*
+substitution — every summary and list query is already phrased against one alias, so the expansion seam
+replaces `FROM txn t` and leaves every facet helper, sentinel, and exclusion guard untouched. What moved
+the decision is that splits is the terminal dependency of two other initiatives (reimbursable expenses
+outright, attachments at phase 4), so deferring it defers them as well. Scope and the settled decisions
+are in [`backlog/transaction-splits.md`](backlog/transaction-splits.md).

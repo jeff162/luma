@@ -28,6 +28,19 @@ from backend.services.transaction_tags import (
     list_visible_transaction_tags,
     set_manual_transaction_tag,
 )
+from backend.json_utils import safe_json_dict
+from backend.services.amazon_import import parse_item_evidence
+from backend.services.txn_splits import (
+    SPLIT_CATEGORY_SOURCE,
+    SplitValidationError,
+    clear_split,
+    get_split_parts_map,
+    get_split_parts,
+    proportional_allocation,
+    save_split,
+    split_txn_ids,
+    txn_effective_sql,
+)
 
 router = APIRouter()
 
@@ -61,6 +74,15 @@ class CategoryOverride(BaseModel):
     # Category edits from the transaction UI can also persist the note field in the same save gesture.
     category_id: str
     notes: Optional[str] = None
+
+
+class SplitPartInput(BaseModel):
+    category_id: Optional[str] = None
+    amount: Optional[float] = None
+
+
+class SplitSave(BaseModel):
+    parts: list[SplitPartInput] = []
 
 
 class TransactionTagUpdate(BaseModel):
@@ -887,6 +909,17 @@ def list_transactions(
         amount_min_op=amount_min_op, amount_max_op=amount_max_op,
     )
 
+    # A category-shaped facet is what makes split expansion correct *here*. Scoped to a category, a
+    # split transaction belongs in the result as the part that matched, carrying the part's amount — so
+    # a drill-down's visible rows sum to the total its summary endpoint reported. Unscoped, the ledger
+    # must stay one row per purchase, so the plain table is the row source and a split renders once at
+    # its full amount (`is_split` / `split_part_count` drive the "Split (N)" affordance). `view` counts
+    # because spending/income resolve through the category's type. See services/txn_splits.py.
+    expand_splits = bool(
+        category_id or category_ids or group_ids
+        or exclude_category_ids or exclude_group_ids
+        or view in ("spending", "income")
+    )
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     order_by_parts = []
     # Sorting stays server-backed so filtered transaction views remain stable even when the page incrementally loads
@@ -900,13 +933,14 @@ def list_transactions(
     order_by = ", ".join(order_by_parts)
 
     with get_db() as conn:
+        _src = txn_effective_sql(conn, expand=expand_splits)
         # Count *and* signed net sum over the whole filtered set, not just the returned page — so a
         # caller can show a correct total/count for a scope larger than the page limit instead of
         # summing the capped `transactions` client-side (which silently undercounts past the limit).
         agg = conn.execute(
             f"""
             SELECT COUNT(*) AS count, COALESCE(SUM(t.amount), 0) AS sum_amount
-            FROM txn t
+            FROM {_src} t
             JOIN account a ON a.id = t.account_id
             LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
@@ -956,8 +990,9 @@ def list_transactions(
                 -- targeted "Restore to recurring series". Grouped subquery → one row per txn (no fan-out);
                 -- MIN picks a stable one in the rare multi-exclude case.
                 rex.series_id    AS recurring_excluded_series_id,
-                rxs.display_name AS recurring_excluded_series_name
-            FROM   txn t
+                rxs.display_name AS recurring_excluded_series_name,
+                t.is_split
+            FROM   {_src} t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
@@ -981,10 +1016,16 @@ def list_transactions(
         txn_ids = [txn["id"] for txn in transactions]
         tag_map = get_visible_transaction_tag_map(conn, txn_ids) if rows else {}
         blocked_map = get_blocked_transaction_tag_map(conn, txn_ids) if rows else {}
+        # A split row's allocations, for its "Split (N)" label and the hover that lists the parts. One
+        # query for the page rather than one per row, and only for the rows that are actually split.
+        split_parts = get_split_parts_map(conn, [t["id"] for t in transactions if t.get("is_split")])
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
             txn["blocked_tags"] = blocked_map.get(txn["id"], [])
+            parts = split_parts.get(txn["id"], [])
+            txn["split_parts"] = parts
+            txn["split_part_count"] = len(parts)
 
     return {
         "total": total,
@@ -1017,10 +1058,18 @@ def _reject_group_category_assignment(conn, category_id: Optional[str]) -> None:
 def override_category(txn_id: str, body: CategoryOverride):
     with get_db() as conn:
         txn = conn.execute(
-            "SELECT id FROM txn WHERE id = ?", (txn_id,)
+            "SELECT id, is_split FROM txn WHERE id = ?", (txn_id,)
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        # A split transaction has no single category to set — its allocations are the categorization.
+        # Refusing here rather than silently discarding them keeps un-splitting an explicit act; the UI
+        # opens the split editor from this row instead of the category picker.
+        if txn["is_split"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This transaction is split across categories. Remove the split before setting a single category.",
+            )
         _reject_group_category_assignment(conn, body.category_id)
 
         conn.execute(
@@ -1033,6 +1082,86 @@ def override_category(txn_id: str, body: CategoryOverride):
             (body.category_id, body.notes, txn_id),
         )
     return {"ok": True}
+
+
+# --- Splits -----------------------------------------------------------------------------------
+# Allocating one transaction's amount across several categories. The invariants (parts sum to the
+# amount, share its sign, one part per category) and the reporting expansion they feed live in
+# services/txn_splits.py; these endpoints are the editor's surface onto them.
+
+
+@router.get("/{txn_id}/split")
+def get_transaction_split(txn_id: str):
+    with get_db() as conn:
+        txn = conn.execute(
+            "SELECT id, amount, is_split FROM txn WHERE id = ?", (txn_id,)
+        ).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {
+            "txn_id": txn_id,
+            "amount": txn["amount"],
+            "is_split": bool(txn["is_split"]),
+            "parts": get_split_parts(conn, txn_id),
+        }
+
+
+@router.put("/{txn_id}/split")
+def save_transaction_split(txn_id: str, body: SplitSave):
+    """Replace a transaction's allocations. Validation failures come back as 400s carrying the reason in
+    the user's terms — a remainder that has not reached zero, a repeated category, a part pointing the
+    wrong direction — because every one of them is something the editor can show and the user can fix."""
+    with get_db() as conn:
+        try:
+            parts = save_split(conn, txn_id, [p.model_dump() for p in body.parts])
+        except SplitValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    return {"txn_id": txn_id, "is_split": True, "parts": parts}
+
+
+@router.delete("/{txn_id}/split")
+def delete_transaction_split(txn_id: str):
+    """Un-split a transaction, restoring the category it carried before the split."""
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        clear_split(conn, txn_id)
+    return {"ok": True}
+
+
+@router.get("/{txn_id}/split/suggestion")
+def suggest_transaction_split(txn_id: str):
+    """A proposed allocation for a transaction whose import captured per-item detail.
+
+    The items carry **list prices** while the transaction carries what was actually paid (net of refunds,
+    inclusive of tax, shipping and any promo), so the two do not agree. The suggestion therefore
+    distributes the real amount across the items by list-price share rather than using the list figures
+    as amounts — which spreads tax and shipping proportionally instead of parking them on one item.
+
+    It is a starting point, never applied on its own: parts arrive without categories for the user to
+    fill in, and an item the export priced at nothing arrives with a null amount rather than a guess.
+    `available` is false when there is nothing to propose — no captured item detail, no cash to
+    distribute (a points- or gift-card-funded order), or no priced items to weight by.
+    """
+    with get_db() as conn:
+        txn = conn.execute(
+            "SELECT id, amount, import_evidence_json FROM txn WHERE id = ?", (txn_id,)
+        ).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        evidence = safe_json_dict(txn["import_evidence_json"])
+        items = parse_item_evidence(evidence)
+        amounts = proportional_allocation(float(txn["amount"]), [i["price"] for i in items])
+        if not amounts:
+            return {"available": False, "parts": []}
+        return {
+            "available": True,
+            "parts": [
+                {"description": item["description"], "amount": amount, "category_id": None}
+                for item, amount in zip(items, amounts)
+            ],
+        }
 
 
 @router.patch("/{txn_id}/imported-category")
@@ -1261,10 +1390,15 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
         flt = {k: v for k, v in (selection.filter or {}).items() if k in _BULK_FILTER_KEYS}
         clauses, params = _build_transaction_filter(**flt)  # include_trashed defaults False
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Expanded, so a "select all matching" under a category filter resolves the same rows the
+        # ledger showed — including split transactions that matched on one part. DISTINCT because a
+        # split whose parts both match would otherwise arrive twice. The bulk actions that cannot act
+        # on a split refuse it by name and report the count; silently dropping it here instead would
+        # make the selection quietly mean less than the screen said it did.
         rows = conn.execute(
             f"""
-            SELECT t.id
-            FROM   txn t
+            SELECT DISTINCT t.id
+            FROM   {txn_effective_sql(conn, expand=True)} t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
@@ -1279,11 +1413,20 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
     raise HTTPException(status_code=400, detail="selection.mode must be 'ids' or 'filter'")
 
 
-def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
+def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
+    """Apply one bulk action to a set of rows. Returns how many rows it declined because they are
+    split — always 0 except for `set_category`, whose whole effect is the thing a split owns."""
     kind = action.type
     if kind == "set_category":
         # None clears the category (a deliberate manual uncategorize); a real id must be a leaf.
         _reject_group_category_assignment(conn, action.category_id)
+        # Split rows keep their allocations. A bulk recategorize would replace hand-built allocation
+        # work with a single category and leave nothing to restore it from, so those rows are declined
+        # and counted for the caller to report — the same contract a full-force rule apply follows.
+        skipped = split_txn_ids(conn, ids)
+        ids = [i for i in ids if i not in skipped]
+        if not ids:
+            return len(skipped)
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
             conn.execute(
@@ -1293,6 +1436,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
                 f"WHERE id IN ({placeholders})",
                 [action.category_id, *chunk],
             )
+        return len(skipped)
     elif kind in ("add_tags", "remove_tags"):
         present = kind == "add_tags"
         for tag_id in (action.tag_ids or []):
@@ -1352,6 +1496,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
             )
     else:
         raise HTTPException(status_code=400, detail=f"unknown bulk action: {kind}")
+    return 0
 
 
 @router.post("/bulk")
@@ -1361,9 +1506,13 @@ def bulk_update_transactions(body: BulkUpdateRequest):
         target_ids = _resolve_bulk_target_ids(conn, body.selection)
         if not target_ids:
             return {"updated_count": 0}
+        skipped_splits = 0
         for action in body.actions:
-            _apply_bulk_action(conn, target_ids, action)
-    return {"updated_count": len(target_ids)}
+            skipped_splits += _apply_bulk_action(conn, target_ids, action)
+    # `skipped_splits` counts rows a set_category action left alone because they are split. Reported
+    # rather than folded into the total: "updated 40" when 3 of them kept their old categorization is
+    # a number the user would act on wrongly.
+    return {"updated_count": len(target_ids), "skipped_splits": skipped_splits}
 
 
 @router.post("/{txn_id}/restore")
@@ -1575,6 +1724,10 @@ def spending_by_category(
         )
 
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
@@ -1587,7 +1740,7 @@ def spending_by_category(
                 {_summary_uncategorized_type_sql('category')} AS category_type,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
                 COUNT(*)                                      AS count
-            FROM   txn t
+            FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             {where}
@@ -1672,11 +1825,15 @@ def spending_by_tag_signature(
         "OR (t.category_id IS NULL AND t.amount < 0)) THEN -t.amount ELSE t.amount END"
     )
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         rows = conn.execute(
             f"""
             SELECT sig, SUM(net) AS net, COUNT(*) AS count FROM (
                 SELECT {sig_sql} AS sig, {signed_amount} AS net
-                FROM   txn t
+                FROM   {_expanded} t
                 LEFT JOIN category c ON c.id = t.category_id
                 LEFT JOIN category p ON p.id = c.parent_id
                 {where}
@@ -1748,6 +1905,10 @@ def spending_by_group(
     _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
 
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
@@ -1758,7 +1919,7 @@ def spending_by_group(
                 {_summary_uncategorized_type_sql('group')}                       AS category_type,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('group'))} AS total,
                 COUNT(*)                                                         AS count
-            FROM   txn t
+            FROM   {_expanded} t
             LEFT JOIN category c  ON c.id  = t.category_id
             LEFT JOIN category p  ON p.id  = c.parent_id
             {where}
@@ -1830,6 +1991,10 @@ def spending_by_category_in_group(
     where = "WHERE " + " AND ".join(clauses)
 
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         rows = conn.execute(
             f"""
             SELECT
@@ -1838,7 +2003,7 @@ def spending_by_category_in_group(
                 NULL                                AS category_color,
                 {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
                 COUNT(*)                            AS count
-            FROM   txn t
+            FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
             {where}
             GROUP BY category_id
@@ -1987,6 +2152,10 @@ def monthly_trend(
     where = "WHERE " + " AND ".join(clauses)
 
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         if anchor_latest:
             anchor_row = conn.execute(
                 f"SELECT MAX(t.date) AS m FROM txn t {join_sql} {where}",
@@ -2015,7 +2184,7 @@ def monthly_trend(
                 strftime('%Y-%m', t.date) AS month,
                 ({sign_factor} * SUM(t.amount)) AS total,
                 COUNT(*)                  AS count
-            FROM   txn t
+            FROM   {_expanded} t
             {join_sql}
             {where}
             GROUP BY month
@@ -2114,6 +2283,10 @@ def monthly_by_group(
     select_total = f"{_summary_signed_total_sql(type_expr)} AS total"
 
     with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
         rows = conn.execute(
             f"""
             SELECT
@@ -2123,7 +2296,7 @@ def monthly_by_group(
                 {select_col},
                 {select_type},
                 {select_total}
-            FROM   txn t
+            FROM   {_expanded} t
             {join}
             {where}
             GROUP BY month, series_id

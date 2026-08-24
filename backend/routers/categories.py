@@ -16,6 +16,7 @@ from typing import Optional
 from backend.db.database import get_db, _seed_default_categories
 from backend.services.categorizer import DEFAULT_RULE_SEEDS, seed_default_rules
 from backend.json_utils import safe_json_dict
+from backend.services.txn_splits import txn_effective_sql
 
 router = APIRouter()
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
@@ -410,12 +411,15 @@ def get_category_usage_summary():
             for row in conn.execute("SELECT id FROM category").fetchall()
         ]
 
+        # Usage counts read the split-expansion seam: a category used only by one part of a split is
+        # genuinely in use, and deletion offers to rewrite what points at it, so under-reporting here
+        # would present a category as unused and then quietly rewrite an allocation.
         txn_counts = {
             row["category_id"]: row["txn_count"]
             for row in conn.execute(
-                """
+                f"""
                 SELECT category_id, COUNT(*) AS txn_count
-                FROM txn
+                FROM {txn_effective_sql(conn, expand=True)} t
                 WHERE category_id IS NOT NULL
                 GROUP BY category_id
                 """

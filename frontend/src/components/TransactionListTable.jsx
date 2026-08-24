@@ -194,6 +194,8 @@ export default function TransactionListTable({
     reconcileRow: (txnId, patch) => patchRows(txnId, patch),
     removeRow: txnId => { onRowsChange?.(prev => prev.filter(row => row.id !== txnId)); onTrashed?.(txnId) },
     onRuleSaved,
+    categories,
+    onAddCategory,
   })
 
   // The menu's "Edit transaction" item needs somewhere to open the editor; without that callback
@@ -253,6 +255,7 @@ export default function TransactionListTable({
               })
               : undefined}
             onAddCategory={onAddCategory}
+            onOpenSplit={rowActions.openSplitFromMenu}
             onRulePrompt={onRulePrompt}
           />
         )

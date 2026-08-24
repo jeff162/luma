@@ -219,6 +219,8 @@ export default function Transactions() {
       setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === txnId)))
     },
     onRuleSaved: ({ applyToExisting }) => { if (applyToExisting) { isFirstLoad.current = true; load() } },
+    categories,
+    onAddCategory: addCategory,
   })
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
@@ -811,6 +813,7 @@ export default function Transactions() {
             onSave={(txnId, catId, catObj) => saveCategory(txnId, catId, catObj)}
             onAddCategory={addCategory}
             onRulePrompt={setRulePrompt}
+            onOpenSplit={rowActions.openSplitFromMenu}
             onOpenDetail={txn.category_id ? () => openDetailPanel('category', {
               id: txn.category_id,
               name: txn.category_name,

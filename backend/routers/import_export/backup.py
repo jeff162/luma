@@ -606,10 +606,14 @@ BACKUP_SECTIONS = (
      "SELECT id, external_transaction_id, account_id, owner_id, "
      "category_id, amount, merchant_name, display_name, raw_name, date, "
      "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
-     "import_evidence_json, needs_review, recurring_series_id, "
+     "import_evidence_json, needs_review, recurring_series_id, is_split, "
      "import_batch_id FROM txn ORDER BY date DESC"),
     ("recurring_membership_overrides", "recurring_membership_override",
      "SELECT * FROM recurring_membership_override ORDER BY rowid"),
+    # Split allocations. txn.is_split rides along in the transactions section above, but the parts are
+    # the categorization itself: without these a restore would leave rows flagged as split with nothing
+    # to expand into, and every category rollup would silently drop that money.
+    ("txn_splits", "txn_split", "SELECT * FROM txn_split ORDER BY rowid"),
     # Typed transaction links (services/txn_links.py): the link rows plus their membership. Without
     # these a restore would silently drop every link (e.g. an Amazon order's charge<->item association),
     # the same failure the tag attachments guard against below.
@@ -649,8 +653,8 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # so that neither writing nor reading a backup has to hold the whole thing in memory. The *content* of
 # a section is unchanged from 9, which is why the restore's per-section handling is shared with the
 # older versions rather than duplicated.
-BACKUP_PAYLOAD_VERSION = 10
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10)
+BACKUP_PAYLOAD_VERSION = 11
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11)
 
 # Which of the two backups a file is. Stamped into every container the app writes and read back by the
 # identification pass below, so the restore surface can route a file rather than asking the person

@@ -96,6 +96,7 @@ TABLE_TO_SECTION = {
     "txn_link": "txn_links",
     "txn_link_member": "txn_link_members",
     "amazon_funding_map": "amazon_funding_map",
+    "txn_split": "txn_splits",
 }
 
 
@@ -249,6 +250,26 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO amazon_funding_map (id, last4, network, amazon_account_id, funding_account_id) VALUES (?, '4455', 'Fablecard', NULL, ?)",
                     (str(uuid.uuid4()), a1),
+                )
+
+                # A split transaction with its allocations, so the round trip covers txn_split *and* the
+                # txn.is_split flag that tells the reporting expansion the parts exist. A split whose
+                # flag survived without its parts (or the reverse) is the failure worth pinning: both
+                # halves restore or the money silently leaves every category total.
+                second_leaf = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO category (id, name, parent_id, category_type) "
+                    "SELECT ?, 'Split Sibling', parent_id, category_type FROM category WHERE id = ?",
+                    (second_leaf, leaf),
+                )
+                conn.execute("UPDATE txn SET is_split = 1, category_source = 'split', category_overridden = 1 WHERE id = ?", (charge,))
+                conn.execute(
+                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order) VALUES (?, ?, ?, 20.00, 0)",
+                    (str(uuid.uuid4()), charge, leaf),
+                )
+                conn.execute(
+                    "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order) VALUES (?, ?, ?, 17.32, 1)",
+                    (str(uuid.uuid4()), charge, second_leaf),
                 )
 
     def _user_data_tables(self) -> set[str]:

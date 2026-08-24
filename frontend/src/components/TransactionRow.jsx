@@ -17,6 +17,7 @@ import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
+import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -154,7 +155,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onOpenSplit, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
   useDismissibleLayer({
     open: !!menu,
@@ -192,6 +193,12 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
     >
       {item('✎ Edit transaction…', () => onOpenDetail(menu.txn))}
       {item(ruleActionLabel, () => onOpenRule(menu.txn))}
+      {/* Named for what the row ends up as, not for the mechanism: an ordinary row is being divided,
+          a split one is being adjusted. Sits with the rule item because both are categorization. */}
+      {onOpenSplit ? item(
+        menu.txn.is_split ? '◧ Edit split…' : '◧ Split…',
+        () => onOpenSplit(menu.txn),
+      ) : null}
       {/* Recurring: a member edits/views its series; a row the user previously removed offers a targeted
           restore back into that same series; otherwise "Mark as recurring…" (which starts a new one). */}
       {onRestoreRecurring && !menu.txn.recurring_series_id && menu.txn.recurring_excluded_series_id
@@ -797,7 +804,31 @@ export function TransactionAmountCell({ txn, onOpenDetail, showExcludedFromTotal
   )
 }
 
-export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail }) {
+// The allocation behind a "Split (N)" chip, shown on hover. The amounts are what make this worth a
+// hover rather than a list of category names: in a category-scoped list the row itself shows only the
+// *part* that matched, so this is where "why does this row say $60 when the purchase was $100?" gets
+// answered. Signed, like every other displayed figure — see docs/data-model.md, Reporting assumptions.
+function SplitPartsHoverCard({ parts }) {
+  return (
+    <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
+      {parts.map((part, i) => (
+        <div key={part.category_id || `part-${i}`} style={{ display: 'flex', gap: 16, justifyContent: 'space-between' }}>
+          <span>{part.category_name || 'Uncategorized'}</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+            {formatSignedMoneyAmount(part.amount)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+// `onOpenSplit` (optional) is what makes a split row editable: a split transaction has no single
+// category to pick, so the cell renders "Split (N)" and routes a click to the split editor instead of
+// the category picker. A host that doesn't pass it renders the marker read-only rather than offering a
+// picker that the backend would refuse — see docs/data-model.md, Transaction splits.
+export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail, onOpenSplit }) {
   const [editing, setEditing] = useState(false)
   // A category created from inside the picker is assigned in the same tick it's added, before the parent's
   // `categories` prop reflects it — capture it here so the save + rule prompt resolve the real object
@@ -846,6 +877,33 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
     setEditing(false)
     onSave(txn.id, catId ?? null, created || undefined)
     if (catId != null) fireRulePrompt(catId, created)
+  }
+
+  if (txn.is_split) {
+    const parts = txn.split_parts || []
+    const partCount = txn.split_part_count || parts.length
+    const chip = (
+      <span style={{
+        border: '1px dashed var(--border)', borderRadius: 6, color: 'var(--muted)',
+        fontSize: 12, padding: '1px 7px', whiteSpace: 'nowrap',
+      }}>
+        {partCount ? `Split (${partCount})` : 'Split'}
+      </span>
+    )
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <div
+          onClick={onOpenSplit ? () => onOpenSplit(txn) : undefined}
+          style={{ cursor: onOpenSplit ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          {parts.length ? (
+            <RowTooltip content={<SplitPartsHoverCard parts={parts} />} maxWidth={320}>
+              {chip}
+            </RowTooltip>
+          ) : chip}
+        </div>
+      </div>
+    )
   }
 
   if (editing) {

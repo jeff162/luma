@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 38
+CURRENT_VERSION = 39
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1124,6 +1124,31 @@ def _connection_last_sync_summary(conn):
         )
 
 
+@migration(39)
+def _transaction_splits(conn):
+    # Split allocations and the flag that marks a transaction as carrying them — see the baseline CREATE
+    # for why the marker is a column rather than a derived EXISTS test. Existing rows take the DDL
+    # default 0, which reads correctly: nothing was split before this table existed. The table is created
+    # here as well as in the baseline script because an existing database never re-runs that script's
+    # CREATE for a table it already has — but it has never seen txn_split at all.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if not cols:
+        return  # a minimal hand-built fixture without the table
+    if "is_split" not in cols:
+        conn.execute("ALTER TABLE txn ADD COLUMN is_split INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS txn_split (
+            id          TEXT PRIMARY KEY,
+            txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            category_id TEXT REFERENCES category(id) ON DELETE SET NULL,
+            amount      REAL NOT NULL,
+            sort_order  INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1677,7 +1702,28 @@ def init_db(db_path: str | None = None):
                 -- Membership link to a detected/confirmed recurring series (see recurring_series).
                 -- NULL = not part of any recurring series. Recomputed by the recurring detector on
                 -- each scan; a match cache, not user-authored.
-                recurring_series_id      TEXT REFERENCES recurring_series(id) ON DELETE SET NULL
+                recurring_series_id      TEXT REFERENCES recurring_series(id) ON DELETE SET NULL,
+                -- 1 = this transaction's amount is allocated across several categories in `txn_split`
+                -- rather than sitting in the single `category_id`. The reporting expansion does not
+                -- read it (it left-joins the parts directly); the flag exists for everything that has
+                -- to know a row is split *without* reaching for its parts — the ledger's "Split (N)"
+                -- rendering, and the guards that make automatic categorization and bulk edits decline
+                -- these rows. While it is set, `category_id` retains the pre-split category as the
+                -- stashed prior that un-splitting restores.
+                is_split                 INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- One category allocation of a split transaction's amount. The parts of a split must sum to
+            -- the transaction's amount and share its sign; that is enforced on save (see
+            -- services/txn_splits.py), not by the DB, because no SQLite constraint can express a
+            -- cross-row sum. At most one part per category — two parts in one category would make a
+            -- summary bucket's COUNT(*) read as allocation rows rather than transactions.
+            CREATE TABLE IF NOT EXISTS txn_split (
+                id          TEXT PRIMARY KEY,
+                txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                category_id TEXT REFERENCES category(id) ON DELETE SET NULL,
+                amount      REAL NOT NULL,
+                sort_order  INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -2038,6 +2084,20 @@ def init_db(db_path: str | None = None):
         # script, where it would reference a not-yet-existing column on an in-place upgrade.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_import_batch_connection ON import_batch(connection_id)"
+        )
+        # Same deferral as idx_txn_needs_review: txn.is_split is only added by its migration on an
+        # existing database. Partial, because only a small minority of rows carry the flag and every
+        # reader asks the same question — which of these rows are split (`split_txn_ids`, the bulk and
+        # rule-apply guards).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_txn_is_split ON txn(is_split) WHERE is_split = 1"
+        )
+        # Every expansion of a split reaches its parts through txn_id; the uniqueness is the
+        # one-part-per-category invariant, enforced here so a concurrent double-save cannot slip a
+        # second part into a category behind the service-level check.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_split_txn ON txn_split(txn_id)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_split_txn_category ON txn_split(txn_id, category_id)"
         )
         # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
         # constrained — a row can be excluded from more than one candidate series.

@@ -5,7 +5,7 @@
 
 /*
  * Shared controller for a transaction list's right-click row menu and the editors it launches
- * (edit · create/open rule · note · tags · send to trash). Both the Transactions ledger (which
+ * (edit · create/open rule · split · note · tags · send to trash). Both the Transactions ledger (which
  * renders its own rows) and the shared TransactionListTable (every report/detail list) consume
  * this, so the row actions have one implementation rather than two copies that drift.
  *
@@ -16,6 +16,12 @@
  *   - reconcileRow(id, patch)  patch a row in place after a note/tag edit
  *   - removeRow(id)            drop a row after it is trashed (and adjust any total/panels)
  *   - onRuleSaved(info)        optional: react to a rule create/apply from the menu
+ *   - categories / onAddCategory  the category list the split editor's pickers render. Passing
+ *                              a non-empty `categories` is what turns the split action on: without
+ *                              one the menu
+ *                              omits Split… rather than opening an editor with an empty picker, and
+ *                              `openSplitFromMenu` is also what a host hands its CategoryCell as
+ *                              `onOpenSplit` so a split row's marker opens this same editor.
  */
 
 import { useEffect, useState } from 'react'
@@ -26,10 +32,11 @@ import { txnMutations } from './txnMutations.js'
 import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleActionModal from '../components/RuleActionModal.jsx'
+import SplitEditorDialog from '../components/SplitEditorDialog.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 
-export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved } = {}) {
+export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, categories, onAddCategory } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const navigate = useNavigate()
   const [noteTarget, setNoteTarget] = useState(null)
@@ -41,6 +48,10 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const [ruleModalState, setRuleModalState] = useState(null)
   // Pre-removal membership snapshot backing the "Removed from recurring series · Undo" toast.
   const [recurringUndo, setRecurringUndo] = useState(null)
+  // The transaction whose split is being edited. Owned here rather than per host so the ledger, every
+  // detail list, and the row menu all reach one editor — and so a host wires it by passing
+  // `openSplitFromMenu` to its CategoryCell rather than repeating the dialog.
+  const [splitTarget, setSplitTarget] = useState(null)
   // A failed row action, surfaced by the chrome. Every action below patches the list only *after* its
   // write resolves, so a failure has genuinely changed nothing — but silence is indistinguishable from
   // the button not working, which is what this exists to say out loud.
@@ -224,10 +235,31 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       ? '⚙ Open matching rule'
       : '⚙ Create rule'
 
+  function openSplitFromMenu(txn) {
+    setSplitTarget(txn)
+  }
+
+  // A saved split changes what the row reports (its marker, its part count, its provenance), so the
+  // host's copy is patched through the same reconcile seam every other row action uses.
+  function handleSplitSaved(txnId, { is_split, parts }) {
+    reconcileRow?.(txnId, {
+      is_split,
+      split_part_count: parts?.length || 0,
+      category_source: is_split ? 'split' : 'manual',
+      category_overridden: 1,
+    })
+  }
+
   return {
     onContextMenu,
     closeMenu,
     menu,
+    splitTarget,
+    setSplitTarget,
+    openSplitFromMenu,
+    handleSplitSaved,
+    categories,
+    onAddCategory,
     noteTarget,
     setNoteTarget,
     tagTarget,
@@ -270,6 +302,7 @@ export function TransactionRowActionsChrome({ controller }) {
     actionError, setActionError,
     handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
+    splitTarget, setSplitTarget, openSplitFromMenu, handleSplitSaved, categories, onAddCategory,
   } = controller
 
   return (
@@ -284,6 +317,7 @@ export function TransactionRowActionsChrome({ controller }) {
           onMarkReviewed={txn => { markReviewed(txn); closeMenu() }}
           onTrash={txn => { setPendingTrash(txn); closeMenu() }}
           onOpenRule={openRuleFromMenu}
+          onOpenSplit={categories?.length ? txn => { openSplitFromMenu(txn); closeMenu() } : undefined}
           onMarkRecurring={markRecurringFromMenu}
           onRemoveFromRecurring={txn => { removeFromRecurring(txn); closeMenu() }}
           onRestoreRecurring={restoreToRecurring}
@@ -377,6 +411,15 @@ export function TransactionRowActionsChrome({ controller }) {
           title={actionError.title}
           description={actionError.description}
           onClose={() => setActionError(null)}
+        />
+      ) : null}
+      {splitTarget ? (
+        <SplitEditorDialog
+          txn={splitTarget}
+          categories={categories}
+          onAddCategory={onAddCategory}
+          onClose={() => setSplitTarget(null)}
+          onSaved={result => handleSplitSaved(splitTarget.id, result)}
         />
       ) : null}
     </>

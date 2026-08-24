@@ -435,6 +435,17 @@ export const api = {
   updateTransactionTag: (id, tag_id, present) =>
     request(`/transactions/${id}/tags`, { method: 'PATCH', body: JSON.stringify({ tag_id, present }) }),
   clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),
+  // Splits: allocating one transaction's amount across several categories. `parts` is an ordered
+  // [{ category_id, amount }]; the backend enforces the invariants (sum to the amount, share its sign,
+  // one part per category) and answers a failure with a 400 whose detail is written for the user, so a
+  // caller shows that message rather than composing its own. `getSplitSuggestion` proposes an
+  // allocation from an imported order's captured per-item detail — `{ available: false }` when there is
+  // nothing to propose.
+  getSplit:            (id)         => request(`/transactions/${id}/split`),
+  saveSplit:           (id, parts)  =>
+    request(`/transactions/${id}/split`, { method: 'PUT', body: JSON.stringify({ parts }) }),
+  deleteSplit:         (id)         => request(`/transactions/${id}/split`, { method: 'DELETE' }),
+  getSplitSuggestion:  (id)         => request(`/transactions/${id}/split/suggestion`),
   // Trash (soft-delete) for transactions. Mirrors the account trash flow: trashed rows are
   // filtered out of every read until they're explicitly restored or the trash is emptied.
   trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),

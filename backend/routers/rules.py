@@ -198,7 +198,7 @@ def _rule_affected_txn_ids(conn, rule) -> list[str]:
     return [r["id"] for r in rows if _rule_matches_txn(rule, r)]
 
 
-def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None) -> list[str]:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None, skipped_splits: Optional[list] = None) -> list[str]:
     # `capture_prior` (optional): when given, the prior (category_id, category_source, category_overridden)
     # of each row whose category this apply changes is appended to it — the same snapshot shape
     # `/restore-categorization` consumes — so an accept can stash it for Undo and put the rows back.
@@ -209,6 +209,11 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # `txn_ids` restricts the apply to a specific set of rows (still subject to the matcher check) — used
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
+    # `skipped_splits` (optional): ids of rows whose *category* this apply declined to set because the
+    # transaction is split. A split's allocations are hand-built work with no stashed copy anywhere, so
+    # no rule apply — not even the full-force one that overwrites a manual edit — may silently replace
+    # them; the caller reports the count instead. The refusal is scoped to the category effect only:
+    # a rule's rename and tags describe the purchase, not its allocation, so those still apply.
     rule = conn.execute(
         f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
                    owner_id, {rule_scope_account_sql()}, account_type, match_source_text
@@ -249,6 +254,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.category_id          AS prior_category_id,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
+               t.is_split,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                COALESCE(p.type, a.type) AS effective_account_type
            FROM txn t
@@ -274,10 +280,15 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         if txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
             effect_max_date = txn["date"]
         row_changed = False
-        if rule["category_id"] is not None or rule["clean_name"]:
+        # A split transaction keeps its allocations: the category half of this rule is declined and
+        # reported, while the rename half below still runs.
+        split_blocked = bool(txn["is_split"]) and rule["category_id"] is not None
+        if split_blocked and skipped_splits is not None:
+            skipped_splits.append(txn["id"])
+        if (rule["category_id"] is not None and not split_blocked) or rule["clean_name"]:
             params = []
             set_parts = []
-            if rule["category_id"] is not None:
+            if rule["category_id"] is not None and not split_blocked:
                 # An explicit apply is the user asking the rule to own these matches, so any
                 # prior auto state is replaced with the rule's category output when provided.
                 if capture_prior is not None:
@@ -934,12 +945,22 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 
 @router.post("/{rule_id}/apply")
 def apply_rule(rule_id: str, preserve_manual: bool = False):
+    skipped_splits: list = []
     with get_db() as conn:
-        affected_ids = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
+        affected_ids = _apply_rule_to_existing(
+            conn, rule_id, preserve_manual=preserve_manual, skipped_splits=skipped_splits,
+        )
     # `transaction_ids` lets an in-place caller reconcile exactly the rows the rule changed (re-fetch them
     # by id and merge them back) instead of re-running its scoped query, which would drop the now-
     # recategorized rows out of the view.
-    return {"updated": len(affected_ids), "transaction_ids": affected_ids}
+    # `skipped_splits` is how many matches kept their split allocations instead of taking the rule's
+    # category — surfaced rather than silent, because an apply that reports "updated 12" while quietly
+    # declining 3 rows is telling the user something that is not true.
+    return {
+        "updated": len(affected_ids),
+        "transaction_ids": affected_ids,
+        "skipped_splits": len(skipped_splits),
+    }
 
 
 class ApplyToTransactionsBody(BaseModel):
@@ -952,13 +973,20 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
     generated an accepted import-rule suggestion — so the user's review edits land on exactly those
     rows. Skips manual rows (deliberate exceptions) and rows the matcher no longer matches."""
     prior_rows: list = []
+    skipped_splits: list = []
     with get_db() as conn:
         affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids, capture_prior=prior_rows,
+            skipped_splits=skipped_splits,
         )
     # `prior_rows` is the pre-apply categorization snapshot of the changed rows (restore-categorization
     # shape), so an accepted suggestion's Undo can put the rows back before deleting the rule.
-    return {"updated": len(affected_ids), "transaction_ids": affected_ids, "prior_rows": prior_rows}
+    return {
+        "updated": len(affected_ids),
+        "transaction_ids": affected_ids,
+        "prior_rows": prior_rows,
+        "skipped_splits": len(skipped_splits),
+    }
 
 
 @router.delete("/{rule_id}")

@@ -339,3 +339,43 @@ def read_export(text: str) -> tuple[Optional[str], list[dict]]:
     kind = sniff_kind(headers)
     rows = [dict(r) for r in reader]
     return kind, rows
+
+
+# The inverse of the router's `_order_evidence` item lines. That formatter is the only place an order's
+# per-item list price is retained — it renders each item as `Label (×2, list $12.34, ASIN)` inside an
+# `extra_text_fields` entry headed "Item" — so a consumer that needs the numbers back has to read them
+# out of that text. Keeping the reader here, beside the price semantics it depends on, is what makes the
+# coupling visible from both ends: a change to the formatter's shape breaks this, and the round-trip test
+# is what catches it.
+_ITEM_LIST_PRICE_RE = re.compile(r"list \$([0-9]+(?:\.[0-9]{1,2})?)")
+_ITEM_QUANTITY_RE = re.compile(r"×([0-9]+)")
+
+
+def parse_item_evidence(evidence: dict) -> list[dict]:
+    """Recover an order's per-item detail from a transaction's stored import evidence.
+
+    Returns one dict per item — ``{"description", "price", "quantity"}`` — with ``price`` None where the
+    export gave none (a digital or promotional line often has no list price). An order that was imported
+    from the orders file alone carries no "Item" entries at all and yields an empty list.
+
+    The prices are **list prices**, not what was paid: they exclude tax and shipping and predate any
+    promo, so they do not sum to the transaction's amount and must never be used as ledger figures. Their
+    one legitimate use is as *relative weights* — see ``txn_splits.proportional_allocation``.
+    """
+    items: list[dict] = []
+    for field_entry in (evidence or {}).get("extra_text_fields") or []:
+        if field_entry.get("header") != "Item":
+            continue
+        value = str(field_entry.get("value") or "")
+        price_match = _ITEM_LIST_PRICE_RE.search(value)
+        quantity_match = _ITEM_QUANTITY_RE.search(value)
+        # The label is everything before the trailing parenthesized detail the formatter appended.
+        label = value
+        if "(" in value and value.rstrip().endswith(")"):
+            label = value[: value.rfind("(")].strip()
+        items.append({
+            "description": label or "item",
+            "price": float(price_match.group(1)) if price_match else None,
+            "quantity": int(quantity_match.group(1)) if quantity_match else 1,
+        })
+    return items

@@ -444,7 +444,13 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     `txn_ids` restricts the pass to a specific row set (for the scoped reconcile); `None` is the whole
     ledger. A row already at its correct category matches identically either way — retain vs. reconcile
     only differ on the no-match case."""
-    where = ["category_overridden = 0", "category_source IS NOT 'enrichment'"]
+    # 'split' joins 'enrichment' as a feature-owned source. A split row also carries
+    # category_overridden = 1, so the lock bit alone would exclude it today — the guard is stated by
+    # source anyway because that is the actual invariant ("automatic categorization never touches a
+    # split's category"), and a guard that only holds via a second field's current value is one
+    # refactor away from being wrong.
+    where = ["category_overridden = 0", "category_source IS NOT 'enrichment'",
+             "category_source IS NOT 'split'"]
     params: list = []
     if txn_ids is not None:
         if not txn_ids:
@@ -575,7 +581,8 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
            JOIN   account a ON a.id = t.account_id
            LEFT   JOIN account p ON p.id = a.parent_account_id
            WHERE  category_overridden = 0
-             AND  category_source IS NOT 'enrichment'"""
+             AND  category_source IS NOT 'enrichment'
+             AND  category_source IS NOT 'split'"""
     ).fetchall()
 
     rules = load_categorization_rules(conn)
