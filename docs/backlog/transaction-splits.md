@@ -1,6 +1,6 @@
 # Transaction splits (categorize one purchase across several categories)
 
-**Status: decisions settled 2026-08-23, in build.** Came out of Amazon orders, but is deliberately a
+**Status: built and exercised in the running app, 2026-08-24; Help topic (`transaction-splits`) written.** Came out of Amazon orders, but is deliberately a
 **general** feature. Today a transaction carries exactly one category, so a single purchase that spans
 categories — a warehouse-store run that's part groceries / part electronics, or an online order with a
 battery charger *and* a network switch — can only land in one bucket. This item adds the ability to

@@ -6,6 +6,7 @@ import { api } from '../lib/api.js'
 import DropZone from './DropZone.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 /*
  * Receipts and invoices attached to one transaction: the list, the attach target, and the viewer.
@@ -154,8 +155,11 @@ export default function DocumentsPanel({ txnId, onDocumentsChange }) {
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Documents
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Documents
+        </span>
+        <FeatureExplainer topic="transaction-documents" placement="bottom-left" />
       </div>
 
       {loading ? <Spinner /> : (

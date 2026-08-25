@@ -1,6 +1,6 @@
 # Multi-payment purchases
 
-**Status: built 2026-08-24.** Grouping several transactions that are one purchase — a deposit and a
+**Status: built and exercised in the running app, 2026-08-24.** Grouping several transactions that are one purchase — a deposit and a
 final payment, a three-instalment plan. The field semantics and invariants live in
 [`../data-model.md`](../data-model.md) → *Multi-payment purchases*; the shared UI behavior in
 [`../ui-patterns.md`](../ui-patterns.md). This file holds the depth: why the shape is what it is, what
@@ -98,8 +98,9 @@ re-derive the comparison, or reach for the wrong one:
 - **A purchases list page.** There is no surface listing every purchase; they are reached from their
   payments. One would be worth building only once there are enough of them to browse, which is a
   question about use rather than design.
-- **A Help topic.** Owed, like attachments phase 1's. It should be written in the user's own voice per
-  the existing topics in `help/content.jsx`.
+- **Nothing further on the Help side.** The topic (`multi-payment-purchases`) is written, under the
+  *Transaction detail* index section added with it, and reached from an inline `?` on the panel's
+  purchase summary.
 
 ## Cross-refs
 

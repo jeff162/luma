@@ -30,7 +30,7 @@ Landed in the working tree, uncommitted at the time of writing:
 Six, all with designs already written. Named scope is what ships for the release; anything else in
 those files stays deferred.
 
-### 1. Receipts and invoices — attachment phase 1  ✅ *built 2026-08-24; Help topic still owed*
+### 1. Receipts and invoices — attachment phase 1  ✅ *built 2026-08-24*
 
 [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → *Phase 1*.
 
@@ -76,10 +76,13 @@ green test suite:
   file, which records it as a don't-re-impose.
 - **The ledger's paperclip opens documents**, rather than only counting them.
 
-**Still owed:** a **Help topic** — the feature has none, and 27 other surfaces do (`help/content.jsx`).
-It should be written in the user's own voice, per the existing topics. Beyond that, more use in the real
-app: the first pass found four defects in an hour, every one of them in how a component sits in the live
-tree rather than in its logic.
+The **Help topic** (`transaction-documents`) is written — filed under a new *Transaction detail* index
+section, reached from an inline `?` on the Documents panel, and drafted against the voice of the existing
+topics rather than in the author's own hand, so it is placed rather than finished.
+
+**Exercised in the running app, 2026-08-24**, and nothing further is owed on it. The first pass had found
+four defects in an hour, every one of them in how a component sits in the live tree rather than in its
+logic — the reason that pass was treated as blocking rather than as a formality.
 
 ### 2. Recurring anomaly signals
 
@@ -173,7 +176,7 @@ the digest at ingest.
 
 **Prerequisite for feature 1**, and worth doing regardless of it.
 
-### 6. Transaction splits
+### 6. Transaction splits  ✅ *built; exercised in the running app 2026-08-24*
 
 [`backlog/transaction-splits.md`](backlog/transaction-splits.md) — the whole file; its decisions were
 settled 2026-08-23 and it is no longer a parked design.

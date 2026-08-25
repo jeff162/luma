@@ -6,6 +6,7 @@ import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { paymentPositionLabel, purchaseDisplayLabel, purchaseRowSummary } from '../lib/purchaseLinks.js'
 import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 /*
  * The transaction detail panel's statement that this row is one payment of a larger purchase.
@@ -54,8 +55,11 @@ export default function PurchasePanel({ txnId, onPurchaseChange }) {
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Purchase
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Purchase
+        </span>
+        <FeatureExplainer topic="multi-payment-purchases" placement="bottom-left" />
       </div>
 
       {/* The whole summary is the control, like the row's marker is: there is one thing to do with a

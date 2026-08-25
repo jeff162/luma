@@ -1,6 +1,6 @@
 # Transaction attachments — receipts, invoices, and the text inside them
 
-**Status: phase 1 built and first-pass reviewed in the running app, 2026-08-24. Owed: a Help topic.**
+**Status: phase 1 built and exercised in the running app, 2026-08-24; Help topic written.**
 The prerequisite streaming-backup work landed 2026-08-23; everything in *Phase 1* below is implemented,
 backend and UI, and has been exercised against real receipts. See *Settled: what phase 1 answered* for
 the decisions that closed along the way — including two that were **reversed** under real use and are

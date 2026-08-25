@@ -193,13 +193,20 @@ instruction and fix the drift rather than silently choosing the looser version.
   placement, say so and ask for a targeted look **early**, instead of reporting it done and discovering
   it over four round trips.
 
-- **Two of the same feature's decisions were reversed on first real use, and both were the same
-  mistake:** a capability withheld because the user "might be confused" — a search prefix made
-  mandatory, a marker left inert — where the honest fix was to *explain* rather than to withhold. Both
-  reversals are recorded in their design docs as don't-re-impose, because the original arguments read as
-  plausible. Before constraining what a surface will do on the grounds that the result might be
-  misread, ask whether the fix is a label, a marker, or a tooltip. It usually is. This is the same shape
-  as the split-allocation rule above, now seen three times.
+- **Withholding a capability keeps being the mistake, and it arrives wearing two different arguments.**
+  The first is *the user might be confused* — a search prefix made mandatory, a document marker left as
+  an inert counter — where the honest fix was to **explain** rather than to withhold: a label, a marker,
+  or a tooltip, which it almost always is. The second is *another route already reaches it*, which is
+  how the multi-payment purchase marker was first built inert: the row's pencil opened a panel holding
+  the editor, so a marker that opened the same thing read as redundant. It is not redundant, because the
+  question is not whether the capability is reachable but whether **this** control does what it stands
+  for — a marker representing something openable that does nothing reads as broken, whatever else exists
+  elsewhere. Every one of these was reversed on first real use, and each is recorded in its own design
+  doc as don't-re-impose precisely because the original argument reads as restraint rather than as a
+  defect. **Watch for the second form especially**: the first is caught by asking "could this be
+  misread?", and the second sails straight past that question. Both are the same shape as the
+  split-allocation rule above — a constraint whose real justification was the implementer's convenience
+  or tidiness rather than anything in the domain.
 
 - **Having read the evidence is not the same as using it.** The costly failures are not missing
   context — they are proceeding against context already in hand: the repo file that had been read,

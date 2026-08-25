@@ -17,6 +17,7 @@ import NoteEditor from './NoteEditor.jsx'
 import DocumentsPanel from './DocumentsPanel.jsx'
 import PurchasePanel from './PurchasePanel.jsx'
 import { purchaseRowSummary } from '../lib/purchaseLinks.js'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -494,6 +495,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                       }}
                     >Split…</button>
                   ) : null}
+                  <FeatureExplainer topic="transaction-splits" placement="bottom-left" />
                 </div>
               </div>
               <div>

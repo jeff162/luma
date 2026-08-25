@@ -55,6 +55,11 @@ export const HELP_SECTIONS = [
     blurb: 'Two ways to organize transactions for reports -- a category tree and cross-cutting tags.',
   },
   {
+    key: 'transaction-detail',
+    label: 'Transaction detail',
+    blurb: 'Recording what a transaction does not say on its own -- the paperwork behind it, and purchases that took more than one payment.',
+  },
+  {
     key: 'recurring',
     label: 'Recurring transactions',
     blurb: 'Transactions that repeat on a schedule -- what the scan finds on its own, and how to declare one it cannot see.',
@@ -540,9 +545,129 @@ export const HELP_TOPICS = [
           is edited while staying trusted-import.
         </p>
         <p>
+          A <HelpLink to="/help/transaction-splits">split transaction</HelpLink> sits outside all of this.
+          Its categorization is the set of items it was divided into, so both passes leave it alone --
+          even a full-force rule apply, which reports how many it skipped rather than overwriting them.
+        </p>
+        <p>
           To check a single transaction’s current source, open its detail panel: a small pinned label
           sits beside the category, and the details show a <em>Categorized by</em> line naming the
           source -- a rule, a manual edit, or the category present in the source data.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'transaction-splits',
+    section: 'organizing',
+    title: 'Splitting one transaction across categories',
+    surfaces: ['Transactions (row menu, Split marker)', 'Transaction detail (Split...)'],
+    summary: 'A purchase that spans categories -- part groceries, part hardware -- stays one transaction with its amount divided into items, each with its own category. The amounts have to account for the transaction exactly. Reports count each item under its own category, while the ledger still shows one row for the purchase.',
+    body: () => (
+      <>
+        <p>
+          One trip to a warehouse store can be groceries and a winter coat; one hardware run can be half
+          garden supplies. Filing the whole amount under a single category overstates that category and
+          leaves the other empty, which is the sort of quiet error that only shows up as a puzzling
+          dashboard months later.
+        </p>
+        <p>
+          A <strong>split</strong> keeps the purchase as <em>one</em> transaction and divides its amount
+          into <strong>items</strong>, each with its own category, its own amount, and an optional
+          description. It deliberately does not create child transactions: the ledger still shows one row
+          for one purchase, because that is what happened.
+        </p>
+
+        <h4>Building one</h4>
+        <p>
+          The editor opens three ways -- from the row&rsquo;s right-click menu
+          (<strong>Split&hellip;</strong>, or <strong>Edit split&hellip;</strong> on one already split),
+          from the <strong>Split (N)</strong> marker that a split row shows in its category column, or
+          from the <strong>Split&hellip;</strong> button beside the category in the transaction detail
+          panel. All three land in the same dialog.
+        </p>
+        <p>
+          It reads as a small ledger -- <em>Description</em>, <em>Category</em>, <em>Amount</em> -- in the
+          same order the transaction list uses. The description is optional and names what that item
+          covers, which is worth filling in: without it a saved split is a column of amounts with no
+          record of why each was set. <strong>+ Item</strong> adds another line, and a split needs at
+          least two.
+        </p>
+        <p>
+          <strong>Remaining</strong> counts down as the amounts are filled in, and turns
+          into <strong>Fully allocated</strong> when the items account for the transaction exactly.
+          <strong> Save split</strong> stays unavailable until then, so whether a split is finished is
+          answered on screen rather than by a save that comes back refused.
+          <strong> Add remainder to selected</strong> drops whatever is left into the amount last worked
+          in -- useful for the final line -- and offers to put the previous figure back if that was not
+          what was wanted.
+        </p>
+
+        <h4>What the editor will not accept</h4>
+        <ul>
+          <li>
+            <strong>The items must add up to the transaction, to the cent.</strong> A split that does not
+            balance would make the ledger disagree with the bank.
+          </li>
+          <li>
+            <strong>Every item points the same way as the transaction</strong> -- all money out, or all
+            money in. A refunded item within a purchase is not currently expressible.
+          </li>
+          <li>
+            <strong>An item names a category, not a group</strong> -- the same rule ordinary
+            categorization follows.
+          </li>
+        </ul>
+        <p>
+          Two items <em>may</em> name the same category, and that is on purpose rather than an oversight.
+          Two things bought together often classify alike, and folding them into one line would throw away
+          exactly the detail a split exists to keep -- two records at two prices are two purchases.
+        </p>
+
+        <h4>Splitting an imported order</h4>
+        <p>
+          Where the transaction came from a marketplace order whose per-item detail was imported, the
+          editor opens with one line per item already filled in, and <strong>shows its working</strong>:
+          each item&rsquo;s list price beside the share worked out from it, against the amount actually
+          paid. The two differ because list prices exclude tax, shipping and discounts -- so they are used
+          as <em>proportions</em> rather than as amounts. <strong>Use items</strong> applies the proposal,
+          and every figure stays editable afterwards.
+        </p>
+
+        <h4>How a split transaction reads afterwards</h4>
+        <p>
+          In the transaction list the category column shows <strong>Split (N)</strong> in place of a
+          category, since there is no single category to show. Hovering it lists the items and their
+          amounts; clicking it reopens the editor.
+        </p>
+        <p>
+          The ledger shows the transaction <em>once</em>, at its full amount. Inside a report or a
+          category drill-down it appears instead as the <em>item</em> that matched, at that
+          item&rsquo;s amount -- which is what makes the rows in a drill-down add up to the total above
+          them. Opening the same transaction&rsquo;s detail panel shows the whole amount again. That
+          difference is intended: one is the purchase, the other is the part of it that belongs to the
+          category being looked at.
+        </p>
+        <p>
+          Tags behave the way they read. A tag put on the transaction applies to the whole thing and to
+          every item; a tag inherited from a category follows each item&rsquo;s own category, so a split
+          transaction can contribute to two different tag totals. See{' '}
+          <HelpLink to="/help/tags">how tags work</HelpLink>.
+        </p>
+
+        <h4>Undoing it</h4>
+        <p>
+          <strong>Remove split</strong> returns the transaction to a single category -- the one it carried
+          before it was split, which is kept for exactly this. Assigning a single category to a split row
+          any other way is refused rather than silently discarding the items, so the editor is always the
+          way in.
+        </p>
+        <p>
+          Automatic categorization leaves a split alone. <strong>Run categorization</strong> skips it, and
+          even applying a rule to its matching transactions -- which otherwise overrides a category set by
+          hand -- will not overwrite one, reporting how many it left instead. A split is hand-built work
+          with no other record of it. See{' '}
+          <HelpLink to="/help/re-categorizing">what changes a transaction&rsquo;s category</HelpLink>.
         </p>
       </>
     ),
@@ -1082,6 +1207,57 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'intra-file-duplicates',
+    section: 'duplicates',
+    title: 'A source that lists the same row twice',
+    surfaces: ['Import / Export (duplicate report)'],
+    summary: 'Duplicate detection compares an incoming file against what is already in the ledger, so two copies inside one file both import and neither is flagged -- deliberately, because a real repeat purchase and an export artifact look identical. The fix is to clean the export before importing it, or to trash the extra copy after.',
+    body: () => (
+      <>
+        <p>
+          Some exports list the same purchase twice, often a day apart. This is different from every other
+          duplicate case, and it is worth knowing why nothing catches it.
+        </p>
+        <p>
+          Duplicate detection compares an <em>incoming file</em> against what is already in the ledger. Two
+          copies of one purchase sitting inside the same file have nothing to be compared against, so both
+          import and neither is flagged. That is deliberate rather than an oversight: a genuine repeat
+          purchase -- the same coffee at the same price on two mornings -- and an export artifact are the
+          same rows. Guessing between them would either drop real transactions or leave false flags to
+          clear on every import, and only the person who knows the merchant can tell which is which.
+        </p>
+
+        <h4>Spotting it</h4>
+        <p>
+          Sorting the imported file&rsquo;s rows by amount brings identical figures together, which is the
+          quickest way to see whether a file is doing this. It tends to be a property of the
+          <em>source</em> rather than of one export -- if one file from a source double-lists, later ones
+          usually will too, so it is worth checking the first import from any new source.
+        </p>
+
+        <h4>Two ways to deal with it</h4>
+        <ul>
+          <li>
+            <strong>Clean the file before importing.</strong> The better fix where a source does this
+            every time. Work on a copy, keep a record of what was dropped, and be generous about what
+            counts as a duplicate -- rows a day or two apart with the same amount and merchant. Small
+            fixed-price repeats (a vending machine, a parking meter) are acceptable casualties; they do
+            not move a total.
+          </li>
+          <li>
+            <strong>Trash the extra copy after importing.</strong> Fine for a one-off. Find the pair on
+            the Transactions page, select the copy to remove, and move it to trash -- it stays recoverable
+            from Settings until the trash is emptied.
+          </li>
+        </ul>
+        <p>
+          Undoing the whole import and starting again from a cleaned file is always available too, and is
+          usually less work than picking through a long history by hand.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'removed-as-duplicates',
     section: 'duplicates',
     title: 'Where a removed duplicate went',
@@ -1263,6 +1439,188 @@ export const HELP_TOPICS = [
         <p>
           See also:{' '}
           <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'transaction-documents',
+    section: 'transaction-detail',
+    title: 'Attaching receipts and invoices',
+    surfaces: ['Transactions (row marker)', 'Transaction detail (Documents)'],
+    summary: 'A transaction records that money moved, not what was bought. Receipts and invoices attach to the transaction they belong to -- dropped, browsed, or pasted straight out of an email -- and text inside a PDF or a paste is searchable from the ordinary filter box.',
+    body: () => (
+      <>
+        <p>
+          A transaction records that money moved and where it went. It does not record <em>what was
+          bought</em>. For most rows that does not matter. For a car repair, a service invoice, or a
+          purchase with a warranty behind it, the useful detail exists only on paperwork
+          that {APP_NAME} has never seen -- so it can be attached to the transaction it belongs to.
+        </p>
+        <p>
+          Attachments live on the transaction detail panel under <strong>Documents</strong>, and a row
+          that carries any shows a paperclip marker which opens them. One transaction can hold several:
+          a repair often arrives as an estimate and then a final invoice, and a two-page bill
+          photographs as two files.
+        </p>
+
+        <h4>Four ways to attach one</h4>
+        <p>All four end in the same place, so whichever is nearest is the right one.</p>
+        <ul>
+          <li><strong>Drop a file</strong> onto the panel, or click it to browse.</li>
+          <li>
+            <strong>Paste an image</strong> -- a screenshot, or a photo already on the clipboard. There is
+            nothing to review, so it attaches straight away.
+          </li>
+          <li>
+            <strong>Paste text</strong> into the box below. A receipt that arrived by email is usually
+            copied out of the mail client rather than saved first, and pasted text lands in the box where
+            a signature or a quoted reply can be trimmed off before it is attached.
+          </li>
+          <li>
+            <strong>A saved email</strong> (an <code>.eml</code> file) can be dropped like any other file.
+            The message itself is not what gets stored -- the receipt inside it is, named by the subject
+            line, which is usually the only recognizable thing about an exported message.
+          </li>
+        </ul>
+        <p>
+          An unedited paste keeps the layout it came with. The plain-text flavour of a copied email is its
+          table flattened, one cell to a line, so an amount ends up under the item it prices rather than
+          beside it; keeping the original markup preserves the arrangement the sender laid out. Editing
+          the box turns that off, since an edit says the text on screen is what was wanted. The panel
+          states which of the two will be stored.
+        </p>
+
+        <h4>What is accepted, and what happens to it</h4>
+        <p>
+          PDFs, images, plain text, and saved email. A PDF is kept exactly as it arrived, because its text
+          layer is what makes it the best thing to attach. A large photograph is scaled down once on the
+          way in -- a receipt shot at twelve megapixels carries nothing legible above roughly 300 DPI at
+          text size -- and the original is not kept. Screenshots and small images pass through untouched,
+          since crisp text is what re-encoding treats worst. A generous per-file size limit exists to stop
+          a pathological scan, not to ration space.
+        </p>
+        <p>
+          Attaching the same file to the same transaction twice is reported rather than stored twice.
+          Dropping a receipt again because nothing visibly happened quickly enough is ordinary behaviour,
+          and two identical entries would then have to be told apart by nothing.
+        </p>
+
+        <h4>Searching what is inside</h4>
+        <p>
+          Text found in an attachment is searched by the ordinary quick-filter box on the Transactions
+          page -- no prefix required. A transaction whose match came from an attachment is marked, so a
+          row returned for a term that appears in none of its visible fields still explains itself.
+          Typing <code>doc:</code> before the terms narrows a search to attachments only. See{' '}
+          <HelpLink to="/help/searching-transactions">searching by date or amount</HelpLink> for the rest
+          of that box.
+        </p>
+        <p>
+          Text is available for a PDF carrying a text layer, and for anything pasted as text. A
+          <em>photograph</em> of a receipt has no text to extract -- reading text out of a picture is not
+          built -- so a photographed receipt is stored and viewable, but not findable by what it says.
+        </p>
+
+        <h4>Removing, the trash, and backups</h4>
+        <p>
+          Removing a document deletes the file and cannot be undone, so it asks first. That is different
+          from trashing the <em>transaction</em>: documents follow their transaction into the trash, come
+          back intact if it is restored, and are destroyed only when the trash is emptied.
+        </p>
+        <p>
+          Attached files are stored beside the ledger on disk rather than inside the database, and they
+          travel inside the <strong>Financial data</strong> backup along with the transactions that
+          reference them -- so a backup taken after attaching a receipt contains the receipt. See{' '}
+          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'multi-payment-purchases',
+    section: 'transaction-detail',
+    title: 'One purchase paid in several payments',
+    surfaces: ['Transactions (link marker, Bulk Edit)', 'Transaction detail (Purchase)'],
+    summary: 'A deposit and a final payment are two real transactions for one purchase. Linking them records that, and gives the purchase a total, without changing anything about the transactions or about any report. Select the payments under Bulk Edit and choose Link as one purchase.',
+    body: () => (
+      <>
+        <p>
+          Some purchases are paid in more than one go -- a deposit up front and the balance on completion,
+          or a few instalments. Each payment is a real movement of money on its own date, and each is
+          recorded correctly. What the ledger cannot say on its own is that they add up to one thing,
+          which leaves a deposit reading as a mysterious partial amount and leaves &ldquo;what did that
+          actually cost&rdquo; to memory.
+        </p>
+        <p>
+          Linking the payments as a <strong>purchase</strong> records that relationship.
+          <strong> Nothing about the transactions changes</strong> -- categories, amounts, dates, and
+          every total and chart stay exactly as they were. A purchase says which rows belong together;
+          it does not restate them.
+        </p>
+
+        <h4>Grouping the payments</h4>
+        <p>
+          On the Transactions page, turn on <strong>Bulk Edit</strong>, tick the payments that make up the
+          purchase, and choose <strong>Link as one purchase</strong>. The dialog lists what is about to be
+          grouped, with a running total, so a row ticked by mistake is visible before anything is saved.
+        </p>
+        <p>
+          A name is optional, and is pre-filled from the payee when every payment shares one. Two further
+          fields are worth filling in when the paperwork is to hand: the <strong>invoice or order
+            number</strong>, and the <strong>expected total</strong> -- what the purchase was supposed to
+          come to.
+        </p>
+
+        <h4>Reading it back</h4>
+        <p>
+          Each grouped payment carries a small <strong>&#128279;</strong> marker in its row. Hovering it
+          says which payment of how many this is, what the purchase is called, and how much has been
+          linked against what was expected. Clicking it opens the purchase. The transaction detail panel
+          shows the same summary under <strong>Purchase</strong>, and opens the same editor.
+        </p>
+        <p>
+          Where an expected total was recorded, the difference from it shows
+          as <strong>Unaccounted</strong>. That word is deliberate: a gap may be a payment that has not
+          been made yet, or one that has been made and not yet linked, and nothing in the ledger can tell
+          those apart. When the payments account for the total exactly, it says so instead.
+        </p>
+
+        <h4>Changing one afterwards</h4>
+        <ul>
+          <li>
+            <strong>A payment that turns up later</strong> joins the existing purchase rather than
+            starting a second one: tick it together with any payment already in that purchase, and the
+            same action adds it.
+          </li>
+          <li>
+            <strong>A payment linked by mistake</strong> comes out from the purchase itself, with
+            the <strong>&times;</strong> beside it. The transaction is untouched -- it simply stops
+            counting toward the purchase. Removing one that would leave a single payment behind ungroups
+            the purchase entirely, and says so before doing it.
+          </li>
+          <li>
+            <strong>Ungroup</strong> undoes the grouping altogether. Every payment stays exactly as it is,
+            and the same payments can be linked again afterwards.
+          </li>
+        </ul>
+
+        <h4>What belongs in one, and what does not</h4>
+        <p>
+          A refund against the purchase can be linked as well, and the total then reads as the net --
+          which is what the purchase actually cost. A payment that has been trashed stops counting toward
+          the total but stays listed, struck through, so nothing vanishes from a purchase without saying
+          why.
+        </p>
+        <p>
+          A payment belongs to <em>one</em> purchase. Where a single payment covered two separate
+          purchases, splitting that transaction across categories is the tool for it -- linking it to both
+          would count the whole payment toward each.
+        </p>
+        <p>
+          This is for a purchase that ends: a deposit and a balance, three instalments on a piece of
+          furniture. Something that repeats indefinitely -- a subscription, a monthly bill, a mortgage --
+          is a <HelpLink to="/help/recurring-transactions">recurring series</HelpLink> instead, which
+          tracks a cadence and what is due next.
         </p>
       </>
     ),
