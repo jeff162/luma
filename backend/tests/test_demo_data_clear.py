@@ -8,8 +8,11 @@ while the marker is set. The four here (data restore, CSV import, credentials re
 set; a fifth path added without a gate is a way to lose real data to the demo clear."""
 
 import asyncio
+import hashlib
 import json
+import os
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +31,12 @@ from backend.routers.import_export.backup import (
     restore_credentials,
 )
 from backend.routers.sync import run_sync
+from backend.services.documents import (
+    INGEST_GRACE_SECONDS,
+    document_file_path,
+    new_document_id,
+    write_document_file,
+)
 
 
 class _FakeUpload:
@@ -113,6 +122,36 @@ class DemoDataClearTests(unittest.TestCase):
             self.assertFalse(is_demo_data_loaded(conn))   # marker cleared by the wipe
             # The protected Unassigned group is restored.
             self.assertTrue(conn.execute("SELECT 1 FROM category WHERE system_key = 'unassigned'").fetchone())
+
+    def test_clear_takes_attached_documents_and_their_files(self):
+        # A document attached to a demo transaction is the case the wipe alone does not finish: the row
+        # goes with its transaction via ON DELETE CASCADE, but files are outside that transaction and
+        # would survive it as orphans nothing references. The sweep after the commit is what closes it.
+        with get_db(str(self.db_path)) as conn:
+            load_demo_data(conn, scope_id="demo-profile")
+            txn_id = conn.execute("SELECT id FROM txn LIMIT 1").fetchone()["id"]
+
+        with self._use_db_path():
+            document_id = new_document_id()
+            payload = b"%PDF-1.4\ndemo receipt\n%%EOF\n"
+            write_document_file(document_id, payload)
+            with get_db(str(self.db_path)) as conn:
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at) "
+                    "VALUES (?, ?, 'demo.pdf', 'application/pdf', ?, ?, '2026-08-24T00:00:00Z')",
+                    (document_id, txn_id, len(payload), hashlib.sha256(payload).hexdigest()),
+                )
+            # Aged past the ingest grace period, which exists to spare a file whose row has not committed
+            # yet — without this the sweep would correctly decline to touch a file written a moment ago.
+            path = document_file_path(document_id)
+            stale = time.time() - (INGEST_GRACE_SECONDS + 60)
+            os.utime(path, (stale, stale))
+
+            clear_demo_data_endpoint()
+
+            self.assertFalse(path.exists())
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM document").fetchone()[0], 0)
 
     def test_clear_is_repeatable_after_reload(self):
         with get_db(str(self.db_path)) as conn:

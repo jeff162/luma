@@ -31,6 +31,11 @@ from backend.services.transaction_tags import (
 from backend.json_utils import safe_json_dict
 from backend.services.amazon_import import parse_item_evidence
 from backend.services.categorizer import categorize_transaction, load_categorization_rules
+from backend.services.documents import (
+    INGEST_GRACE_SECONDS,
+    documents_map_for,
+    sweep_unreferenced_files,
+)
 from backend.services.txn_splits import (
     SPLIT_CATEGORY_SOURCE,
     SplitValidationError,
@@ -55,7 +60,7 @@ TRIM(
 )
 """
 QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS = {"check", "checking", "saving", "savings", "credit", "debit"}
-QUICK_FILTER_FIELD_PREFIXES = {"merchant", "category", "account", "date", "amount"}
+QUICK_FILTER_FIELD_PREFIXES = {"merchant", "category", "account", "date", "amount", "doc"}
 TRANSACTION_SORT_SQL = {
     "date": "t.date",
     "merchant": "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))",
@@ -551,6 +556,17 @@ def _build_quick_filter_clause(value: str):
             or_clauses.append("t.date LIKE ?")
             params.append(f"%-{month}-%")
 
+    if want("doc"):
+        # Text inside an attached receipt is searchable from the plain box, not only behind `doc:`.
+        # The objection to folding it in was that a hit has no visible cause — every field shown on the
+        # row lacks the term — and the answer is to *show* the cause rather than to hide the match: the
+        # list feed carries `matched_document` for these rows and the ledger marks them. `doc:` remains
+        # as the way to search documents *only*.
+        match_query = _fts_match_query(search_text)
+        if match_query:
+            or_clauses.append(DOCUMENT_MATCH_SQL)
+            params.append(match_query)
+
     if want("amount"):
         amount_value = _parse_quick_filter_amount(search_text)
         if amount_value is not None:
@@ -568,6 +584,51 @@ def _build_quick_filter_clause(value: str):
         return "(1 = 0)", []
 
     return f"({' OR '.join(or_clauses)})", params
+
+
+# Whether any document attached to `t` matches an FTS query. Stated once because it is used two ways —
+# as a filter clause, and as a projected column telling the ledger *why* a row came back — and the two
+# must ask exactly the same question or a row would match without being marked, or the reverse.
+DOCUMENT_MATCH_SQL = (
+    "EXISTS (SELECT 1 FROM document_fts "
+    "        JOIN document d ON d.rowid = document_fts.rowid "
+    "        WHERE document_fts MATCH ? AND d.txn_id = t.id)"
+)
+
+
+def document_match_query(quick_filter: Optional[str]) -> Optional[str]:
+    """The FTS query a quick filter implies for document text, or None if it implies none.
+
+    Used by the list feed to project the match reason. Returns None for a prefixed filter that is not
+    `doc:` — a `merchant:` search has no document component, so its rows must not be marked as though
+    they matched one.
+    """
+    text = (quick_filter or "").strip()
+    if not text:
+        return None
+    field, remainder = _split_quick_filter_field(text)
+    if field is not None and field != "doc":
+        return None
+    return _fts_match_query(remainder if field is not None else text)
+
+
+def _fts_match_query(value: str) -> Optional[str]:
+    """Turn what someone typed into an FTS5 MATCH expression, or None if nothing usable is left.
+
+    **Every token is quoted rather than passed through.** FTS5 MATCH is a query language — `AND`, `*`,
+    `:`, `^`, parentheses and quotes all mean something — so raw input is both a syntax error waiting to
+    happen (an unbalanced quote raises, which would surface as a 500 from a typo) and a way to write a
+    query nobody asked for. Quoting each token makes it a literal phrase, so a receipt can be searched
+    for `AND` or `store (west)` and get what it says.
+
+    **Tokens match by prefix.** Every other quick-filter facet is a substring match, so an exact-word
+    search here would behave differently from the box it shares — `doc:brak` finding nothing while
+    `merchant:brak` finds Brake Co. Prefix is the closest FTS equivalent to typing-as-you-go.
+    """
+    tokens = [token for token in re.split(r"[^0-9A-Za-z\']+", value or "") if token]
+    if not tokens:
+        return None
+    return " ".join(f'"{token}"*' for token in tokens)
 
 
 def _normalize_quick_filter_text(value: str) -> str:
@@ -941,6 +1002,12 @@ def list_transactions(
     order_by_parts.append("t.id DESC")
     order_by = ", ".join(order_by_parts)
 
+    # Why a row came back, for the rows whose reason is invisible. Projected only when the filter
+    # actually has a document component, so the ordinary listing pays nothing for it.
+    doc_query = document_match_query(quick_filter)
+    document_match_column = f"{DOCUMENT_MATCH_SQL} AS matched_document," if doc_query else ""
+    document_match_params = [doc_query] if doc_query else []
+
     with get_db() as conn:
         _src = txn_effective_sql(conn, expand=expand_splits)
         # Count *and* signed net sum over the whole filtered set, not just the returned page — so a
@@ -1000,6 +1067,7 @@ def list_transactions(
                 -- MIN picks a stable one in the rare multi-exclude case.
                 rex.series_id    AS recurring_excluded_series_id,
                 rxs.display_name AS recurring_excluded_series_name,
+                {document_match_column}
                 t.is_split
             FROM   {_src} t
             JOIN   account  a ON a.id = t.account_id
@@ -1019,7 +1087,7 @@ def list_transactions(
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
             """,
-            params + [sql_limit, offset],
+            document_match_params + params + [sql_limit, offset],
         ).fetchall()
         transactions = [dict(r) for r in rows]
         txn_ids = [txn["id"] for txn in transactions]
@@ -1028,6 +1096,11 @@ def list_transactions(
         # A split row's allocations, for its "Split (N)" label and the hover that lists the parts. One
         # query for the page rather than one per row, and only for the rows that are actually split.
         split_parts = get_split_parts_map(conn, [t["id"] for t in transactions if t.get("is_split")])
+        # The documents on each row, for the ledger's paperclip — which names them and opens them, so it
+        # needs more than a count. Slim rows only (no extracted text, which can run to hundreds of
+        # kilobytes no list surface renders), carried inline for the same reason `split_parts` is: the
+        # marker opens straight from the row, and a fetch there would be a loading state inside a click.
+        documents_by_txn = documents_map_for(conn, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
@@ -1035,6 +1108,9 @@ def list_transactions(
             parts = split_parts.get(txn["id"], [])
             txn["split_parts"] = parts
             txn["split_part_count"] = len(parts)
+            docs = documents_by_txn.get(txn["id"], [])
+            txn["documents"] = docs
+            txn["document_count"] = len(docs)
 
     return {
         "total": total,
@@ -1661,6 +1737,14 @@ def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
             f"DELETE FROM txn WHERE trashed_at IS NOT NULL AND {visible}{cutoff}", params
         )
         removed = cursor.rowcount or 0
+    if removed:
+        # Attached documents are what makes the purge the *irreversible* half of the trash: trashing a
+        # transaction hides its documents with it and a restore brings them back, while this deletes
+        # them. The rows go with their transaction (ON DELETE CASCADE), but files sit outside that
+        # transaction, so the stored bytes are reclaimed here — after the commit, against the ledger as
+        # it now stands, sparing anything an in-flight ingest has written but not yet committed.
+        with get_db() as conn:
+            sweep_unreferenced_files(conn, min_age_seconds=INGEST_GRACE_SECONDS)
     return {"removed": removed}
 
 

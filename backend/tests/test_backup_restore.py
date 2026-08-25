@@ -55,6 +55,7 @@ from backend.routers.import_export.backup import (
     write_backup_archive,
 )
 from backend.routers.import_export.backup import _zip_json_bytes, read_payload_bytes
+from backend.services.documents import document_file_path, documents_dir, write_document_file
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
@@ -65,6 +66,17 @@ from backend.services.categorizer import seed_default_rules
 # diagnostics, not part of the financial dataset a backup preserves, and pointless to restore against
 # connections the data backup never carries.
 EXCLUDED_TABLES = {"plaid_item", "connection", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
+# The document text index and the shadow tables FTS5 keeps beside it. Derived state, not data: every
+# term in it comes from `document.text`, which the backup *does* carry, and the triggers rebuild the
+# index as those rows stream back in. Backing it up would ship a second copy of the same text and a
+# second thing that could disagree with the first.
+EXCLUDED_TABLES |= {"document_fts", "document_fts_data", "document_fts_idx", "document_fts_docsize",
+                    "document_fts_config", "document_fts_content"}
+# Machine-local operational state: where *this* install got to in a restore. It must never travel to
+# another install — carrying it would tell the target it has a restore outstanding against an artifact
+# path that does not exist there. Being outside the wipe list is also what keeps it alive across the very
+# operation it tracks.
+EXCLUDED_TABLES |= {"restore_state"}
 
 # Every other data-DB table maps to a backup payload section. A new table with no entry here fails
 # the coverage guard, which is the point: it can't be silently left out of backups.
@@ -97,6 +109,7 @@ TABLE_TO_SECTION = {
     "txn_link_member": "txn_link_members",
     "amazon_funding_map": "amazon_funding_map",
     "txn_split": "txn_splits",
+    "document": "documents",
 }
 
 
@@ -274,6 +287,28 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "INSERT INTO txn_split (id, txn_id, category_id, amount, sort_order, label) "
                     "VALUES (?, ?, ?, 17.32, 1, NULL)",
                     (str(uuid.uuid4()), charge, second_leaf),
+                )
+
+                # Attached documents. Two, deliberately: one with its file present, which must come back
+                # byte-identical, and one whose file is *missing*, because file-and-row drift is possible
+                # by construction here — the store writes the file before the row and nothing stops the
+                # file being deleted underneath it. A backup that refused to export over one unreadable
+                # receipt would withhold the entire ledger, so the row has to ride without its member.
+                self.document_bytes = b"%PDF-1.4\nfixture invoice\n%%EOF\n"
+                self.present_document = str(uuid.uuid4())
+                self.absent_document = str(uuid.uuid4())
+                write_document_file(self.present_document, self.document_bytes)
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at, text, text_source) "
+                    "VALUES (?, ?, 'repair-invoice.pdf', 'application/pdf', ?, ?, '2026-04-16T10:00:00Z', "
+                    "'Replaced front brake pads', 'pdf_text')",
+                    (self.present_document, charge, len(self.document_bytes),
+                     hashlib.sha256(self.document_bytes).hexdigest()),
+                )
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at) "
+                    "VALUES (?, ?, 'lost-receipt.jpg', 'image/jpeg', 12, 'deadbeef', '2026-04-16T10:05:00Z')",
+                    (self.absent_document, charge),
                 )
 
     def _user_data_tables(self) -> set[str]:
@@ -681,6 +716,121 @@ class BackupArchiveTests(BackupFixtureTestCase):
             for name, recorded in meta["members"].items():
                 lines = [ln for ln in zf.read(name).decode().splitlines() if ln.strip()]
                 self.assertEqual(recorded["rows"], len(lines), f"{name} row count is wrong")
+
+    # --- attached documents ----------------------------------------------------------------------
+    # Documents are the one part of the payload that is not rows, and the only part whose storage is not
+    # transactional. What these pin is the seam: the bytes ride the same artifact as the ledger that
+    # references them, and every way the two can disagree resolves toward keeping the ledger.
+
+    def test_document_files_ride_the_archive_as_stored_members(self):
+        self._seed_complete()
+        with zipfile.ZipFile(io.BytesIO(self._write_archive())) as zf:
+            info = zf.getinfo(f"documents/{self.present_document}")
+            self.assertEqual(zf.read(info.filename), self.document_bytes)
+            # Stored, not deflated: a PDF/JPEG/PNG payload is already compressed, so deflating it spends
+            # CPU for nothing while the NDJSON sections beside it still compress ~10:1.
+            self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
+            # A row whose file is gone rides without a member rather than failing the export — refusing
+            # would withhold the whole ledger over one unreadable receipt.
+            self.assertNotIn(f"documents/{self.absent_document}", set(zf.namelist()))
+            # Their digests live on the `document` row, deliberately not repeated in meta.json: one
+            # source of truth, and the one a resumed restore can check a half-written file against.
+            self.assertNotIn(f"documents/{self.present_document}", json.loads(zf.read("meta.json"))["members"])
+
+    def test_restore_rebuilds_the_document_store_and_sweeps_what_the_ledger_dropped(self):
+        self._seed_complete()
+        archive = self._write_archive()
+
+        with self._use_db_path():
+            # Destroy the store the way a restore onto a different machine would find it: the attached
+            # file gone, and an unrelated file present that the restored ledger knows nothing about.
+            document_file_path(self.present_document).unlink()
+            orphan = str(uuid.uuid4())
+            write_document_file(orphan, b"%PDF-1.4\nnot in the ledger\n%%EOF\n")
+
+        result = self._restore_archive(archive)
+
+        with self._use_db_path():
+            self.assertEqual(document_file_path(self.present_document).read_bytes(), self.document_bytes)
+            # Swept last rather than cleared up front, so an interrupted restore leaves inert litter
+            # instead of originals it can no longer recover.
+            self.assertFalse(document_file_path(orphan).exists())
+        self.assertEqual(result["documents"]["restored"], 1)
+        self.assertEqual(result["documents"]["swept"], 1)
+        # The row whose file never made it into the archive is reported, not silently forgotten.
+        self.assertEqual(result["documents"]["missing"], 1)
+
+    def test_a_stale_file_under_a_restored_id_is_not_adopted_as_the_document(self):
+        # Ids are stable across backups of one install, so a file for a restored id may already be in
+        # the store. The archive here does not carry that document's member (its file was missing at
+        # export), and the local file under the same id holds something else entirely. Leaving it would
+        # be the worst outcome available: the restored ledger references the id, so the sweep spares it,
+        # and the app would serve unrelated content as that receipt.
+        self._seed_complete()
+        archive = self._write_archive()
+
+        with self._use_db_path():
+            write_document_file(self.absent_document, b"%PDF-1.4\nsomeone else's invoice\n%%EOF\n")
+
+        result = self._restore_archive(archive)
+
+        with self._use_db_path():
+            self.assertFalse(document_file_path(self.absent_document).exists())
+        self.assertEqual(result["documents"]["missing"], 1)
+        self.assertEqual(result["documents"]["retained"], 0)
+
+    def test_a_local_file_matching_its_digest_survives_a_gap_in_the_archive(self):
+        # The same branch, other outcome. When the local file *is* the document — the ordinary case for
+        # a re-restore, since ids are stable — the archive's gap costs nothing and the file is kept. The
+        # digest is what tells the two cases apart, which is why the decision is not made on the id.
+        self._seed_complete()
+        with self._use_db_path():
+            # Drop the file so the export writes this row without its member, then put the genuine
+            # bytes back, as an earlier restore or the original attach would have left them.
+            document_file_path(self.present_document).unlink()
+        archive = self._write_archive()
+        with self._use_db_path():
+            write_document_file(self.present_document, self.document_bytes)
+
+        result = self._restore_archive(archive)
+
+        with self._use_db_path():
+            self.assertEqual(document_file_path(self.present_document).read_bytes(), self.document_bytes)
+        self.assertEqual(result["documents"]["retained"], 1)
+
+    def test_a_corrupt_document_costs_its_file_and_not_the_ledger(self):
+        self._seed_complete()
+        tables = self._user_data_tables()
+        archive = self._rewrite_member(
+            self._write_archive(), f"documents/{self.present_document}", b"corrupted on the way here",
+        )
+
+        result = self._restore_archive(archive)
+
+        # The ledger is already committed and correct by the time a document is written, so one file
+        # failing its digest must not cost the user their transactions.
+        self.assertEqual(self._counts(tables)["txn"], result["restored_counts"]["transactions"])
+        self.assertEqual(result["documents"]["corrupt"], 1)
+        with self._use_db_path():
+            # Removed rather than left in place: "present on disk" has to keep meaning "intact", or
+            # every later digest comparison — a resumed restore above all — is reading a lie.
+            self.assertFalse(document_file_path(self.present_document).exists())
+
+    def test_restoring_a_backup_without_documents_empties_the_store(self):
+        # Restore is destructive, and its destructive half is derived rather than declared: a ledger
+        # with no documents means no files, whether the backup predates the feature or simply had none.
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("DELETE FROM document")
+        archive = self._write_archive()
+
+        with self._use_db_path():
+            write_document_file(self.present_document, self.document_bytes)
+        self._restore_archive(archive)
+
+        with self._use_db_path():
+            self.assertFalse(document_file_path(self.present_document).exists())
 
     # --- integrity -------------------------------------------------------------------------------
 

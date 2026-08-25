@@ -9,7 +9,10 @@ endpoint shows trashed rows while the regular list hides them.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -26,6 +29,12 @@ from backend.routers.transactions import (
     restore_transaction,
     spending_by_group,
     trash_transaction,
+)
+from backend.services.documents import (
+    INGEST_GRACE_SECONDS,
+    document_file_path,
+    new_document_id,
+    write_document_file,
 )
 
 
@@ -268,6 +277,42 @@ class TrashFilterCoverageTests(unittest.TestCase):
         # Confirmed duplicates survive so detach / undo-reject can still restore them.
         self.assertTrue(self._txn_exists(auto))
         self.assertTrue(self._txn_exists(user_dup))
+
+    def test_trash_hides_a_documented_row_and_the_purge_reclaims_its_file(self):
+        # Documents inherit the trash's own two stages rather than defining a second lifetime: trashing
+        # is reversible and keeps the file, purging is not and takes it. The row goes with its
+        # transaction via ON DELETE CASCADE, but the file is outside that transaction, so only the
+        # sweep after the purge actually reclaims the bytes.
+        account, group, _, target = self._seed_two()
+        with self._use_db_path():
+            document_id = new_document_id()
+            payload = b"%PDF-1.4\nrepair invoice\n%%EOF\n"
+            write_document_file(document_id, payload)
+            with get_db(str(self.db_path)) as conn:
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at) "
+                    "VALUES (?, ?, 'invoice.pdf', 'application/pdf', ?, ?, '2026-08-24T00:00:00Z')",
+                    (document_id, target, len(payload), hashlib.sha256(payload).hexdigest()),
+                )
+            path = document_file_path(document_id)
+            stale = time.time() - (INGEST_GRACE_SECONDS + 60)
+            os.utime(path, (stale, stale))
+
+            trash_transaction(target)
+            # Still recoverable, so the file must still be there — trashing is the reversible stage.
+            self.assertTrue(path.exists())
+            with get_db(str(self.db_path)) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM document").fetchone()[0], 1)
+
+            restore_transaction(target)
+            self.assertTrue(path.exists())
+
+            trash_transaction(target)
+            os.utime(path, (stale, stale))
+            self.assertEqual(empty_transaction_trash()["removed"], 1)
+            self.assertFalse(path.exists())
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM document").fetchone()[0], 0)
 
     def test_amazon_removals_show_in_trash_and_empty_by_scope(self):
         # Amazon reconciliation removals (amazon_merge / amazon_discard) are the visible exception

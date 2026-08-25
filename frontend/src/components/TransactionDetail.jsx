@@ -14,6 +14,7 @@ import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
+import DocumentsPanel from './DocumentsPanel.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -267,6 +268,20 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     // reset displayName mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTxn.display_name, detailTxn.merchant_name, detailTxn.raw_name, editingName])
+
+  // Kept stable, deliberately. `DocumentsPanel` reports its documents so the ledger's paperclip updates
+  // without refetching the page, and that report patches the host row — which re-renders this panel. An
+  // inline arrow here would hand the panel a new identity on each of those renders, and the panel would
+  // refetch on every one, looping between loading and loaded. See the ref in DocumentsPanel for the
+  // other half of the same rule.
+  //
+  // The whole list travels, not just its length: the row *opens* documents from its own copy, so a
+  // stale id there is a click that opens the wrong thing (or nothing) rather than merely a wrong count.
+  const handleDocumentsChange = useCallback(documents => {
+    const patch = { documents, document_count: documents.length }
+    setDetailTxn(prev => (prev ? { ...prev, ...patch } : prev))
+    onReconcile?.(txn.id, patch)
+  }, [onReconcile, txn.id])
 
   // Persistence for the shared NoteEditor: write through, patch the panel's own copy, and
   // reconcile the host's row so the saved note shows behind the panel (otherwise the note
@@ -523,6 +538,11 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
               </div>
               <NoteEditor value={detailTxn.notes} onSave={handleSaveNote} />
             </div>
+
+            {/* Attached paperwork. Placed beside Notes because it answers the same kind of question —
+                what this transaction was actually *for* — and the count is reconciled back to the host
+                so the ledger's indicator updates without a refetch of the page. */}
+            <DocumentsPanel txnId={detailTxn.id} onDocumentsChange={handleDocumentsChange} />
 
             <div style={{ display: 'grid', gap: 6 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

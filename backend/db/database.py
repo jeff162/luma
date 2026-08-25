@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 41
+CURRENT_VERSION = 43
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1171,6 +1171,48 @@ def _split_parts_may_repeat_a_category(conn):
     conn.execute("DROP INDEX IF EXISTS idx_txn_split_txn_category")
 
 
+@migration(42)
+def _add_document(conn):
+    # Attached receipts and invoices — see the baseline CREATE for the column semantics and
+    # services/documents.py for the store. Created here as well as in the baseline script because an
+    # existing database never re-runs that script's CREATE for a table it already has, and it has never
+    # seen `document` at all. Nothing is backfilled: no document can predate the table.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS document (
+            id          TEXT PRIMARY KEY,
+            txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            filename    TEXT NOT NULL,
+            mime_type   TEXT NOT NULL,
+            byte_size   INTEGER NOT NULL,
+            sha256      TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            text        TEXT,
+            text_source TEXT
+        )
+        """
+    )
+
+
+@migration(43)
+def _add_restore_state(conn):
+    # Tracks a restore across the gap between its ledger commit and its document files — see the
+    # baseline CREATE for why it is in this database and in a table of its own. Created here as well
+    # because an existing database has never seen it; nothing is backfilled, since a restore that
+    # predates the table cannot have been interrupted in a way this could describe.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS restore_state (
+            id             INTEGER PRIMARY KEY CHECK (id = 1),
+            phase          TEXT NOT NULL,
+            started_at     TEXT NOT NULL,
+            artifact_path  TEXT,
+            artifact_id    TEXT
+        )
+        """
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1754,6 +1796,71 @@ def init_db(db_path: str | None = None):
                 label       TEXT
             );
 
+            -- A receipt or invoice attached to a transaction: the paperwork saying *what was bought*,
+            -- which the ledger row itself never records. The bytes are a file under `documents/` beside
+            -- this database, not a blob here — see services/documents.py for why, and for the file-first
+            -- write order that decides which way a crash can fail.
+            --
+            -- Several documents may hang off one transaction (a repair arrives as an estimate and then a
+            -- final invoice, a scan as two images), so there is deliberately no unique index on txn_id.
+            CREATE TABLE IF NOT EXISTS document (
+                id          TEXT PRIMARY KEY,
+                txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                -- The upload's own name, kept for display and for the download filename. Never used to
+                -- locate the file: the store is keyed by id precisely so a user-supplied name is not
+                -- filesystem input.
+                filename    TEXT NOT NULL,
+                mime_type   TEXT NOT NULL,
+                -- Both describe the *stored* bytes rather than the upload, which differ whenever an
+                -- oversized image was downscaled at ingest. The digest is load-bearing: it is what tells
+                -- a complete file from a torn one when a restore resumes, what extends a backup's
+                -- integrity check to cover the files, and how the same receipt attached twice is spotted.
+                byte_size   INTEGER NOT NULL,
+                sha256      TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                -- Text pulled out of the document, and which tier produced it ('pdf_text' for a digital
+                -- PDF's own text layer). NULL means no text was obtained — a photograph before OCR is
+                -- offered, or a PDF with no text layer — which is distinct from a document whose text is
+                -- genuinely empty. Search reads this; nothing else depends on it, so a document with no
+                -- text is fully functional.
+                text        TEXT,
+                text_source TEXT
+            );
+
+            -- One row at most, tracking a restore that is in flight or unfinished. It exists because a
+            -- restore spans two things that cannot be one transaction: the ledger, which commits
+            -- atomically, and the document files, which do not. A crash between them would otherwise
+            -- leave a live ledger whose paperwork is half-written, with nothing recording that.
+            --
+            -- It lives in the *data* DB rather than the control DB on purpose. The instinct is the
+            -- control DB, on the precedent of state that must survive a data restore — but the
+            -- requirement here is stronger than survival: the marker must be *atomic with the committed
+            -- ledger*. Written inside the restore transaction, it exists exactly when the ledger it
+            -- describes exists. A control-DB row could land without the ledger, or the ledger without it.
+            --
+            -- It is also its own table rather than a key in `import_workflow_state`, which the restore
+            -- *wipes* — a marker living there would be inside the blast radius of the operation it
+            -- tracks. Staying outside the wipe list also keeps it out of the backup for free: this is
+            -- machine-local operational state and must never travel to another install.
+            CREATE TABLE IF NOT EXISTS restore_state (
+                -- Single-row table; the CHECK is what makes that a schema fact rather than a convention.
+                id             INTEGER PRIMARY KEY CHECK (id = 1),
+                -- 'staging'           — a restore is running and has NOT committed. Nothing was changed,
+                --                       so finding this after an unclean shutdown means report and clear.
+                -- 'documents_pending' — the ledger is live and its files are not all there yet, so the
+                --                       documents phase can resume. These mean opposite things about the
+                --                       data, which is why a phase is recorded rather than a flag.
+                phase          TEXT NOT NULL,
+                started_at     TEXT NOT NULL,
+                -- Where the staged artifact was left. It outlives the ledger commit precisely so a
+                -- resume has something to read; it is deleted when the documents phase completes.
+                artifact_path  TEXT,
+                -- Enough of the backup's identity to recognize it again if the staged file is gone, so a
+                -- re-upload can be confirmed as *the same backup* rather than silently filling the
+                -- document directory from a different one.
+                artifact_id    TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS tag (
                 id         TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
@@ -2125,12 +2232,18 @@ def init_db(db_path: str | None = None):
         # classify into the same category — two records from one order are two purchases, and folding
         # them together would throw away the per-item detail the split exists to hold.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_split_txn ON txn_split(txn_id)")
+        # Same deferral as the indexes above: `document` only exists after its migration on an existing
+        # database. Every read reaches a transaction's documents through txn_id — the detail panel's
+        # list, and the indicator the ledger draws — and deliberately *not* unique, since a transaction
+        # may carry several.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_document_txn ON document(txn_id)")
         # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
         # constrained — a row can be excluded from more than one candidate series.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_recurring_override_pin ON recurring_membership_override(txn_id) WHERE state = 'pinned'"
         )
         _create_recon_epoch_triggers(conn)
+        _create_document_search_index(conn)
         ensure_shared_owner(conn)
 
 
@@ -2174,6 +2287,58 @@ def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
                     ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
                 END
             """)
+
+
+# Full-text index over the text pulled out of attached documents, reached from the Transactions page's
+# quick filter as `doc:<terms>`. FTS5 rather than a LIKE over `document.text`: a substring scan grows with
+# the stored text and is the wrong instrument for prose anyway, where word matching is what someone means
+# by searching a receipt. FTS5 ships inside SQLite, so this costs no dependency.
+#
+# **External content** (`content='document'`) — the index stores terms, not a second copy of the text, so
+# a 200 KB invoice is not held twice.
+#
+# **Maintained by triggers, and that is not a style preference.** A document row is most often removed by
+# `ON DELETE CASCADE` when its transaction is purged, and a restore rebuilds the whole table by streaming
+# rows in — neither of which is a place application code could hook even if every endpoint remembered to.
+# An index that missed those would keep returning transactions that no longer exist, which is worse than
+# no search at all. Triggers make a miss impossible, the same reasoning the recon-epoch triggers above
+# record. It also means the restore needs no FTS awareness whatsoever: rows land, the index follows.
+#
+# The index is derived state and is deliberately **not** backed up — `test_backup_restore.py` excludes it
+# and its shadow tables for that reason. It is rebuilt from `document.text` whenever it is created here,
+# so an install that somehow lost it gets a correct index on the next start rather than a silent gap.
+def _create_document_search_index(conn: sqlite3.Connection) -> None:
+    """Create (idempotently) the document text index and the triggers that keep it in step with
+    `document`. Runs after run_migrations so the table exists on both fresh and migrated databases."""
+    existed = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_fts'"
+    ).fetchone()
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS document_fts "
+        "USING fts5(text, content='document', content_rowid='rowid')"
+    )
+    # The 'delete' command is how an external-content table is told a row is going away; it needs the
+    # *old* text to remove the right terms, which is why the update trigger deletes before inserting.
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_document_fts_insert AFTER INSERT ON document BEGIN
+            INSERT INTO document_fts (rowid, text) VALUES (new.rowid, new.text);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_document_fts_delete AFTER DELETE ON document BEGIN
+            INSERT INTO document_fts (document_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_document_fts_update AFTER UPDATE ON document BEGIN
+            INSERT INTO document_fts (document_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+            INSERT INTO document_fts (rowid, text) VALUES (new.rowid, new.text);
+        END
+    """)
+    if not existed:
+        # Populate from whatever `document` already holds. Empty on a fresh install and on any database
+        # that predates documents; the case this covers is an index rebuilt after being lost.
+        conn.execute("INSERT INTO document_fts (document_fts) VALUES ('rebuild')")
 
 
 def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool = False):

@@ -488,15 +488,25 @@ Empty states should be brief and quiet.
 
 - Avoid oversized boxes for simple “nothing here yet” states.
 
+- **Every marker in a transaction row's marker strip opens what it stands for.** The note glyph, the tag chips and the document paperclip all act on click; an inert marker sitting among them reads as broken rather than as restraint, which is exactly how the document indicator first shipped. The paperclip opens the document when there is one and a small chooser when there are several — the count is on the icon, so which case you are in is visible before the click. Attaching still belongs to the detail panel, which has room to explain itself; the row only *opens*. The data this needs rides the list feed (`documents`, slim rows without the extracted text) rather than being fetched on click, the same call `split_parts` made: a marker that opens from a row must not put a loading state inside the interaction.
+
 ## Drop zones and file inputs
 
 When a file-upload action is important, prefer a visible drop zone over a bare browser file input.
 
-- Use the same visual pattern across the app where possible.
+- Use the same visual pattern across the app where possible. **`components/DropZone.jsx` is that pattern** — reach for it rather than rebuilding the dashed box and its `dragOver` state (see `shared-components.md`, including why the CSV upload stage keeps its own).
 
 - The control should support both clicking to browse and dropping a file.
 
 - Keep the text concise and task-specific.
+
+- **A paste target has to be a genuinely editable element.** This is not a styling preference and it is easy to get wrong: a `paste` event fires only at the *focused* element, and browsers offer "Paste" in the right-click menu only for `input` / `textarea` / `contenteditable`. A handler on a plain `div` — even a focusable one — is therefore unreachable by keyboard *and* by mouse, however clearly it is labelled, which is exactly how the document panel first shipped. Use a real textarea, and let it also be where the pasted content is shown. (`navigator.clipboard.read()` is not the way out: `lib/transactionShare.js` records that `navigator.clipboard` is absent entirely in insecure contexts, which covers the ordinary LAN/WSL2 deployment.)
+
+- **Read the clipboard's rich flavour, not only the plain one.** A `<textarea>` receives `text/plain` and nothing else, but `clipboardData.getData('text/html')` is right there on the same event — and for anything copied out of an email or a web page, the plain flavour is the rich one *flattened*, which for a table means every cell on its own line. Taking the markup is often the difference between storing a receipt and storing a scramble of it. `lib/transactionShare.js` already writes both flavours when copying; this is the same idea in the other direction. Only prefer the rich flavour when it actually contains markup, and let an edit to the reviewed text switch back to storing the text.
+
+- **Let a paste that has something to review land before it commits.** Attaching a document takes both: a pasted *image* attaches at once, exactly like a dropped file, because there is nothing to look at first; pasted *text* lands in the box, because a receipt copied out of an email arrives wrapped in signature and quoting and attaching it unseen would store all of that. Same machine-proposes / user-approves shape as the rest of the app.
+
+- **Report uploads per file, not as one busy flag.** A drop can carry several files and each settles on its own; a single spinner turns "the big scan is still going" into "this looks stuck", and a failure message that does not name its file is not actionable when three things were dropped together.
 
 - If the loaded file becomes editable text, switch to the editor after load rather than trying to keep two separate controls visible.
 

@@ -52,6 +52,7 @@ from backend import app_config
 from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
+from backend.services.restore_state import require_no_pending_restore
 from backend.db.control_database import auth_required
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
@@ -2745,6 +2746,7 @@ async def run_import(
                 "code": "demo_data_loaded",
                 "message": "Clear the demo data before importing your own data.",
             })
+        require_no_pending_restore(conn, "importing")
 
     content = await file.read()
     try:

@@ -6,7 +6,8 @@ Transaction splits — allocating one transaction's amount across several catego
 
 A split keeps the ledger at **one row per purchase** and hangs a set of allocations off it
 (``txn_split``), rather than exploding the purchase into child transactions. The parts must sum to the
-transaction's amount and share its sign, and at most one part may name a given category. ``txn.is_split``
+transaction's amount and share its sign; several parts may name the *same* category, since the parts
+record items and two items bought together may classify alike. ``txn.is_split``
 marks the transaction while ``txn.category_id`` retains the pre-split category as the stashed prior that
 un-splitting restores.
 

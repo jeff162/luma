@@ -1,6 +1,19 @@
 # Transaction attachments — receipts, invoices, and the text inside them
 
-**Status: backlog, not started (2026-08-20).** A transaction records that money moved and where it went;
+**Status: phase 1 built and first-pass reviewed in the running app, 2026-08-24. Owed: a Help topic.**
+The prerequisite streaming-backup work landed 2026-08-23; everything in *Phase 1* below is implemented,
+backend and UI, and has been exercised against real receipts. See *Settled: what phase 1 answered* for
+the decisions that closed along the way — including two that were **reversed** under real use and are
+recorded as don't-re-impose. [`../pre-release.md`](../pre-release.md) owns the release scope. Phases 2-4
+(OCR, the tier-3 extractor, and feeding the splits) are untouched and stay deferred.
+
+**The ingestion seam ended up wider than this file first described**, and every addition came from real
+use rather than from planning: a file (drop or browse), a pasted image, pasted text, the pasted
+**`text/html`** flavour that keeps an emailed receipt's table intact, and a saved **`.eml`**. The
+constant is the one this file always claimed — every path produces *(bytes, media type, filename)* and
+nothing downstream knows which it was.
+
+(Original note, 2026-08-20:) A transaction records that money moved and where it went;
 it does not record *what was bought*. For most rows nobody cares — nobody is going to attach a grocery
 list. For the ones where it matters (a car repair bill, a service invoice, a warranty-relevant purchase)
 the useful fact — what was actually done to the car — exists only on a document the app has never seen.
@@ -95,10 +108,9 @@ Follow those; do not invent a fourth review idiom.
 1. ~~**Where attachments live: database blob or filesystem.**~~ **SETTLED 2026-08-21** — files on disk
    under `DATA_DIR`, carried inside the backup zip as members. See *Settled: storage, sizing, and what
    the backup carries* below, which also resolves the portable-vs-installed question for free.
-2. **What "searchable" means concretely.** Extracted text has to be reachable from somewhere. There is
-   no full-text search surface today beyond the quick-filter, so this is a real decision: extend the
-   existing filter, or introduce FTS over attachment text as its own surface. Sizing this is part of
-   scoping tier 1, not a later refinement.
+2. ~~**What "searchable" means concretely.**~~ **SETTLED 2026-08-24** — an FTS5 table over the
+   extracted text, reached through a `doc:` prefix in the Transactions page's existing quick-filter box.
+   See *Settled: what phase 1 answered* below.
 3. **The extractor adapter's capability vocabulary** — text-only vs line-items vs both, and how a
    partially-capable backend degrades. Same question `building-a-connector.md` had to answer for
    providers, and the same trap: a capability that is really one backend's quirk.
@@ -173,7 +185,7 @@ Consequences to handle when building:
   delta needs to ask whether the far side's copy is intact. Settled with the backup work
   (2026-08-23) because that work depends on it; recorded here because this is the code that must produce
   it. It is also the natural key for noticing that the same receipt was attached twice.
-- **Payload version 9 → 10 is bumped by the streaming backup work, not by this feature.** That work
+- **The envelope bump belongs to the streaming backup work, not to this feature.** (It landed as 10 there; splits then took 11 and documents took 12 — the reasoning below is unchanged, only the numbers moved.) That work
   restructures the envelope into `meta.json` + `sections/<name>.ndjson` + `documents/<id>` for its own
   reasons (see [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) → *Streaming
   both directions*), and lands the container documents were always going to need. What remains here is
@@ -253,6 +265,70 @@ and [`database-diagnostics.md`](database-diagnostics.md) is already the home for
 the stored data" — which would also let it sit beside the orphan reconciliation the write-order note
 above requires. Decide when either is built; do not build two.
 
+## Settled: what phase 1 answered (2026-08-24)
+
+**A pasted receipt keeps its layout.** The design said "pasting an image or text… is the whole of the
+email story" and that was very nearly a trap: pasting *text* out of an email gets the plain flavour,
+which is the sender's table flattened one cell per line, with each amount below the item it prices
+instead of beside it. The clipboard's `text/html` flavour has the real table, so an unedited paste keeps
+that and is stored as HTML; editing the review box stores the edited text instead. Nothing new was
+needed to view it safely — the sandbox CSP already sent with every document blocks scripts, same-origin
+access and every subresource, the last of which is what stops an email's tracking pixels firing when the
+receipt is opened.
+
+**A saved `.eml` is accepted too, and it does not reopen the mailbox question.** "Email is copy/paste,
+not a mailbox" rules out polling, receiving addresses and stored mail credentials; a file the user
+exported and chose is none of those, so this is the same ingestion seam with one more input rather than
+a widening of scope. It is also the one path a clipboard quirk cannot defeat, which is why it earned its
+place: the rich-paste route depends on the source offering a `text/html` flavour, and the export does
+not.
+
+**Search is FTS5 over the extracted text, reachable from the plain quick-filter box, with `doc:` to
+narrow to documents only.** `LIKE` over the text column was rejected: a substring scan that grows with
+the stored text, and substring is the wrong instrument for prose. FTS5 is built into SQLite, so this
+costs no dependency, and `doc:` joins `merchant:` / `category:` / `account:` / `date:` / `amount:`
+rather than introducing a second search surface — which was decision 2's real question.
+
+**The prefix was briefly *required*, and that was wrong — do not re-impose it.** The argument was that an
+unprefixed hit has no visible cause: receipt text is not on the row, so the match reads as a wrong
+result until the row is opened. It was reversed the first time the feature met real use, when searching
+for a word from a just-attached receipt returned nothing and the only hint that `doc:` existed was a
+tooltip inside the detail panel. The objection was real but the remedy was backwards — **show the cause
+instead of hiding the match**: rows matched inside an attachment come back flagged and the ledger
+emphasizes their document marker. The general lesson is the one this file has now recorded twice: a
+constraint defended on "the user might be confused" is usually a missing explanation, not a reason to
+withhold the capability.
+
+**A document hangs off a transaction, and a transaction may carry several.** `document.txn_id` with
+`ON DELETE CASCADE`, and deliberately **no** unique index on it. Many-per-transaction is not a feature
+that was added — it is what the plain foreign key already gives, and the unique index is what would have
+had to be *added* to prevent it. There was no reason to: a repair arrives as an estimate and then a final
+invoice, and a two-page bill arrives as two photographs. This is the same trap the split-parts
+one-per-category rule fell into (see [`transaction-splits.md`](transaction-splits.md)) — a constraint on
+what the user may record, justified by nothing but the shape the implementer expected.
+
+**Documents follow the transaction through the trash.** Trash hides the row and its documents together;
+restore-from-trash brings them back intact; the age-based purge deletes the transaction, cascades the
+document rows, and sweeps the files. The trash is already the reversible stage and the purge the
+irreversible one, so documents inherit that rather than defining a second lifetime. Two alternatives
+were considered: surviving the purge as unattached documents (which needs a surface for documents with
+no home, and a store that only ever grows), and warning before purging a documented transaction (the
+`EditedTransactionsWarning` idiom). The warning is a reasonable later addition and was left out of phase
+1 as scope, not as a decision against it.
+
+**The payload version is 12, not 10.** The 9 → 10 bump this file anticipated was spent by the streaming
+backup work, and splits then took 11, so documents took 12. Nothing about the design changed — the
+`documents` section and the `documents/<id>` members are exactly as additive as planned — but any prose
+elsewhere still saying "9 → 10 for attachments" is stale.
+
+**Removal is a sweep, not a delete beside each row.** Every destructive path (purge, demo-data clear,
+restore) removes rows and then reclaims files the ledger no longer references. This falls out of the
+file-first write order — litter is a normal outcome that something must reclaim regardless — and it is
+what lets an interrupted restore leave extra files rather than deleted originals. The one hazard is the
+window between an ingest's file write and its row commit, in which a file is legitimately unreferenced:
+incremental sweeps therefore spare recently-written files, while a restore, having just replaced the
+whole ledger, sweeps unconditionally.
+
 ## Phases
 
 - **Phase 1 — attach and view.** The ingestion seam (file drop, clipboard paste), storage per the
@@ -268,13 +344,18 @@ above requires. Decide when either is built; do not build two.
 
 ## Open questions
 
-- Multiple attachments per transaction, or one? (Assume many; a repair can arrive as an estimate plus a
-  final invoice.)
-- Do attachments survive the transaction being trashed, and what does restore-from-trash bring back?
-- Size caps, and what the app does with a 40 MB scan — refuse, downscale, or accept.
-- Does an attachment belong to a transaction only, or can it hang off an order/link (the Amazon
-  order model already has a place where an invoice would fit)?
+Four of the original six closed with phase 1 — many-per-transaction, the trash lifetime, the size cap,
+and what a document hangs off — and are recorded in *Settled: what phase 1 answered* rather than here.
+What is still open:
+
+- Does a document belong to a transaction only, or can it also hang off an order/link? Phase 1 answered
+  the *first* half (a transaction, via `document.txn_id`) and left the order case unbuilt rather than
+  refused. The Amazon order model has a place where an invoice would fit, and the table can grow a
+  second nullable reference if that turns out to be wanted.
 - Is there a path for the same document to cover several transactions (one invoice, two card charges)?
+  Deliberately not built. The digest recorded at ingest means the second attach is *recognizable* as the
+  same file, so this can become a join table later without rewriting the store — which is the property
+  worth preserving until someone actually wants it.
 
 ## Cross-refs
 

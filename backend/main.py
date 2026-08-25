@@ -60,7 +60,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from backend import app_config, runtime_config, spa
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
-from backend.routers import accounts, app_control, connections, auth, categories, currency, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
+from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
@@ -166,6 +166,7 @@ app.include_router(sync.router,         prefix="/api/sync",          tags=["sync
 app.include_router(rules.router,        prefix="/api/rules",         tags=["rules"])
 app.include_router(owners.router,       prefix="/api/owners",        tags=["owners"])
 app.include_router(tags.router,         prefix="/api/tags",          tags=["tags"])
+app.include_router(documents.router,    prefix="/api/documents",     tags=["documents"])
 app.include_router(import_export.router, prefix="/api/import-export", tags=["import-export"])
 app.include_router(tasks.router,         prefix="/api/tasks",         tags=["tasks"])
 app.include_router(recurring.router,     prefix="/api/recurring",     tags=["recurring"])

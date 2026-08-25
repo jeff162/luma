@@ -571,6 +571,31 @@ export const api = {
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),
   updateOwner: (id, data) => request(`/owners/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOwner: (id) => request(`/owners/${id}`, { method: 'DELETE' }),
+  // Attached documents (receipts/invoices). The file itself is never carried through JSON — it is
+  // uploaded as multipart and fetched back from its own URL, which is what `documentFileUrl` is for.
+  getTransactionDocuments: (txnId) => request(`/documents/transaction/${txnId}`),
+  attachTransactionDocument: (txnId, file, filename) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    // A pasted image arrives as a File with no useful name of its own; naming it here is what keeps
+    // every paste from landing as "blob".
+    if (filename) fd.append('filename', filename)
+    return trackedFetch(`/api/documents/transaction/${txnId}`, { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      signalDataMutated()
+      return res.json()
+    })
+  },
+  detachDocument: (documentId) =>
+    request(`/documents/${documentId}`, { method: 'DELETE' }),
+  // A URL rather than a fetch: the viewer points an <img>/<iframe> straight at it, so the bytes never
+  // pass through JavaScript. `download` swaps the disposition for a save.
+  documentFileUrl: (documentId, { download = false } = {}) =>
+    `${BASE}/documents/${documentId}/file${download ? '?download=true' : ''}`,
+
   getTags:     () => request('/tags'),
   createTag:   (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

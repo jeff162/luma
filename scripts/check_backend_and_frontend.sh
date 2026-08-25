@@ -11,7 +11,7 @@
 #
 # Usage:
 #   ./scripts/check_backend_and_frontend.sh                 # backend suite + frontend lint
-#   ./scripts/check_backend_and_frontend.sh backend [args]  # backend only ([args] forwarded to run_tests.sh -> unittest)
+#   ./scripts/check_backend_and_frontend.sh backend [args]  # backend only ([args] forwarded to run_tests.sh -> pytest)
 #   ./scripts/check_backend_and_frontend.sh frontend        # frontend lint only
 set -uo pipefail
 exec 2>&1

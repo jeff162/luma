@@ -185,7 +185,7 @@ They belong to the **Financial data** bucket above: transaction detail, not cred
 deliberate and load-bearing — it is the backup people actually take, and a backup that silently omitted
 every receipt is precisely the failure this document exists to prevent.
 
-Consequences: payload **version 9 → 10** (a new table plus new members is an envelope change), and
+Consequences: a payload version bump (a new table plus new members is an envelope change — it landed as **12**, since the streaming work below spent 10 and splits took 11), and
 restore's destructive semantics extend to the documents directory. *How* they extend is settled below
 rather than here — the directory is swept against the restored ledger at the end rather than cleared at
 the start, so an interrupted restore leaves litter instead of losing originals.

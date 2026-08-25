@@ -1,0 +1,386 @@
+"""Attaching, serving, detaching and searching documents.
+
+The store's own invariants live in `test_documents_store.py`; this covers the API over it and the one
+thing that only exists once both halves are wired together — that text pulled out of a PDF at ingest is
+reachable from the ledger's quick filter.
+
+Two areas get disproportionate attention because they are where this feature can actually hurt someone:
+the headers a stored file is served under (this is the only endpoint that returns bytes a user
+supplied), and what the search box does with input that is not a well-formed query.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import unittest
+import uuid
+from pathlib import Path
+import tempfile
+
+from fastapi import HTTPException, UploadFile
+
+from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.documents import (
+    attach_transaction_document,
+    detach_document,
+    get_document_file,
+    list_transaction_documents,
+)
+from backend.routers.transactions import list_transactions
+from backend.services.documents import document_file_path
+from backend.tests._pdf_fixture import make_text_pdf
+from backend.tests.test_documents_store import make_image_bytes
+
+INVOICE_LINES = ["ACME Auto Repair", "Replaced front brake pads and rotors", "Total 249.50"]
+
+
+def _upload(content: bytes, filename: str, content_type: str) -> UploadFile:
+    return UploadFile(
+        file=io.BytesIO(content),
+        filename=filename,
+        headers={"content-type": content_type},
+    )
+
+
+class DocumentsApiTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.db_path = str(Path(self.tempdir.name) / "documents-api.db")
+        init_db(self.db_path)
+        token = set_current_db_path(self.db_path)
+        self.addCleanup(reset_current_db_path, token)
+        with get_db() as conn:
+            conn.execute("INSERT INTO account (id, name, display_name) VALUES ('acct', 'Everyday', 'Everyday')")
+            for txn_id, payee, amount, date in (
+                ("txn-repair", "Garage", -249.50, "2026-03-14"),
+                ("txn-coffee", "Cafe", -4.75, "2026-03-15"),
+            ):
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, amount, date, merchant_name, display_name, raw_name) "
+                    "VALUES (?, 'acct', ?, ?, ?, ?, ?)",
+                    (txn_id, amount, date, payee, payee, payee),
+                )
+
+    def attach(self, txn_id, content, filename, content_type, form_filename=None):
+        return asyncio.run(attach_transaction_document(
+            txn_id, file=_upload(content, filename, content_type), filename=form_filename,
+        ))
+
+    def list_rows(self, value):
+        return self._list(value)["transactions"]
+
+    def quick_filter(self, value):
+        return [row["id"] for row in self._list(value)["transactions"]]
+
+    def _list(self, value):
+        return list_transactions(
+            month=None, date_start=None, date_end=None, import_batch_id=None,
+            sort_by="date", sort_dir="desc", account_id=None, account_ids=None, category_id=None,
+            group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+            direction=None, view=None, search=None, quick_filter=value,
+            include_trashed=False, limit=50, offset=0,
+        )
+
+
+class AttachAndServeTests(DocumentsApiTestCase):
+    def test_attaching_a_pdf_stores_it_and_extracts_its_text(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        result = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")
+
+        document = result["document"]
+        self.assertFalse(result["already_attached"])
+        self.assertEqual(document["mime_type"], "application/pdf")
+        self.assertEqual(document["filename"], "invoice.pdf")
+        # A digital PDF carries real text, so tier 1 is exact rather than interpreted — and says so,
+        # since the tiers differ in reliability and anything reading the text later needs to know which.
+        self.assertEqual(document["text_source"], "pdf_text")
+        self.assertEqual(document_file_path(document["id"]).read_bytes(), pdf)
+        with get_db() as conn:
+            stored = conn.execute("SELECT text FROM document WHERE id = ?", (document["id"],)).fetchone()
+        self.assertIn("brake pads", stored["text"])
+
+    def test_a_photograph_is_stored_without_text_rather_than_refused(self):
+        # No text is a real answer, not a failure: OCR is a later tier behind a system binary, and the
+        # file is the point — an image whose text cannot be read is still a perfectly good receipt.
+        result = self.attach("txn-coffee", make_image_bytes(300, 400), "receipt.jpg", "image/jpeg")
+        self.assertIsNone(result["document"]["text_source"])
+        self.assertTrue(document_file_path(result["document"]["id"]).is_file())
+
+    def test_several_documents_hang_off_one_transaction_in_attach_order(self):
+        # A repair arrives as an estimate and then a final invoice. Nothing constrains this to one, and
+        # the order shown is the order they were attached.
+        first = self.attach("txn-repair", make_text_pdf(["Estimate 210.00"]), "estimate.pdf", "application/pdf")
+        second = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")
+
+        listed = list_transaction_documents("txn-repair")["documents"]
+        self.assertEqual([d["id"] for d in listed], [first["document"]["id"], second["document"]["id"]])
+
+    def test_the_same_file_twice_is_reported_rather_than_stored_twice(self):
+        # Dropping a receipt twice is ordinary when nothing visibly happened fast enough. Two identical
+        # entries the user then has to tell apart by nothing is the outcome worth preventing.
+        pdf = make_text_pdf(INVOICE_LINES)
+        first = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")
+        again = self.attach("txn-repair", pdf, "invoice-copy.pdf", "application/pdf")
+
+        self.assertTrue(again["already_attached"])
+        self.assertEqual(again["document"]["id"], first["document"]["id"])
+        self.assertEqual(len(list_transaction_documents("txn-repair")["documents"]), 1)
+
+    def test_the_same_file_on_a_different_transaction_is_a_different_document(self):
+        # The digest identifies a *duplicate attach*, not a globally unique file: one invoice legitimately
+        # covering two charges is a real thing, and dedupe is scoped to the transaction for that reason.
+        pdf = make_text_pdf(INVOICE_LINES)
+        first = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")
+        other = self.attach("txn-coffee", pdf, "invoice.pdf", "application/pdf")
+
+        self.assertFalse(other["already_attached"])
+        self.assertNotEqual(other["document"]["id"], first["document"]["id"])
+
+    def test_a_pasted_image_can_be_named_by_the_client(self):
+        # A clipboard paste has no filename of its own; without this every paste lands as "blob".
+        result = self.attach(
+            "txn-coffee", make_image_bytes(200, 200), "blob", "image/jpeg",
+            form_filename="Pasted receipt.jpg",
+        )
+        self.assertEqual(result["document"]["filename"], "Pasted receipt.jpg")
+
+    def test_an_unsupported_file_is_refused_with_a_reason(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self.attach("txn-repair", b"MZ\x90\x00 not a receipt", "setup.exe", "application/octet-stream")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("PDF, an image, text, or an exported email", ctx.exception.detail)
+
+    def test_pasted_text_is_a_document_and_is_searchable_immediately(self):
+        # The email story: a receipt forwarded by mail is pasted rather than saved first. No extraction
+        # step runs — the bytes *are* the text — which is why the source is `verbatim` and not a tier.
+        body = "ACME Auto Repair\nReplaced front brake pads and rotors\nTotal 249.50"
+        result = self.attach("txn-repair", body.encode(), "Pasted receipt.txt", "text/plain")
+
+        self.assertEqual(result["document"]["mime_type"], "text/plain")
+        self.assertEqual(result["document"]["text_source"], "verbatim")
+        self.assertEqual(self.quick_filter("doc:rotors"), ["txn-repair"])
+
+    def test_html_pasted_from_an_email_keeps_its_markup_and_is_searchable(self):
+        # A receipt copied out of an email carries its table as text/html. Storing that rather than the
+        # flattened plain flavour is what keeps an amount beside the thing it is the price of; the search
+        # text is the same markup with its tags taken out.
+        markup = (
+            "<table><tr><td>Professional Tune Up</td><td>1</td><td>$350.00</td></tr>"
+            "<tr><td>EDDY merxx white</td><td>1</td><td>$0.00</td></tr></table>"
+            "<style>td { color: red }</style>"
+        )
+        result = self.attach("txn-repair", markup.encode(), "Pasted receipt.html", "text/html")
+
+        self.assertEqual(result["document"]["mime_type"], "text/html")
+        self.assertEqual(result["document"]["text_source"], "html_text")
+        self.assertEqual(self.quick_filter("doc:merxx"), ["txn-repair"])
+        with get_db() as conn:
+            text = conn.execute("SELECT text FROM document").fetchone()["text"]
+        # Cells stay on their row, so the price is still next to what it prices.
+        self.assertIn("Professional Tune Up 1 $350.00", text)
+        # Stylesheet bodies are text to a parser and noise to a reader.
+        self.assertNotIn("color", text)
+
+    def test_a_saved_email_becomes_the_document_it_carries(self):
+        # An exported .eml is the one receipt source a clipboard quirk cannot defeat, and no browser
+        # renders one — so it is converted at ingest and nothing downstream knows an email was involved.
+        # The HTML part wins over the plain one for the same reason a rich paste does: it holds the table
+        # the sender laid out, where the plain alternative is that table flattened.
+        raw = (
+            "Return-Path: <shop@example.invalid>\r\n"
+            "Subject: Work order #8123 quote\r\n"
+            "MIME-Version: 1.0\r\n"
+            'Content-Type: multipart/alternative; boundary="b1"\r\n\r\n'
+            "--b1\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
+            "Professional Tune Up\r\n1\t$350.00\r\n"
+            "--b1\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n"
+            "<table><tr><td>EDDY merxx white</td><td>1</td><td>$0.00</td></tr></table>\r\n"
+            "--b1--\r\n"
+        )
+        result = self.attach("txn-repair", raw.encode(), "download.eml", "message/rfc822")
+
+        document = result["document"]
+        self.assertEqual(document["mime_type"], "text/html")
+        # The subject names it: an exported message is usually named opaquely by whatever produced it.
+        self.assertEqual(document["filename"], "Work order #8123 quote.html")
+        self.assertEqual(document["text_source"], "html_text")
+        self.assertEqual(self.quick_filter("doc:merxx"), ["txn-repair"])
+
+    def test_binary_claiming_to_be_text_is_still_refused(self):
+        # Decoding is used to *confirm* a text upload, never to classify an unknown one — otherwise the
+        # receipt store becomes a general file dump for anything that happens to decode.
+        with self.assertRaises(HTTPException) as ctx:
+            self.attach("txn-repair", b"\x00\x01\x02 binary", "notes.txt", "text/plain")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_attaching_to_an_unknown_transaction_is_a_404(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self.attach(str(uuid.uuid4()), make_text_pdf(["x y z"]), "a.pdf", "application/pdf")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_documents_stay_reachable_while_their_transaction_is_in_the_trash(self):
+        # The trash is the reversible stage. Hiding the paperwork at the moment someone is deciding
+        # whether to restore the row would make it look already lost.
+        self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")
+        with get_db() as conn:
+            conn.execute("UPDATE txn SET trashed_at = '2026-03-20T00:00:00Z' WHERE id = 'txn-repair'")
+        self.assertEqual(len(list_transaction_documents("txn-repair")["documents"]), 1)
+
+
+class ServeAndDetachTests(DocumentsApiTestCase):
+    def test_the_file_is_served_as_what_it_is_with_the_headers_a_file_store_owes(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        document = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")["document"]
+
+        response = get_document_file(document["id"])
+
+        self.assertEqual(response.media_type, "application/pdf")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        # This is the one endpoint returning bytes a user supplied. Without nosniff a browser may
+        # reinterpret the content as something executable; the sandbox CSP is the second half of the
+        # same argument, since a PDF viewer is a scripting host.
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+        self.assertIn("inline", response.headers["content-disposition"])
+
+    def test_asking_for_a_download_offers_the_original_filename(self):
+        document = self.attach(
+            "txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf"
+        )["document"]
+        response = get_document_file(document["id"], download=True)
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertIn('filename="invoice.pdf"', response.headers["content-disposition"])
+
+    def test_a_filename_cannot_inject_a_header(self):
+        # The name is echoed into Content-Disposition, so a quote in it would end the quoted string and
+        # let the rest be read as header syntax.
+        document = self.attach(
+            "txn-coffee", make_image_bytes(200, 200), 'evil".jpg', "image/jpeg",
+            form_filename='ev"il\r\nX-Injected: yes.jpg',
+        )["document"]
+        disposition = get_document_file(document["id"]).headers["content-disposition"]
+        self.assertNotIn('"', disposition.split("filename=", 1)[1][1:-1])
+        self.assertNotIn("\n", disposition)
+
+    def test_a_row_whose_file_vanished_says_so_rather_than_failing_opaquely(self):
+        # The drift the file-first write order allows. "Your receipt is gone" and "the server broke"
+        # call for different reactions from whoever reads it.
+        document = self.attach(
+            "txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf"
+        )["document"]
+        document_file_path(document["id"]).unlink()
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_document_file(document["id"])
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertIn("missing from the store", ctx.exception.detail)
+
+    def test_detaching_removes_the_row_and_the_file(self):
+        document = self.attach(
+            "txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf"
+        )["document"]
+        path = document_file_path(document["id"])
+
+        self.assertEqual(detach_document(document["id"]), {"ok": True})
+
+        self.assertFalse(path.exists())
+        self.assertEqual(list_transaction_documents("txn-repair")["documents"], [])
+        with self.assertRaises(HTTPException) as ctx:
+            detach_document(document["id"])
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class DocumentSearchTests(DocumentsApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")
+
+    def test_doc_prefix_finds_the_transaction_by_words_inside_its_receipt(self):
+        # The whole point of the feature: the fact that answers "what was actually done to the car"
+        # exists only on the document, and is now reachable from the ledger.
+        self.assertEqual(self.quick_filter("doc:brake"), ["txn-repair"])
+        self.assertEqual(self.quick_filter("doc:rotors"), ["txn-repair"])
+
+    def test_terms_match_by_prefix_and_several_terms_are_an_and(self):
+        # Every other quick-filter facet is a substring match, so exact-word-only here would behave
+        # differently from the box it shares.
+        self.assertEqual(self.quick_filter("doc:brak"), ["txn-repair"])
+        self.assertEqual(self.quick_filter("doc:brake rotors"), ["txn-repair"])
+        self.assertEqual(self.quick_filter("doc:brake espresso"), [])
+
+    def test_the_plain_search_box_reaches_inside_documents_and_says_so(self):
+        # Searching a word that exists only inside an attached receipt has to work from the box people
+        # actually type in — the first thing anyone does after attaching one. The objection to folding
+        # it in was that the hit has no visible cause, so the row carries the cause instead: rows that
+        # matched this way are flagged, and the ledger marks them.
+        rows = self.list_rows("brake")
+        self.assertEqual([r["id"] for r in rows], ["txn-repair"])
+        self.assertTrue(rows[0]["matched_document"])
+
+    def test_a_row_matched_on_a_visible_field_is_not_flagged_as_a_document_match(self):
+        # The flag is a *reason*, so it must not fire for a row the search found by its payee. Marking
+        # one would send the reader looking for an attachment that had nothing to do with the match.
+        rows = self.list_rows("Garage")
+        self.assertEqual([r["id"] for r in rows], ["txn-repair"])
+        self.assertFalse(rows[0]["matched_document"])
+
+    def test_a_field_scoped_search_carries_no_document_reason_at_all(self):
+        # `merchant:` has no document component, so its rows must not be projected as document matches.
+        rows = self.list_rows("merchant:Garage")
+        self.assertEqual([r["id"] for r in rows], ["txn-repair"])
+        self.assertNotIn("matched_document", rows[0])
+
+    def test_doc_prefix_still_searches_documents_only(self):
+        # The prefix keeps its own job: documents *only*, so a term that appears on the row but not in
+        # any attachment finds nothing.
+        self.assertEqual(self.quick_filter("doc:Garage"), [])
+
+    def test_a_term_that_appears_in_no_document_matches_nothing(self):
+        self.assertEqual(self.quick_filter("doc:espresso"), [])
+
+    def test_query_syntax_typed_into_the_box_is_treated_as_text(self):
+        # FTS5 MATCH is a query language: unbalanced quotes and bare operators raise, which would
+        # surface as a 500 from an ordinary typo. Every token is quoted, so these are searches, not
+        # syntax — and `AND`, a real word on a real receipt, searches for itself.
+        for probe in ('doc:"unbalanced', "doc:*", "doc:AND", "doc:^", "doc:(west)", "doc:a:b"):
+            with self.subTest(probe=probe):
+                self.assertIsInstance(self.quick_filter(probe), list)
+        self.assertEqual(self.quick_filter("doc:repair"), ["txn-repair"])
+
+    def test_the_ledger_row_carries_its_documents_for_the_marker(self):
+        result = list_transactions(
+            month=None, date_start=None, date_end=None, import_batch_id=None,
+            sort_by="date", sort_dir="desc", account_id=None, account_ids=None, category_id=None,
+            group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+            direction=None, view=None, search=None, quick_filter=None,
+            include_trashed=False, limit=50, offset=0,
+        )
+        by_id = {row["id"]: row for row in result["transactions"]}
+        self.assertEqual(by_id["txn-repair"]["document_count"], 1)
+        self.assertEqual(by_id["txn-coffee"]["document_count"], 0)
+        self.assertEqual(by_id["txn-coffee"]["documents"], [])
+
+        # Enough to name a document, choose a viewer for it and open it — carried inline so the ledger's
+        # marker opens without a fetch.
+        attached = by_id["txn-repair"]["documents"][0]
+        self.assertEqual(attached["filename"], "invoice.pdf")
+        self.assertEqual(attached["mime_type"], "application/pdf")
+        # Never the extracted text: it can run to hundreds of kilobytes and no list surface renders it.
+        self.assertNotIn("text", attached)
+
+    def test_detaching_a_document_takes_it_out_of_the_index(self):
+        document = list_transaction_documents("txn-repair")["documents"][0]
+        detach_document(document["id"])
+        self.assertEqual(self.quick_filter("doc:brake"), [])
+
+    def test_purging_the_transaction_takes_its_document_out_of_the_index(self):
+        # The index is maintained by triggers precisely because this delete is a cascade no application
+        # code sees. An index that missed it would keep returning a transaction that no longer exists.
+        with get_db() as conn:
+            conn.execute("DELETE FROM txn WHERE id = 'txn-repair'")
+        self.assertEqual(self.quick_filter("doc:brake"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -149,6 +149,22 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Reporting:** the dashboard's "Spending by …" picker offers built-in `group` / `category` partitions plus user-saved tag reports built on the multi-tag breakdown; combination wedges represent transactions matching multiple selected tags, and an `Other / Untagged` wedge holds the remainder
 
+### Attached documents
+
+- **Storage:** `document` (rows) + files under `documents/` beside the data database + `document_fts` (search index)
+
+- **Backend:** `backend/services/documents.py` (the store: ingest normalization, atomic writes, extraction, reconciliation) + `backend/routers/documents.py` (the API over it)
+
+- **Behavior:** a receipt or invoice attached to a transaction, answering *what was bought* — the thing a ledger row never records. One format-agnostic ingestion seam: file drop, file picker, clipboard paste (image, text, or the rich `text/html` flavour that keeps an emailed receipt's table intact) and a saved `.eml` all arrive as the same multipart upload of *(bytes, media type, filename)*, so a new way of choosing a file never reaches the backend. An email is converted to the document it carries at ingest, so nothing past that point knows the format exists. The media type is decided from the file's own header rather than from what the upload claimed. Oversized images are downscaled once at ingest; PDFs pass through byte-for-byte, because their text layer is what makes them worth preferring. Several documents may hang off one transaction, and an identical file re-attached to the same transaction is reported as already there rather than stored twice (the ingest digest is what makes that answerable)
+
+- **The bytes are files, not rows, and that shapes everything around them.** File and row cannot be one transaction, so the ordering is the contract — file first on the way in, row first on the way out — and removal is *derived*: every destructive path deletes rows and then sweeps files the ledger no longer references. `data-model.md` → *Attached documents* carries the invariants and why each is the way it is
+
+- **Serving is the one endpoint that returns bytes a user supplied**, so it sends the media type recorded at ingest (never one derived from the request), `X-Content-Type-Options: nosniff`, and a sandbox CSP — a PDF viewer is a scripting host, and a stored document has no business running script against this origin
+
+- **Search:** text held on a document (a PDF's extracted layer, or pasted text verbatim) is indexed in `document_fts` and reached from the Transactions quick filter — from the plain box, with `doc:<terms>` to narrow to documents only. A row matched inside an attachment carries `matched_document` so the ledger can show *why* it came back, which is what makes the plain-box behaviour readable — see `data-model.md`
+
+- **Used by:** the transaction detail panel (attach/view/detach) and the ledger row's document marker, which opens the viewer directly. The list feed carries slim document rows (`documents` — id, filename, media type, no extracted text) plus `document_count`, so the marker opens without a fetch
+
 ### Recurring series
 
 - **Backend:** `backend/services/recurring_detection.py` (detection) + `backend/routers/recurring.py` (API)

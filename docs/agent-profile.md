@@ -165,6 +165,42 @@ instruction and fix the drift rather than silently choosing the looser version.
   Where that applies, recommend the cleanup plainly and say the standard requires it. The only real
   question left is scope and sequencing, never whether quality work is worth doing.
 
+- **A constraint on what the user may record needs a reason beyond implementation convenience.** Split
+  allocations were given a "one part per category" rule, and it was written into `data-model.md` as a
+  settled decision with a rationale. The real reason was to avoid changing five `COUNT(*)`s to
+  `COUNT(DISTINCT)`. The user asked what the problem with repeating a category actually was, and there
+  wasn't one worth the cost: two records bought in one order are two purchases at two prices, and the
+  rule discarded exactly the detail the feature existed to capture. Sums were never affected — only a
+  bucket's row count, which `COUNT(DISTINCT)` reports more honestly anyway. Before constraining the
+  data model, ask whether the difficulty is in the *domain* or in the queries; if it is the queries,
+  fix the queries. And when a rule like that is reversed, record the reversal where the rationale was
+  (with a "don't re-impose it"), because the original argument will read as plausible to the next
+  person who finds it.
+
+- **A green unit suite says nothing about how a component sits in the live tree — and that is where the
+  defects are.** Attachments phase 1 shipped with ~40 new tests passing and the user found four defects
+  in an hour, every one of them invisible to those tests by construction rather than by oversight. A
+  panel looped forever because its host passed an inline callback, while the test passed a stable
+  `vi.fn()` whose identity never changed. A dialog surfaced underneath the page header because it was
+  opened from inside a table, while the test rendered the row with no table around it. A row opened a
+  deleted document because the reconcile carried a count and the row had grown to need ids — the test
+  asserted the count contract as written. The pattern: **unit tests verify a component against the
+  props you chose to give it, and every one of these failures came from props or ancestors the real app
+  supplies and the test does not.** Practical consequences — pass a deliberately *unstable* callback
+  where a host will; render a deep-mounted dialog inside a representative ancestor; and when a consumer
+  is widened (a marker that now *opens* what it used to merely count), revisit the contract feeding it
+  rather than assuming it still fits. Above all, when a feature's risk is concentrated in tree
+  placement, say so and ask for a targeted look **early**, instead of reporting it done and discovering
+  it over four round trips.
+
+- **Two of the same feature's decisions were reversed on first real use, and both were the same
+  mistake:** a capability withheld because the user "might be confused" — a search prefix made
+  mandatory, a marker left inert — where the honest fix was to *explain* rather than to withhold. Both
+  reversals are recorded in their design docs as don't-re-impose, because the original arguments read as
+  plausible. Before constraining what a surface will do on the grounds that the result might be
+  misread, ask whether the fix is a label, a marker, or a tooltip. It usually is. This is the same shape
+  as the split-allocation rule above, now seen three times.
+
 - **Having read the evidence is not the same as using it.** The costly failures are not missing
   context — they are proceeding against context already in hand: the repo file that had been read,
   the alternative already written down in an earlier message, the mechanism already known (React

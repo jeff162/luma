@@ -59,6 +59,7 @@ from backend.services.preferences import (
 from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner, _seed_default_categories
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
+from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
 from backend.services import crypto_service
 from backend import transport
 
@@ -426,6 +427,13 @@ def clear_demo_data_endpoint():
         _wipe_user_data_tables(conn)
         _seed_default_categories(conn)
         ensure_shared_owner(conn)
+    # The wipe takes the `document` rows with the transactions they hang off (ON DELETE CASCADE), but
+    # files are not in that transaction and would survive it as orphans. Swept after the commit, so a
+    # failed wipe never costs a file: the ledger is the authority on what exists, and this derives the
+    # store from it. The grace period spares a file whose ingest has written it but not yet committed
+    # its row.
+    with get_db() as conn:
+        sweep_unreferenced_files(conn, min_age_seconds=INGEST_GRACE_SECONDS)
     return {"ok": True}
 
 

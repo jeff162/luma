@@ -45,12 +45,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tempfile
 import time
 import uuid
 import zipfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -77,6 +79,22 @@ from backend.app_logging import log_warning
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
+from backend.services.documents import (
+    copy_document_file_from,
+    document_file_path,
+    file_digest,
+    is_safe_document_id,
+    missing_document_ids,
+    sweep_unreferenced_files,
+)
+from backend.services.restore_state import (
+    RESTORE_PHASE_DOCUMENTS,
+    RESTORE_PHASE_STAGING,
+    clear_restore_state,
+    get_restore_state,
+    require_no_pending_restore,
+    set_restore_state,
+)
 from backend.services.transaction_tags import tag_filter_membership_sql
 
 router = APIRouter()
@@ -643,6 +661,10 @@ BACKUP_SECTIONS = (
     ("amazon_pending_items", "amazon_pending_item", "SELECT * FROM amazon_pending_item ORDER BY rowid"),
     # UI/layout preferences (page layouts, dashboard tag reports, ...), keyed by scope_id.
     ("ui_preferences", "ui_preference", "SELECT * FROM ui_preference ORDER BY rowid"),
+    # Attached receipts and invoices — the rows only. Each row's *file* rides as its own
+    # `documents/<id>` member (see `_write_document_members`), which is the whole reason documents are
+    # files rather than blobs: the bytes never enter this JSON.
+    ("documents", "document", "SELECT * FROM document ORDER BY rowid"),
 )
 
 BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTIONS)
@@ -652,9 +674,12 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # the archive is laid out — `meta.json` + one NDJSON member per section, in place of one JSON object —
 # so that neither writing nor reading a backup has to hold the whole thing in memory. The *content* of
 # a section is unchanged from 9, which is why the restore's per-section handling is shared with the
-# older versions rather than duplicated.
-BACKUP_PAYLOAD_VERSION = 11
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11)
+# older versions rather than duplicated. Version 11 added the `txn_splits` section, and 12 the
+# `documents` section plus the `documents/<id>` file members beside it — both purely additive, which
+# is why an older archive still restores through exactly the same path with the new section simply
+# absent.
+BACKUP_PAYLOAD_VERSION = 12
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12)
 
 # Which of the two backups a file is. Stamped into every container the app writes and read back by the
 # identification pass below, so the restore surface can route a file rather than asking the person
@@ -669,9 +694,18 @@ STREAM_CHUNK_BYTES = 1 << 20
 
 META_MEMBER = "meta.json"
 
+# Attached files ride as one member each, addressed by document id — the same flat, extensionless
+# layout the on-disk store uses, so a restore can copy a member straight to its path without
+# reconstructing a name.
+DOCUMENT_MEMBER_PREFIX = "documents/"
+
 
 def _section_member(section: str) -> str:
     return f"sections/{section}.ndjson"
+
+
+def _document_member(document_id: str) -> str:
+    return f"{DOCUMENT_MEMBER_PREFIX}{document_id}"
 
 
 def _canonical_json(value) -> str:
@@ -710,6 +744,31 @@ def backup_temp_file():
     return tempfile.TemporaryFile(dir=os.path.dirname(current_db_path()) or None)
 
 
+def restore_staging_file():
+    """A *named* staging file for an uploaded backup, returned as `(fileobj, path)`.
+
+    The export's staging file is deliberately unnamed, so a crash mid-export cannot strand one. A
+    restore's has the opposite requirement: its documents phase runs after the ledger has committed, so
+    an interruption there needs the source archive still to exist and still to be findable. It is
+    removed as soon as that phase completes, or immediately if the restore never reached it.
+
+    Beside the data database for the same reasons as every other staging file here — `/tmp` is
+    RAM-backed on many Linux installs, and the data directory is the volume the user has sized.
+    """
+    directory = os.path.dirname(current_db_path()) or "."
+    handle, path = tempfile.mkstemp(dir=directory, prefix=".restore-staging-", suffix=".zip")
+    return os.fdopen(handle, "w+b"), path
+
+
+def _discard_unclaimed_staging(path: str) -> None:
+    """Remove a staged upload unless the restore's documents phase is holding it for a resume."""
+    with get_db() as conn:
+        state = get_restore_state(conn)
+    if state and state.get("artifact_path") == path:
+        return
+    Path(path).unlink(missing_ok=True)
+
+
 def _stream_file_out(fileobj):
     """Yield a staged artifact back to the client and close it afterwards — including when the client
     disconnects mid-download, which closes the generator."""
@@ -721,6 +780,34 @@ def _stream_file_out(fileobj):
             yield chunk
     finally:
         fileobj.close()
+
+
+def _write_document_members(conn, zf) -> None:
+    """Add every attached document's file to the archive, one member per document.
+
+    Each file streams from disk into its member with a fixed buffer, so a large attachment is never
+    resident — the property that makes a backup's size a disk question rather than a memory one.
+    Members are **stored, not deflated**: JPEG, PNG and PDF payloads are already compressed, so
+    deflating them spends CPU for nothing while the NDJSON sections beside them still compress ~10:1.
+
+    Their digests are deliberately not added to `meta.json`. A document's digest already lives on its
+    `document` row, which is both the app's own record of the file and what lets a resumed restore tell
+    a complete file from a torn one — listing it twice would create a second source of truth that could
+    disagree with the first.
+
+    **A row whose file is missing does not fail the export.** That drift is possible by construction (the
+    store writes the file before the row, and nothing outside this app is stopped from deleting one), and
+    refusing to produce a backup is the worst available response to it: it would withhold the ledger over
+    one unreadable receipt. The row rides without its member and the restore reports it as missing.
+    """
+    for row in conn.execute("SELECT id FROM document ORDER BY rowid"):
+        path = document_file_path(row["id"])
+        try:
+            source = open(path, "rb")
+        except FileNotFoundError:
+            continue
+        with source, zf.open(_zip_member_info(_document_member(row["id"]), zipfile.ZIP_STORED), "w") as member:
+            shutil.copyfileobj(source, member, STREAM_CHUNK_BYTES)
 
 
 def write_backup_archive(conn, sink) -> None:
@@ -744,6 +831,8 @@ def write_backup_archive(conn, sink) -> None:
                     member.write(line)
                     rows += 1
             members[name] = {"sha256": digest.hexdigest(), "rows": rows}
+
+        _write_document_members(conn, zf)
 
         zf.writestr(
             _zip_member_info(META_MEMBER, zipfile.ZIP_DEFLATED),
@@ -1359,6 +1448,7 @@ def _restore_preflight(header: dict, force: bool) -> None:
                 "code": "demo_data_loaded",
                 "message": "Clear the demo data before restoring a backup.",
             })
+        require_no_pending_restore(conn, "restoring another backup")
 
     # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently replace a
     # *different* system's existing data, or load across access modes, unless the user has explicitly
@@ -1483,12 +1573,132 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     # (incl. pre-rebrand) is treated as Luma v1 → all post-rebrand data-init runs.
     run_post_restore_data_init(conn, header.get("schema_version"))
 
+    # Hand the restore over to its documents phase, atomically with the ledger this marker describes.
+    # Written here rather than after the commit because that is the whole point of the phase: a crash
+    # before commit must leave neither the ledger nor the marker, and a commit must leave both. The
+    # earlier `staging` row is replaced in place, so its artifact path — the thing a resume needs —
+    # carries forward. Rewritten unconditionally, including when the payload named no documents at all:
+    # the phase still owes the directory sweep that removes the previous ledger's files.
+    staging = get_restore_state(conn)
+    set_restore_state(
+        conn, RESTORE_PHASE_DOCUMENTS,
+        staging["artifact_path"] if staging else None,
+        staging["artifact_id"] if staging else None,
+    )
+
     # Counted from the tables rather than from what the payload offered, so the report is what actually
     # landed — net of rows dropped as unreferenced, and of any the unique constraints ignored.
     return {
         section: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for section, table, _query in BACKUP_SECTIONS
     }
+
+
+# --- restore_state: carrying a restore across the gap between the ledger and the files ------------
+# A restore commits the ledger atomically and then writes files, which are not transactional. This
+# marker is what makes that gap survivable rather than silent. It records a *phase*, because the two
+# possible states mean opposite things about the data:
+#
+#   staging           — the restore has not committed. NOTHING was changed, so finding this after a
+#                       crash means the attempt can simply be reported and the row cleared.
+#   documents_pending — the ledger is live and its files are not all there yet, so the documents phase
+#                       has work left and the app should say so rather than serve broken links.
+#
+# The two writes are deliberately in different transactions. `staging` goes in its own short one, which
+# is what makes a running restore *visible* to other requests at all — a `get_db()` block commits on
+# exit, so a marker written inside the long restore transaction would stay invisible until it ended, by
+# which point it has nothing left to guard. `documents_pending` goes inside the restore transaction, so
+# it exists exactly when the ledger it describes exists.
+
+def _artifact_identity(header: dict) -> str:
+    """Enough of a backup's identity to recognize the same artifact again — which system it came from
+    and when it was taken. Used only when the staged file is gone and a resume needs to confirm that a
+    re-uploaded backup is *this* one, rather than filling the document directory from a different one."""
+    return f"{header.get('instance_id') or ''}@{header.get('exported_at') or ''}"
+
+
+def _begin_restore(header: dict, artifact_path: Optional[str]) -> None:
+    """Claim the restore slot, refusing a second one. Its own transaction, so it is visible immediately.
+
+    A concurrent restore is refused rather than queued: two of them wiping and rebuilding the same
+    ledger has no coherent outcome, and the second would be racing the first's document phase over the
+    same files.
+    """
+    with get_db() as conn:
+        existing = get_restore_state(conn)
+        if existing:
+            raise HTTPException(status_code=409, detail={
+                "code": "restore_in_progress",
+                "message": (
+                    "A restore is already in progress."
+                    if existing["phase"] == RESTORE_PHASE_STAGING
+                    else "A previous restore still has documents to write. Finish or clear it first."
+                ),
+            })
+        set_restore_state(conn, RESTORE_PHASE_STAGING, artifact_path, _artifact_identity(header))
+
+
+def _abandon_restore_if_staging() -> None:
+    """Release the slot if the restore never committed.
+
+    Only `staging` is cleared. A `documents_pending` marker means the ledger *did* commit and its files
+    are still owed, which is exactly the state that must survive to be resumed — clearing it here would
+    throw away the only record that anything is outstanding.
+    """
+    with get_db() as conn:
+        state = get_restore_state(conn)
+        if state and state["phase"] == RESTORE_PHASE_STAGING:
+            clear_restore_state(conn)
+
+
+@router.get("/restore/state")
+def restore_state_status():
+    """Whether a restore is running or has documents outstanding, for the surfaces that must say so.
+
+    While documents are pending the ledger is correct but some attachments have no file yet, so this is
+    what lets the app explain that instead of showing a broken link with no reason.
+    """
+    with get_db() as conn:
+        state = get_restore_state(conn)
+        if not state:
+            return {"phase": None}
+        pending = missing_document_ids(conn) if state["phase"] == RESTORE_PHASE_DOCUMENTS else []
+        return {
+            "phase": state["phase"],
+            "started_at": state["started_at"],
+            "documents_pending": len(pending),
+            "artifact_available": bool(state["artifact_path"] and os.path.exists(state["artifact_path"])),
+        }
+
+
+@router.post("/restore/resume-documents")
+def resume_restore_documents():
+    """Finish the documents phase of a restore that was interrupted after its ledger committed.
+
+    The staged artifact is re-read and every document the ledger still lacks is written. There is no
+    progress cursor anywhere in this design: with a digest on each `document` row, "what is missing" is
+    a comparison between the committed ledger and the directory, which is computable in one pass,
+    self-correcting, and able to catch a *torn* file that a position counter would skip straight past.
+    """
+    with get_db() as conn:
+        state = get_restore_state(conn)
+    if not state or state["phase"] != RESTORE_PHASE_DOCUMENTS:
+        raise HTTPException(status_code=409, detail={
+            "code": "no_documents_pending",
+            "message": "No restore is waiting to finish writing documents.",
+        })
+    path = state["artifact_path"]
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=409, detail={
+            "code": "artifact_missing",
+            "message": (
+                "The backup this restore came from is no longer staged, so its documents cannot be "
+                "recovered here. Restore the same backup again to finish them."
+            ),
+        })
+    with open(path, "rb") as staged, zipfile.ZipFile(staged) as zf:
+        documents = _restore_documents(zf)
+    return {"ok": True, "documents": documents}
 
 
 @router.post("/restore")
@@ -1511,13 +1721,25 @@ def restore_backup(body: RestoreRequest):
     def section_rows(section):
         return (dict(row) for row in payload.get(section) or [])
 
-    with get_db() as conn:
-        counts = _restore_sections(conn, payload, section_rows, backup_version)
-    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts}
+    # No artifact path: this payload arrived as a parsed body and there is no staged file to resume
+    # from, so the documents phase here is one-shot by nature.
+    _begin_restore(payload, None)
+    try:
+        with get_db() as conn:
+            counts = _restore_sections(conn, payload, section_rows, backup_version)
+    finally:
+        _abandon_restore_if_staging()
+    documents = _restore_documents(None)
+    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
 
 
-def restore_from_archive(zf, force: bool = False) -> dict:
-    """Destructive restore straight from an opened version-10 archive, one member at a time."""
+def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] = None) -> dict:
+    """Destructive restore straight from an opened version-10 archive, one member at a time.
+
+    `artifact_path` is where the staged copy of this archive lives, when it has one. Recording it is
+    what makes the documents phase resumable: the ledger commits before a single file is written, so an
+    interruption after that point needs the source still to exist.
+    """
     meta = _read_archive_meta(zf)
     backup_version = meta.get("version")
     if backup_version not in RESTORABLE_PAYLOAD_VERSIONS:
@@ -1525,9 +1747,108 @@ def restore_from_archive(zf, force: bool = False) -> dict:
     verify_archive_members(zf, meta)
     _restore_preflight(meta, force)
 
+    _begin_restore(meta, artifact_path)
+    try:
+        with get_db() as conn:
+            counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
+    finally:
+        # Clears the slot only if the ledger never committed. A successful restore has already moved the
+        # marker to `documents_pending` inside its own transaction, and that one has to survive.
+        _abandon_restore_if_staging()
+    documents = _restore_documents(zf)
+    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
+
+
+def _restore_documents(zf) -> dict:
+    """Rebuild the document store from the archive, after the ledger has committed.
+
+    `zf` is None on the JSON-body restore path, which carries rows but can carry no files. That is not a
+    special case to guard: every document the payload named is then simply missing, and the sweep still
+    has to run, because the ledger was replaced and the files behind the old one must not survive it.
+
+    **Tables first, then documents**, which is why this runs outside the restore transaction rather than
+    inside it. The reverse order would leave, on a crash, new files beside the old ledger whose own
+    documents had already been replaced — strictly worse than the window this creates, in which an
+    attachment indicator exists for a file not yet on disk.
+
+    Written **in place**, each file through the store's atomic temp-and-replace. Staging the whole set
+    into a sibling directory and swapping at the end was the first instinct and is worse: it costs 2x
+    disk on precisely the class of data that grows without bound, and buys nothing, because documents are
+    immutable and content-addressed — an id plus a digest either matches or it does not.
+
+    **The directory is not cleared up front.** Restore is destructive, but the destructive half is
+    derivable: once every document from the archive is written, files the restored ledger no longer
+    references are swept. Doing it last means an interrupted restore leaves inert litter rather than lost
+    originals.
+
+    **A document that fails its digest does not fail the restore.** The ledger is already committed and
+    correct; one unreadable receipt is one missing file, reported here, rather than costing the user
+    their entire ledger. A file that arrives corrupt is removed rather than left in place, so what
+    remains on disk is always either complete or absent — the invariant every later digest comparison
+    (including a resumed restore) depends on.
+
+    **A document the archive did not carry is decided by the digest, not by the id.** Ids are stable
+    across backups of the same install, so a file for that id may already be sitting in the store — from
+    an earlier restore, or because this backup was taken here. It cannot simply be *left*: the restored
+    ledger now references that id, so the sweep will not reclaim it, and the app would treat whatever is
+    there as the document. Compared against the row's digest it is either genuinely the right file, in
+    which case the archive's gap costs nothing and it is **retained**, or it is a stale file from the
+    ledger this restore just replaced, in which case it is deleted. Nothing survives unverified, which
+    is the same rule the corrupt branch follows.
+    """
+    restored, retained, missing, corrupt = 0, [], [], []
     with get_db() as conn:
-        counts = _restore_sections(conn, meta, lambda section: read_archive_section(zf, section), backup_version)
-    return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts}
+        rows = [dict(row) for row in conn.execute("SELECT id, sha256 FROM document ORDER BY rowid")]
+        for row in rows:
+            # An id that cannot name a file is treated as a document that did not arrive, not as a
+            # failure: a restore must never let a hand-edited archive decide where bytes are written.
+            if not is_safe_document_id(row["id"]):
+                missing.append(row["id"])
+                continue
+            try:
+                source = zf.open(_document_member(row["id"])) if zf is not None else None
+            except KeyError:
+                source = None
+            if source is None:
+                path = document_file_path(row["id"])
+                if file_digest(path) == row["sha256"]:
+                    retained.append(row["id"])
+                else:
+                    path.unlink(missing_ok=True)
+                    missing.append(row["id"])
+                continue
+            with source:
+                digest = copy_document_file_from(row["id"], source)
+            if digest == row["sha256"]:
+                restored += 1
+            else:
+                # Deliberately deleted rather than kept: a file that does not match its digest is not the
+                # document, and leaving it would make "present on disk" stop meaning "intact".
+                document_file_path(row["id"]).unlink(missing_ok=True)
+                corrupt.append(row["id"])
+        swept = sweep_unreferenced_files(conn)
+        # The phase is over: every document the archive could supply has been written and the directory
+        # has been reconciled against the ledger. `missing` and `corrupt` are *reported*, not retried —
+        # rerunning would produce the same answer, since neither the archive nor the ledger will change.
+        staged = _finish_restore_phase(conn)
+    if staged:
+        # Deleted only now. It had to outlive the ledger commit so an interrupted phase had something to
+        # resume from; with the phase complete it is a copy of a backup the user already has.
+        Path(staged).unlink(missing_ok=True)
+    return {
+        "restored": restored,
+        "retained": len(retained),
+        "missing": len(missing),
+        "corrupt": len(corrupt),
+        "swept": len(swept),
+    }
+
+
+def _finish_restore_phase(conn) -> Optional[str]:
+    """Clear the restore marker, returning the staged artifact's path so the caller can remove it."""
+    state = get_restore_state(conn)
+    clear_restore_state(conn)
+    return state.get("artifact_path") if state else None
 
 
 # --- Uploads: staging, decryption, and dispatch --------------------------------------------------
@@ -1627,11 +1948,11 @@ def decrypt_archive_to_temp(zf, private_key_bytes: Optional[bytes], passphrase: 
     return plaintext
 
 
-def _restore_from_zip(zf, force: bool) -> dict:
+def _restore_from_zip(zf, force: bool, artifact_path: Optional[str] = None) -> dict:
     """Restore an opened backup zip, whichever generation it is: version 10 streams from its members,
     older versions are a single JSON object that has to be read whole."""
     if META_MEMBER in set(zf.namelist()):
-        return restore_from_archive(zf, force)
+        return restore_from_archive(zf, force, artifact_path=artifact_path)
     return restore_backup(RestoreRequest(data=_read_single_json_member(zf), force=force))
 
 
@@ -2011,7 +2332,10 @@ async def restore_backup_file(
     force: bool = Form(False),
 ):
     private_key_bytes = await private_key_file.read() if private_key_file else None
-    with backup_temp_file() as staged:
+    # Named, unlike every other staging file here, because the documents phase may need to read it again
+    # after the ledger has committed. Removed below unless that phase claimed it.
+    staged, staged_path = restore_staging_file()
+    try:
         await _spool_upload(file, staged)
         # Identify before anything else: a credentials backup reaching this endpoint should be told what
         # it is, not met with a complaint about the names of the members inside it.
@@ -2023,13 +2347,22 @@ async def restore_backup_file(
         staged.seek(0)
         with zipfile.ZipFile(staged) as zf:
             if not _is_encrypted_archive(zf):
-                return _restore_from_zip(zf, force)
+                return _restore_from_zip(zf, force, artifact_path=staged_path)
             plaintext = decrypt_archive_to_temp(zf, private_key_bytes, private_key_passphrase)
             try:
                 with zipfile.ZipFile(plaintext) as inner:
+                    # **No artifact path on the encrypted path, deliberately.** Resuming would mean
+                    # keeping the *decrypted* archive on disk after the request, which is the one thing
+                    # an encrypted backup exists to avoid — the staged file beside it is ciphertext and
+                    # cannot be reopened without the private key. An interrupted documents phase here is
+                    # finished by restoring the same backup again, which the marker's recorded identity
+                    # lets the app confirm.
                     return _restore_from_zip(inner, force)
             finally:
                 plaintext.close()
+    finally:
+        staged.close()
+        _discard_unclaimed_staging(staged_path)
 
 
 @router.post("/restore/credentials-file")

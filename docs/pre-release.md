@@ -30,7 +30,7 @@ Landed in the working tree, uncommitted at the time of writing:
 Six, all with designs already written. Named scope is what ships for the release; anything else in
 those files stays deferred.
 
-### 1. Receipts and invoices — attachment phase 1
+### 1. Receipts and invoices — attachment phase 1  ✅ *built 2026-08-24; Help topic still owed*
 
 [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → *Phase 1*.
 
@@ -45,10 +45,41 @@ shipped document wrong. Its scope was deliberately written to the free tiers for
 **Storage decision settled 2026-08-21:** files on disk under `DATA_DIR/documents/`, carried inside the
 backup zip as members, riding the **Financial data** backup. That also resolves portable-vs-installed
 for free (`DATA_DIR` already anchors both databases). Images are downscaled at ingest (Pillow, accepted);
-a ~25 MB per-file cap covers pathological scans. Payload version 9 → 10. Details and the rejected
+a ~25 MB per-file cap covers pathological scans. The `documents` section and the `documents/<id>` members took payload version **12** (feature 5 spent the 9 → 10 bump this was originally scoped against, and splits then took 11). Details and the rejected
 alternatives are in the backlog file.
 
-**It gained a prerequisite instead** — see feature 5.
+**It gained a prerequisite instead** — see feature 5, which landed 2026-08-23.
+
+**Phase 1 is built and has had a first pass in the running app (2026-08-24).** Backend: the `document`
+table and the on-disk store (atomic writes, ingest normalization, image downscaling, and the sweep that
+derives file removal from the ledger); the backup half (the `documents` section plus each file as a
+stored zip member, restored after the ledger commits and swept against it); `restore_state` and the
+resumable documents phase, with the gate that refuses an import, a sync or a second restore while one is
+outstanding; the attach/list/serve/detach endpoints; tier-1 PDF text extraction (`pypdf`); and the FTS5
+index. UI: the shared `DropZone` (extracted on the `shared-components.md` watchlist trigger, with the
+Amazon tab moved onto it), `DocumentsPanel` on the transaction detail panel, the ledger row's paperclip,
+and `DocumentViewerDialog`. Documents follow their transaction through the trash, and the purge and the
+demo-data clear both reclaim their files.
+
+**What the first real-app pass changed**, all of it worth knowing because none of it was visible to a
+green test suite:
+
+- **Text and HTML became document kinds.** The design had always said a receipt may arrive as text
+  pasted out of a mail client; only files had been built. Pasting also turned out to need a real
+  `<textarea>` — a paste event reaches only the focused element and browsers offer right-click Paste
+  only on editable ones, so the original handler was unreachable by keyboard *and* mouse.
+- **A paste keeps the sender's layout.** The plain flavour of a copied email is its table flattened, one
+  cell per line, with each amount under the item it prices. The `text/html` flavour is taken instead when
+  the box is left unedited. A saved `.eml` is accepted too and converted at ingest.
+- **Document text reaches the plain search box**, not only `doc:`, with matched rows flagged so the
+  ledger can show *why* they came back. The prefix-only rule was reversed on first use — see the backlog
+  file, which records it as a don't-re-impose.
+- **The ledger's paperclip opens documents**, rather than only counting them.
+
+**Still owed:** a **Help topic** — the feature has none, and 27 other surfaces do (`help/content.jsx`).
+It should be written in the user's own voice, per the existing topics. Beyond that, more use in the real
+app: the first pass found four defects in an hour, every one of them in how a component sits in the live
+tree rather than in its logic.
 
 ### 2. Recurring anomaly signals
 

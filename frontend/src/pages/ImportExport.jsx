@@ -22,6 +22,7 @@ import {
   getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
+import DropZone from '../components/DropZone.jsx'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
@@ -4720,7 +4721,6 @@ function AmazonImportTab({ initialFiles }) {
   const [newAccountName, setNewAccountName] = useState('Amazon')
   const [savingAccount, setSavingAccount] = useState(false)
   const [files, setFiles] = useState([])
-  const [dragOver, setDragOver] = useState(false)
   const [scan, setScan] = useState(null)            // { instruments, unrecognized_files, ... } | null
   const [skippedFilesAlert, setSkippedFilesAlert] = useState(null)   // already-imported names awaiting an OK
   const [scanning, setScanning] = useState(false)
@@ -4923,20 +4923,12 @@ function AmazonImportTab({ initialFiles }) {
               <strong> orders</strong> file (the <strong>items</strong> file is optional extra detail) — each is
               recognized by its columns, so upload order does not matter.
             </p>
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files) }}
-              style={{
-                border: `1.5px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 8, padding: '30px 16px', textAlign: 'center', cursor: 'pointer',
-                background: dragOver ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'transparent',
-                color: 'var(--muted)', fontSize: 13,
-              }}
-            >
+            {/* The shared target (components/DropZone.jsx), extracted when attaching documents became
+                the third surface wanting one. The CSV upload stage keeps its own: its zone is a
+                container for the data-source chooser rendered inside it, which this does not model. */}
+            <DropZone onFiles={addFiles} accept=".csv" multiple>
               Drop the AZAD CSV file(s) here, or click to browse.
-            </div>
+            </DropZone>
           </>
         ) : (
           <>

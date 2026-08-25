@@ -11,3 +11,10 @@ cryptography==43.0.1
 # because the OpenSSL it carries looks where the *build* machine kept one.
 truststore==0.10.4
 segno==1.6.6
+# Downscales attached receipt photographs once, at ingest (services/documents.py). Bundles cleanly
+# into the PyInstaller kits, so the standalone builds are unaffected.
+Pillow==12.3.0
+# Reads the text layer a digital PDF already carries, so an attached invoice is searchable without
+# OCR (tier 1 in docs/backlog/transaction-attachments.md). Pure Python with no dependencies of its
+# own, which is why it is preferred over the layout-aware alternatives.
+pypdf==6.7.0

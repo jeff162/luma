@@ -145,10 +145,17 @@ npm run build
 ```
 
 ```bash
-# backend test suite — wraps `python -m unittest` using backend/venv
+# backend test suite — wraps pytest using backend/venv
 scripts/run_tests.sh                                            # everything
 scripts/run_tests.sh backend.tests.test_suspect_duplicates      # one module
+scripts/run_tests.sh backend.tests.test_suspect_duplicates.SuspectDuplicateTests   # one class
+scripts/run_tests.sh -v                                         # name every test as it runs
 ```
+
+The runner and CI both use **pytest**, deliberately: they collect different sets otherwise. `unittest`
+finds `TestCase` classes only, while several modules are written as plain `def test_` functions, so
+running the suite locally under `unittest` silently skipped what CI would run. Write either style —
+pytest collects both.
 
 Tests use isolated SQLite files under `tempfile.TemporaryDirectory()`, so they never touch the live
 database and are safe to run with the backend still up. If a new dependency lands, re-run

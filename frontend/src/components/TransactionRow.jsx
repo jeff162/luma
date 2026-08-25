@@ -12,9 +12,10 @@ import CategoryPicker from './CategoryPicker.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
+import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
@@ -545,6 +546,43 @@ function TagStackChip({ tags, onClick }) {
 // popover to <body> and positioning it `fixed` against the anchor's live rect escapes that trap
 // (the same approach CategoryPicker uses). Right-aligned to the anchor (the marker strip); flips
 // above the anchor when there isn't room below.
+// The chooser the paperclip opens when a transaction carries more than one document — an estimate and
+// then a final invoice, or a two-page bill scanned as two images. Names only: what a document *is* is
+// the viewer's job, and this exists purely to answer "which one".
+function DocumentListPopover({ documents, onOpen, onClose }) {
+  const ref = useRef(null)
+  useDismissibleLayer({ ref, onDismiss: onClose })
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        ...getFloatingPanelSurfaceStyle(),
+        minWidth: 220, maxWidth: 340, padding: 6, display: 'grid', gap: 2,
+      }}
+    >
+      {documents.map(doc => (
+        <button
+          key={doc.id}
+          type="button"
+          onClick={() => onOpen(doc)}
+          title={doc.filename}
+          style={{
+            textAlign: 'left', background: 'none', border: 'none', borderRadius: 4,
+            padding: '5px 7px', fontSize: 13, color: 'var(--text)', cursor: 'pointer',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+        >
+          {doc.filename}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+
 function RowPopoverPortal({ anchorRef, children }) {
   const [layout, setLayout] = useState(null)
 
@@ -592,6 +630,8 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
   const markerStripRef = useRef(null)
   const [showNote, setShowNote] = useState(false)
   const [showTags, setShowTags] = useState(false)
+  const [showDocuments, setShowDocuments] = useState(false)
+  const [viewingDocument, setViewingDocument] = useState(null)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
   // Tracking via state alone (no separate loading flag) avoids a cancel-loop where
   // the effect re-runs on every loading-state flip and aborts its own in-flight fetch.
@@ -630,6 +670,9 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
 
   const useStack = visibleTags.length > TAG_INLINE_LIMIT
   const hasNote = !!txn.notes
+  const documentCount = txn.document_count || 0
+  const matchedDocument = !!txn.matched_document
+  const documents = Array.isArray(txn.documents) ? txn.documents : []
   // Surfaces that pair this list with a total which omits excluded-from-totals rows (the account
   // activity panel) opt in via showExcludedFromTotals; the row then carries a quiet ⊘ marker (and its
   // amount is dimmed over in TransactionAmountCell) so the gap between the visible rows and the total
@@ -720,6 +763,46 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
             </button>
           </RowTooltip>
         ) : null}
+        {documentCount > 0 ? (
+          <RowTooltip
+            content={
+              <span>
+                {documentCount === 1 ? '1 attached document' : `${documentCount} attached documents`}
+                {matchedDocument ? ' — this row matched your search inside one of them' : ''}
+                {documentCount === 1 ? ' — click to open' : ' — click to choose one'}
+              </span>
+            }
+          >
+            {/* Opens the document, like every other marker in this strip opens what it stands for —
+                the note glyph and the tag chips both do, so an inert paperclip reads as broken rather
+                than as restraint. *Attaching* still belongs to the detail panel, which has room for it.
+                When the search matched *inside* a document, this marker is the row's only explanation
+                for being here at all — every field on screen lacks the term — so it is emphasized
+                rather than quiet, and it is also the fastest route to the thing that matched. */}
+            <button
+              type="button"
+              onClick={event => {
+                event.stopPropagation()
+                // One document has nothing to choose between, so it opens straight away; several get
+                // the popover the note and tag markers beside this one already use.
+                if (documents.length === 1) setViewingDocument(documents[0])
+                else setShowDocuments(value => !value)
+              }}
+              aria-label={
+                matchedDocument
+                  ? 'Matched inside an attached document — open it'
+                  : (documentCount === 1 ? 'Open the attached document' : `Open ${documentCount} attached documents`)
+              }
+              style={{
+                ...iconButtonStyle,
+                color: matchedDocument ? 'var(--accent)' : 'var(--muted)',
+                fontWeight: matchedDocument ? 700 : undefined,
+              }}
+            >
+              📎{documentCount > 1 ? documentCount : ''}
+            </button>
+          </RowTooltip>
+        ) : null}
         {useStack ? (
           <TagStackChip tags={visibleTags} onClick={() => setShowTags(true)} />
         ) : (
@@ -756,6 +839,18 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
               onClose={() => setShowTags(false)}
             />
           </RowPopoverPortal>
+        ) : null}
+        {showDocuments ? (
+          <RowPopoverPortal anchorRef={markerStripRef}>
+            <DocumentListPopover
+              documents={documents}
+              onOpen={doc => { setShowDocuments(false); setViewingDocument(doc) }}
+              onClose={() => setShowDocuments(false)}
+            />
+          </RowPopoverPortal>
+        ) : null}
+        {viewingDocument ? (
+          <DocumentViewerDialog document={viewingDocument} onClose={() => setViewingDocument(null)} />
         ) : null}
         {excludedFromTotals ? (
           <RowTooltip

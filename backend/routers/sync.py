@@ -35,6 +35,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
+from backend.services.restore_state import require_no_pending_restore
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
@@ -840,6 +841,7 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 "code": "demo_data_loaded",
                 "message": "Clear the demo data before syncing a data source.",
             })
+        require_no_pending_restore(conn, "syncing a data source")
 
     marked = _connections_in_scope(connection_id, provider)
     set_sync_running(marked, True)
