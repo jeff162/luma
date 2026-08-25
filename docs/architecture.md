@@ -165,6 +165,18 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Used by:** the transaction detail panel (attach/view/detach) and the ledger row's document marker, which opens the viewer directly. The list feed carries slim document rows (`documents` — id, filename, media type, no extracted text) plus `document_count`, so the marker opens without a fetch
 
+### Multi-payment purchases
+
+- **Storage:** `txn_link` / `txn_link_member` with `kind='purchase'` — the general association primitive, unchanged and with no schema of its own
+
+- **Backend:** `backend/services/purchase_links.py` (the invariants and the summaries) + `backend/routers/purchases.py` (the API over them), plus one transaction-scoped read on the transactions router and a per-page projection into the list feed
+
+- **Behavior:** several transactions that are one purchase — a deposit and a balance, an instalment plan — grouped so the purchase has a total, each payment has an ordinal, and an expected total (from the invoice) has somewhere to sit. The defining property is what it does *not* do: unlike the primitive's other two clients, which recategorize a leg to stop the same money counting twice, this one mutates nothing, so **no reporting surface knows it exists** and a grouped payment reports exactly as it did before. `data-model.md` → *Multi-payment purchases* carries the invariants and the reasons
+
+- **Lifecycle:** a purchase is created from the ledger's bulk selection and edited or ungrouped from the transaction detail panel. It cannot outlive its payments — `trg_purchase_link_prune` drops the link when its last member row goes, which is a trigger rather than a call at each of the five hard-delete sites for the reason the recon-epoch triggers give
+
+- **Used by:** the Transactions ledger (the `🔗` row marker and the "Link as one purchase" bulk action) and the transaction detail panel's purchase summary, which renders nothing for a transaction that is not grouped. Both open the same `PurchaseEditorDialog`, so editing a purchase has one implementation regardless of where it was noticed. The list feed carries a per-row summary (`purchase` — label, ordinal, counts, totals) rather than the sibling payments; the dialog loads the full record when it opens, which is what keeps the per-row cost to one summary
+
 ### Recurring series
 
 - **Backend:** `backend/services/recurring_detection.py` (detection) + `backend/routers/recurring.py` (API)

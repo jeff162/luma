@@ -2243,6 +2243,7 @@ def init_db(db_path: str | None = None):
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_recurring_override_pin ON recurring_membership_override(txn_id) WHERE state = 'pinned'"
         )
         _create_recon_epoch_triggers(conn)
+        _create_purchase_link_prune_trigger(conn)
         _create_document_search_index(conn)
         ensure_shared_owner(conn)
 
@@ -2288,6 +2289,30 @@ def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
                 END
             """)
 
+
+# A `txn_link` row has no foreign key to `txn` — deliberately, since a link may outlive the rows it
+# joined and the owning feature is what knows whether it should. For a **multi-payment purchase** the
+# answer is unambiguous: a purchase whose payments have all been hard-deleted is not a purchase any
+# more, and nothing in the app will ever show it again. Left alone it is an invisible row that
+# accumulates forever.
+#
+# A trigger rather than a prune call at each deletion site, for the reason the recon-epoch triggers
+# above give: transactions are hard-deleted from five scattered places (empty-trash, batch undo, account
+# merge, an Amazon order's removal, a restore's wipe) and a single missed one would leak silently. The
+# `WHEN` clause keeps it to this feature's own links — the other kinds' owners have their own reversal
+# discipline and must not have rows swept out from under a multi-step operation.
+def _create_purchase_link_prune_trigger(conn: sqlite3.Connection) -> None:
+    """Create (idempotently) the trigger that drops a purchase link once its last payment is gone.
+    Runs after run_migrations so both tables exist on fresh and migrated databases alike."""
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_purchase_link_prune
+        AFTER DELETE ON txn_link_member
+        WHEN (SELECT kind FROM txn_link WHERE id = OLD.link_id) = 'purchase'
+         AND NOT EXISTS (SELECT 1 FROM txn_link_member WHERE link_id = OLD.link_id)
+        BEGIN
+            DELETE FROM txn_link WHERE id = OLD.link_id;
+        END
+    """)
 
 # Full-text index over the text pulled out of attached documents, reached from the Transactions page's
 # quick filter as `doc:<terms>`. FTS5 rather than a LIKE over `document.text`: a substring scan grows with

@@ -7,8 +7,10 @@ middleware; (3) request-body parsing + response serialization. These tests cover
 high-value endpoints rather than re-testing business logic (which the direct tests already own).
 """
 
+import sqlite3
 import unittest
 
+from backend.db.database import SHARED_OWNER_ID
 from backend.tests._api_client import api_client
 
 
@@ -52,6 +54,62 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(created.status_code, 200)
             names = [o["name"] for o in client.get("/api/owners").json()]
             self.assertIn("Alice", names)
+
+
+    def test_purchase_link_round_trips_and_reaches_the_ledger_row(self):
+        """The multi-payment purchase router end to end: create, the 400 its invariant produces, and the
+        summary the transaction list carries back for the row marker.
+
+        Worth a full-stack test rather than only the service's: the ordinal and totals on a ledger row
+        are assembled in the list endpoint, and a body or serialization mistake between the two would
+        leave the marker silently absent on a page where the service is perfectly correct.
+        """
+        with api_client() as (client, data_path):
+            with sqlite3.connect(data_path) as conn:
+                conn.execute(
+                    """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
+                       VALUES ('acct', 'p_acct', 'fixture', 'Rewards Card', 'Rewards Card', 'credit', ?)""",
+                    (SHARED_OWNER_ID,),
+                )
+                for txn_id, amount, date in (
+                    ("dep", 2400.0, "2026-03-04"), ("bal", 3600.0, "2026-05-19"), ("other", 12.0, "2026-05-20"),
+                ):
+                    conn.execute(
+                        """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name,
+                                            raw_name, date, is_pending)
+                           VALUES (?, 'acct', ?, ?, 'Riverstone Joinery', 'Riverstone Joinery',
+                                   'Riverstone Joinery', ?, 0)""",
+                        (txn_id, SHARED_OWNER_ID, amount, date),
+                    )
+
+            created = client.post("/api/purchases", json={
+                "txn_ids": ["bal", "dep"], "label": "Kitchen counters",
+                "reference": "INV-4471", "expected_total": 6000.0,
+            })
+            self.assertEqual(created.status_code, 200)
+            purchase = created.json()
+            self.assertEqual([p["txn_id"] for p in purchase["payments"]], ["dep", "bal"])
+            self.assertEqual(purchase["unaccounted"], 0.0)
+
+            # The invariant surfaces as a 400 the dialog can show, not a 500.
+            refused = client.post("/api/purchases", json={"txn_ids": ["bal", "other"]})
+            self.assertEqual(refused.status_code, 400)
+            self.assertIn("one purchase", refused.json()["detail"])
+
+            rows = {row["id"]: row for row in client.get("/api/transactions").json()["transactions"]}
+            self.assertEqual(rows["dep"]["purchase"]["position"], 1)
+            self.assertEqual(rows["bal"]["purchase"]["position"], 2)
+            self.assertEqual(rows["bal"]["purchase"]["payment_count"], 2)
+            self.assertEqual(rows["bal"]["purchase"]["label"], "Kitchen counters")
+            self.assertIsNone(rows["other"]["purchase"])
+
+            # The transaction-scoped read the detail panel opens with.
+            panel = client.get("/api/transactions/dep/purchase").json()["purchase"]
+            self.assertEqual(panel["id"], purchase["id"])
+            self.assertEqual(panel["reference"], "INV-4471")
+
+            self.assertEqual(client.delete(f"/api/purchases/{purchase['id']}").status_code, 200)
+            self.assertIsNone(client.get("/api/transactions/dep/purchase").json()["purchase"])
 
 
 if __name__ == "__main__":

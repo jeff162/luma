@@ -13,12 +13,14 @@ import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
+import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -624,7 +626,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -632,6 +634,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
   const [showTags, setShowTags] = useState(false)
   const [showDocuments, setShowDocuments] = useState(false)
   const [viewingDocument, setViewingDocument] = useState(null)
+  const [editingPurchase, setEditingPurchase] = useState(false)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
   // Tracking via state alone (no separate loading flag) avoids a cancel-loop where
   // the effect re-runs on every loading-state flip and aborts its own in-flight fetch.
@@ -709,6 +712,30 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
             >
               ↻
             </span>
+          </RowTooltip>
+        ) : null}
+        {txn.purchase ? (
+          /* One payment of a multi-payment purchase — a deposit and a balance, an instalment plan.
+             It opens the purchase, like every other interactive marker in this strip opens what it
+             stands for: the note glyph, the tag chips and the paperclip all do, and this repo has twice
+             reversed a marker left inert on the reasoning that another route already existed. The
+             editor it opens is the same dialog the detail panel's purchase summary opens, so a
+             mis-linked payment is repaired from wherever it was noticed. */
+          <RowTooltip
+            content={<span>{purchaseMarkerTooltip(txn.purchase)} — click to open</span>}
+            maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+          >
+            <button
+              type="button"
+              onClick={event => {
+                event.stopPropagation()
+                setEditingPurchase(true)
+              }}
+              aria-label={`${purchaseMarkerTooltip(txn.purchase)} — open this purchase`}
+              style={{ ...iconButtonStyle, fontSize: 11 }}
+            >
+              🔗
+            </button>
           </RowTooltip>
         ) : null}
         {txn.suspect_duplicate_of ? (
@@ -851,6 +878,16 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showEx
         ) : null}
         {viewingDocument ? (
           <DocumentViewerDialog document={viewingDocument} onClose={() => setViewingDocument(null)} />
+        ) : null}
+        {editingPurchase ? (
+          /* Owned here rather than threaded down from a row-actions controller, the way the document
+             viewer beside it is: this editor needs nothing from the host but a place to report the
+             result, so a controller in between would be plumbing with no decision in it. */
+          <PurchaseEditorDialog
+            txnId={txn.id}
+            onClose={() => setEditingPurchase(false)}
+            onSaved={purchase => onUpdatePurchase?.(txn.id, purchaseRowSummary(purchase, txn.id))}
+          />
         ) : null}
         {excludedFromTotals ? (
           <RowTooltip

@@ -296,6 +296,7 @@ export default function TransactionListTable({
             showExcludedFromTotals={markExcludedFromTotals}
             onUpdateNote={(id, notes) => patchRows(id, { notes })}
             onUpdateTags={(id, tags, blockedTags) => patchRows(id, { tags, blocked_tags: blockedTags })}
+            onUpdatePurchase={(id, purchase) => patchRows(id, { purchase })}
           />
         )
       case 'amount':

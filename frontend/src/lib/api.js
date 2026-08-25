@@ -446,6 +446,20 @@ export const api = {
     request(`/transactions/${id}/split`, { method: 'PUT', body: JSON.stringify({ parts }) }),
   deleteSplit:         (id)         => request(`/transactions/${id}/split`, { method: 'DELETE' }),
   getSplitSuggestion:  (id)         => request(`/transactions/${id}/split/suggestion`),
+  // Multi-payment purchases: several transactions that are one purchase (a deposit and a balance, an
+  // instalment plan). Pure association — grouping payments never changes a category, an amount or a
+  // total, so nothing here needs an undo beyond removing the link. `expected_total` is signed in the
+  // ledger's convention like every other amount, so a caller takes the sign from the payments it is
+  // linking. A broken invariant (a payment already in another purchase, a selection of one) comes back
+  // as a 400 whose detail is written for the user; show it rather than composing your own.
+  getTransactionPurchase: (txnId)   => request(`/transactions/${txnId}/purchase`),
+  createPurchase:      (body)       => request('/purchases', { method: 'POST', body: JSON.stringify(body) }),
+  updatePurchase:      (id, body)   => request(`/purchases/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  addPurchasePayments: (id, txnIds) =>
+    request(`/purchases/${id}/payments`, { method: 'POST', body: JSON.stringify({ txn_ids: txnIds }) }),
+  removePurchasePayment: (id, txnId) =>
+    request(`/purchases/${id}/payments/${txnId}`, { method: 'DELETE' }),
+  deletePurchase:      (id)         => request(`/purchases/${id}`, { method: 'DELETE' }),
   // Trash (soft-delete) for transactions. Mirrors the account trash flow: trashed rows are
   // filtered out of every read until they're explicitly restored or the trash is emptied.
   trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),

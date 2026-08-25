@@ -15,6 +15,8 @@ import { getTxnOriginRows } from '../lib/importSourceFields.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentsPanel from './DocumentsPanel.jsx'
+import PurchasePanel from './PurchasePanel.jsx'
+import { purchaseRowSummary } from '../lib/purchaseLinks.js'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -283,6 +285,15 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     onReconcile?.(txn.id, patch)
   }, [onReconcile, txn.id])
 
+  // Stable for the same reason `handleDocumentsChange` is — see the comment above it. What travels is
+  // the *summary* the ledger row's marker draws from, so a purchase edited or ungrouped here updates
+  // the marker behind the panel without a refetch, and `null` removes it.
+  const handlePurchaseChange = useCallback(purchase => {
+    const patch = { purchase: purchaseRowSummary(purchase, txn.id) }
+    setDetailTxn(prev => (prev ? { ...prev, ...patch } : prev))
+    onReconcile?.(txn.id, patch)
+  }, [onReconcile, txn.id])
+
   // Persistence for the shared NoteEditor: write through, patch the panel's own copy, and
   // reconcile the host's row so the saved note shows behind the panel (otherwise the note
   // persists to the DB but the page keeps reading its stale copy and shows no note marker).
@@ -543,6 +554,11 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 what this transaction was actually *for* — and the count is reconciled back to the host
                 so the ledger's indicator updates without a refetch of the page. */}
             <DocumentsPanel txnId={detailTxn.id} onDocumentsChange={handleDocumentsChange} />
+
+            {/* Renders nothing unless this transaction is one payment of a multi-payment purchase, so
+                the section appears only where it has something to say. Placed beside Documents because
+                it answers the same question those do — what this transaction was actually part of. */}
+            <PurchasePanel txnId={detailTxn.id} onPurchaseChange={handlePurchaseChange} />
 
             <div style={{ display: 'grid', gap: 6 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

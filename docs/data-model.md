@@ -30,6 +30,8 @@ This document focuses on data semantics and invariants. For how these are expose
 
 - [Attached documents](#attached-documents)
 
+- [Multi-payment purchases](#multi-payment-purchases)
+
 ## Core hierarchy
 
 The main relationship chain is:
@@ -737,7 +739,7 @@ The review record (`review_state.suggestions[id]`, in the batch/profile/system s
 
 ## Transaction links and Amazon order import
 
-**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization and **wallet funding-leg suppression** (`kind='wallet_funding'`, see below) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade.
+**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below) and **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade.
 
 **Amazon order import is the first client** (parsed from an AZAD orders/items export; **orders-only model**, 2026-07-10 — the earlier per-item itemization was superseded). Each order becomes **one spending transaction** in a chosen **Amazon account** — an ordinary account, since an account here is only a reporting/owner dimension with no balance or net-worth role — amount = net cash (`total − refund`), memo = the orders file's concatenated item list, categorized by the user's normal rules. The matching card charge (found by amount + date, with the account resolved from the funding-source map — see below) is recategorized into the excluded **"Amazon Funding"** leaf (created under the seeded `Transfers` group, so exclusion is inherited via `COALESCE(parent, leaf)`) and joined to the order by an `amazon_order` link (member roles `order` + `charge`). An order may link **several** charges (a split-shipment order — see the reconciliation bullet): each charge's prior categorization is stashed per charge in the link `metadata_json` (`charge_priors: {charge_id: prior}`; the legacy singular `charge_prior` written by the auto-matcher is still honored) so undo restores each exactly. The invariants that keep totals honest:
 
@@ -1121,3 +1123,83 @@ The noun is deliberate. **"Attachment" was already taken** — it means a *tag* 
 **The index is maintained by triggers, which is a correctness requirement rather than a style choice.** A `document` row is most often removed by `ON DELETE CASCADE` when its transaction is purged, and a restore rebuilds the whole table by streaming rows in — neither is a place application code could hook even if every endpoint remembered to. An index that missed those would keep returning transactions that no longer exist. The same property means the restore needs no search awareness at all: rows land, the index follows. It is derived state and is deliberately **not** backed up; it is rebuilt from `document.text` whenever it is created.
 
 The decisions, the tiering of extraction, and the alternatives rejected along the way are in [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md).
+
+## Multi-payment purchases
+
+A deposit and a final payment — or a three-instalment plan — are several real movements of money that
+together buy one thing. Each is recorded correctly on its own date, and nothing in the ledger says they
+belong together: "what did the deck actually cost" has to be reassembled from memory, and a deposit
+sitting alone reads as a mysterious partial amount.
+
+A **purchase** (`txn_link` `kind='purchase'`, `services/purchase_links.py`) is that grouping. It is the
+third client of the link primitive and by far the cheapest, because of what makes it different from the
+other two: Amazon order itemization and wallet funding-leg suppression both exist to stop the *same*
+money counting twice, so each recategorizes a leg into an excluded bucket and stashes the prior for
+reversal. Here both payments are genuinely spent money on genuinely different dates. **Nothing is
+excluded, restated or netted** — the link is pure association, exactly what the primitive is by
+default, which is what makes grouping a purchase incapable of changing a total that was already right.
+
+**Every reporting surface is deliberately untouched.** Summaries, trends, the dashboard and every drill
+read plain `txn` and know nothing about purchases; a grouped payment reports exactly as it did before.
+This is the opposite of the choice [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md)
+makes, and for a stated reason: there the numbers are wrong across a period boundary and a holding
+category is what fixes them, so pairing is optional and late. Here the numbers are already right and
+only the *relationship* is missing, so the link is the whole feature and no category machinery is
+warranted. Do not add one.
+
+**What it holds.** The members carry role `payment`; `external_ref` is the invoice or order number when
+there is one; `metadata_json` holds `label` (a name for the purchase) and `expected_total`.
+
+- **`expected_total` is stored signed, in the ledger's convention** (`amount > 0` is money out), like
+  every amount the API carries. A person types a magnitude — "6000", not a sign against a convention
+  they have never seen — so the *UI* derives the direction from the payments being linked
+  (`lib/purchaseLinks.js` → `signedExpectedTotal`) and shows the derived figure back before saving,
+  which keeps the inference visible rather than silent. A sign the user typed explicitly is honored
+  rather than overridden.
+- **`unaccounted` is `expected_total − linked_total`, and is named for what it is.** The gap may be a
+  payment not made yet or one made and not linked, and nothing in the ledger can tell which, so it is
+  deliberately not called "remaining" or "owed". It is NULL when no expected total was stated — "not
+  stated" is a real answer and is not the same as zero, which would claim the purchase is complete.
+
+**The invariants**, enforced in the service rather than the schema (no SQLite constraint reaches across
+the two tables to express them):
+
+- **A transaction belongs to at most one purchase.** Not a query convenience: one payment covering two
+  invoices would count whole into both purchases' totals, so admitting it would make the single figure
+  this feature exists to produce wrong. Dividing *one* payment across things is the other axis —
+  [transaction splits](#transaction-splits) — and the refusal says so.
+- **Two payments minimum.** One payment is not a multi-payment purchase. Removing a payment that would
+  leave fewer than two therefore deletes the whole link rather than leaving a degenerate one that
+  renders "1 of 1".
+- **Signs are not constrained.** A refund against the purchase is part of what it cost, so it may be a
+  member and the honest total is the net. (Contrast splits, where a mixed-sign allocation would report
+  one transaction against both an income and an expense bucket.)
+- **One role for every member.** Which payment is the deposit is already told by the dates, and a role
+  saying it again is a second truth that can drift from the first.
+
+**Totals count live payments only; trashed ones stay visible.** A trashed payment is money that is not
+in the ledger, so counting it would overstate the purchase — and it is given no ordinal, since it is
+not one of the N the purchase is made of. It is still listed (struck through) rather than silently
+dropped, because the trash is the reversible stage and a payment vanishing without explanation is worse
+than one shown as removed. A trashed row cannot be *added* to a purchase, which is a different case: it
+would contribute nothing, so a purchase whose figures do not move when a payment is added is the
+confusing outcome being avoided.
+
+**A purchase does not outlive its payments, and a trigger is what guarantees it.** A `txn_link` row has
+no FK to `txn`, so hard-deleting the last member leaves an orphan link nothing will ever show again.
+Transactions are hard-deleted from five scattered places (empty-trash, batch undo, account merge, an
+Amazon order's removal, a restore's wipe), so `trg_purchase_link_prune` (`db/database.py`, created in
+the deferred post-migration block alongside the recon-epoch triggers) drops a purchase link once its
+last member row goes — the same "a trigger makes a miss impossible" reasoning the recon-epoch and FTS
+triggers record. Its `WHEN` clause is scoped to `kind='purchase'` precisely because the other kinds run
+multi-step reversals that must not have rows swept out from under them.
+
+**No schema change was needed and none should be added.** `txn_link`/`txn_link_member` already carry
+every field this uses and already ride in backups, so a purchase round-trips through export and restore
+with nothing feature-specific in the payload. One side effect worth knowing: writes to `txn_link` bump
+`recon_epoch`, so creating a purchase invalidates the Amazon reconciliation's cached attention count.
+That is over-invalidation of the harmless kind the cache already documents — it forces one recompute on
+the next read — and is not worth complicating the trigger to avoid.
+
+Depth, the surfaces, and what was deliberately left out are in
+[`backlog/multi-payment-purchases.md`](backlog/multi-payment-purchases.md).

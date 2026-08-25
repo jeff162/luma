@@ -24,6 +24,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
+import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 
@@ -584,6 +585,17 @@ export default function Transactions() {
     }))
   }
 
+  // The row's purchase marker reports the summary after an edit or an ungroup (null when the payments
+  // were ungrouped), so the marker follows without re-fetching the page.
+  function updatePurchase(txnId, purchase) {
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === txnId ? { ...t, purchase } : t
+      ),
+    }))
+  }
+
   function addCategory(cat) {
     setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])
   }
@@ -666,6 +678,21 @@ export default function Transactions() {
   // more capable — select-all-matching can copy the whole filtered result, which no drag could.
   const [copyStatus, setCopyStatus] = useState('')
   const [copying, setCopying] = useState(false)
+
+  /*
+   * "Link as one purchase" — grouping a deposit and its balance (or an instalment plan) as one thing.
+   *
+   * Deliberately **ids-only**: linking is a claim about specific transactions, so it operates on rows
+   * the user picked and can see listed in the dialog before saving. "All matching" reaches past the
+   * loaded pages by design and has no sensible reading here — nobody means "every row this filter
+   * returns is one purchase" — so the action is withheld in that mode rather than silently re-resolving
+   * a set the dialog cannot show.
+   */
+  const [linkingPurchase, setLinkingPurchase] = useState(null)
+  const selectedRowsForPurchase = useMemo(
+    () => (selection.allMatching ? [] : data.transactions.filter(txn => selection.isSelected(txn.id))),
+    [selection, data.transactions],
+  )
 
   const copySelectedTransactions = useCallback(async () => {
     setCopying(true)
@@ -857,6 +884,7 @@ export default function Transactions() {
             txn={txn}
             onUpdateNote={updateNote}
             onUpdateTags={updateTags}
+            onUpdatePurchase={updatePurchase}
           />
         )
       case 'amount':
@@ -985,10 +1013,38 @@ export default function Transactions() {
               >
                 {copying ? 'Copying…' : 'Copy as CSV'}
               </Button>
+              <Button
+                small
+                variant="ghost"
+                onClick={() => setLinkingPurchase(selectedRowsForPurchase)}
+                disabled={selection.allMatching || selectedRowsForPurchase.length < 2}
+                title={
+                  selection.allMatching
+                    ? 'Pick the individual payments to group them as one purchase'
+                    : 'Several payments for one thing — a deposit and a balance, or an instalment plan'
+                }
+              >
+                Link as one purchase
+              </Button>
               {copyStatus ? <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>{copyStatus}</span> : null}
             </>
           }
         />
+
+        {linkingPurchase ? (
+          <LinkPurchaseDialog
+            rows={linkingPurchase}
+            onClose={() => setLinkingPurchase(null)}
+            onLinked={async () => {
+              setLinkingPurchase(null)
+              bulk.selection.clear()
+              // The rows' purchase summaries come from the list feed, so the markers and the panel's
+              // section follow from a reload — the same route a bulk edit on this page already takes.
+              isFirstLoad.current = true
+              await load()
+            }}
+          />
+        ) : null}
 
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
             so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore

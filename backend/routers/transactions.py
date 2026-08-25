@@ -36,6 +36,7 @@ from backend.services.documents import (
     documents_map_for,
     sweep_unreferenced_files,
 )
+from backend.services.purchase_links import purchase_for_txn, purchase_map_for
 from backend.services.txn_splits import (
     SPLIT_CATEGORY_SOURCE,
     SplitValidationError,
@@ -1101,6 +1102,10 @@ def list_transactions(
         # kilobytes no list surface renders), carried inline for the same reason `split_parts` is: the
         # marker opens straight from the row, and a fetch there would be a loading state inside a click.
         documents_by_txn = documents_map_for(conn, txn_ids) if rows else {}
+        # The purchase each row is a payment of, for the row's link marker. A *summary* per row (label,
+        # ordinal, totals) rather than the sibling payments: this marker explains the row rather than
+        # acting on it, so the panel is where the payments are listed. See services/purchase_links.py.
+        purchases_by_txn = purchase_map_for(conn, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
@@ -1111,6 +1116,7 @@ def list_transactions(
             docs = documents_by_txn.get(txn["id"], [])
             txn["documents"] = docs
             txn["document_count"] = len(docs)
+            txn["purchase"] = purchases_by_txn.get(txn["id"])
 
     return {
         "total": total,
@@ -1283,6 +1289,19 @@ def suggest_transaction_split(txn_id: str):
             "categorized": sum(1 for p in proposed if p["category_id"]),
             "parts": proposed,
         }
+
+
+# --- Multi-payment purchases -------------------------------------------------------------------
+# The one transaction-scoped read of a purchase link: what purchase, if any, this row is a payment of.
+# Everything that acts on a purchase is addressed by the purchase's own id — see routers/purchases.py.
+
+
+@router.get("/{txn_id}/purchase")
+def get_transaction_purchase(txn_id: str):
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM txn WHERE id = ?", (txn_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"purchase": purchase_for_txn(conn, txn_id)}
 
 
 @router.patch("/{txn_id}/imported-category")

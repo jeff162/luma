@@ -11,9 +11,11 @@ a free-form `metadata` blob (kind-specific data, such as what a reversal must re
 
 The primitive is deliberately **pure association**: it never mutates the linked transactions (no
 category flip, no `exclude_from_totals`, no amount change). Those belong to whatever feature owns the
-link — the Amazon import adapter is the first client; credit-card payment-leg pairing and a cash-flow
-lens are intended future clients (see ``docs/backlog/paypal-amazon-enrichment.md``). Keeping the table
-association-only is exactly what lets it serve all of them.
+link — the Amazon import adapter is the first client, wallet funding-leg suppression the second, and
+multi-payment purchases (``services/purchase_links.py``) the third; credit-card payment-leg pairing and a
+cash-flow lens are intended future clients (see ``docs/backlog/paypal-amazon-enrichment.md``). Keeping the
+table association-only is exactly what lets it serve all of them — the purchase client in particular
+mutates nothing at all, so it uses the primitive exactly as it comes.
 """
 
 from __future__ import annotations
