@@ -125,6 +125,18 @@ def bundle_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def bundled_license_path() -> Path | None:
+    """The license text shipped *with* this copy of the application, if there is one.
+
+    Present in a checkout (the repository's own LICENSE) and in a packaged build (the spec places it at
+    the bundle root). Absent is a real answer rather than an error: a build assembled some other way
+    still runs, and the UI simply keeps pointing at the published copy, which is the authoritative one
+    regardless — a local file travels with a binary that may have been modified.
+    """
+    candidate = bundle_root() / "LICENSE"
+    return candidate if candidate.is_file() else None
+
+
 def install_root() -> Path:
     """Where the application *sits* — the directory a portable copy keeps its data and its `.env` beside.
 

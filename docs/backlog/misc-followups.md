@@ -105,3 +105,39 @@ on `request()` is the shape that would work, added per-call where a caller knows
 
 **Trigger.** Worth doing if a stalled request is ever actually observed; not worth building the
 machinery speculatively.
+
+## Manual tagging vs inheritance: what checking a tag means
+
+**Context (raised 2026-08-26, from a live observation).** A transaction sat in a category that
+carries a tag *and* had a direct `txn_tag` row for the same tag. The API reports one winning source
+(`direct` beats `category`, `_SOURCE_PRIORITY`), so the UI cannot show that both contribute, and it
+cannot tell a rule-attached tag from a hand-attached one either — both read as `direct`.
+
+**What the round trip actually does** (measured, not inferred — the two cases differ):
+
+| starting row | uncheck | re-check |
+| --- | --- | --- |
+| `rule_present=0, manual_state=1` | `-1` (blocked) | row **deleted** → tag reverts to inherited |
+| `rule_present=1, manual_state=1` | `-1` (blocked) | `manual_state=0` → still reports `direct` |
+
+**The open question.** The delete branch (`present=True` + inherited + no rule) normalizes away a
+direct row on the grounds that a purely inherited tag needs none. The counter-argument, and the
+reason this is filed: **checking a tag on a transaction is an act on the transaction**, so the tag
+arguably should survive a later recategorization — which the deleted row would not. The two readings
+correspond to two different user intents that the current API cannot distinguish: *"undo the hide I
+just made"* (delete is right — it restores the prior state) versus *"tag this transaction"* (a
+force-on row is right).
+
+**Why it is not simply a bug.** In the row/detail picker an inherited-and-visible tag is rendered
+checked-but-disabled, so the only way to reach `present=True` while the tag is inherited is by
+un-blocking one — the undo case, where delete *is* correct. **Bulk `add_tags` has no such guard**:
+it goes through the same `set_manual_transaction_tag`, so tagging a selection leaves no row on the
+rows that already inherit the tag, and the tag silently drops off those when they are recategorized.
+That is the concrete hole to look at first if this is picked up.
+
+**Sketch of a fix, if wanted.** Report every contributing source rather than only the winner
+(`sources: ['direct','category']`, with rule and manual told apart) — the merge loop in
+`get_visible_transaction_tag_map` has both facts in hand at the point where it discards one, so the
+data side is cheap. That would let the picker say "added here · also from Coffee Shops" and offer the
+two intents as separate actions ("remove my copy, keep the inherited one" vs "hide here"), and would
+let bulk add record a force-on without the ambiguity.

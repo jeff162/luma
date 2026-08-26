@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useId, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
+import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Tooltip } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -649,7 +649,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
           {single
             ? 'Turning this on password-protects your user. Set a password to continue — you become the admin.'
-            : 'Turning this on password-protects each user. Choose which user is yours (you become the admin), then optionally set a starting password for the others. Everyone else is required to set their own password the next time they sign in.'}
+            : 'Turning this on password-protects each user. Choose which user is yours (you become the admin), then optionally set a starting password for the others. Everyone without a password is required to set a password the next time they sign in.'}
         </div>
 
         {!single && (
@@ -3076,7 +3076,23 @@ function AboutRow({ label, value, help = '' }) {
   )
 }
 
-function AboutSection({ dbInstanceId }) {
+// The app's own legal notice surface: who holds the copyright, under what terms, where the source is,
+// and that there is no warranty. The source link is not decoration — the AGPL's network clause obliges
+// anyone running a modified copy for other people to offer them the corresponding source, and this is
+// where a user looks for it. The full license text stays in the repository rather than in the app; the
+// license row links to it, which is what "how to view a copy of this License" asks for.
+//
+// **One license link, and it prefers the copy this build carries.** The local one is same-origin and
+// works with no network at all, so it is the better destination whenever it exists; the canonical text
+// at gnu.org stands in when a build ships without one. Two links to the same immutable text was the
+// earlier arrangement and bought nothing — the AGPL never changes, so there is no fresher copy to defer
+// to, and this project's *own* published copy is no more trustworthy than the file beside the binary
+// (a fork edits a URL as easily as a file). Where an outward link does mean something is the FSF's
+// text, which no fork controls. An earlier version went further and probed the repository to decide
+// which link to show; that cost an outbound request nobody asked for on every visit to this panel,
+// which contradicts the promise the README makes about network access. Both remaining links are plain
+// anchors: nothing is fetched from anywhere until the user clicks.
+function AboutSection({ dbInstanceId, bundledLicenseAvailable }) {
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>
@@ -3096,14 +3112,39 @@ function AboutSection({ dbInstanceId }) {
           />
           <AboutRow
             label="License"
-            value="GNU AGPL v3.0 or later"
-            help="SPDX identifier: AGPL-3.0-or-later."
+            value={(
+              <a
+                href={bundledLicenseAvailable ? '/api/app/license' : LICENSE_CANONICAL_URL}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                GNU AGPL v3.0 or later
+              </a>
+            )}
+            help={`© 2026 Jeffrey Orlin · SPDX identifier: AGPL-3.0-or-later. ${
+              bundledLicenseAvailable ? 'Local text from this build.' : 'Canonical text at gnu.org.'
+            }`}
+          />
+          <AboutRow
+            label="Source"
+            value={(
+              <a href={PROJECT_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+                {PROJECT_URL.replace('https://', '')}
+              </a>
+            )}
+            help="Full source, releases and issue tracker."
           />
           <AboutRow
             label="Instance ID"
             value={dbInstanceId || 'Unavailable'}
-            help="Unique identifier for this database. Backups are stamped with it, so restoring a backup from a different database warns before overwriting."
+            help="Unique identifier for the database. Used to warn when restoring a backup from a different database."
           />
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          Provided without warranty of any kind, to the extent permitted by applicable law. See sections
+          15 and 16 of the license for the full disclaimer and limitation of liability.
         </div>
       </div>
     </Card>
@@ -3235,9 +3276,9 @@ function CurrencySection() {
         </Button>
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
-        Every amount is stored as a plain number, so this sets what those numbers <em>mean</em> and how
-        they are shown — it does not convert anything. Transactions from a connected data source whose
-        account is held in a different currency are not imported.
+        Amounts are stored plain numbers, this sets what those numbers <em>mean</em> and how
+        they are shown — it does not convert anything. The more interesting feature is that transactions from a connected data source with
+        a different currency are not imported.
       </div>
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
 
@@ -3266,6 +3307,7 @@ export default function Settings() {
     dataProviderIntended,
     developerOptionsEnabled,
     dbInstanceId,
+    bundledLicenseAvailable,
     activeLocalProfile,
     setSecurityProfile,
     setPasswordPolicy,
@@ -3315,7 +3357,7 @@ export default function Settings() {
 
           <StickySection
             title="Appearance"
-            description="Choose your color theme."
+            description="Select the color theme."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('appearance')}
           >
@@ -3324,7 +3366,7 @@ export default function Settings() {
 
           <StickySection
             title="Currency"
-            description="The currency this ledger's amounts are in."
+            description="Define the currency used by the ledger."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('currency')}
           >
@@ -3346,7 +3388,7 @@ export default function Settings() {
 
           <StickySection
             title="Intended usage"
-            description={`How you'll run ${APP_NAME}, and whether you'll connect a bank or data provider.`}
+            description={`How ${APP_NAME} will be run and whether a bank or data provider will be connected which involves secrets that need protecting.`}
             actions={<FeatureExplainer topic="data-and-backups" placement="bottom-left" />}
             scrollContainerRef={settingsScrollRef}
             {...bindSection('intendedUsage')}
@@ -3364,7 +3406,7 @@ export default function Settings() {
           {!authEnabled && (
             <StickySection
               title="Sign-in protection"
-              description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
+              description="Enable to add passwords, 2FA to access the application."
               scrollContainerRef={settingsScrollRef}
               {...bindSection('signInProtection')}
             >
@@ -3422,7 +3464,7 @@ export default function Settings() {
               was even recorded until someone set an env var and reproduced the problem. */}
           <StickySection
             title="Connection sync log"
-            description="What each data connection did on every sync — how much arrived, whether the full history was fetched, and anything the provider reported."
+            description="Record of data connection sync actions — how much arrived, whether the full history was fetched, and anything the provider reported."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('connectionSyncLog')}
           >
@@ -3431,7 +3473,7 @@ export default function Settings() {
 
           <StickySection
             title="Distinct account pairs"
-            description="Accounts you have declared to be different from one another, so imports stop looking for duplicate transactions between them."
+            description="Accounts which have declared to be distinct from one another to prevent imports from looking for duplicate transactions between them."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('distinctAccountPairs')}
           >
@@ -3440,7 +3482,7 @@ export default function Settings() {
 
           <StickySection
             title="Transaction tags"
-            description="Create the lightweight labels that show on transaction rows and can be applied by rules."
+            description="Labels applied to transactions to create selection criteria."
             actions={<FeatureExplainer topic="tags" placement="bottom-left" />}
             scrollContainerRef={settingsScrollRef}
             {...bindSection('transactionTags')}
@@ -3450,7 +3492,6 @@ export default function Settings() {
 
           <StickySection
             title="Trash"
-            description="Restore merged child accounts or trashed transactions before you permanently remove them."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('trash')}
           >
@@ -3488,7 +3529,7 @@ export default function Settings() {
             scrollContainerRef={settingsScrollRef}
             {...bindSection('about')}
           >
-            <AboutSection dbInstanceId={dbInstanceId} />
+            <AboutSection dbInstanceId={dbInstanceId} bundledLicenseAvailable={bundledLicenseAvailable} />
           </StickySection>
         </div>
       </div>

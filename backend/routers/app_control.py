@@ -20,6 +20,9 @@ service away from everyone else.
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
+
+from backend.runtime_config import bundled_license_path
 
 router = APIRouter()
 
@@ -60,3 +63,24 @@ def shutdown_app():
         )
     _shutdown_handler()
     return {"stopping": True}
+
+
+def bundled_license_available() -> bool:
+    """Whether this copy carries its own license text. Reported in the auth status payload for the same
+    reason the shutdown capability is: the About page has to decide whether a fallback exists at all
+    before it goes looking for one."""
+    return bundled_license_path() is not None
+
+
+@router.get("/license", response_class=PlainTextResponse)
+def read_bundled_license():
+    """The license text shipped with this copy.
+
+    A fallback, not the reference: the published text in the repository is the trustworthy one, and this
+    file travels with a binary that may have been modified. The About page therefore links out first and
+    only reaches here when the repository cannot be reached — which is exactly the case (an air-gapped
+    or offline install) where a conveyed copy still owes its recipient a readable license."""
+    path = bundled_license_path()
+    if path is None:
+        raise HTTPException(status_code=404, detail="This build does not carry a bundled license file.")
+    return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")

@@ -74,6 +74,8 @@ Options:
   --no-browser    start without opening a browser, and just print the address
 
 This build is unsigned, so the operating system will warn about it the first time it runs.
+
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
 """
 
 READ_ME_INSTALLED = """Luma — installed build
@@ -89,6 +91,8 @@ Options:
   --no-browser    start without opening a browser, and just print the address
 
 This build is unsigned, so the operating system will warn about it the first time it runs.
+
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
 """
 
 # Gatekeeper is the reason this one is long. The gesture most people know for opening an unsigned
@@ -122,6 +126,8 @@ same thing from the browser.
 
 {DEFAULT_APP_NAME} runs no window of its own — the browser is its interface — so the Dock icon is the
 only thing on screen when it is running.
+
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
 """
 
 
@@ -303,6 +309,14 @@ def _package(built: Path, form: str) -> Path:
     return _package_disk_image(built, form) if _is_macos() else _package_zip(built, form)
 
 
+# The license file the distribution carries beside the program. Separate from the copy inside the
+# bundle, which only a *running* app can reach: a recipient whose download will not launch — wrong
+# architecture, an unsigned binary the OS refuses, a machine that never runs it at all — still received
+# a conveyed copy and is still owed its license. It is also the form every packager and license scanner
+# looks for, none of which open the app and click About.
+LICENSE_FILE = ROOT / "LICENSE"
+
+
 def _package_zip(executable: Path, form: str) -> Path:
     archive = _artifact_name(form, ".zip")
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -316,6 +330,7 @@ def _package_zip(executable: Path, form: str) -> Path:
         bundle.writestr(info, executable.read_bytes())
         readme = READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED
         bundle.writestr("luma/README.txt", readme)
+        bundle.writestr("luma/LICENSE", LICENSE_FILE.read_text(encoding="utf-8"))
 
     return archive
 
@@ -337,6 +352,7 @@ def _package_disk_image(app: Path, form: str) -> Path:
         shutil.copytree(app, staging / app.name, symlinks=True)
         (staging / "Applications").symlink_to("/Applications")
         (staging / "README.txt").write_text(READ_ME_MACOS)
+        shutil.copyfile(LICENSE_FILE, staging / "LICENSE")
 
         _run(
             [

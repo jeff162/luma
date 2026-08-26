@@ -73,6 +73,10 @@ analysis = Analysis(
     datas=[
         (str(ROOT / "frontend" / "dist"), "frontend/dist"),
         (str(form_marker), "."),
+        # A packaged build is a *conveyed* copy, and the AGPL requires the license to accompany one.
+        # The repository copy covers a checkout; nothing covered the binary until this line. It lands at
+        # the bundle root, which is where `runtime_config.bundled_license_path` looks for it.
+        (str(ROOT / "LICENSE"), "."),
     ],
     hiddenimports=(
         collect_submodules("uvicorn")

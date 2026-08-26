@@ -1080,6 +1080,8 @@ export default function App() {
   const [shutdownError, setShutdownError] = useState('')
   const [appStopped, setAppStopped] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
+  // Whether this build ships its own license copy — the About page's offline fallback.
+  const [bundledLicenseAvailable, setBundledLicenseAvailable] = useState(false)
   const [localProfiles, setLocalProfiles] = useState([])
   const [activeLocalProfile, setActiveLocalProfile] = useState(null)
   const [previousLocalProfile, setPreviousLocalProfile] = useState(null)
@@ -1118,6 +1120,7 @@ export default function App() {
     dataProviderIntended,
     developerOptionsEnabled,
     dbInstanceId,
+    bundledLicenseAvailable,
     activeLocalProfile,
     preferenceSubjectId,
     setAuthEnabled,
@@ -1133,6 +1136,7 @@ export default function App() {
     dataProviderIntended,
     developerOptionsEnabled,
     dbInstanceId,
+    bundledLicenseAvailable,
     activeLocalProfile,
     preferenceSubjectId,
   ])
@@ -1203,6 +1207,7 @@ export default function App() {
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setShutdownAvailable(!!status.app_shutdown_available)
         setDbInstanceId(status.db_instance_id || '')
+        setBundledLicenseAvailable(!!status.bundled_license_available)
         // Drop a theme cache left over from a different/previous database (e.g. a recreated DB) so the
         // welcome screen — which paints before any per-profile theme loads — falls back to System
         // rather than inheriting the old palette. Same-DB profile clears keep their configured theme.
