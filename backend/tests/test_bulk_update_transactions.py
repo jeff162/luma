@@ -78,15 +78,15 @@ class BulkUpdateTransactionTests(unittest.TestCase):
             conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, '#fff', 0)", (tag_id, name))
         return tag_id
 
-    def _insert_txn(self, *, merchant="Store", amount=5.0, date="2026-01-02", category_id=None):
+    def _insert_txn(self, *, merchant="Store", amount=5.0, date="2026-01-02", category_id=None, needs_review=0):
         txn_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """
-                INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, needs_review)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
-                (txn_id, self.account_id, SHARED_OWNER_ID, category_id, amount, merchant, merchant, merchant, date),
+                (txn_id, self.account_id, SHARED_OWNER_ID, category_id, amount, merchant, merchant, merchant, date, needs_review),
             )
         return txn_id
 
@@ -187,6 +187,44 @@ class BulkUpdateTransactionTests(unittest.TestCase):
         self.assertEqual(self._row(x)["notes"], "bulk")
         self.assertIsNone(self._row(y)["notes"])     # excluded
         self.assertIsNone(self._row(other)["notes"])  # outside the filter
+
+    def test_filter_mode_honors_needs_review(self):
+        # The regression this exists for: the flag reached the endpoint but was not on the allowlist, so
+        # it was dropped and "the rows needing review" resolved to the entire ledger.
+        flagged = self._insert_txn(merchant="Flagged", needs_review=1)
+        settled = self._insert_txn(merchant="Settled", needs_review=0)
+        result = self._bulk(
+            BulkSelection(mode="filter", filter={"needs_review": True}),
+            [BulkAction(type="set_notes", notes="bulk")],
+        )
+        self.assertEqual(result["updated_count"], 1)
+        self.assertEqual(self._row(flagged)["notes"], "bulk")
+        self.assertIsNone(self._row(settled)["notes"])
+
+    def test_filter_mode_refuses_an_unsupported_key(self):
+        # A key the endpoint cannot honor must fail rather than be dropped: every filter here narrows,
+        # so a dropped one silently widens the set the actions run against.
+        txn = self._insert_txn()
+        with self.assertRaises(HTTPException) as caught:
+            self._bulk(
+                BulkSelection(mode="filter", filter={"needs_review": True, "not_a_filter": "x"}),
+                [BulkAction(type="set_notes", notes="bulk")],
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("not_a_filter", caught.exception.detail)
+        self.assertIsNone(self._row(txn)["notes"])
+
+    def test_filter_mode_refuses_reaching_into_the_trash(self):
+        txn = self._insert_txn()
+        self._bulk(BulkSelection(mode="ids", ids=[txn]), [BulkAction(type="trash")])
+        with self.assertRaises(HTTPException) as caught:
+            self._bulk(
+                BulkSelection(mode="filter", filter={"include_trashed": True}),
+                [BulkAction(type="set_notes", notes="bulk")],
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("include_trashed", caught.exception.detail)
+        self.assertIsNone(self._row(txn)["notes"])
 
     def test_filter_mode_select_all_skips_trashed(self):
         a, b = self._insert_txn(), self._insert_txn()

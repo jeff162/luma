@@ -164,6 +164,16 @@ when nothing is selected, so every grain change fell through to "scroll to the n
 charts are now handed explicit sizes, and the month under the middle of the viewport is carried across a
 re-cut. Details and the don't-re-impose notes are in the backlog file.
 
+**Fourth real-app pass, 2026-08-25 — one data-correctness bug, found by using the ledger rather than the
+dashboard.** "Needs review" + select-all + Mark reviewed reported 18,278 rows changed against a filter
+showing 28. The bulk endpoint's filter allowlist did not name `needs_review`, and an unrecognized key was
+*dropped*: every filter there narrows, so losing one widened the selection to the whole ledger. Harmless
+by luck — the action rewrites `needs_review = 0` on rows that already held it — and destructive under any
+other action. Fixed by naming the key and by making an unrecognized key a 400 instead of a silent drop,
+and a selection over 500 rows is now confirmed before it runs. The lesson generalizes past this endpoint:
+a validation step that discards what it does not understand is only safe when discarding is the
+conservative direction, and for a filter it is the opposite one.
+
 **Not otherwise exercised in the running app.** The backend contracts and the graph rules are under test (14
 backend, 17 frontend), but the diagram's placement, labelling and hit targets are exactly the class of
 thing a green unit suite cannot see — the same class that produced four defects in an hour on feature 1.

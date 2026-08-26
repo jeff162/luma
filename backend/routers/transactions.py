@@ -1498,14 +1498,45 @@ def trash_transaction(txn_id: str):
     return {"ok": True}
 
 
+# Which of the list feed's filters a "select all matching" payload may carry. Every key here must
+# narrow the same way it does on the list endpoint, because the count the user was shown came from
+# that endpoint and the rows changed come from this one.
+#
+# **A key this set does not name is rejected, never dropped.** Dropping is silent and it is never
+# conservative: every filter here narrows, so losing one *widens* the set the actions run against —
+# which is how a "mark the 28 rows needing review" once resolved to the whole ledger. An unsupported
+# key is a client and a server that disagree about the selection, and the only safe reading of that
+# disagreement is to refuse it.
 _BULK_FILTER_KEYS = {
     "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id", "account_ids",
     "source_account_ids", "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids",
     "payees", "exclude_account_ids", "exclude_group_ids", "exclude_category_ids",
     "exclude_owner_ids", "exclude_payees", "exclude_tag_ids", "require_all_tag_ids",
-    "direction", "view", "search", "quick_filter",
+    "direction", "view", "search", "quick_filter", "needs_review",
     "amount_min", "amount_max", "amount_min_op", "amount_max_op", "recurring_only",
 }
+
+# Filters the builder understands but bulk refuses on purpose, named separately so the error can say
+# why rather than calling them unknown: bulk never acts on trashed rows, and a filter payload naming
+# ids outright would bypass the resolve-and-exclude path that mode='ids' exists for.
+_BULK_FILTER_REFUSED_KEYS = {"include_trashed", "ids"}
+
+
+def _bulk_filter_params(raw: dict | None) -> dict:
+    flt = dict(raw or {})
+    refused = sorted(k for k in flt if k in _BULK_FILTER_REFUSED_KEYS)
+    if refused:
+        raise HTTPException(
+            status_code=400,
+            detail=f"selection.filter may not carry: {', '.join(refused)}",
+        )
+    unknown = sorted(k for k in flt if k not in _BULK_FILTER_KEYS)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"selection.filter has unsupported key(s): {', '.join(unknown)}",
+        )
+    return flt
 
 
 def _chunk(seq, size=400):
@@ -1531,7 +1562,7 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
         return resolved
 
     if selection.mode == "filter":
-        flt = {k: v for k, v in (selection.filter or {}).items() if k in _BULK_FILTER_KEYS}
+        flt = _bulk_filter_params(selection.filter)
         clauses, params = _build_transaction_filter(**flt)  # include_trashed defaults False
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # Expanded, so a "select all matching" under a category filter resolves the same rows the

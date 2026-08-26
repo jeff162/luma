@@ -24,6 +24,12 @@
  * Apply reconciliation: hosts that hold their rows in local state pass `setRows` (+ optional
  * `onRowsTrashed` to decrement a separately-tracked total) for in-place patching; a host whose source of
  * truth is a paginated re-fetch passes `onReload` instead.
+ *
+ * A large selection is confirmed before it runs (BULK_CONFIRM_THRESHOLD). The gate lives in the
+ * controller rather than in the action bar so no host and no future action can route around it, and it
+ * names the count and what is about to happen — the point is to make the size of the selection readable
+ * *before* the fact, since "all matching" resolves server-side and a filter that quietly failed to
+ * narrow looks exactly like one that worked until the result lands.
  */
 
 import { useCallback, useMemo, useState } from 'react'
@@ -33,6 +39,28 @@ import { useTransactionSelection } from './useTransactionSelection.js'
 import { categoryReconcilePatch } from './txnMutations.js'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { AppConfirmDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
+
+// Above this many rows, an apply is confirmed first. Chosen to sit above ordinary work and below a
+// runaway: recategorizing a merchant or tagging a trip is tens of rows, and marking a freshly imported
+// batch reviewed is hundreds, so a lower bar would train the user to click through it — while anything
+// that has quietly widened to a whole ledger is orders of magnitude past this.
+export const BULK_CONFIRM_THRESHOLD = 500
+
+const BULK_ACTION_LABELS = {
+  set_category: 'Set category',
+  add_tags: 'Add tags',
+  remove_tags: 'Remove tags',
+  set_notes: 'Set notes',
+  set_merchant: 'Set merchant',
+  set_date: 'Set date',
+  mark_reviewed: 'Mark reviewed',
+  set_review_status: 'Change review status',
+  trash: 'Move to trash',
+}
+
+export function describeBulkActions(actions = []) {
+  return actions.map(action => BULK_ACTION_LABELS[action.type] || action.type).join(' · ')
+}
 
 export function useBulkTransactionEditing({
   rows = [],
@@ -50,6 +78,8 @@ export function useBulkTransactionEditing({
   const [showPanel, setShowPanel] = useState(false)
   const [applying, setApplying] = useState(false)
   const [pendingTrash, setPendingTrash] = useState(false)
+  // Actions held back at the size gate, waiting for the user to confirm the count.
+  const [pendingConfirm, setPendingConfirm] = useState(null)
   const [notice, setNotice] = useState('')
   const selection = useTransactionSelection()
 
@@ -141,8 +171,14 @@ export function useBulkTransactionEditing({
     if (trashedCount && onRowsTrashed) onRowsTrashed(trashedCount)
   }, [setRows, effectiveTags, categories, getRowId, onRowsTrashed])
 
-  const runActions = useCallback(async (actions) => {
+  // `confirmed` is set by the size-gate dialog and by the trash confirm, which names the count itself —
+  // a second dialog saying the same thing would read as a stutter rather than as a check.
+  const runActions = useCallback(async (actions, { confirmed = false } = {}) => {
     if (!actions.length) return
+    if (!confirmed && selectedCount >= BULK_CONFIRM_THRESHOLD) {
+      setPendingConfirm(actions)
+      return
+    }
     setApplying(true)
     // Snapshot which loaded rows the selection covers *before* clearing it, so the in-place patch
     // reconciles exactly those. Works in both modes: isSelected() is true for every non-excluded loaded
@@ -161,7 +197,7 @@ export function useBulkTransactionEditing({
     } finally {
       setApplying(false)
     }
-  }, [rows, tableSelection, getRowId, selection, filterParams, onReload, reconcile])
+  }, [rows, tableSelection, getRowId, selection, selectedCount, filterParams, onReload, reconcile])
 
   return {
     bulkMode,
@@ -176,6 +212,8 @@ export function useBulkTransactionEditing({
     applying,
     pendingTrash,
     setPendingTrash,
+    pendingConfirm,
+    setPendingConfirm,
     notice,
     setNotice,
     runActions,
@@ -191,7 +229,7 @@ export function BulkEditChrome({ controller, barStyle, actions = null }) {
   const {
     bulkMode, selectedCount, selection, categories,
     showPanel, setShowPanel, applying, pendingTrash, setPendingTrash,
-    notice, setNotice, runActions,
+    pendingConfirm, setPendingConfirm, notice, setNotice, runActions,
   } = controller
   return (
     <>
@@ -237,8 +275,26 @@ export function BulkEditChrome({ controller, barStyle, actions = null }) {
           confirmVariant="danger"
           confirmDisabled={applying}
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={async () => { setPendingTrash(false); await runActions([{ type: 'trash' }]) }}
+          onConfirm={async () => { setPendingTrash(false); await runActions([{ type: 'trash' }], { confirmed: true }) }}
           onCancel={() => setPendingTrash(false)}
+          width="min(520px, 100%)"
+        />
+      ) : null}
+
+      {pendingConfirm ? (
+        <AppConfirmDialog
+          title={`Apply to ${selectedCount} transactions?`}
+          description={`${describeBulkActions(pendingConfirm)} — ${selection.allMatching
+            ? 'this runs on every row matching the current filter, not only the rows loaded on screen.'
+            : 'this runs on every selected row.'} A bulk edit cannot be undone in one step.`}
+          confirmLabel={applying ? 'Applying…' : `Apply to ${selectedCount}`}
+          confirmDisabled={applying}
+          onConfirm={async () => {
+            const actions = pendingConfirm
+            setPendingConfirm(null)
+            await runActions(actions, { confirmed: true })
+          }}
+          onCancel={() => setPendingConfirm(null)}
           width="min(520px, 100%)"
         />
       ) : null}

@@ -317,7 +317,7 @@ export function BackupRestoreTab() {
               // other, so in a shared workspace it is not interchangeable with a colleague's. Neither
               // applies to restoring here — this install's key opens its own backups whatever the
               // passphrase has since become — so the caveat is scoped to somewhere else.
-              ? 'Restoring this on another install requires this user\'s current vault passphrase\u2019s. Retain passphrases after a change if older backups may be restored elsewhere.'
+              ? 'Restoring this requires this user\'s current vault passphrase\u2019s. Retain passphrases after a change to allow restoring older backups.'
               : 'No stored data-source credentials exist to back up.'}
           </div>
         </div>
