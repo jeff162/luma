@@ -25,9 +25,13 @@ changing the application.
 For the shortest local startup path, use the launcher scripts documented in
 [README.md](README.md).
 
-For manual development, the backend requires **Python 3.12 or newer** (`backend/pyproject.toml` declares
-`requires-python = ">=3.12"`). The venv belongs at `backend/venv/` — that is where every script in
-`scripts/` looks for it.
+**Toolchain:** **Python 3.12 or 3.13**, and **Node.js 20 or newer**. The Python range has a ceiling as
+well as a floor — `backend/pyproject.toml` declares `requires-python = ">=3.12,<3.14"`, because the
+pinned `pydantic-core` publishes no wheels for 3.14 and a 3.14 environment falls back to compiling it
+from source, failing somewhere that says nothing about the real cause. [README.md](README.md) carries
+the fuller note, including why this does not apply to the packaged downloads.
+
+The venv belongs at `backend/venv/` — that is where every script in `scripts/` looks for it.
 
 ```bash
 # backend
