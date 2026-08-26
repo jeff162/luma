@@ -25,7 +25,7 @@ import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -717,16 +717,15 @@ export default function Recurring() {
     return () => { live = false }
   }, [openSeries, reportNonce])
 
-  const applyCategoryToRow = useCallback((txnId, cat) => {
+  const applyCategoryToRow = useCallback((txnId, patch) => {
     setReportRows(prev => prev.map(t => (t.id === txnId
-      ? { ...t, ...categoryReconcilePatch(cat) }
+      ? { ...t, ...patch }
       : t)))
   }, [setReportRows])
 
   const saveCategory = useCallback((txnId, catId, catObj) => {
     const cat = catObj || categories.find(c => c.id === catId) || null
-    applyCategoryToRow(txnId, cat)
-    txnMutations.setCategory(txnId, catId)
+    applyCategoryChange(txnId, cat, patch => applyCategoryToRow(txnId, patch))
   }, [categories, applyCategoryToRow])
 
   // load/scan/filter-toggle rebuild the layout snapshot; in-place card updates deliberately do not. The

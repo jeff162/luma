@@ -36,7 +36,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { api } from './api.js'
 import { useTags } from './useTags.js'
 import { useTransactionSelection } from './useTransactionSelection.js'
-import { categoryReconcilePatch } from './txnMutations.js'
+import { categoryReconcilePatch, reconcileRowsAfterRuleApply } from './txnMutations.js'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { AppConfirmDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
 
@@ -133,7 +133,9 @@ export function useBulkTransactionEditing({
               const cat = categories.find(c => c.id === action.category_id)
               // Bulk set_category always writes category_source='manual' and clears needs_review on the
               // backend — even the null (bulk uncategorize) case — so force the marker off unconditionally
-              // rather than leaving the helper's assign-only clear to decide.
+              // rather than leaving the helper's assign-only clear to decide. Inherited tags move with the
+              // category and cannot be patched from here (one response, many rows), so the rows are
+              // refetched after the apply — see the set_category branch in runActions.
               return { ...txn, ...categoryReconcilePatch(cat), needs_review: 0 }
             }
             case 'set_notes':
@@ -191,13 +193,24 @@ export function useBulkTransactionEditing({
       setBulkMode(false)
       setNotice(`Updated ${result.updated_count} transaction${result.updated_count === 1 ? '' : 's'}.`)
       if (onReload) await onReload()
-      else reconcile(actions, affectedIds)
+      else {
+        reconcile(actions, affectedIds)
+        // A category change moves the row's *inherited* tags, and which tags those are is resolved per
+        // transaction from the category, its group, the account and the row's own blocks — so unlike
+        // every other action here it cannot be patched from the action itself. The per-row endpoint
+        // answers with the resolved set; the bulk one cannot (one response, many rows), so the loaded
+        // rows it touched are refetched by id instead. Only for set_category: the other actions already
+        // patch exactly, and a refetch would cost a request per bulk edit for nothing.
+        if (setRows && actions.some(action => action.type === 'set_category')) {
+          await reconcileRowsAfterRuleApply(rows, [...affectedIds], setRows)
+        }
+      }
     } catch (error) {
       setNotice(error?.message || 'Bulk update failed.')
     } finally {
       setApplying(false)
     }
-  }, [rows, tableSelection, getRowId, selection, selectedCount, filterParams, onReload, reconcile])
+  }, [rows, setRows, tableSelection, getRowId, selection, selectedCount, filterParams, onReload, reconcile])
 
   return {
     bulkMode,

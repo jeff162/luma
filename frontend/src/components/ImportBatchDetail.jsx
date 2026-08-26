@@ -28,7 +28,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -189,11 +189,10 @@ export default function ImportBatchDetail({
   }, [dedupedRows, debouncedFilter])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
-    await txnMutations.setCategory(txnId, categoryId)
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
-    setRows(prev => prev.map(txn => (
-      txn.id === txnId ? { ...txn, ...categoryReconcilePatch(resolvedCategory) } : txn
-    )))
+    await applyCategoryChange(txnId, resolvedCategory, patch => setRows(prev => prev.map(txn => (
+      txn.id === txnId ? { ...txn, ...patch } : txn
+    ))))
   }
 
   const dateFilterLabel = (dateStart || dateEnd)

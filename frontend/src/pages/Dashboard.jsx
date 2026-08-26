@@ -8,7 +8,7 @@ import {
   Customized,
 } from 'recharts'
 import { api } from '../lib/api.js'
-import { txnMutations, reconcileRowsAfterRuleApply, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { reconcileRowsAfterRuleApply, applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
@@ -3016,8 +3016,8 @@ export default function Dashboard() {
                                 {...selectedCatBulk.tableProps}
                                 onCategorySave={(txnId, catId, catObj) => {
                                   const cat = catObj || categories.find(c => c.id === catId)
-                                  setTxnData(prev => prev.map(x => x.id === txnId ? { ...x, ...categoryReconcilePatch(cat) } : x))
-                                  txnMutations.setCategory(txnId, catId)
+                                  applyCategoryChange(txnId, cat, patch => setTxnData(prev => prev.map(
+                                    x => x.id === txnId ? { ...x, ...patch } : x)))
                                 }}
                                 onRulePrompt={setRulePrompt}
                                 onRowsChange={setTxnData}
@@ -3277,8 +3277,8 @@ export default function Dashboard() {
                       {...selectedGroupBulk.tableProps}
                       onCategorySave={(txnId, catId, catObj) => {
                         const cat = catObj || categories.find(c => c.id === catId)
-                        setGroupTxnData(prev => prev.map(x => x.id === txnId ? { ...x, ...categoryReconcilePatch(cat) } : x))
-                        txnMutations.setCategory(txnId, catId)
+                        applyCategoryChange(txnId, cat, patch => setGroupTxnData(prev => prev.map(
+                          x => x.id === txnId ? { ...x, ...patch } : x)))
                       }}
                       onRulePrompt={setRulePrompt}
                       onRowsChange={setGroupTxnData}

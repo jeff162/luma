@@ -1149,6 +1149,22 @@ def _reject_group_category_assignment(conn, category_id: Optional[str]) -> None:
         )
 
 
+def _resolved_tags_response(conn, txn_id: str) -> dict:
+    """A transaction's effective tags, for an endpoint that just changed what they resolve from.
+
+    Tag inheritance is resolved per transaction from the leaf category, its group and the effective
+    account, so *changing the category changes the tags* — but only the server can say to what. An
+    endpoint that answers `{"ok": True}` leaves the client's row holding the previous category's
+    inherited tags with no way to know it, and nothing else on the page refetches the row. Returning
+    the resolved set is what lets the caller's in-place patch stay honest; it mirrors what the tag
+    PATCH already returns, so the client has one shape to reconcile from either write.
+    """
+    return {
+        "tags": list_visible_transaction_tags(conn, txn_id),
+        "blocked_tags": get_blocked_transaction_tag_map(conn, [txn_id]).get(txn_id, []),
+    }
+
+
 @router.patch("/{txn_id}/category")
 def override_category(txn_id: str, body: CategoryOverride):
     with get_db() as conn:
@@ -1176,7 +1192,8 @@ def override_category(txn_id: str, body: CategoryOverride):
             """,
             (body.category_id, body.notes, txn_id),
         )
-    return {"ok": True}
+        resolved = _resolved_tags_response(conn, txn_id)
+    return {"ok": True, **resolved}
 
 
 # --- Splits -----------------------------------------------------------------------------------
@@ -1331,7 +1348,8 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
             """,
             (body.category_id, cat["name"], txn_id),
         )
-    return {"ok": True}
+        resolved = _resolved_tags_response(conn, txn_id)
+    return {"ok": True, **resolved}
 
 
 @router.post("/rejected-suggestion-disposition")
@@ -1479,7 +1497,8 @@ def clear_override(txn_id: str):
             "UPDATE txn SET category_overridden = 0, category_id = NULL, category_source = NULL WHERE id = ?",
             (txn_id,),
         )
-    return {"ok": True}
+        resolved = _resolved_tags_response(conn, txn_id)
+    return {"ok": True, **resolved}
 
 
 # Soft-delete (trash) mirrors the account-trash pattern in routers/accounts.py: stamp `trashed_at`

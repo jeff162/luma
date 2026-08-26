@@ -16,7 +16,13 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.rules import _apply_rule_to_existing, create_rule, RuleCreate
-from backend.routers.transactions import list_transactions, spending_by_group
+from backend.routers.transactions import (
+    CategoryOverride,
+    clear_override,
+    list_transactions,
+    override_category,
+    spending_by_group,
+)
 from backend.services.categorizer import preview_recategorize_count, recategorize_all
 from backend.services.transaction_tags import (
     get_blocked_transaction_tag_map,
@@ -324,6 +330,49 @@ class TransactionTagsTests(unittest.TestCase):
                 self.assertEqual([t["id"] for t in list_visible_transaction_tags(conn, txn_a)], [essential_tag_id])
                 self.assertIsNone(self._txn_tag_row(conn, txn_a, essential_tag_id))
                 self.assertEqual(get_blocked_transaction_tag_map(conn, [txn_a]).get(txn_a, []), [])
+
+    def test_recategorizing_answers_with_the_new_category_s_tags(self):
+        # The client patches its row in place from this response rather than refetching, so an endpoint
+        # that changed what tags resolve from has to say what they resolved to. Answering {"ok": True}
+        # left the row showing the *previous* category's inherited tag until something else refetched it.
+        account_id = self._insert_account("Primary Checking")
+        groceries_id = self._insert_expense_leaf("Groceries")
+        dining_id = self._insert_expense_leaf("Dining")
+        essential_tag_id = self._insert_tag("Essential", "#22c55e")
+        treat_tag_id = self._insert_tag("Treat", "#f59e0b")
+        self._attach_category_tag(groceries_id, essential_tag_id)
+        self._attach_category_tag(dining_id, treat_tag_id)
+        txn_id = self._insert_transaction(account_id=account_id, merchant_name="Store A")
+        self._set_txn_category(txn_id, groceries_id)
+
+        with self._use_db_path():
+            moved = override_category(txn_id, CategoryOverride(category_id=dining_id))
+            self.assertEqual([tag["id"] for tag in moved["tags"]], [treat_tag_id])
+            self.assertEqual(moved["blocked_tags"], [])
+
+            # Clearing the category takes the inherited tag with it, which the row cannot know either.
+            cleared = clear_override(txn_id)
+            self.assertEqual(cleared["tags"], [])
+
+    def test_recategorizing_reports_a_tag_still_blocked_on_the_row(self):
+        # A block is keyed to (txn, tag) and survives recategorization, so a tag the new category
+        # contributes can arrive already suppressed — the picker needs it in blocked_tags to offer it back.
+        account_id = self._insert_account("Primary Checking")
+        groceries_id = self._insert_expense_leaf("Groceries")
+        dining_id = self._insert_expense_leaf("Dining")
+        shared_tag_id = self._insert_tag("Essential", "#22c55e")
+        self._attach_category_tag(groceries_id, shared_tag_id)
+        self._attach_category_tag(dining_id, shared_tag_id)
+        txn_id = self._insert_transaction(account_id=account_id, merchant_name="Store A")
+        self._set_txn_category(txn_id, groceries_id)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                set_manual_transaction_tag(conn, txn_id, shared_tag_id, present=False)
+            moved = override_category(txn_id, CategoryOverride(category_id=dining_id))
+
+        self.assertEqual(moved["tags"], [])
+        self.assertEqual([tag["id"] for tag in moved["blocked_tags"]], [shared_tag_id])
 
     def test_block_inherited_account_tag(self):
         account_id = self._insert_account("Primary Checking")

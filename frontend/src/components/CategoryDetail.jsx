@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -112,10 +112,9 @@ export default function CategoryDetail({ category, categories = [], onClose, for
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
-    setLocalMonthTxns(prev => prev.map(t => (
-      t.id === txnId ? { ...t, ...categoryReconcilePatch(cat) } : t
-    )))
-    txnMutations.setCategory(txnId, catId)
+    applyCategoryChange(txnId, cat, patch => setLocalMonthTxns(prev => prev.map(t => (
+      t.id === txnId ? { ...t, ...patch } : t
+    ))))
   }
 
   const header = (

@@ -120,14 +120,38 @@ export const txnMutations = {
 // (a hand edit counts as reviewing the row), so the amber `R` marker must drop from the row in place
 // rather than lingering until a Refresh. Clearing to uncategorized is NOT a review on the backend
 // (`clearOverride` leaves `needs_review` untouched), so the flag is left as-is in that case.
-export function categoryReconcilePatch(cat) {
+export function categoryReconcilePatch(cat, resolved = null) {
   return {
     category_id: cat?.id ?? null,
     category_name: cat?.name ?? null,
     category_color: null,
     category_overridden: 1,
     ...(cat ? { needs_review: 0 } : {}),
+    // Tags are inherited from the category (and its group), so changing the category changes them — but
+    // only the server can say to what, since resolution also spans the account and this row's own
+    // blocks. They come from the write's own response; without it the row keeps the *previous*
+    // category's inherited tags and nothing on the page refetches to correct that.
+    ...(Array.isArray(resolved?.tags)
+      ? { tags: resolved.tags, blocked_tags: resolved.blocked_tags ?? [] }
+      : {}),
   }
+}
+
+/*
+ * The two-phase reconcile a category change needs, in one call so no surface can implement half of it.
+ *
+ * Phase one paints the caller's optimistic patch — the picker has to feel immediate, and the category
+ * itself is known client-side. Phase two applies the same patch again once the write answers, this time
+ * carrying the tags the server resolved for the new category. `applyPatch` is called twice with a patch
+ * to merge into the row (both phases carry the category, so a caller that only handles one still shows
+ * the right category); `write` names the mutation, since "clear the override" and "set the category to
+ * nothing" are different intents that answer the same way.
+ */
+export async function applyCategoryChange(txnId, cat, applyPatch, write = null) {
+  applyPatch(categoryReconcilePatch(cat))
+  const resolved = await (write ? write() : txnMutations.setCategory(txnId, cat?.id ?? null))
+  applyPatch(categoryReconcilePatch(cat, resolved))
+  return resolved
 }
 
 // Reconcile an in-place transaction list after a rule was applied to existing rows. The rule's apply

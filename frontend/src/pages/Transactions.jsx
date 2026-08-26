@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { txnMutations, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { txnMutations, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
@@ -524,11 +524,11 @@ export default function Transactions() {
   // its new category) so a mis-tap stays correctable and the user can add a tag or note before moving
   // on. The row is pruned only when the user re-queries with the Refresh button. Shared by inline edits
   // and by edits made inside an open transaction detail panel.
-  function reconcileCategorizedRow(txnId, cat) {
+  function reconcileCategorizedRow(txnId, patch) {
     setData(prev => ({
       ...prev,
       transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, ...categoryReconcilePatch(cat) } : t
+        t.id === txnId ? { ...t, ...patch } : t
       ),
     }))
   }
@@ -537,16 +537,15 @@ export default function Transactions() {
     setEditId(null)
     if (catId == null) {
       // The picker's "Uncategorized" clear: drop the override back to unassigned.
-      reconcileCategorizedRow(txnId, null)
-      txnMutations.uncategorize(txnId)
+      applyCategoryChange(txnId, null, patch => reconcileCategorizedRow(txnId, patch),
+        () => txnMutations.uncategorize(txnId))
       return
     }
     const cat = catObj || categories.find(c => c.id === catId)
     if (catObj && !categories.find(c => c.id === catObj.id)) {
       setCategories(prev => [...prev, catObj])
     }
-    reconcileCategorizedRow(txnId, cat)
-    txnMutations.setCategory(txnId, catId)
+    applyCategoryChange(txnId, cat, patch => reconcileCategorizedRow(txnId, patch))
   }
 
   // Single reconcile callback for a TransactionDetail panel: it persisted through txnMutations (which

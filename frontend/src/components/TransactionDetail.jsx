@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, AppNoticeDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
@@ -204,12 +204,12 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   }, [payee, dateStart, dateEnd, showPayeeActivity])
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
-  function handleCatSaved(txnId, cat) {
+  function handleCatSaved(txnId, patch) {
     if (txnId === detailTxn.id) {
-      setDetailTxn(prev => ({ ...prev, ...categoryReconcilePatch(cat) }))
+      setDetailTxn(prev => ({ ...prev, ...patch }))
     }
     setMonthTxns(prev => prev.map(t =>
-      t.id !== txnId ? t : { ...t, ...categoryReconcilePatch(cat) }
+      t.id !== txnId ? t : { ...t, ...patch }
     ))
   }
 
@@ -240,13 +240,13 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   }
 
   async function handleOverrideCategory(txnId, catId, catObj) {
-    await txnMutations.setCategory(txnId, catId)
-    const resolvedCat = catObj || detailCategories.find(c => c.id === catId)
-    handleCatSaved(txnId, resolvedCat || null)
-    // Notify the host (e.g. the Transactions list) so it can reconcile the row that was
-    // categorized from inside this panel — otherwise the change only lives in the panel's
-    // local state and the page behind it stays stale.
-    onReconcile?.(txnId, categoryReconcilePatch(resolvedCat || null))
+    const resolvedCat = catObj || detailCategories.find(c => c.id === catId) || null
+    // Both phases go to both places: the panel's own copy and the host's row (e.g. the Transactions
+    // list) — otherwise the change lives only in the panel and the page behind it stays stale.
+    await applyCategoryChange(txnId, resolvedCat, patch => {
+      handleCatSaved(txnId, patch)
+      onReconcile?.(txnId, patch)
+    })
   }
 
   const {

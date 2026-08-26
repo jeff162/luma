@@ -19,7 +19,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
+import { reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -1727,16 +1727,15 @@ export default function Categories() {
   }
 
   async function saveMatchingTxnCategory(txnId, catId, catObj) {
-    // txnMutations.setCategory invalidates the derived counts (Tasks badge, etc.) for us.
-    await txnMutations.setCategory(txnId, catId)
     const cat = catObj || flatCats.find(c => c.id === catId)
     // Even in the synthetic Unassigned/Uncategorized buckets, a freshly categorized row is left in
     // place (restyled, not removed) so a mis-tap stays visible and correctable; the user prunes the
     // list on demand with the Refresh button. Applying a rule still sweeps rows immediately — undoing
     // that is heavier (edit the rule, restore the other affected txns), so it does not wait.
-    setPagedMatchingTxns(prev => prev.map(txn =>
-      txn.id === txnId ? { ...txn, ...categoryReconcilePatch(cat) } : txn
-    ))
+    // (applyCategoryChange writes through txnMutations, which invalidates the derived counts for us.)
+    await applyCategoryChange(txnId, cat, patch => setPagedMatchingTxns(prev => prev.map(txn =>
+      txn.id === txnId ? { ...txn, ...patch } : txn
+    )))
   }
 
   function handleMatchingTxnColumnUpdate(nextColumns) {
