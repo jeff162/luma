@@ -74,7 +74,7 @@ _NO_OVERRIDES = {
     "CONTROL_DB_PATH": None,
     "LUMA_ENV_FILE": None,
     "XDG_DATA_HOME": None,
-    "APPDATA": None,
+    "LOCALAPPDATA": None,
 }
 
 
@@ -191,7 +191,7 @@ def test_an_installed_build_uses_the_per_os_user_data_directory():
     with tempfile.TemporaryDirectory() as home_dir:
         home = Path(home_dir).resolve()
         expected = {
-            "win32": home / "AppData" / "Roaming" / "Luma",
+            "win32": home / "AppData" / "Local" / "Luma",
             "darwin": home / "Library" / "Application Support" / "Luma",
             "linux": home / ".local" / "share" / "luma",
         }
@@ -212,7 +212,7 @@ def test_the_platform_variable_for_relocating_a_profile_is_honored():
         home = Path(home_dir).resolve()
         with _two_roots() as (install, bundle), \
              _frozen(install, bundle, form=installed, platform="win32"), \
-             _env(**{**_NO_OVERRIDES, "APPDATA": str(elsewhere)}), _home(home):
+             _env(**{**_NO_OVERRIDES, "LOCALAPPDATA": str(elsewhere)}), _home(home):
             assert runtime_config.user_data_dir() == elsewhere / "Luma"
         with _two_roots() as (install, bundle), \
              _frozen(install, bundle, form=installed, platform="linux"), \

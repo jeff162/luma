@@ -119,7 +119,7 @@ branch, no platform matrix:
   "beside the executable" in a frozen build, so the existing `DATA_DIR = "."` default already lands in
   the right place; an `.env` was expected to be needed here and turned out not to be.
 - **Installed** (an OS installer) — `DATA_DIR` defaults to the per-OS user-data directory
-  (`%APPDATA%\Luma`, `~/Library/Application Support/Luma`, `$XDG_DATA_HOME` or `~/.local/share` plus
+  (`%LOCALAPPDATA%\Luma`, `~/Library/Application Support/Luma`, `$XDG_DATA_HOME` or `~/.local/share` plus
   `luma`). Because the portable form works off the plain default, telling the two apart needed a
   build-time signal rather than anything the user configures. **Settled:** `LUMA_DIST_FORM` selects the
   form at build time, `scripts/luma.spec` writes it into the bundle as a one-word file, and
@@ -132,9 +132,13 @@ branch, no platform matrix:
   because that file is one of the things that may *set* `DATA_DIR`. Details in
   [`architecture.md`](../architecture.md) under *Packaged builds*.
 
-  Windows uses `%APPDATA%` (roaming) rather than `%LOCALAPPDATA%`, as first written here. Worth a second
-  look before a Windows installer ships: SQLite on a roaming profile is a real hazard in a domain
-  environment, and `platformdirs` treats local, not roaming, as the default for application data.
+  Windows uses `%LOCALAPPDATA%` (**settled 2026-08-26**; it was `%APPDATA%` as first written here). A
+  roaming profile synchronises at logon and logoff, usually over SMB, and a SQLite database diverged
+  across two machines resolves last-writer-wins on a binary file — silent loss, not a visible conflict.
+  Windows' own guidance keeps databases out of roaming, and `platformdirs` treats local as the default
+  for application data. The change cost nothing because it was made while the window was open: Windows
+  ships **portable** only, so `user_data_dir()` is unreachable in any released artifact and no install
+  had data under the old path. That stops being true the day a Windows installer ships.
 
 macOS only supports the installed form. A `.app` bundle cannot hold its own writable data: writing
 inside a notarized bundle invalidates the signature, and **App Translocation** mounts a quarantined app

@@ -12,7 +12,7 @@ rather than derived from `runtime_config`, because a check that asks the code un
 should have written the file cannot fail. Restating them is the whole point, and the duplication is
 load-bearing rather than accidental.
 
-The environment is made self-contained rather than inherited: a fake home (and `%APPDATA%` on Windows)
+The environment is made self-contained rather than inherited: a fake home (and `%LOCALAPPDATA%` on Windows)
 means the assertion is against a known path and the run leaves nothing behind on the machine.
 
 On macOS the artifact is a `.dmg` rather than a zip, and it is installed the way a person would — the
@@ -156,28 +156,28 @@ def _unpack_zip(archive: Path, into: Path) -> Path:
     return executable
 
 
-def _expected_data_dir(form: str, executable: Path, home: Path, appdata: Path) -> Path:
+def _expected_data_dir(form: str, executable: Path, home: Path, local_appdata: Path) -> Path:
     """Where this form must have put its databases. Restated rather than imported — see the module
     docstring."""
     if form == "portable":
         return executable.parent
     if sys.platform == "win32":
-        return appdata / "Luma"
+        return local_appdata / "Luma"
     if sys.platform == "darwin":
         return home / "Library" / "Application Support" / "Luma"
     return home / ".local" / "share" / "luma"
 
 
-def _environment(home: Path, appdata: Path) -> dict[str, str]:
+def _environment(home: Path, local_appdata: Path) -> dict[str, str]:
     """A self-contained environment. Every layer that outranks the built-in default is cleared, since
     the built-in default is the thing under test, and the home directory is redirected so the run
     asserts against a known path and leaves nothing behind."""
     env = {**os.environ, "BACKEND_PORT": str(SMOKE_PORT)}
-    for key in ("DATA_DIR", "DB_PATH", "CONTROL_DB_PATH", "LUMA_ENV_FILE", "XDG_DATA_HOME"):
+    for key in ("DATA_DIR", "DB_PATH", "CONTROL_DB_PATH", "LUMA_ENV_FILE", "XDG_DATA_HOME", "APPDATA"):
         env.pop(key, None)
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
-    env["APPDATA"] = str(appdata)
+    env["LOCALAPPDATA"] = str(local_appdata)
     return env
 
 
@@ -240,11 +240,11 @@ def smoke(form: str) -> int:
     try:
         unpacked = workspace / "unpacked"
         home = workspace / "home"
-        appdata = home / "AppData" / "Roaming"
-        appdata.mkdir(parents=True)
+        local_appdata = home / "AppData" / "Local"
+        local_appdata.mkdir(parents=True)
 
         executable = _unpack(archive, unpacked)
-        expected = _expected_data_dir(form, executable, home, appdata)
+        expected = _expected_data_dir(form, executable, home, local_appdata)
         log = workspace / "output.log"
 
         print(f"  executable: {executable}")
@@ -258,7 +258,7 @@ def smoke(form: str) -> int:
                 # the whole point of anchoring — and something launched from a file manager gets an
                 # arbitrary working directory anyway.
                 cwd=workspace,
-                env=_environment(home, appdata),
+                env=_environment(home, local_appdata),
                 stdout=sink,
                 stderr=subprocess.STDOUT,
             )

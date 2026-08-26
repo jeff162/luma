@@ -220,8 +220,13 @@ def user_data_dir() -> Path:
     Only consulted for the installed form. A portable copy keeps its data beside the executable and a
     checkout uses the working directory, so neither reaches here."""
     if sys.platform == "win32":
-        roaming = os.getenv("APPDATA")
-        base = Path(roaming) if roaming else Path.home() / "AppData" / "Roaming"
+        # Local, not roaming. A roaming profile is synchronised at logon and logoff, usually over SMB,
+        # and a SQLite database is the worst possible passenger: open during a sync, or diverged across
+        # two machines, it resolves last-writer-wins on a binary file — silent loss rather than a
+        # conflict anyone sees. Windows' own guidance keeps databases out of roaming for that reason,
+        # and the ledger would drag its backups through every logon of every machine besides.
+        local = os.getenv("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
         return base / USER_DATA_DIR_NAME
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / USER_DATA_DIR_NAME
