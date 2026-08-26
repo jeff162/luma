@@ -887,10 +887,12 @@ def _build_transaction_filter(
             "(COALESCE(c.category_type, pc.category_type) = 'income' "
             "OR (t.category_id IS NULL AND t.amount < 0))"
         )
-    if view in ("spending", "income"):
-        # Cross-cutting dashboard scopes (spending/income) skip categories marked
-        # exclude_from_totals so transfers and other bookkeeping moves don't pollute
-        # the listing of transactions backing a Dashboard total bar.
+    if view in ("spending", "income", "cash_flow"):
+        # Cross-cutting dashboard scopes skip categories marked exclude_from_totals so transfers and
+        # other bookkeeping moves don't pollute the listing of transactions backing a Dashboard total.
+        # `cash_flow` takes no category-type clause above — it counts both directions — but it takes
+        # this one, because a drill from a cash-flow node has to list exactly the rows that node's
+        # figure was computed from.
         clauses.append(
             "COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) = 0"
         )
@@ -937,7 +939,7 @@ def list_transactions(
     exclude_tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs to exclude ('is not')"),
     require_all_tag_ids:  Optional[str] = Query(None, description="comma-separated tag IDs the row must ALL have (AND), independent of tag_ids"),
     direction:    Optional[str] = Query(None, description="debit | credit"),
-    view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
+    view:         Optional[str] = Query(None, description="spending | income | cash_flow — mirrors monthly-trend's cross-cutting dashboard scope"),
     search:       Optional[str] = Query(None),
     quick_filter: Optional[str] = Query(None),
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
@@ -985,11 +987,13 @@ def list_transactions(
     # a drill-down's visible rows sum to the total its summary endpoint reported. Unscoped, the ledger
     # must stay one row per purchase, so the plain table is the row source and a split renders once at
     # its full amount (`is_split` / `split_part_count` drive the "Split (N)" affordance). `view` counts
-    # because spending/income resolve through the category's type. See services/txn_splits.py.
+    # because every cross-cutting scope resolves through the category: spending/income through its type,
+    # and cash_flow through its exclude_from_totals guard, which a split's parts can straddle. See
+    # services/txn_splits.py.
     expand_splits = bool(
         category_id or category_ids or group_ids
         or exclude_category_ids or exclude_group_ids
-        or view in ("spending", "income")
+        or view in ("spending", "income", "cash_flow")
     )
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     order_by_parts = []
@@ -1892,7 +1896,13 @@ def spending_by_category(
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             {where}
-            GROUP BY category_id
+            -- GROUP BY the sentinel *expression*, not the `category_id` alias: the row source carries a
+            -- real `category_id` column, and SQLite binds a bare name in GROUP BY to that column rather
+            -- than to the output alias. Grouping on it merges the synthetic uncategorized income and
+            -- expense buckets back into one (both have `t.category_id IS NULL`), which also breaks
+            -- _summary_signed_total_sql's precondition that the type expression be constant within a
+            -- bucket — leaving the merged row labelled and signed by whichever member SQLite picked.
+            GROUP BY {_summary_uncategorized_id_sql('category')}
             ORDER BY total DESC
             """,
             params,
@@ -2154,7 +2164,13 @@ def spending_by_category_in_group(
             FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
             {where}
-            GROUP BY category_id
+            -- GROUP BY the sentinel *expression*, not the `category_id` alias: the row source carries a
+            -- real `category_id` column, and SQLite binds a bare name in GROUP BY to that column rather
+            -- than to the output alias. Grouping on it merges the synthetic uncategorized income and
+            -- expense buckets back into one (both have `t.category_id IS NULL`), which also breaks
+            -- _summary_signed_total_sql's precondition that the type expression be constant within a
+            -- bucket — leaving the merged row labelled and signed by whichever member SQLite picked.
+            GROUP BY {_summary_uncategorized_id_sql('category')}
             ORDER BY total DESC
             """,
             params,
@@ -2343,6 +2359,109 @@ def monthly_trend(
 
     return [dict(r) for r in rows]
 
+
+# Monthly cash flow, split into the two sides the trend chart draws as diverging bars.
+#
+# **The atom is a category's net for the month, not a transaction's sign.** A month's `inflow` is the
+# sum of the categories that net money *in* that month and `outflow` the sum of those that net money
+# *out*, so a refund inside an expense category reduces that month's outflow instead of appearing as
+# income. That is the same rule the single-period Sankey applies to decide which side a node sits on
+# (a link cannot have a negative width), which is what makes a month's bars equal the sides of that
+# month's diagram. The alternative — bucketing raw transaction signs — reports a larger gross both
+# ways for the same net and would not reconcile against the diagram.
+#
+# `net` is `inflow - outflow` (positive = net inflow), and equals `/summary/monthly-trend`'s
+# `view=cash_flow` total for the same filters: netting per bucket and then re-summing is the same
+# arithmetic as summing the whole month. That equality is the contract between the two frames.
+#
+# No `count`: an accurate one is `COUNT(DISTINCT t.id)` per month, which cannot be recovered by summing
+# per-bucket counts (the expansion seam puts a split transaction in several buckets), and reading the
+# source a second time to get it is the cost the seam itself was shaped to avoid. Callers that need a
+# count have `/summary/monthly-trend` over the same population.
+@router.get("/summary/monthly-cash-flow")
+def monthly_cash_flow(
+    months:      int           = Query(24, le=240),
+    account_id:  Optional[str] = Query(None),
+    account_ids: Optional[str] = Query(None),
+    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
+    tag_ids:     Optional[str] = Query(None),
+    owner_ids:   Optional[str] = Query(None),
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
+    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
+    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
+    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
+    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
+    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
+    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    date_start:  Optional[str] = Query(None),
+    date_end:    Optional[str] = Query(None),
+):
+    clauses = [
+        "t.is_pending = 0",
+        "t.trashed_at IS NULL",
+        # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every
+        # other such frame governs it too — and it is the *only* exclusion axis the design allows.
+        # See docs/backlog/dashboard-reporting.md.
+        "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
+    ]
+    params: list = []
+
+    _append_effective_account_filter(
+        clauses, params, account_id=account_id, account_ids=account_ids,
+        exclude_account_ids=exclude_account_ids,
+    )
+    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
+    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
+    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+
+    if date_start:
+        clauses.append("t.date >= ?")
+        params.append(date_start)
+    if date_end:
+        clauses.append("t.date <= ?")
+        params.append(date_end)
+    if not date_start and not date_end:
+        clauses.append("t.date >= date('now', ? || ' months')")
+        params.append(f"-{months}")
+
+    where = "WHERE " + " AND ".join(clauses)
+    bucket_sql = _summary_uncategorized_id_sql('category')
+
+    with get_db() as conn:
+        # Category rollups read the split-expansion seam: a split transaction contributes one row
+        # per allocation, so every facet, sentinel and exclusion guard below applies per part
+        # without being restated. See services/txn_splits.py.
+        _expanded = txn_effective_sql(conn, expand=True)
+        rows = conn.execute(
+            f"""
+            SELECT
+                month,
+                SUM(CASE WHEN bucket_net < 0 THEN -bucket_net ELSE 0 END) AS inflow,
+                SUM(CASE WHEN bucket_net > 0 THEN  bucket_net ELSE 0 END) AS outflow,
+                -SUM(bucket_net)                                          AS net
+            FROM (
+                SELECT
+                    strftime('%Y-%m', t.date) AS month,
+                    {bucket_sql}              AS bucket,
+                    SUM(t.amount)             AS bucket_net
+                FROM   {_expanded} t
+                LEFT JOIN category c ON c.id = t.category_id
+                LEFT JOIN category p ON p.id = c.parent_id
+                {where}
+                GROUP BY month, bucket
+            )
+            GROUP BY month
+            ORDER BY month
+            """,
+            params,
+        ).fetchall()
+
+    return [dict(r) for r in rows]
 
 @router.get("/summary/monthly-by-group")
 def monthly_by_group(

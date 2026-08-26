@@ -7,6 +7,20 @@
  * codes ('YYYY-MM'); the page folds monthly-trend rows into them (aggregateMonthlyIntoBuckets).
  */
 
+// Every month code from `startYM` to `endYM`, both inclusive. Callers use it to run an axis
+// continuously across a window: a month with no rows is a real answer, and closing the gap would imply
+// the months either side of it were adjacent.
+export function monthsInRange(startYM, endYM) {
+  const months = []
+  let [sy, sm] = startYM.split('-').map(Number)
+  const [ey, em] = endYM.split('-').map(Number)
+  while (sy < ey || (sy === ey && sm <= em)) {
+    months.push(`${sy}-${String(sm).padStart(2, '0')}`)
+    sm++; if (sm > 12) { sm = 1; sy++ }
+  }
+  return months
+}
+
 export function shiftMonth(ym, deltaMonths) {
   const [y, m] = ym.split('-').map(Number)
   const totalMonthIndex = (y * 12) + (m - 1) + deltaMonths

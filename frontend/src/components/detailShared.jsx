@@ -61,6 +61,22 @@ export function getDetailMonthSectionHeight(trend = []) {
   )
 }
 
+function readViewport() {
+  return { width: window.innerWidth, height: window.innerHeight }
+}
+
+// The size a panel may actually occupy in a given viewport. Takes the viewport rather than reading the
+// window, so a render can re-derive it from state and a live gesture can pass the current one.
+function clampPanelSize(next, view) {
+  if (!next) return null
+  const maxWidth = Math.max(DETAIL_PANEL_MIN_WIDTH, view.width - DETAIL_FLOATING_EDGE_GUTTER * 2)
+  const maxHeight = Math.max(DETAIL_PANEL_MIN_HEIGHT, view.height - DETAIL_FLOATING_TOP_GUTTER - DETAIL_FLOATING_EDGE_GUTTER)
+  return {
+    width: Math.max(DETAIL_PANEL_MIN_WIDTH, Math.min(maxWidth, next.width)),
+    height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.min(maxHeight, next.height)),
+  }
+}
+
 function clampPanelPosition(pos, rect = null) {
   if (!pos) return null
   const gutter = DETAIL_FLOATING_EDGE_GUTTER
@@ -120,7 +136,15 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // initialSize lets a caller open the panel at a constrained explicit size so the user has
   // room to drag it around. Without this the panel falls back to a max-height that nearly fills
   // the viewport, which leaves zero vertical drag range (clampPanelPosition locks Y to topGutter).
-  const [size, setSize] = useState(initialSize)
+  //
+  // The size asked for is held apart from the size rendered, and the clamp is applied on the way out
+  // rather than written back into state. A clamp that wrote back is lossy: shrinking the window would
+  // overwrite the user's size with the smaller one, and growing it again had nothing left to restore.
+  // Keeping the request intact means the panel gives room back as the window shrinks and takes it
+  // straight back as the window grows, up to whatever the user originally set.
+  const [desiredSize, setDesiredSize] = useState(initialSize)
+  const [viewport, setViewport] = useState(readViewport)
+  const size = useMemo(() => clampPanelSize(desiredSize, viewport), [desiredSize, viewport])
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
   const resizeStart = useRef({ x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, dir: 'se' })
@@ -137,16 +161,6 @@ export function useDetailPanelChrome(onClose, options = {}) {
   function setGestureCosmetics(active, grabCursor = false) {
     if (panelRef.current) panelRef.current.style.userSelect = active ? 'none' : ''
     if (grabCursor) document.body.style.cursor = active ? 'grabbing' : ''
-  }
-
-  function clampSize(next) {
-    if (!next) return null
-    const maxWidth = Math.max(DETAIL_PANEL_MIN_WIDTH, window.innerWidth - DETAIL_FLOATING_EDGE_GUTTER * 2)
-    const maxHeight = Math.max(DETAIL_PANEL_MIN_HEIGHT, window.innerHeight - DETAIL_FLOATING_TOP_GUTTER - DETAIL_FLOATING_EDGE_GUTTER)
-    return {
-      width: Math.max(DETAIL_PANEL_MIN_WIDTH, Math.min(maxWidth, next.width)),
-      height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.min(maxHeight, next.height)),
-    }
   }
 
   // Direct-DOM drag: each mousemove writes `left`/`top` on panelRef (rAF-batched) instead of driving
@@ -231,7 +245,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     // the body — there's no direct-DOM shortcut. But the start/stop of the gesture stays off state so
     // it doesn't add two extra full re-renders bracketing the resize.
     let seededPos = pos
-    if (!size) setSize({ width: rect.width, height: rect.height })
+    if (!size) setDesiredSize({ width: rect.width, height: rect.height })
     if (!pos) { seededPos = { x: rect.left, y: rect.top }; setPos(seededPos) }
     e.preventDefault()
     e.stopPropagation()
@@ -247,8 +261,8 @@ export function useDetailPanelChrome(onClose, options = {}) {
       if (d.includes('w')) nextWidth = width - dx
       if (d.includes('s')) nextHeight = height + dy
       if (d.includes('n')) nextHeight = height - dy
-      const clamped = clampSize({ width: nextWidth, height: nextHeight })
-      setSize(clamped)
+      const clamped = clampPanelSize({ width: nextWidth, height: nextHeight }, readViewport())
+      setDesiredSize(clamped)
       lastGeom = { ...lastGeom, size: clamped }
       // West/north edges grow the panel toward the origin, so move left/top by however much the
       // clamped size actually changed — that keeps the opposite (east/south) edge pinned in place.
@@ -296,7 +310,12 @@ export function useDetailPanelChrome(onClose, options = {}) {
   useEffect(() => {
     function handleResize() {
       setPos(prev => clampPanelPosition(prev, panelRef.current?.getBoundingClientRect()))
-      setSize(prev => clampSize(prev))
+      // Only the viewport is recorded; the rendered size falls out of it. The requested size is left
+      // untouched so the panel can grow back into a window that is enlarged again.
+      setViewport(prev => {
+        const next = readViewport()
+        return prev.width === next.width && prev.height === next.height ? prev : next
+      })
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
@@ -836,6 +855,13 @@ export function DetailPanelShell({
   // growing/repositioning. We hold it at opacity 0 — not display:none — precisely so it DOES lay out
   // while hidden (the position clamp settles and Recharts can measure its container before reveal).
   revealed = true,
+  // Take the full height available instead of sizing to content. A panel whose body is one long list
+  // needs this: a bounded list inside a content-sized panel can only ever be as tall as the number it
+  // was given, so the window growing changes nothing. Filling gives the body a *definite* height, which
+  // is what lets an inner `fillHeight` list resolve a percentage height and own its own scroll — the
+  // scroll has to stay with the list, since that is what drives its paging. The cost is that a short
+  // list leaves empty room below it, so this is for list panels rather than the chart+list ones.
+  fillHeight = false,
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
@@ -865,6 +891,11 @@ export function DetailPanelShell({
     radius: 12,
   })
   const explicitSized = Boolean(size)
+  // The tallest the panel may be: a floating panel leaves the gutters it is dragged within, a docked one
+  // sits under the overlay's own top padding.
+  const availableHeight = pos
+    ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
+    : '85vh'
   // mousedown anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
   // Using mousedown rather than click means the panel rises immediately, before any nested
   // event listener runs — so the focused panel is on top while the user's actual gesture
@@ -891,12 +922,10 @@ export function DetailPanelShell({
           top: pos ? pos.y : undefined,
           width: explicitSized ? size.width : DETAIL_PANEL_WIDTH,
           maxWidth: explicitSized ? undefined : DETAIL_PANEL_WIDTH,
-          height: explicitSized ? size.height : undefined,
-          maxHeight: explicitSized
-            ? undefined
-            : (pos
-              ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
-              : '85vh'),
+          // A filling panel takes its cap as its height, so the two stay one number: whatever the
+          // viewport allows is both the most it may be and exactly what it is.
+          height: explicitSized ? size.height : (fillHeight ? availableHeight : undefined),
+          maxHeight: explicitSized ? undefined : availableHeight,
           display: 'flex',
           flexDirection: 'column',
           // 'auto' re-enables interaction inside the pointer-transparent floating backdrop; while the
@@ -935,7 +964,7 @@ export function DetailPanelShell({
             instead of silently clipping at the bottom. The transaction list inside still owns
             its own bounded scroll for the rows; the outer scroll here is for the panel-level
             content stack. */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
         {onResizeStart && PANEL_RESIZE_HANDLES.map(handle => (

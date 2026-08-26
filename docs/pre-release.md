@@ -99,7 +99,7 @@ and overlaps the price-change signal without being needed by it.
 motivated this. *New series detected* is cheap once the surface exists and catches the forgotten free
 trial; *upcoming* is a forward view rather than an anomaly.
 
-### 3. Cash-flow reporting
+### 3. Cash-flow reporting  ✅ *built 2026-08-25*
 
 [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md) → *cash-flow half only*.
 
@@ -110,6 +110,64 @@ flag rather than any new transfer-pairing or per-view exclusion machinery.
 **Not in scope:** the Trends-tab double-count audit in the same file. It is gated on the Trends tab
 gaining a tag-report selector, which is not part of this release. The two items are unrelated despite
 sharing a file. The deferred `cash_date` phase stays deferred.
+
+**What landed.** The frame selector widened to three; the single-period Sankey (custom node and link
+renderers over `recharts`'s bare `<Sankey>`, with each side's long tail paged through the same adaptive
+slicing the pies use, now shared from `lib/longTailSlices.js`); the Trends form as diverging bars with a
+net line and the usual average reference line; drill-through from every node into the existing
+group → categories → transactions drill; and a `dashboard-cash-flow` Help topic.
+
+Two things turned out differently from the design as written, both recorded in the backlog file:
+
+- **The Sankey needed no new endpoint** — `/summary/by-category` already returns the node set, so the
+  single-period diagram is a re-projection of a call the dashboard already makes.
+- **The Trends form did**, and could not be built from `view=spending` + `view=income`: those filter on
+  `category_type` and drop type-less categorized rows, so their difference would not equal the
+  `cash_flow` net and the net line would contradict its own bars. `/summary/monthly-cash-flow` reports
+  the two sides netted per category, which is what makes a month's bars equal that month's diagram.
+  `/transactions?view=cash_flow` was added with it, because the list endpoint's `exclude_from_totals`
+  guard was gated on the other two views and a drill would have listed transfers its total excluded.
+
+**Owed decision left open, deliberately:** Compare has no cash-flow form. The frame selector was already
+hidden there and stays hidden. Specifying a two-period cash-flow comparison is open work, not an
+oversight.
+
+**First real-app pass, 2026-08-25** — three defects, all of them invisible to the unit suite by
+construction, since neither chart can be rendered under the unit runner. Two were label legibility on the
+Sankey: a fixed-height label stack that overlapped its neighbours on any node under ~13px, and a side too
+short to reach the shared named-slice floor naming every bucket it had, down to 0.0004% of the side.
+Labels now fold onto one line where two will not fit, and the shared slicing gained an opt-in `minShare`
+the cash-flow sides pass at 1%. The third was the Trends chart drawing the wrong thing entirely: the
+diverging bars were missing `stackOffset="sign"`, so money out was stacked down from the top of the
+money-in bar rather than from zero, putting the net on screen twice and money out not at all — with
+correct tooltips the whole time. All three are recorded in the backlog file as don't-re-impose.
+
+**Second real-app pass, 2026-08-25** — three more, all on the *shared* single-period trend chart rather
+than on anything cash-flow specific: one outlier period owning the whole Y axis (no chart in the app set
+a `domain`, so this was latent across all seven of them), a bar click leaving the chart apparently blank
+because the pan offset outlived the bucket set it was scrolled over, and no way back from a trend click,
+which re-pins the shared date filter. Fixed by `lib/chartOutliers.js` + a shared `ClippedBar` shape, a
+layout effect that re-centres the selected bucket, and a bounded date history in `FilterContext` with a
+"← Back to …" control that names its destination. That history records **chart pins only** — an explicit
+FilterBar pick resets it rather than becoming a step, so the control never offers to step back over a
+period the user chose themselves. The clamping is applied to the single-period trend
+chart only so far; the other charts are noted in the backlog file. Two follow-ons from the same pass:
+that chart's value axis was pulled out of the horizontal scroll so it stays readable at any pan
+position, and the average pill moved into that column, where it steps aside from any tick label it
+would otherwise bury.
+
+**Third real-app pass, 2026-08-25** — changing the trend grain took seconds to settle. Two mechanical
+causes (the bars still carried recharts' default grow-in, and both charts sat in a `<ResponsiveContainer>`
+that measures its own box after the fact, so a re-bucket painted at the previous bucket set's width) and
+one behavioural: the re-centring rule targets the *selected* bucket, and the grain selector only appears
+when nothing is selected, so every grain change fell through to "scroll to the newest bucket". Both
+charts are now handed explicit sizes, and the month under the middle of the viewport is carried across a
+re-cut. Details and the don't-re-impose notes are in the backlog file.
+
+**Not otherwise exercised in the running app.** The backend contracts and the graph rules are under test (14
+backend, 17 frontend), but the diagram's placement, labelling and hit targets are exactly the class of
+thing a green unit suite cannot see — the same class that produced four defects in an hour on feature 1.
+This one is worth a pass before screenshots.
 
 ### 4. Vault recovery
 

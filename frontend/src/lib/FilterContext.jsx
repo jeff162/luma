@@ -15,6 +15,33 @@ const DEFAULT_FILTERS = {
   selections: [],
 }
 
+// How many prior periods "back" can walk. The Dashboard trend re-pins the date on every bar click, so a
+// user exploring a timeline can generate a long run of them; the cap keeps that bounded without ever
+// being reached in practice.
+const DATE_HISTORY_LIMIT = 20
+
+// Two date filters are the same selection. Compared field by field rather than by identity because every
+// setter builds a fresh object, so identity would record a "change" on every re-pick of the same period
+// and fill the history with no-ops.
+function sameDateFilter(a, b) {
+  if (!a || !b) return !a && !b
+  return a.start === b.start && a.end === b.end && a.preset === b.preset
+}
+
+/*
+ * A date filter named for a person, for UI that has to say where a control would take them.
+ *
+ * The three shapes are distinct and mean different things: `null` is *unset*, which falls back to
+ * whatever default the page registered; the truthy `{start:null,end:null}` sentinel is an explicit
+ * all-time that overrides that default; anything else is a real range, which may or may not have been
+ * picked from a named preset.
+ */
+export function describeDateFilter(date) {
+  if (!date) return 'the default period'
+  if (!date.start || !date.end) return 'All time'
+  return date.preset || `${date.start} → ${date.end}`
+}
+
 const FilterContext = createContext(null)
 
 export function FilterProvider({ children, initialDate = null, initialSelections = [] }) {
@@ -30,11 +57,47 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   // the user isn't left wondering why their date selection has no effect.
   const [dateApplies, setDateApplies] = useState(true)
 
-  function setDate(date) { setFilters(f => ({ ...f, date })) }
+  // Prior periods displaced by a *chart pin*, oldest first. It exists because clicking a bar on a
+  // Dashboard trend re-pins the shared period — a navigation the user did not necessarily read as one,
+  // leaving no way back to a period they never explicitly typed. Only those pins are recorded: every
+  // other way of moving the period (a FilterBar pick, a clear) is a deliberate choice the user can see
+  // in the chip, and recording it would let one step back walk *over* it to a period two changes old.
+  // Those paths reset the history instead, so the back-step always means "undo the pins I just made".
+  // Held here rather than in the Dashboard so the record survives leaving the page that made it.
+  const [dateHistory, setDateHistory] = useState([])
+
+  // The single date mutator; `record` is what separates a chart pin (keep the outgoing period) from an
+  // explicit pick (drop the history). Either way it reads the outgoing value from the render closure
+  // rather than from inside a state updater: queueing one state update from inside another's updater is
+  // a side effect in a function React reserves the right to call more than once, so it is not something
+  // to build a record on even where a given version happens to call it once. A re-pick of the period
+  // already in force moves nothing, so it neither records nor resets.
+  function pushDate(next, { record = false } = {}) {
+    if (sameDateFilter(filters.date, next)) return
+    setDateHistory(h => (record ? [...h, filters.date].slice(-DATE_HISTORY_LIMIT) : []))
+    setFilters(f => ({ ...f, date: next }))
+  }
+
+  function setDate(date) { pushDate(date) }
+  // The recording path, for a click on a chart element that re-pins the period as a side effect of
+  // drilling. Deliberately a setter of its own rather than a flag on setDate: opting in should be a
+  // decision visible at the call site, not an argument that is easy to pass along by habit.
+  function pinDateFromChart(date) { pushDate(date, { record: true }) }
   // Clearing returns to *unset*, not to a hardcoded all-time — so on a page with a registered default
   // (the Dashboard) it falls back to that default. To force all-time, pick the explicit "All time"
   // preset (the truthy sentinel).
-  function clearDate()   { setFilters(f => ({ ...f, date: null })) }
+  function clearDate()   { pushDate(null) }
+
+  // Step back to the period in force before the last chart pin. Only the date moves: a page's own drill
+  // state resets on a date change anyway, and restoring both would make one control mean two things.
+  function goBackDate() {
+    if (dateHistory.length === 0) return
+    const previous = dateHistory[dateHistory.length - 1]
+    setDateHistory(h => h.slice(0, -1))
+    setFilters(f => ({ ...f, date: previous }))
+  }
+  const previousDate = dateHistory.length > 0 ? dateHistory[dateHistory.length - 1] : null
+  const canGoBackDate = dateHistory.length > 0
 
   // The effective period a page should honor: the user's explicit pick if set, otherwise the page's
   // registered default (null => all-time). This is the read counterpart to setDate — **this is the
@@ -107,11 +170,12 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   }
 
   function clearSelections() { setFilters(f => ({ ...f, selections: [] })) }
-  function clearAll()        { setFilters(DEFAULT_FILTERS) }
+  function clearAll()        { setDateHistory([]); setFilters(DEFAULT_FILTERS) }
 
   return (
     <FilterContext.Provider value={{
-      filters, setDate, clearDate, getDate, getRawDate, dateIsDefault, setDefaultDate,
+      filters, setDate, pinDateFromChart, clearDate, getDate, getRawDate, dateIsDefault, setDefaultDate,
+      goBackDate, canGoBackDate, previousDate,
       addSelection, addSelections, removeSelection, removeSelections, clearSelections, clearAll,
       setSelectionMode, toggleSelectionMode,
       dateApplies, setDateApplies,

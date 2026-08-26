@@ -436,6 +436,67 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'dashboard-cash-flow',
+    section: 'reports',
+    title: 'Cash flow',
+    surfaces: ['Dashboard frame selector'],
+    summary: 'A third dashboard frame beside Expenses and Income: what came in against what went out. A single period draws it as a flow diagram; Trends draws the two directions as bars around a zero line.',
+    body: () => (
+      <>
+        <p>
+          <strong>Cash flow</strong> sits beside <em>Expenses</em> and <em>Income</em> in the
+          dashboard&rsquo;s frame selector. Where those two report one side of the ledger, this one
+          reports both at once: money in against money out, and the net between them. The period,
+          the filter chips and the breakdown picker all work exactly as they do in the other two
+          frames.
+        </p>
+        <p>
+          For a <strong>single period</strong> the frame draws a flow diagram &mdash; sources on the
+          left, the period in the middle, destinations on the right. The width of each band is the
+          amount, and the label beside it carries the figure. Clicking a band opens what it is made
+          of, the same drill the pie wedges offer: a group opens its categories, a category opens its
+          transactions. Where a long tail of small buckets would be too thin to read, the remainder
+          collapses into a single <em>Other</em> band that opens one level further in.
+        </p>
+        <p>
+          The two sides rarely balance, and the difference is the point. A period that took in more
+          than it spent ends in a <strong>Net saved</strong> band; one that spent more is funded by
+          a <strong>Net drawdown</strong> band on the incoming side. That band stands for the
+          difference itself rather than for any transactions, so it is the one band that does not
+          open.
+        </p>
+        <p>
+          Under <strong>Trends</strong> the same frame becomes a bar per month around a zero line
+          &mdash; money in above it, money out below, with the net drawn across them and the average
+          net marked. Clicking a month opens its transactions; double-clicking switches to the
+          single-period view for that month.
+        </p>
+        <p>
+          A category&rsquo;s <strong>net</strong> for the period decides which side it lands on, not
+          what kind of category it is. A month where returns outweighed purchases puts that category
+          on the incoming side; income clawed back lands on the outgoing side. This is also why the
+          figures net rather than gross: a purchase and its later refund in the same category and
+          period show as the difference, not as two separate movements.
+        </p>
+        <p>
+          Only one thing is excluded, and it is the same switch every other report
+          uses: <HelpLink to="/help/exclude-from-totals">groups excluded from totals</HelpLink>.
+          Transfers between accounts and credit-card payments belong there, and once they are, they
+          drop out of cash flow as well &mdash; without which every card payment would read as money
+          leaving on top of the purchases it settled.
+        </p>
+        <p>
+          Tag reports are not offered in this frame. A tag signature mixes categories from both
+          directions, so it has no single direction to net; switching back to <em>Expenses</em>
+          or <em>Income</em> restores the saved report.
+        </p>
+        <p>
+          See also: <HelpLink to="/help/exclude-from-totals">Excluding a group from totals</HelpLink>
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'exclude-from-totals',
     section: 'organizing',
     title: 'Excluding a group from totals',

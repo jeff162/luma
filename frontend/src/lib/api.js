@@ -300,6 +300,19 @@ export const api = {
     })
     return request(`/transactions/summary/monthly-by-group?${q}`)
   },
+  getMonthlyCashFlow: (months = 24, account_id, tag_ids, owner_ids, opts = {}) => {
+    const q = new URLSearchParams({
+      months,
+      ...(account_id ? { account_id } : {}),
+      ...(opts.date_start ? { date_start: opts.date_start } : {}),
+      ...(opts.date_end ? { date_end: opts.date_end } : {}),
+      ...csvParam('tag_ids', tag_ids),
+      ...csvParam('owner_ids', owner_ids),
+      ...csvParam('source_account_ids', opts.source_account_ids),
+      ...summaryFilterParams(opts),
+    })
+    return request(`/transactions/summary/monthly-cash-flow?${q}`)
+  },
   getPayeeTrend: (payee, date_start, date_end, tag_ids) => {
     const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...csvParam('tag_ids', tag_ids) })
     return request(`/transactions/summary/monthly-trend?${q}`)

@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
+  Customized,
 } from 'recharts'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, categoryReconcilePatch } from '../lib/txnMutations.js'
@@ -14,10 +15,10 @@ import TagDetail from '../components/TagDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
+import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
-import { shiftMonth, isYearToDateRange, computeTrendBuckets } from '../lib/trendBuckets.js'
+import { shiftMonth, isYearToDateRange, computeTrendBuckets, monthsInRange } from '../lib/trendBuckets.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_ITEM_STYLE,
@@ -38,6 +39,18 @@ import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTags } from '../lib/useTags.js'
+import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
+import CashFlowSankey from '../components/CashFlowSankey.jsx'
+import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
+import { buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
+import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
+import ClippedBar from '../components/ClippedBar.jsx'
+import {
+  trendPlotLayout, centeredScrollLeft, bucketAnchorMonth, bucketIndexAtScroll, trendScrollTargetIndex,
+} from '../lib/trendPlotLayout.js'
+import AvgPill from '../components/AvgPill.jsx'
+import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
+import AxisAvgPill from '../components/AxisAvgPill.jsx'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -52,6 +65,21 @@ const DASHBOARD_TRENDS_SPLIT_PREF_KEY = 'ui.dashboard.trendsSplit'
 // the same window (matching how the FilterBar date itself survives navigation but resets on reload); a
 // reload that resets the date self-heals via the containment check in loadSingleTotals.
 const DASHBOARD_TREND_ANCHOR_PREF_KEY = 'ui.dashboard.trendAnchor'
+// The trend chart is drawn as *two* charts side by side so the value axis can stay put while the plot
+// pans: a fixed column carrying only the axis, and the scrolling plot with its own axis hidden. The two
+// share one vertical geometry — height, top and bottom margins, and the space the category axis
+// reserves — because that is what makes their scales identical and their gridlines line up. Change any
+// of these and both charts must change together, or the axis quietly starts describing a scale the bars
+// are not drawn to.
+const TREND_CHART_HEIGHT = 224
+const TREND_CHART_MARGIN_Y = 6
+const TREND_XAXIS_HEIGHT = 48
+// The sticky column, and the axis inside it. The column is the wider of the two by enough to hold the
+// average pill, which is drawn over the tick labels rather than in the plot so that it stays visible at
+// any pan position; the remaining few pixels are the gap the plot would otherwise butt straight up
+// against.
+const TREND_AXIS_COLUMN_WIDTH = 76
+const TREND_AXIS_LABEL_WIDTH = 60
 const TRENDS_SPLIT_DEFAULT = 0.56
 const TRENDS_SPLIT_MIN = 0.3
 const TRENDS_SPLIT_MAX = 0.75
@@ -77,32 +105,55 @@ function makeTagReportId() {
   return `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+// The frame selector: which cross-cutting question the Single and Trends modes are answering. Cash flow
+// is a *frame*, not a top-level mode, because it wants the same period, compare and trend machinery the
+// other two use — see docs/backlog/dashboard-reporting.md for why the fourth-mode shape was rejected.
+const DASHBOARD_VIEW_SPENDING = 'spending'
+const DASHBOARD_VIEW_INCOME = 'income'
+const DASHBOARD_VIEW_CASH_FLOW = 'cash_flow'
+
 const DASHBOARD_VIEW_OPTIONS = [
-  { value: 'spending', label: 'Expenses' },
-  { value: 'income', label: 'Income' },
+  { value: DASHBOARD_VIEW_SPENDING, label: 'Expenses' },
+  { value: DASHBOARD_VIEW_INCOME, label: 'Income' },
+  { value: DASHBOARD_VIEW_CASH_FLOW, label: 'Cash flow' },
 ]
 
-// Slicing model for the single-mode pie chart:
-// - Each pie page shows the long-tail items as named wedges, plus one
-//   synthetic "Other" wedge carrying whatever's left.
-// - Named-wedge count is data-driven: keep peeling items off the tail while
-//   the next slice's share of the page's pool total is at least
-//   SMALLEST_NAMED_SLICE_MIN_SHARE; once it would drop below that, stop and
-//   roll the rest into Other so the smallest wedge stays clickable.
-// - MIN_NAMED_SLICES is a safety floor for very flat distributions where
-//   nothing meets the threshold; without it we could end up with everything
-//   in Other on every page and never make progress.
-// - Singletons (Other == 1 item) are absorbed into the named slices so we
-//   never show a one-item Other wedge.
-// - Clicking Other pages further into the tail; the same rule applies again
-//   within that depth's pool.
-// - There is intentionally no upper cap on named slices; if a real dataset
-//   has many categories above the threshold, that's preferable to forcing
-//   the user through extra Other-drill levels.
-const MIN_NAMED_SLICES = 10
-const SMALLEST_NAMED_SLICE_MIN_SHARE = 0.03
-const OTHER_SLICE_KEY = '__other__'
-const OTHER_SLICE_COLOR = '#6b7280'
+const DASHBOARD_MODE_OPTIONS = [
+  { value: 'single', label: 'Single period' },
+  { value: 'compare', label: 'Compare' },
+  { value: 'trends', label: 'Trends' },
+]
+
+// The Dashboard header's two pill toggles — the frame and the analysis mode — are the same control with
+// different options, so they share one renderer rather than two copies of the markup that have to be
+// kept looking alike.
+function SegmentedToggle({ value, options, onChange, ariaLabel }) {
+  return (
+    <div role="group" aria-label={ariaLabel} style={{
+      display: 'flex', background: 'var(--surface2)',
+      borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
+    }}>
+      {options.map(opt => (
+        <button key={opt.value} onClick={() => onChange(opt.value)} aria-pressed={value === opt.value} style={{
+          padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
+          background: value === opt.value ? 'var(--accent)' : 'transparent',
+          color: value === opt.value ? '#fff' : 'var(--muted)',
+        }}>
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// Compare mode has no cash-flow form (its two-period breakdown is specified for spending and income
+// only), and the frame selector is hidden there — so a persisted cash-flow preference has to be read as
+// spending for that mode rather than leaking into loaders that have no branch for it.
+function frameForMode(view, mode) {
+  if (mode === 'compare' && view === DASHBOARD_VIEW_CASH_FLOW) return DASHBOARD_VIEW_SPENDING
+  return view
+}
+
 
 // Turn the server's per-signature buckets (`[{ signature_tag_ids, total, count }]` from
 // /summary/by-tag-signature) into display rows: name each by its tags (Other / Untagged for the empty
@@ -140,38 +191,6 @@ function buildTagSignatureRows(buckets, tagsById) {
     paletteIndex++
   }
   return rows
-}
-
-function computeSlicePages(rows) {
-  const pages = []
-  let start = 0
-  while (start < rows.length) {
-    const remaining = rows.slice(start)
-    const poolTotal = remaining.reduce((s, r) => s + (Number(r.total) || 0), 0)
-    let pageSize = Math.min(MIN_NAMED_SLICES, remaining.length)
-    while (pageSize < remaining.length) {
-      const nextShare = poolTotal > 0
-        ? (Number(remaining[pageSize].total) || 0) / poolTotal
-        : 0
-      if (nextShare < SMALLEST_NAMED_SLICE_MIN_SHARE) break
-      pageSize++
-    }
-    if (remaining.length - pageSize === 1) pageSize = remaining.length
-    pages.push({ start, end: start + pageSize })
-    start += pageSize
-  }
-  return pages.length > 0 ? pages : [{ start: 0, end: 0 }]
-}
-
-function monthsInRange(startYM, endYM) {
-  const months = []
-  let [sy, sm] = startYM.split('-').map(Number)
-  let [ey, em] = endYM.split('-').map(Number)
-  while (sy < ey || (sy === ey && sm <= em)) {
-    months.push(`${sy}-${String(sm).padStart(2, '0')}`)
-    sm++; if (sm > 12) { sm = 1; sy++ }
-  }
-  return months
 }
 
 function periodLabel(p) {
@@ -515,44 +534,19 @@ function StaggeredMonthTick({ x, y, payload, index, visibleTicksCount }) {
   )
 }
 
-// Reference-line label for the average line on the trend charts: a single "Avg $X" pill that sits on
-// the line just inside the plot area. Keeping the value inside the pill (rather than in the y-axis tick
-// column) means it can't collide with a real axis tick when the average happens to land near one.
+// Reference-line label for the average line on the charts that scale to fit: a single "Avg $X" pill
+// that sits on the line just inside the plot area. The single-period trend chart does not use this —
+// it pans horizontally, so its pill goes in the sticky axis column instead (see AxisAvgPill).
 function AvgReferenceLabel({ viewBox, value, align = 'left' }) {
   if (!viewBox) return null
   const labelY = viewBox.y ?? 0
   const innerX = viewBox.x ?? 0
   const innerW = viewBox.width ?? 0
-  const text = `Avg ${formatSignedAxisTick(value)}`
-  const pillH = 15
-  // Approximate the rendered text width (no measurement API in SVG here) so the pill hugs the label.
-  const pillW = Math.round(text.length * 5.4 + 12)
+  const text = avgPillText(value)
   // `align='right'` hugs the right edge of the plot area — used by the horizontally-scrolling annual
   // chart so the pill (and the right-side axis) stay visible in its default right-pinned view.
-  const pillX = align === 'right' ? (innerX + innerW - pillW - 2) : (innerX + 2)
-  return (
-    <g style={{ pointerEvents: 'none' }}>
-      <rect
-        x={pillX}
-        y={labelY - pillH / 2}
-        width={pillW}
-        height={pillH}
-        rx={3}
-        fill="var(--accent2)"
-        opacity={0.92}
-      />
-      <text
-        x={pillX + pillW / 2}
-        y={labelY + 3.5}
-        fontSize={10}
-        fontWeight={600}
-        fill="#fff"
-        textAnchor="middle"
-      >
-        {text}
-      </text>
-    </g>
-  )
+  const pillX = align === 'right' ? (innerX + innerW - avgPillWidth(text) - 2) : (innerX + 2)
+  return <AvgPill x={pillX} centerY={labelY} text={text} />
 }
 
 // Annual totals can span many years. Each bar keeps a fixed width and the row scrolls horizontally
@@ -1019,6 +1013,17 @@ function assignColors(rows, colorKey) {
   }))
 }
 
+// The headline figures above a Single-mode breakdown. Every one of them is scope-signed — a period that
+// net-refunded reads negative rather than being flattened to a magnitude.
+function SummaryTotalCard({ label, value, color }) {
+  return (
+    <Card style={{ padding: '14px 24px' }}>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color }}>{formatSignedMoneyAmount(value)}</div>
+    </Card>
+  )
+}
+
 function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) {
   const diff = a - b
   // A percent change is only meaningful against a positive prior period. When B <= 0 (a net refund, or
@@ -1098,6 +1103,113 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
       {label}
       <span style={{ fontSize: 10, opacity: active ? 1 : 0.4 }}>{arrow}</span>
     </span>
+  )
+}
+
+/*
+ * The cash-flow frame's Trends form: what came in and what went out, month by month.
+ *
+ * Where the spending and income trends stack one side of the ledger, cash flow has two sides that must
+ * stay legible against each other — so the months are drawn as **diverging bars around a zero
+ * centerline**, money in above and money out below, with the net as a line across them and the period's
+ * average net as the usual reference line. Reading a month is then one glance: how tall each half is,
+ * and which side the line sits on.
+ *
+ * The bars come pre-netted per category from `/summary/monthly-cash-flow`, which is what makes a month's
+ * two halves the same figures as that month's Sankey sides rather than a separate gross reading of the
+ * same ledger. The net line is `inflow - outflow` by construction, so it cannot drift from the bars it
+ * is drawn over.
+ */
+function CashFlowTrendsPanel({ rows, selectedYear, onYearChange, loading, onOpenMonth, onOpenSinglePeriod }) {
+  // Window selection and row shaping are pure and live in lib/cashFlowTrend.js, where they can be
+  // exercised without a chart — the diverging-bar sign contract below depends on them.
+  const { yearOptions, effectiveYear, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
+
+  const lastClickRef = useRef({ idx: -1, time: 0 })
+  function handleChartClick(state) {
+    const idx = state?.activeTooltipIndex
+    if (idx == null || idx < 0 || !chartData[idx]) return
+    const monthKey = chartData[idx].monthKey
+    if (!onOpenSinglePeriod) {
+      onOpenMonth(monthKey)
+      return
+    }
+    // Same split the single-period trend uses: one click opens the month's transactions, a double-click
+    // takes the whole single-period view there. Recharts gives a Bar no dblclick event, so the second
+    // click is detected against a short window.
+    const now = Date.now()
+    const prev = lastClickRef.current
+    if (prev.idx === idx && now - prev.time < 400) {
+      lastClickRef.current = { idx: -1, time: 0 }
+      onOpenSinglePeriod(monthKey)
+    } else {
+      lastClickRef.current = { idx, time: now }
+      onOpenMonth(monthKey)
+    }
+  }
+
+  // First load gets the spinner; a reload keeps what is on screen rather than swapping it for one.
+  // Keyed on the incoming rows, not the derived series, so a year selection that happens to be empty
+  // does not read as still-loading.
+  if (loading && (rows || []).length === 0) return <Spinner />
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={effectiveYear} onChange={e => onYearChange(e.target.value)} style={DASH_SELECT_MD}>
+          {yearOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Money in and out by month</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
+          Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>
+          {' · click a month to open its transactions, double-click for the single-period view'}
+        </div>
+        {chartData.length === 0 ? (
+          <EmptyState message="No cash flow for this selection" />
+        ) : (
+          <ResponsiveContainer width="100%" height={320}>
+            <ComposedChart data={chartData} onClick={handleChartClick} style={{ cursor: 'pointer' }}
+              stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              {/* Every month gets a label up to a year's worth; past that, thin them out rather than
+                  letting them overlap. */}
+              <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
+                interval={chartData.length <= 12 ? 0 : Math.floor(chartData.length / 12)} />
+              <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+              <Tooltip
+                formatter={(value, name, item) => {
+                  if (name === 'Money out') return [formatSignedMoneyAmount(-(item?.payload?.outflowMagnitude ?? 0)), name]
+                  return [formatSignedMoneyAmount(value), name]
+                }}
+                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+              />
+              <ReferenceLine y={0} stroke="var(--muted)" />
+              {/* The diverging pair, and the two things holding it up — both silent if broken.
+                  `stackOffset="sign"` on the chart above keeps separate positive and negative
+                  accumulators, so money in stacks up from zero and money out stacks down from zero.
+                  Without it recharts' default chains the second bar from the *top of the first*
+                  regardless of sign, which draws money out downward from the money-in bar and lands it
+                  exactly on the net: the chart then shows money in, the net twice over (as the
+                  unoverlapped remainder of the first bar, and as whatever crosses below zero), and money
+                  out nowhere at all — with correct tooltips throughout. The prop reads like a removable
+                  nicety and is not one. It also requires `outflow` to arrive **negative**, which is the
+                  contract `buildCashFlowTrendSeries` is written to; magnitude rides along separately as
+                  `outflowMagnitude` for the tooltip. */}
+              <Bar dataKey="inflow" name="Money in" stackId="cashflow" fill="var(--success)" fillOpacity={0.75} />
+              <Bar dataKey="outflow" name="Money out" stackId="cashflow" fill="var(--danger)" fillOpacity={0.65} />
+              <Line type="monotone" dataKey="net" name="Net" stroke="var(--accent)" strokeWidth={2} dot={false} />
+              <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
+                label={<AvgReferenceLabel value={avgNet} />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+    </div>
   )
 }
 
@@ -1521,7 +1633,8 @@ export default function Dashboard() {
    * Dashboard runs three analysis modes over the same global filters, but each mode keeps its own drill state.
    * Resetting that state on mode changes avoids carrying breadcrumbs into views that summarize the same data differently.
    */
-  const { filters, setDateApplies, setDate, removeSelections, setDefaultDate } = useFilters()
+  const { filters, setDateApplies, pinDateFromChart, removeSelections, setDefaultDate,
+    goBackDate, canGoBackDate, previousDate } = useFilters()
   // The Dashboard's configurable default period: what "unset" means here (Transactions treats unset as
   // all-time). Registered into the shared filter so the date chip can show it; the Dashboard itself uses
   // the local `defaultDate` for scope to avoid a first-render all-time→default refetch.
@@ -1586,13 +1699,46 @@ export default function Dashboard() {
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [showAllSpendingRows, setShowAllSpendingRows] = useState(false)
   const [otherDrillDepth, setOtherDrillDepth] = useState(0)
-  const viewIsIncome = dashboardView === 'income'
+  // The trend plot is handed an explicit width rather than discovering one after it has drawn, so the
+  // only measurement left is the viewport it may have to stretch to fill. Observing it here — once, on
+  // the scroll container itself — is what keeps a re-bucket free of any measure-then-redraw: this width
+  // does not change when the grain does. A callback ref rather than an effect, because the container
+  // mounts and unmounts with the drill level and a ref assignment does not re-run effects.
+  const trendScrollRef = useRef(null)
+  const trendViewportObserver = useRef(null)
+  // The month under the middle of the viewport, kept up to date as the plot is panned. Read only when
+  // the bucket set is rebuilt, so it is deliberately the value from *before* that happened.
+  const trendAnchorMonth = useRef(null)
+  const [trendViewportWidth, setTrendViewportWidth] = useState(0)
+  const attachTrendScroll = useCallback(node => {
+    trendViewportObserver.current?.disconnect()
+    trendViewportObserver.current = null
+    trendScrollRef.current = node
+    if (!node) return
+    setTrendViewportWidth(node.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    // clientWidth, not the observed content rect: a horizontal scrollbar costs height, not width, so
+    // this cannot feed back into the width that decides whether the scrollbar is there.
+    const observer = new ResizeObserver(() => setTrendViewportWidth(node.clientWidth))
+    observer.observe(node)
+    trendViewportObserver.current = observer
+  }, [])
+  // The cash-flow diagram has two independent tails — a ledger usually has a handful of income buckets
+  // and a great many expense ones — so each side pages into its own tail rather than sharing the pie's
+  // single depth.
+  const [cashFlowDepths, setCashFlowDepths] = useState({ [INFLOW]: 0, [OUTFLOW]: 0 })
+  // `dashboardView` is the user's persisted frame; `activeFrame` is the one this mode can actually
+  // render, which differs only in Compare (see frameForMode).
+  const activeFrame = frameForMode(dashboardView, mode)
+  const viewIsIncome = activeFrame === DASHBOARD_VIEW_INCOME
+  const viewIsCashFlow = activeFrame === DASHBOARD_VIEW_CASH_FLOW
 
 
   useEffect(() => {
     setShowAllSpendingRows(false)
     setOtherDrillDepth(0)
-  }, [spendingViewBy, dashboardView])
+    setCashFlowDepths({ [INFLOW]: 0, [OUTFLOW]: 0 })
+  }, [spendingViewBy, activeFrame])
 
   // The Trends tab queries its own full-history window (not the shared date chip), so mute the date
   // button while the user is here. Restore on unmount so other pages see the chip as live again.
@@ -1652,11 +1798,18 @@ export default function Dashboard() {
   const allTagReports = transientTagReport
     ? [...savedTagReports, transientTagReport]
     : savedTagReports
-  const spendingViewByOptions = [
-    ...SPENDING_VIEW_BY_BUILTIN_OPTIONS,
-    ...allTagReports.map(r => ({ value: `${TAG_REPORT_PREFIX}${r.id}`, label: r.name })),
-    { value: NEW_TAG_REPORT_OPTION, label: '+ Tag report' },
-  ]
+  // A tag report is not a cash-flow breakdown: a signature bucket mixes income and expense categories,
+  // so it has no single direction to net and no `category_type` to read one from. The cash-flow frame
+  // therefore offers only the two structural breakdowns, and a persisted tag-report selection reads as
+  // group here rather than being carried into a diagram that cannot express it. The selection itself is
+  // left alone, so switching back to Expenses restores the report.
+  const spendingViewByOptions = viewIsCashFlow
+    ? SPENDING_VIEW_BY_BUILTIN_OPTIONS
+    : [
+      ...SPENDING_VIEW_BY_BUILTIN_OPTIONS,
+      ...allTagReports.map(r => ({ value: `${TAG_REPORT_PREFIX}${r.id}`, label: r.name })),
+      { value: NEW_TAG_REPORT_OPTION, label: '+ Tag report' },
+    ]
   const activeSpendingViewBy = spendingViewByOptions.some(opt => opt.value === spendingViewBy)
     && spendingViewBy !== NEW_TAG_REPORT_OPTION
     ? spendingViewBy
@@ -1679,7 +1832,7 @@ export default function Dashboard() {
   const tagModeFetchKey = activeTagReport
     ? JSON.stringify({
       reportTags: (activeTagReport.tagIds || []).join(','),
-      view: dashboardView, dateStart, dateEnd,
+      view: activeFrame, dateStart, dateEnd,
       accountId, tagIds, ownerIds, ...summaryFilters,
     })
     : null
@@ -1900,6 +2053,7 @@ export default function Dashboard() {
   const [trendYear, setTrendYear] = useState(null)
   const [trendGroup, setTrendGroup] = useState(null)
   const [trendRows, setTrendRows] = useState([])
+  const [cashFlowTrendRows, setCashFlowTrendRows] = useState([])
   const [trendGroups, setTrendGroups] = useState([])
   const [trendLoading, setTrendLoading] = useState(false)
 
@@ -1911,9 +2065,12 @@ export default function Dashboard() {
   const hasTotals = groupRows.length > 0 || incomeRows.length > 0
     || cmpGroupsA.length > 0 || cmpGroupsB.length > 0
   const multiDetailMode = detailTxns.length > 1
+  // The category column stays even though a drilled list is one category throughout: it is the only
+  // interactive cell in the table (recategorize, split, rule prompt, drill), so hiding it as redundant
+  // took the row-level edits with it. The account column is hidden on account-scoped lists for the same
+  // "constant here" reason and that one is fine — plain text, nothing to lose.
   const [categoryTxnColumns, setCategoryTxnColumns] = useTransactionTableLayout({
     preferenceKey: DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY,
-    showCategory: false,
   })
   const [groupTxnColumns, setGroupTxnColumns] = useTransactionTableLayout({
     preferenceKey: DASHBOARD_GROUP_TXN_TABLE_PREF_KEY,
@@ -1981,7 +2138,7 @@ export default function Dashboard() {
         signature: row,
         reportTagIds: report.tagIds || [],
         reportName: report.name,
-        view: dashboardView,
+        view: activeFrame,
         accountId: accountId || null,
         dateStart,
         dateEnd,
@@ -1998,7 +2155,10 @@ export default function Dashboard() {
   // the drill-reset that a real mode/filter navigation does. The top-half summary respects the selected
   // date slice; the bottom-half trend uses it only for bucket size, always showing a run of buckets.
   const loadSingleTotals = useCallback(async () => {
-    const isIncomeView = dashboardView === 'income'
+    const isIncomeView = activeFrame === DASHBOARD_VIEW_INCOME
+    // The cash-flow frame reports both directions, so neither side is excluded from the category
+    // breakdown it reads; the spending and income frames each keep to their own half.
+    const isCashFlowView = activeFrame === DASHBOARD_VIEW_CASH_FLOW
     // With a date chip set, the trend is a fixed window of period-sized buckets centered on the
     // selection. With no chip the dashboard totals cover all data, so fetch the full monthly history
     // (ancient start → backend skips its rolling window) and bucket it month-by-month across the data's
@@ -2026,8 +2186,9 @@ export default function Dashboard() {
     const trendEnd = hasDate ? lastDayOfMonthISO(windowBuckets[windowBuckets.length - 1].end) : undefined
     const [g, tr, c] = await Promise.all([
       api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, summaryFilters),
-      api.getMonthlyTrend(120, undefined, accountId || undefined, trendStart, trendEnd, tagIds, dashboardView, ownerIds, summaryFilters),
-      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, !isIncomeView, isIncomeView, summaryFilters),
+      api.getMonthlyTrend(120, undefined, accountId || undefined, trendStart, trendEnd, tagIds, activeFrame, ownerIds, summaryFilters),
+      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds,
+        !isCashFlowView && !isIncomeView, !isCashFlowView && isIncomeView, summaryFilters),
     ])
     setGroupRows(g.filter(r => r.category_type !== 'income'))
     setIncomeRows(g.filter(r => r.category_type === 'income'))
@@ -2036,7 +2197,7 @@ export default function Dashboard() {
     setSingleTrendRows(tr)
     setSingleTrendWindowBuckets(windowBuckets)
     setTopCatRows(c)
-  }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, dashboardView, filters.date])
+  }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeFrame, filters.date])
 
   // Grain selector applies only to the no-chip "all time" trend (a date chip already sizes its own
   // buckets), and only once there's enough history that month/quarter/year is a real choice.
@@ -2050,6 +2211,48 @@ export default function Dashboard() {
     const marked = buckets.map(b => ({ ...b, isSelected: bucketHoldsDateStart(b.start, b.end, filters.date) }))
     return trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(singleTrendRows, marked))
   }, [singleTrendRows, singleTrendWindowBuckets, trendGrain, showTrendGrainSelector, filters.date])
+
+  // The trend chart pans by native horizontal scroll, and the bucket set is replaced under it in two
+  // quite different ways — which is what decides where the plot should then be scrolled to.
+  //
+  // **A bar click picks a period.** The set is rebuilt around what was clicked (an all-time monthly run
+  // of hundreds of buckets becomes a fixed fifteen-bucket window, thousands of pixels narrower), and the
+  // old offset is left pointing past the end of the new content — which is what used to leave the card
+  // apparently blank until the scroll region caught up. The clicked bucket is what to show, and it is
+  // marked selected, so the selection is the target.
+  //
+  // **Changing the grain re-cuts the same data.** Nothing was picked and nothing is selected, so the
+  // reader is still looking at whatever they were looking at — and scrolling to the newest bucket, which
+  // is the only sensible index-based answer, throws them to the far end of the chart every time. The
+  // month under the middle of the viewport is carried across instead, so month, quarter and year views
+  // of the same period stay on that period. It falls out of the existing signal rather than needing a
+  // flag: a click leaves a selected bucket, a grain change does not.
+  //
+  // `useLayoutEffect` so it lands before paint instead of as a visible jump, and keyed on the bucket set
+  // rather than on every render so it never fights the user's own scrolling. The offset is computed from
+  // the same layout the plot is drawn at, not from the bar width: those are the same number only while
+  // the buckets are what sets the width, and a stretched plot spreads its bars over the extra room.
+  const trendSelectedIndex = trend.findIndex(b => b.isSelected)
+  const trendPlot = useMemo(
+    () => trendPlotLayout(trend.length, trendViewportWidth),
+    [trend.length, trendViewportWidth],
+  )
+  const rememberTrendAnchor = useCallback(() => {
+    const el = trendScrollRef.current
+    if (!el || trend.length === 0) return
+    const index = bucketIndexAtScroll({
+      scrollLeft: el.scrollLeft, viewportWidth: el.clientWidth, layout: trendPlot, bucketCount: trend.length,
+    })
+    if (index >= 0) trendAnchorMonth.current = bucketAnchorMonth(trend[index])
+  }, [trend, trendPlot])
+  useLayoutEffect(() => {
+    const el = trendScrollRef.current
+    if (!el || trend.length === 0) return
+    const index = trendScrollTargetIndex({
+      buckets: trend, selectedIndex: trendSelectedIndex, anchorMonth: trendAnchorMonth.current,
+    })
+    el.scrollLeft = centeredScrollLeft({ index, layout: trendPlot, viewportWidth: el.clientWidth })
+  }, [trend, trendSelectedIndex, trendPlot])
 
   // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
   // transaction-change refresh so an edit updates them without resetting the user's drill.
@@ -2070,11 +2273,19 @@ export default function Dashboard() {
     setTrendRows(rows)
   }, [accountId, trendGroup, tagIds, ownerIds, summaryFilters])
 
+  // The cash-flow trends form reads its own endpoint rather than the by-group series: its bars are the
+  // per-category nets re-bucketed by direction, which is not something the group series can be summed
+  // into. Same 20-year window as the other trends, so the year picker reaches every year in the data.
+  const loadCashFlowTrend = useCallback(async () => {
+    const rows = await api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, summaryFilters)
+    setCashFlowTrendRows(rows)
+  }, [accountId, tagIds, ownerIds, summaryFilters])
+
   const loadTrendGroups = useCallback(async () => {
-    const wantIncome = dashboardView === 'income'
+    const wantIncome = activeFrame === DASHBOARD_VIEW_INCOME
     const g = await api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, summaryFilters)
     setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
-  }, [accountId, ownerIds, tagIds, summaryFilters, dashboardView])
+  }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame])
 
   useEffect(() => {
     if (mode !== 'single') return
@@ -2115,13 +2326,13 @@ export default function Dashboard() {
           ]).then(([a, b]) => { setCmpCatsA(a); setCmpCatsB(b) })
         }
       } else if (mode === 'trends') {
-        loadTrendSeries()
-        loadTrendGroups()
+        if (viewIsCashFlow) loadCashFlowTrend()
+        else { loadTrendSeries(); loadTrendGroups() }
       }
     }
     window.addEventListener('luma:transactions-changed', onTxnChange)
     return () => window.removeEventListener('luma:transactions-changed', onTxnChange)
-  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets])
+  }, [mode, viewIsCashFlow, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -2137,23 +2348,26 @@ export default function Dashboard() {
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
-    loadTrendSeries().catch(() => { }).then(() => setTrendLoading(false))
-  }, [mode, loadTrendSeries])
+    const load = viewIsCashFlow ? loadCashFlowTrend : loadTrendSeries
+    load().catch(() => { }).then(() => setTrendLoading(false))
+  }, [mode, viewIsCashFlow, loadTrendSeries, loadCashFlowTrend])
 
   useEffect(() => {
-    if (mode !== 'trends') return
+    // The group drill belongs to the spending/income forms; the cash-flow form has no group selector, so
+    // it does not need the list behind one.
+    if (mode !== 'trends' || viewIsCashFlow) return
     // The drill dropdown lists only the side of the ledger the user is currently viewing —
     // expense groups in spending mode, income groups in income mode (handled inside loadTrendGroups).
     loadTrendGroups()
-  }, [mode, loadTrendGroups])
+  }, [mode, viewIsCashFlow, loadTrendGroups])
 
   // Clear an active drill when the user toggles between spending and income — a drilled
   // expense group has no meaning in income view (and vice versa), so jump back to "all groups".
   useEffect(() => {
     if (mode === 'trends') setTrendGroup(null)
-    // Keyed only on dashboardView; mode changes are unrelated and should not retrigger.
+    // Keyed only on the frame; mode changes are unrelated and should not retrigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboardView])
+  }, [activeFrame])
 
   const drillToCategories = useCallback(async (group) => {
     const groupId = group.group_id ?? group.payload?.group_id
@@ -2184,14 +2398,16 @@ export default function Dashboard() {
   }, [drillToCategories, groupRows, pendingSingleDrill, mode])
 
   // Switch into Single mode focused on the given YYYY-MM month. Optionally preserves the active
-  // trend-group drill so a "this group, this month" view comes up in one gesture.
+  // trend-group drill so a "this group, this month" view comes up in one gesture. The period is pinned
+  // the same way a single-period bar click pins it — the click moved the period as a side effect of
+  // drilling, so it is recorded for the back-step on the card it lands on.
   function openSinglePeriodForMonth(month) {
     if (!month) return
     const [y, m] = month.split('-').map(Number)
     const lastDay = new Date(y, m, 0).getDate()
     const start = `${month}-01`
     const end = `${month}-${String(lastDay).padStart(2, '0')}`
-    setDate({ start, end, preset: monthLabel(month) })
+    pinDateFromChart({ start, end, preset: monthLabel(month) })
     if (trendGroup?.series_id) setPendingSingleDrill(trendGroup.series_id)
     setMode('single')
   }
@@ -2260,6 +2476,24 @@ export default function Dashboard() {
   const totalIncome = incomeRows.reduce((s, r) => s + r.total, 0)
   const pieGroupTotal = pieGroupRows.reduce((s, r) => s + r.total, 0)
 
+  // The cash-flow frame reads the *same* period summary the other two frames read — no extra fetch —
+  // and re-projects it onto the one axis this frame reports (positive = money in). Its breakdown
+  // granularity follows the same group/category selector; the two group lists are recombined because
+  // cash flow spans both sides of the ledger rather than one of them.
+  const cashFlowGraph = useMemo(() => {
+    if (!viewIsCashFlow) return null
+    const byCategory = activeSpendingViewBy === SPENDING_VIEW_BY_CATEGORY
+    return buildCashFlowGraph(
+      byCategory ? topCatRows : [...groupRows, ...incomeRows],
+      {
+        keyField: byCategory ? 'category_id' : 'group_id',
+        nameField: byCategory ? 'category_name' : 'group_name',
+        palette: CHART_PALETTE,
+        depths: cashFlowDepths,
+      },
+    )
+  }, [viewIsCashFlow, activeSpendingViewBy, topCatRows, groupRows, incomeRows, cashFlowDepths])
+
   const tagsById = useMemo(() => {
     const map = new Map()
     for (const tag of availableTags) map.set(tag.id, tag)
@@ -2270,6 +2504,22 @@ export default function Dashboard() {
     [activeTagReport, tagSignatureBuckets, tagsById],
   )
   const tagSignatureTotal = tagSignatureRows.reduce((s, r) => s + r.total, 0)
+
+  // A cash-flow node's click goes wherever that node's own kind of thing already goes: a collapsed tail
+  // pages its own side one level deeper, and a bucket takes the same drill its pie wedge would — groups
+  // to their categories, categories to their transactions. Passing the node's underlying summary row
+  // (rather than the node) is what lets those handlers keep reading the fields they already read; an
+  // income group is not in `groupRows`, so the row it falls back to has to be a real summary row.
+  function handleCashFlowNodeClick(node) {
+    if (!node) return
+    if (node.isOther) {
+      setCashFlowDepths(prev => ({ ...prev, [node.side]: (prev[node.side] || 0) + 1 }))
+      return
+    }
+    if (!node.row) return
+    if (activeSpendingViewBy === SPENDING_VIEW_BY_CATEGORY) drillToTransactions(node.row)
+    else drillToCategories(node.row)
+  }
 
   function handleSpendingViewByChange(value) {
     if (value === NEW_TAG_REPORT_OPTION) {
@@ -2377,37 +2627,21 @@ export default function Dashboard() {
             />
           )}
           leftAdornment={(mode === 'single' || mode === 'trends') && (
-            <div style={{
-              display: 'flex', background: 'var(--surface2)',
-              borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
-            }}>
-              {DASHBOARD_VIEW_OPTIONS.map(opt => (
-                <button key={opt.value} onClick={() => setDashboardView(opt.value)} style={{
-                  padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
-                  background: dashboardView === opt.value ? 'var(--accent)' : 'transparent',
-                  color: dashboardView === opt.value ? '#fff' : 'var(--muted)',
-                }}>
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedToggle
+              value={dashboardView}
+              options={DASHBOARD_VIEW_OPTIONS}
+              onChange={setDashboardView}
+              ariaLabel="Choose dashboard frame"
+            />
           )}
         >
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div style={{
-              display: 'flex', background: 'var(--surface2)',
-              borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
-            }}>
-              {['single', 'compare', 'trends'].map(m => (
-                <button key={m} onClick={() => setMode(m)} style={{
-                  padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
-                  background: mode === m ? 'var(--accent)' : 'transparent',
-                  color: mode === m ? '#fff' : 'var(--muted)',
-                }}>
-                  {m === 'single' ? 'Single period' : m === 'compare' ? 'Compare' : 'Trends'}
-                </button>
-              ))}
-            </div>
+            <SegmentedToggle
+              value={mode}
+              options={DASHBOARD_MODE_OPTIONS}
+              onChange={setMode}
+              ariaLabel="Choose dashboard analysis mode"
+            />
           </div>
         </PageHeader>
       </div>
@@ -2445,19 +2679,29 @@ export default function Dashboard() {
               <>
 
                 <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
-                  <Card style={{ padding: '14px 24px' }}>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                      Total spending · {singlePeriodLabel}
-                    </div>
-                    <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(totalSpend)}</div>
-                  </Card>
-                  {totalIncome > 0 && (
-                    <Card style={{ padding: '14px 24px' }}>
-                      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                        Total income · {singlePeriodLabel}
-                      </div>
-                      <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{formatSignedMoneyAmount(totalIncome)}</div>
-                    </Card>
+                  {viewIsCashFlow ? (
+                    <>
+                      {/* Money out leads, as spending does on the other two frames — the cards are read
+                          as a row across frames, so a consistent reading order matters more here than
+                          mirroring the diagram below, which runs sources-left to destinations-right. */}
+                      <SummaryTotalCard label={`Money out · ${singlePeriodLabel}`}
+                        value={cashFlowGraph?.outflowTotal || 0} />
+                      <SummaryTotalCard label={`Money in · ${singlePeriodLabel}`}
+                        value={cashFlowGraph?.inflowTotal || 0} color="var(--success)" />
+                      {/* Signed on the cash axis, so a period that spent more than it took in reads
+                          negative rather than being flattened into a magnitude. */}
+                      <SummaryTotalCard label={`Net · ${singlePeriodLabel}`}
+                        value={cashFlowGraph?.net || 0}
+                        color={(cashFlowGraph?.net || 0) < 0 ? 'var(--danger)' : 'var(--success)'} />
+                    </>
+                  ) : (
+                    <>
+                      <SummaryTotalCard label={`Total spending · ${singlePeriodLabel}`} value={totalSpend} />
+                      {totalIncome > 0 && (
+                        <SummaryTotalCard label={`Total income · ${singlePeriodLabel}`} value={totalIncome}
+                          color="var(--success)" />
+                      )}
+                    </>
                   )}
                   {selectedGroup && level !== 'groups' && (
                     <Card style={{ padding: '14px 24px' }}>
@@ -2487,7 +2731,30 @@ export default function Dashboard() {
 
                 {drillLoading ? <Spinner /> : (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
-                    {level === 'groups' && (() => {
+                    {/* The diagram wants the full row: it is one wide picture rather than a chart paired
+                        with a legend, and its node labels already carry the names and figures the
+                        breakdown list carries for the pie. */}
+                    {level === 'groups' && viewIsCashFlow && (
+                      <Card style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}>
+                          <span>Cash flow by</span>
+                          <Select
+                            value={activeSpendingViewBy}
+                            onChange={handleSpendingViewByChange}
+                            options={spendingViewByOptions}
+                            aria-label="Choose dashboard cash-flow breakdown"
+                          />
+                          <FeatureExplainer topic="dashboard-cash-flow" placement="bottom-left" />
+                        </div>
+                        <CashFlowSankey
+                          graph={cashFlowGraph}
+                          depths={cashFlowDepths}
+                          onNodeClick={handleCashFlowNodeClick}
+                          onBack={side => setCashFlowDepths(prev => ({ ...prev, [side]: Math.max((prev[side] || 0) - 1, 0) }))}
+                        />
+                      </Card>
+                    )}
+                    {level === 'groups' && !viewIsCashFlow && (() => {
                       const viewIsCategory = activeSpendingViewBy === SPENDING_VIEW_BY_CATEGORY
                       const viewIsTag = !!activeTagReport
                       const allRows = viewIsTag
@@ -2756,7 +3023,6 @@ export default function Dashboard() {
                                 onRowsChange={setTxnData}
                                 onTransactionOpenDetail={openTransactionDetail}
                                 onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
-                                showCategory={false}
                                 columnConfig={categoryTxnColumns}
                                 onColumnConfigChange={setCategoryTxnColumns}
                                 scrollRef={catTxnPaged.listRef}
@@ -2775,8 +3041,17 @@ export default function Dashboard() {
                   const trendAvg = trend.length > 0
                     ? trend.reduce((s, r) => s + (Number(r.total) || 0), 0) / trend.length
                     : 0
-                  const trendBarWidth = 60
-                  const trendChartMinWidth = Math.max(420, trend.length * trendBarWidth)
+                  // One exceptional period would otherwise own the whole axis and flatten every other
+                  // bar against zero — a ledger produces those routinely (a house purchase, a tax
+                  // settlement, a run of miscategorised transfers). The axis is bounded to what the
+                  // ordinary bars can be read against and the outlier is drawn torn off at the frame
+                  // with its real figure on it; `total` stays true everywhere it is read. Engages only
+                  // when there genuinely is an outlier, so the usual chart is untouched.
+                  const trendClamp = computeClampedDomain(trend.map(r => r.total), { average: trendAvg })
+                  const trendData = trend.map(r => {
+                    const { plotted, clipped } = clampBarValue(r.total, trendClamp.bound)
+                    return { ...r, plotted, __clipped: clipped, __clippedValue: r.total }
+                  })
                   const effectiveGrain = showTrendGrainSelector ? trendGrain : 'month'
                   const grainWord = effectiveGrain === 'year' ? 'Yearly' : effectiveGrain === 'quarter' ? 'Quarterly' : 'Monthly'
                   function handleTrendBarClick(d) {
@@ -2784,10 +3059,11 @@ export default function Dashboard() {
                     const start = `${d.bucketStart}-01`
                     const end = lastDayOfMonthISO(d.bucketEnd)
                     // Clicking a bar re-pins the date filter onto it so the rest of the page re-renders with
-                    // it as the new "selected period." The period's transactions open from the header's
-                    // "View transactions" button, not a bar double-click (Recharts bars can't be
-                    // double-clicked reliably).
-                    setDate({ start, end, preset: d.label })
+                    // it as the new "selected period." Pinned through the recording setter, so the header's
+                    // back-step can undo it — a FilterBar pick is a visible choice and does not record.
+                    // The period's transactions open from the header's "View transactions" button, not a
+                    // bar double-click (Recharts bars can't be double-clicked reliably).
+                    pinDateFromChart({ start, end, preset: d.label })
                   }
                   // The header link opens the transaction drawer for the whole selected period (day-precise
                   // dates, not the bar's month range), so it's available even when no single bar is focused.
@@ -2799,13 +3075,29 @@ export default function Dashboard() {
                     const eM = effectiveDate.end.slice(0, 7)
                     const label = effectiveDate.preset
                       || (sM === eM ? monthLabel(sM) : `${monthLabel(sM)} – ${monthLabel(eM)}`)
-                    openPeriodDetail({ start: effectiveDate.start, end: effectiveDate.end, label }, dashboardView)
+                    openPeriodDetail({ start: effectiveDate.start, end: effectiveDate.end, label }, activeFrame)
                   }
                   return (
                     <Card>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
                         <div style={{ fontSize: 14, fontWeight: 600 }}>Trend</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {/* Clicking a bar re-pins the period, which is a navigation the user did not
+                              necessarily read as one — and the FilterBar shows where they are now, not
+                              where they were. Naming the destination is the part that makes this
+                              answerable rather than just reversible. Armed only by those pins: an
+                              explicit FilterBar change clears the history, so this never offers to
+                              step back over a period the user chose themselves. */}
+                          {canGoBackDate && (
+                            <Button
+                              variant="ghost"
+                              small
+                              onClick={goBackDate}
+                              title={`Return to ${describeDateFilter(previousDate)}`}
+                            >
+                              ← Back to {describeDateFilter(previousDate)}
+                            </Button>
+                          )}
                           {effectiveDate && effectiveDate.start && effectiveDate.end && (
                             <Button
                               variant="ghost"
@@ -2843,51 +3135,114 @@ export default function Dashboard() {
                           : `${grainWord} totals across all data`}
                         {' · click a bar to focus it · scroll horizontally to pan'}
                       </div>
-                      <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-                        <div style={{ minWidth: trendChartMinWidth, height: 224 }}>
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={trend} margin={{ top: 6, right: 12, bottom: 6, left: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                              <XAxis
-                                dataKey="label"
-                                interval={0}
-                                tick={<TrendBucketTick />}
-                                height={48}
-                              />
-                              <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-                              <Tooltip
-                                formatter={v => formatSignedMoneyAmount(v)}
-                                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                              />
-                              <Bar
-                                dataKey="total"
-                                radius={[4, 4, 0, 0]}
-                                name={viewIsIncome ? 'Income' : 'Spending'}
-                                onClick={handleTrendBarClick}
-                                style={{ cursor: 'pointer' }}
-                              >
-                                {trend.map((entry, idx) => (
-                                  <Cell
-                                    key={idx}
-                                    fill={entry.isSelected
-                                      ? 'var(--accent)'
-                                      : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))'}
-                                  />
-                                ))}
-                              </Bar>
-                              {trend.length > 1 && (
-                                <ReferenceLine
-                                  y={trendAvg}
-                                  stroke="var(--accent2)"
-                                  strokeDasharray="4 4"
-                                  label={<AvgReferenceLabel value={trendAvg} />}
-                                />
-                              )}
-                            </BarChart>
-                          </ResponsiveContainer>
+                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                        {/* The value axis, held out of the scroll so it stays readable at any pan
+                            position. It is a chart rather than hand-drawn labels so that recharts works
+                            out the ticks — the same ticks, from the same data and domain, that the plot
+                            beside it is scaled to. */}
+                        <div style={{ width: TREND_AXIS_COLUMN_WIDTH, height: TREND_CHART_HEIGHT, flexShrink: 0 }}>
+                          {/* Sized, not measured — see the plot below. This box was never responsive at
+                              all: it is a constant beside a constant. */}
+                          <BarChart
+                            width={TREND_AXIS_COLUMN_WIDTH}
+                            height={TREND_CHART_HEIGHT}
+                            data={trendData}
+                            margin={{ top: TREND_CHART_MARGIN_Y, right: 0, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
+                          >
+                            <YAxis
+                              width={TREND_AXIS_LABEL_WIDTH}
+                              tickFormatter={formatSignedAxisTick}
+                              tick={{ fill: 'var(--muted)', fontSize: 11 }}
+                              domain={trendClamp.domain}
+                              allowDataOverflow={trendClamp.clamped}
+                            />
+                            {/* Draws nothing; it reserves exactly the height the plot's category axis
+                                reserves, which is what keeps the two vertical scales in step. */}
+                            <XAxis dataKey="label" height={TREND_XAXIS_HEIGHT} tick={false} axisLine={false} />
+                            {/* Invisible rather than hidden: `hide` drops the series from the domain
+                                altogether and the axis comes out blank. */}
+                            <Bar dataKey="plotted" fillOpacity={0} isAnimationActive={false} />
+                            {/* The average's pill lives here rather than on its line in the plot,
+                                where it would pan out of view and stay out on a long timeline. It
+                                reads the same scale the ticks were drawn from, and steps aside from
+                                any tick label it would otherwise sit on. */}
+                            {trend.length > 1 && (
+                              <Customized component={
+                                <AxisAvgPill value={trendAvg} columnWidth={TREND_AXIS_COLUMN_WIDTH} />
+                              } />
+                            )}
+                          </BarChart>
                         </div>
+                      <div
+                        ref={attachTrendScroll}
+                        onScroll={rememberTrendAnchor}
+                        style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}
+                      >
+                        {/* Given its width rather than left to discover one. `<ResponsiveContainer>`
+                            measures its own box with a ResizeObserver and holds the result in state, so
+                            a re-bucket draws once at the *previous* bucket set's width and is corrected
+                            only after paint — a stale-width frame whose look depends on which way the
+                            grain went and where the plot was scrolled. The width is not responsive
+                            anyway: it is the bucket count, and the viewport only when the buckets do
+                            not fill it. */}
+                        <div style={{ width: trendPlot.width, height: TREND_CHART_HEIGHT }}>
+                          <BarChart
+                            width={trendPlot.width}
+                            height={TREND_CHART_HEIGHT}
+                            data={trendData}
+                            margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                            <XAxis
+                              dataKey="label"
+                              interval={0}
+                              tick={<TrendBucketTick />}
+                              height={TREND_XAXIS_HEIGHT}
+                            />
+                            {/* Hidden, not absent: the scale still has to be computed here, and it is
+                                identical to the column's because the domain and data are. */}
+                            <YAxis
+                              hide
+                              domain={trendClamp.domain}
+                              allowDataOverflow={trendClamp.clamped}
+                            />
+                            <Tooltip
+                              // The drawn value is clamped; the tooltip reports the real one.
+                              formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                              contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                              labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                              itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+                            />
+                            {/* Static, like the axis column beside it. Re-bucketing replaces the whole
+                                series, so the default grow-in plays in full on every grain change — and
+                                with the axis in its own chart it would be an animation running against
+                                a scale that had already snapped. */}
+                            <Bar
+                              dataKey="plotted"
+                              radius={[4, 4, 0, 0]}
+                              shape={<ClippedBar />}
+                              name={viewIsIncome ? 'Income' : 'Spending'}
+                              onClick={handleTrendBarClick}
+                              isAnimationActive={false}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              {trendData.map((entry, idx) => (
+                                <Cell
+                                  key={idx}
+                                  fill={entry.isSelected
+                                    ? 'var(--accent)'
+                                    : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))'}
+                                />
+                              ))}
+                            </Bar>
+                            {/* Unlabelled: the pill naming this line is in the sticky axis column,
+                                which is the only part of the chart that does not pan away. */}
+                            {trendData.length > 1 && (
+                              <ReferenceLine y={trendAvg} stroke="var(--accent2)" strokeDasharray="4 4" />
+                            )}
+                          </BarChart>
+                        </div>
+                      </div>
                       </div>
                     </Card>
                   )
@@ -2941,7 +3296,18 @@ export default function Dashboard() {
               </>
             )}
 
-            {mode === 'trends' && (
+            {mode === 'trends' && viewIsCashFlow && (
+              <CashFlowTrendsPanel
+                rows={cashFlowTrendRows}
+                selectedYear={trendYear}
+                onYearChange={setTrendYear}
+                loading={trendLoading}
+                onOpenMonth={month => openMonthDetail(month, activeFrame)}
+                onOpenSinglePeriod={openSinglePeriodForMonth}
+              />
+            )}
+
+            {mode === 'trends' && !viewIsCashFlow && (
               <TrendsPanel
                 rows={trendRows}
                 groups={trendGroups}
@@ -2952,7 +3318,7 @@ export default function Dashboard() {
                 onClearDrill={() => setTrendGroup(null)}
                 loading={trendLoading}
                 viewIsIncome={viewIsIncome}
-                onOpenMonth={month => openMonthDetail(month, dashboardView)}
+                onOpenMonth={month => openMonthDetail(month, activeFrame)}
                 onOpenSinglePeriod={openSinglePeriodForMonth}
               />
             )}

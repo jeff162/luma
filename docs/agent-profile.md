@@ -323,6 +323,17 @@ instruction and fix the drift rather than silently choosing the looser version.
   attribute (it dims and drops the handler), so `expect(btn.disabled).toBe(true)` passes against every
   implementation of everything. Assert the consequence — click it, and check the call did not happen.
 
+- **When a new test goes red, check its premise before changing the code.** A test written from a
+  description of the behaviour encodes an assumption about the situation, and that assumption is wrong
+  often enough that the red is information rather than a defect. Three in one session, each of which
+  paid: a "no collision" case whose average turned out to genuinely sit 13px from a tick (the fixture
+  was wrong, and a correctly chosen one made the test stronger); a "crowded axis" case that exposed a
+  real gap — the code would place a label 51px from the line it belonged to, so the fix was a distance
+  cap, not a test edit; and a round-trip that cannot hold because a bucket set narrower than its
+  viewport cannot be scrolled at all, so the true property was "on screen", not "centred". Reaching for
+  the implementation first would have papered over two of the three. The tell is a failure whose numbers
+  make sense — read them and work out what situation actually produces them.
+
 - Prove new guards actually fire. A green result is only meaningful after seeing the same check fail
   on known-bad input. This bites hardest when **changing a default or a constant**: run the new test
   against the old value and require it to fail. A test that passes either way is not testing the

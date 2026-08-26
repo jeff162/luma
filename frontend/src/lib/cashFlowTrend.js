@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import { monthLabel } from './utils.js'
+import { monthsInRange, shiftMonth } from './trendBuckets.js'
+
+/*
+ * The month-by-month series behind the cash-flow frame's Trends form.
+ *
+ * The rows arrive from `/summary/monthly-cash-flow` already netted per category, which is what makes a
+ * month's two bars the same figures as that month's Sankey sides. Everything here is presentation: which
+ * window to show, filling the months the ledger skipped, and shaping each row for the chart.
+ *
+ * **`outflow` is emitted negative, and that is a contract rather than a convenience.** The chart draws
+ * the two series as one diverging column via a shared `stackId` plus `stackOffset="sign"`, and it is the
+ * *sign* of the value that decides which side of zero recharts puts the bar on. Emitting the magnitude
+ * instead does not merely mislabel the bar — recharts stacks it upward on top of money in, which is a
+ * different picture with no error in it anywhere. The true magnitude rides along as `outflowMagnitude`
+ * so the tooltip never has to un-negate anything.
+ *
+ * **The axis runs continuously.** A month the ledger has no row for is drawn as an empty month rather
+ * than closed up, because a gap between two months is information and eliding it would put two
+ * non-adjacent months side by side as though nothing had happened between them.
+ */
+
+export const CASH_FLOW_TREND_LAST_12 = 'last12'
+const LAST_12_MONTHS = 12
+
+/*
+ * The window options the year picker offers: a rolling last-12-months view plus every calendar year the
+ * data reaches, newest first.
+ */
+export function cashFlowTrendYearOptions(rows) {
+  const years = [...new Set(normalizeRows(rows).map(r => r.month.slice(0, 4)))].sort().reverse()
+  return [
+    { value: CASH_FLOW_TREND_LAST_12, label: 'Last 12 months' },
+    ...years.map(y => ({ value: y, label: y })),
+  ]
+}
+
+/*
+ * Build the chart series for one window.
+ *
+ * `selectedYear` is whatever the picker last held, which may name a year the current filters no longer
+ * reach — the shared year state survives switching frames and filters. An unreachable selection falls
+ * back to the rolling window rather than rendering an empty chart, and the resolved value is returned so
+ * the picker can show what is actually being displayed.
+ */
+export function buildCashFlowTrendSeries(rows, selectedYear) {
+  const normalized = normalizeRows(rows)
+  const yearOptions = cashFlowTrendYearOptions(normalized)
+  const effectiveYear = yearOptions.some(o => o.value === selectedYear)
+    ? selectedYear
+    : CASH_FLOW_TREND_LAST_12
+
+  const months = windowMonths(normalized, effectiveYear)
+  const byMonth = new Map(normalized.map(r => [r.month, r]))
+  const chartData = months.map(month => {
+    const row = byMonth.get(month)
+    const inflow = finite(row?.inflow)
+    const outflow = finite(row?.outflow)
+    return {
+      month: monthLabel(month),
+      monthKey: month,
+      inflow,
+      outflow: -outflow,
+      outflowMagnitude: outflow,
+      // The server's net where there is one; derived otherwise, which is the same figure by
+      // construction and keeps an empty month at a flat zero rather than a gap in the line.
+      net: row && Number.isFinite(Number(row.net)) ? Number(row.net) : inflow - outflow,
+    }
+  })
+
+  const avgNet = chartData.length
+    ? chartData.reduce((sum, r) => sum + r.net, 0) / chartData.length
+    : 0
+
+  return { yearOptions, effectiveYear, chartData, avgNet }
+}
+
+function normalizeRows(rows) {
+  return (rows || []).filter(r => r && typeof r.month === 'string')
+}
+
+function finite(value) {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : 0
+}
+
+/*
+ * The month codes the window covers, gaps included.
+ *
+ * The rolling window is twelve *calendar* months back from the latest month holding data — not the
+ * latest twelve rows. Those differ exactly when the ledger skips a month, and taking rows would then
+ * span thirteen or more months under a label that says twelve.
+ */
+function windowMonths(rows, effectiveYear) {
+  if (rows.length === 0) return []
+  if (effectiveYear !== CASH_FLOW_TREND_LAST_12) {
+    const inYear = rows.filter(r => r.month.slice(0, 4) === effectiveYear)
+    return inYear.length > 0 ? monthsInRange(inYear[0].month, inYear[inYear.length - 1].month) : []
+  }
+  const end = rows[rows.length - 1].month
+  const start = shiftMonth(end, -(LAST_12_MONTHS - 1))
+  // A ledger shorter than the window starts where the data does, so a new install is not padded with
+  // empty months it never had.
+  const firstMonth = rows[0].month
+  return monthsInRange(start > firstMonth ? start : firstMonth, end)
+}

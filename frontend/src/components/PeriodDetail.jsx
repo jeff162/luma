@@ -13,7 +13,6 @@ import TransactionListToolbar from './TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
-  DETAIL_LIST_MAX_HEIGHT,
   DetailPanelShell,
   useDetailPanelChrome,
   usePagedTransactions,
@@ -32,6 +31,11 @@ const PERIOD_DETAIL_TABLE_PREF_KEY = 'ui.periodDetail.transactions.columns'
  * negative. The list is infinite-scroll paginated with server-side sort (usePagedTransactions), so a
  * whole-year range isn't truncated at a fetch cap and column sort reorders the entire result — not
  * just the loaded page. Multiple panels stack via stackIndex/forceFloating, matching TransactionDetail.
+ *
+ * Unlike the panels that stack a trend chart above their list, this one is a list and nothing else, so
+ * it takes the full height the window allows and hands the leftover to the table (`fillHeight` on both
+ * the shell and the table). That is what makes an enlarged window show more rows: a fixed row cap in a
+ * content-sized panel cannot use the extra space, however much of it there is.
  */
 export default function PeriodDetail({
   start,
@@ -134,6 +138,7 @@ export default function PeriodDetail({
       onClose={onClose}
       header={header}
       isTopmost={isTopmost}
+      fillHeight
     >
       {loading ? (
         <Spinner />
@@ -157,7 +162,7 @@ export default function PeriodDetail({
             onRowsChange={setTransactions}
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
-            maxHeight={DETAIL_LIST_MAX_HEIGHT}
+            fillHeight
             scrollRef={listRef}
             sortState={sortState}
             onSort={onSort}
