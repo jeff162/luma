@@ -385,6 +385,58 @@ describe('split editor pre-fill', () => {
   })
 })
 
+describe('split editor on a deposit', () => {
+  // Parts are stored in the transaction's own direction, so a deposit's are negative on disk. The
+  // dialog works in that direction throughout — otherwise splitting a $200 deposit would mean typing
+  // -120 and -80 beneath a Transaction line reading -$200 — and converts back on the way out, which is
+  // what these two assert from both ends.
+  const DEPOSIT = { ...TXN, id: 't2', amount: -200, display_name: 'Fixture Employer' }
+
+  it("takes positive amounts and saves them in the transaction's direction", async () => {
+    const user = userEvent.setup()
+    api.getSplit.mockResolvedValue({ txn_id: 't2', amount: -200, is_split: false, parts: [] })
+    renderEditor({ txn: DEPOSIT })
+    const fields = await amountFields()
+
+    // The figure being divided reads as the ledger row reads it, not as it is stored — twice over,
+    // since nothing is allocated yet and the remainder is the whole of it.
+    expect(screen.getAllByText('$200.00').length).toBe(2)
+
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Groceries'))
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Hardware'))
+
+    await user.type(fields[0], '120')
+    // What is left to allocate is stated the same way, so the arithmetic on screen is all one sign.
+    expect(screen.getByText('$80.00')).toBeTruthy()
+    await user.type(fields[1], '80')
+    expect(screen.getByText('Fully allocated')).toBeTruthy()
+
+    await user.click(screen.getByText('Save split'))
+    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(1))
+    expect(api.saveSplit.mock.calls[0][1]).toEqual([
+      { category_id: 'groceries', amount: -120, label: '' },
+      { category_id: 'hardware', amount: -80, label: '' },
+    ])
+  })
+
+  it('reopens an existing deposit split on the figures it was entered with', async () => {
+    api.getSplit.mockResolvedValue({
+      txn_id: 't2', amount: -200, is_split: true,
+      parts: [
+        { id: 'p1', category_id: 'groceries', amount: -120, label: null },
+        { id: 'p2', category_id: 'hardware', amount: -80, label: null },
+      ],
+    })
+    renderEditor({ txn: { ...DEPOSIT, is_split: true } })
+    const fields = await amountFields()
+
+    expect(fields.map(f => f.value)).toEqual(['120', '80'])
+    expect(screen.getByText('Fully allocated')).toBeTruthy()
+  })
+})
+
 describe('split editor labels', () => {
   it('sends the label with the amount it annotates', async () => {
     const user = userEvent.setup()

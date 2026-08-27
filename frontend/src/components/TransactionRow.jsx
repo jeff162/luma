@@ -19,7 +19,7 @@ import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
-import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
 import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
@@ -941,16 +941,25 @@ export function TransactionAmountCell({ txn, onOpenDetail, showExcludedFromTotal
 // The allocation behind a "Split (N)" chip, shown on hover. The amounts are what make this worth a
 // hover rather than a list of category names: in a category-scoped list the row itself shows only the
 // *part* that matched, so this is where "why does this row say $60 when the purchase was $100?" gets
-// answered. Signed, like every other displayed figure — see docs/data-model.md, Reporting assumptions.
-function SplitPartsHoverCard({ parts }) {
+// answered.
+//
+// Each part is stated in the transaction's own direction (`transactionDirection`), so the shares of a
+// charge and of a deposit both read as magnitudes that add up to the row beside them. Direction is
+// carried by the color instead — the same green a deposit's own amount gets, since a part that moves
+// money in is the thing worth marking, not every part of an ordinary purchase.
+function SplitPartsHoverCard({ parts, txnAmount }) {
+  const dir = transactionDirection(txnAmount)
   return (
     <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
       {parts.map((part, i) => (
         <div key={part.category_id || `part-${i}`} style={{ display: 'grid', gap: 1 }}>
           <div style={{ display: 'flex', gap: 16, justifyContent: 'space-between' }}>
             <span>{part.category_name || 'Uncategorized'}</span>
-            <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-              {formatSignedMoneyAmount(part.amount)}
+            <span style={{
+              color: getTransactionAmountColor(part.amount),
+              fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+            }}>
+              {formatSignedMoneyAmount(part.amount * dir)}
             </span>
           </div>
           {/* What the allocation covers, where the user recorded it. Clamped to one line: these come
@@ -1041,7 +1050,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
           style={{ cursor: onOpenSplit ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           {parts.length ? (
-            <RowTooltip content={<SplitPartsHoverCard parts={parts} />} maxWidth={320}>
+            <RowTooltip content={<SplitPartsHoverCard parts={parts} txnAmount={txn.amount} />} maxWidth={320}>
               {chip}
             </RowTooltip>
           ) : chip}

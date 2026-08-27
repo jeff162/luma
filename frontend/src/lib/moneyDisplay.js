@@ -117,6 +117,23 @@ export function getTransactionDisplayAmount(amount) {
   return -(Number(amount) || 0)
 }
 
+// Which way a transaction moves money: -1 when it is money in, 1 when it is money out. Named rather
+// than written inline because two surfaces have to agree on it.
+//
+// It exists for splits. A part is stored in the transaction's own direction — every part shares its
+// sign (`services/txn_splits.py`) — so rendering one raw inverts it against every other amount on
+// screen: a deposit's parts read as negative beneath a row that reads positive, and its split has to be
+// entered as a column of negative numbers. Multiplying by the direction states a part as what it
+// contributes to the whole, so a charge and a deposit both read as magnitudes and direction is left to
+// the transaction's own amount and color, the one place it is not redundant.
+//
+// Deliberately not `Math.abs`. Should a part ever be allowed to oppose its transaction — a refunded
+// item inside an order, a relaxation the splits design leaves open — abs would print that refund as one
+// more charge and the parts would visibly stop summing to the transaction, while this keeps it negative.
+export function transactionDirection(amount) {
+  return Number(amount) < 0 ? -1 : 1
+}
+
 export function formatTransactionAmount(amount, options = {}) {
   return formatSignedMoneyAmount(getTransactionDisplayAmount(amount), options)
 }

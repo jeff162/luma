@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input } from './ui.jsx'
@@ -83,8 +83,15 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   const [remainderUndo, setRemainderUndo] = useState(null)
 
   const amount = Number(txn?.amount) || 0
+  // The whole dialog works in the transaction's own direction: parts are *stored* in it (they all share
+  // the transaction's sign), so a deposit split would otherwise have to be typed, totalled and read as a
+  // column of negative numbers while the row that opened it reads positive. Every figure below is
+  // `× dir`, and `save` multiplies back on the way out — see moneyDisplay's `transactionDirection` for
+  // why this is a direction rather than an absolute value.
+  const dir = transactionDirection(amount)
+  const total = amount * dir
   const allocated = rows.reduce((sum, row) => sum + toAmount(row.amount), 0)
-  const remaining = Math.round((amount - allocated) * 100) / 100
+  const remaining = Math.round((total - allocated) * 100) / 100
   const balanced = Math.abs(remaining) < CENT
   const complete = balanced && rows.length >= MIN_ROWS
     && rows.every(r => r.category_id && Math.abs(toAmount(r.amount)) >= CENT)
@@ -108,7 +115,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
         if (cancelled) return
         if (split.parts?.length) {
           setRows(split.parts.map((p, i) => ({
-            key: `row-${i}-${p.id}`, category_id: p.category_id, amount: String(p.amount),
+            key: `row-${i}-${p.id}`, category_id: p.category_id, amount: String(p.amount * dir),
             label: p.label || '',
           })))
         } else {
@@ -126,7 +133,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
       .catch(err => { if (!cancelled) setError(err?.message || 'Could not load this split.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- category_id seeds the first row on open only; re-running on it would discard in-progress edits
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- category_id seeds the first row on open only; re-running on it would discard in-progress edits, and dir is a property of the very transaction this is keyed on
   }, [txn?.id])
 
   // The single edit seam for a row, and therefore the single place the remainder undo is retired.
@@ -181,7 +188,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setRows(suggestion.parts.map((p, i) => ({
       key: `suggested-${i}`,
       category_id: p.category_id ?? null,
-      amount: p.amount == null ? '' : String(p.amount),
+      amount: p.amount == null ? '' : String(p.amount * dir),
       label: p.label || '',
     })))
   }
@@ -191,7 +198,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
     setError(null)
     try {
       const saved = await api.saveSplit(txn.id, rows.map(r => ({
-        category_id: r.category_id, amount: toAmount(r.amount), label: r.label,
+        category_id: r.category_id, amount: toAmount(r.amount) * dir, label: r.label,
       })))
       onSaved?.({ is_split: true, parts: saved.parts })
       onClose()
@@ -257,7 +264,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
               <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.45 }}>
                 This order lists {suggestion.parts.length} items totalling{' '}
                 {formatSignedMoneyAmount(suggestion.list_total)} at list. Each share below is that
-                item&apos;s portion of the {formatSignedMoneyAmount(amount)} actually paid.
+                item&apos;s portion of the {formatSignedMoneyAmount(total)} actually paid.
                 {suggestion.categorized > 0 ? (
                   <> Your rules categorize {suggestion.categorized} of them; the rest are left for you.</>
                 ) : null}
@@ -298,7 +305,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                       {formatSignedMoneyAmount(part.unit_price ?? 0)}
                     </span>
                     <span style={{ fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
-                      {part.amount == null ? '—' : formatSignedMoneyAmount(part.amount)}
+                      {part.amount == null ? '—' : formatSignedMoneyAmount(part.amount * dir)}
                     </span>
                   </div>
                 ))}
@@ -317,6 +324,13 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
               <span />
             </div>
 
+            {/* Both fields are named and opt out of autocomplete. Without a name the browser keys its
+                saved-value history on the field's `id`, which `Input` derives from `useId` — and those
+                are reused across views, so the amount box was offering back whatever had been typed
+                into the same `:rN:` elsewhere in the app (a merchant name, a date, an id) as
+                suggestions for a split. A name of its own is the key that stops that, and `off` keeps
+                the browser from proposing anything here at all: an allocation is arithmetic against
+                one transaction, never a value worth reusing. */}
             {rows.map(row => {
               const selected = row.key === selectedKey
               const removable = rows.length > MIN_ROWS
@@ -330,6 +344,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                     value={row.label}
                     placeholder="Description (optional)"
                     aria-label="Description"
+                    name="split-part-description"
+                    autoComplete="off"
                     title={row.label || undefined}
                     onChange={value => update(row.key, { label: value })}
                     style={{ fontSize: 12, padding: '5px 8px' }}
@@ -352,6 +368,8 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                     inputMode="decimal"
                     placeholder="0.00"
                     aria-label="Amount"
+                    name="split-part-amount"
+                    autoComplete="off"
                     onFocus={() => setSelectedKey(row.key)}
                     onChange={value => update(row.key, { amount: value })}
                     style={{
@@ -397,7 +415,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: GRID }}>
               <span style={{ color: 'var(--muted)', fontSize: 13, gridColumn: 'span 2' }}>Transaction</span>
               <span style={{ color: 'var(--muted)', fontSize: 13, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>
-                {formatSignedMoneyAmount(amount)}
+                {formatSignedMoneyAmount(total)}
               </span>
               <span />
             </div>
