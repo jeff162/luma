@@ -62,20 +62,17 @@ npm install
 npm run dev
 ```
 
-No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the
-working directory), and the session secret is generated on first run into the control database. A
-repo-root `.env` is the override mechanism, and is what most contributors will want for running against different databases (test v. prod) or different instances running on the same box:
+No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the working directory). A
+repo-root `.env` is the override mechanism, and is useful for running against different databases (test v. prod) or different instances running on the same box:
 `BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
 and `DATA_DIR` specifies the database location. A hand-run `uvicorn`
 does not read `.env` for its port, so pass the same value `.env` sets or the frontend will call a
-backend that is not there. **Settings → Configuration** lists every effective value and its source.
+backend that is not there. **Settings → Configuration** lists every effective value and its current source. Most settings can be set via
+a `.env` file, see `.env_example`.
 
-`LUMA_ENV_FILE` points the backend at a different override file, and is set in the environment rather
-than in one (it chooses which file is read, so it cannot live inside the file). It redirects **the backend
+For building test scrpits, the `LUMA_ENV_FILE` environment variable (not a `.env` file setting as it points at the `.env` file to use). It redirects **the backend
 only** — `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly
-for their ports — so it is the right tool for pointing a backend at a throwaway database for testing, which is exactly
-what `scripts/run-e2e-backend.sh` uses it for, and the wrong one for switching between whole
-configurations. Switching those means choosing which file *is* `.env`.
+for their ports — so it is the right tool for pointing a backend at a throwaway database for testing. `scripts/run-e2e-backend.sh` uses this. It is not of much interest to users starting the application.
 
 Shell examples and local tooling should stay WSL-friendly where practical.
 
@@ -83,7 +80,8 @@ Shell examples and local tooling should stay WSL-friendly where practical.
 
 The repo carries its own agent instructions, and they are worth pointing an assistant at explicitly
 before it starts editing — most of the avoidable rework on this project has come from an agent
-reconstructing the design from source instead of reading the file that already explains it.
+reconstructing the design from source instead of reading the file that already explains it or an agent discovered it didn't follow the
+instructions and it introduced a bug or other technical debt that needs to get resolve later.
 
 A reasonable opening instruction:
 

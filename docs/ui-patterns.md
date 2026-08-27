@@ -72,6 +72,13 @@ Shared controls should be treated as finished product surfaces, not reused snipp
 
 - **Creating is available wherever assigning is.** Anywhere the user picks a value from a managed set — a category, a group, a tag, a note, an owner, and so on — they can also create a *new* member of that set inline, in the same control, and have it applied immediately. The user is never bounced to a separate management screen just to mint the thing they want to assign: they invent it and assign it in one motion (create a category from the category picker, a tag from the tag picker). This is a deliberate stance that the UI must not get in the way of the user's actual intent. Only *creation in service of an assignment* has to be inline — deletion, renaming, reordering, and other maintenance can live on a dedicated screen, because that is not what the user is in the middle of doing. When adding a new picker/selector for any assignable thing, include its inline create affordance from the start rather than deferring it to "manage it in Settings."
 
+- **Copy that names a capability is a claim the UI has to honour.** Text telling someone to do a thing
+  ("replace the vault key after removing someone's access") asserts that the thing is reachable from
+  where they are standing. The vault settings shipped exactly that sentence with no member list and no
+  way to remove anyone — the endpoint existed, only the surface did not — which reads as a dead end
+  rather than as a missing screen. The moment to check is when the copy is written, not when someone
+  tries to follow it.
+
 - Favor consistency over novelty. When a control already exists elsewhere in the app, reuse the same interaction and styling unless there is a strong reason not to.
 
 - Keep look and feel consistent across pages. Similar data structures should use the same spacing, controls, and interaction patterns so the app feels like one coherent tool rather than a set of isolated screens.
@@ -565,6 +572,22 @@ Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the re
 - Avoid dismissing important confirmation modals by backdrop click if the user needs to make an explicit choice.
 
 - Success dialogs should usually have one clear next step.
+
+- **A multi-step ceremony must report every non-success outcome — including the ones the user appears to
+  have chosen.** A flow that spans several prompts (passkey registration is the reference: a WebAuthn
+  `create()` followed by a `get()`) can end in cancellation, an unsupported authenticator, or a silent
+  dismissal, and it is tempting to treat a cancel as self-explanatory — the user declined, so say
+  nothing. That only holds if they know *what* they declined. Swallowing it leaves the surface unchanged,
+  which reads as "the button did nothing, press it again", and the step they dismissed may be the one
+  that actually saves the result. Report the outcome, name which step it belonged to, and where a
+  capability is simply missing return it as a *reason* the UI can turn into advice rather than as an
+  error — see the PRF fallback in `VaultSettingsDialog`.
+
+- **Fewer prompts is a correctness property in a ceremony, not just polish.** Two consecutive
+  authenticator prompts are indistinguishable to the person answering them, so the second reads as a
+  repeat of the first and gets dismissed — taking the result with it. Where a step can be folded into an
+  earlier one at no cost when unsupported (asking for PRF `eval` at creation, which is ignored where it
+  is not implemented, leaving the fallback path intact), fold it.
 
 ## First-run onboarding
 

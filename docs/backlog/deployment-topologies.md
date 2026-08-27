@@ -114,10 +114,10 @@ not what it does: the same entry point becomes the PyInstaller entry point.
 Where the databases live is decided by *how the app was distributed*, not by which OS it runs on. One
 branch, no platform matrix:
 
-- **Portable** (a zip: binary plus its data beside it) — `DATA_DIR` resolves next to the executable, and
-  the zip ships **no** configuration file. `runtime_config.anchor_relative` makes a relative setting mean
-  "beside the executable" in a frozen build, so the existing `DATA_DIR = "."` default already lands in
-  the right place; an `.env` was expected to be needed here and turned out not to be.
+- **Portable** (a zip: binary plus its data beside it) — `DATA_DIR` resolves next to the executable.
+  `runtime_config.anchor_relative` makes a relative setting mean "beside the executable" in a frozen
+  build, so the existing `DATA_DIR = "."` default already lands in the right place and the zip ships
+  **no** configuration file.
 - **Installed** (an OS installer) — `DATA_DIR` defaults to the per-OS user-data directory
   (`%LOCALAPPDATA%\Luma`, `~/Library/Application Support/Luma`, `$XDG_DATA_HOME` or `~/.local/share` plus
   `luma`). Because the portable form works off the plain default, telling the two apart needed a
@@ -157,103 +157,60 @@ came from, so the resolved data directory stays visible rather than inferred and
 
 ### Sequencing
 
-1. **Serve the SPA from the backend, plus the launcher.** *Done.* No packaging involved — this is the
-   feature itself, and it works from a checkout immediately. The durable design now lives in
-   `architecture.md` (three topologies, the client-route fallback, the standalone run mode); what stays
-   here is only what steps 2–3 still depend on.
+1. **Serve the SPA from the backend, plus the launcher.** *Done.* No packaging involved — the feature
+   itself, working from a checkout. The design (three topologies, the client-route fallback, the
+   standalone run mode) is in [`architecture.md`](../architecture.md).
+
 2. **Frozen-aware roots, PyInstaller onefile, portable zip** for Windows and Linux. *Done.*
-   `scripts/luma.spec` and `scripts/build_desktop.py` build it, `scripts/release.py` gates and
-   checksums it, and `backend/requirements-build.txt` carries the build-only dependency.
-   `.github/workflows/release.yml` runs the whole thing per platform on a `v*` tag — a matrix rather
-   than a loop because PyInstaller cannot cross-build, and it stops at uploading artifacts because
-   publishing is a person's decision. **Both the Linux x64 and Windows artifacts have been built and
-   run**; what is still unexercised is the workflow itself, since no `v*` tag has been cut yet.
+   `scripts/luma.spec` and `scripts/build_desktop.py` build it, `scripts/release.py` gates and checksums
+   it, `backend/requirements-build.txt` carries the build-only dependency, and
+   `.github/workflows/release.yml` runs the whole thing per platform on a `v*` tag — **a matrix rather
+   than a loop, because PyInstaller cannot cross-build** — stopping at uploading artifacts, since
+   publishing is a person's decision. *Still unexercised:* the workflow on a real tag. No `v*` has been
+   cut.
+
 3. **Per-OS user-data default and OS installers**, macOS first. *In progress.* The platform-neutral
    spine is in place — `distribution_form()`, `user_data_dir()`, `default_data_dir()`, the
-   `LUMA_DIST_FORM` build signal, `build_desktop.py --form`, the `.env` relocation, and a fix to the
-   configuration report, which had been resolving a relative data directory against the working
-   directory and so named a path a packaged build was not using. All three OS branches are exercised
-   from one platform in `backend/tests/test_packaged_paths.py` by faking `sys.frozen` and `sys.platform`.
-   The smoke harness is `scripts/smoke_artifact.py`, wired into every build job, which on Linux also
-   builds an installed-form artifact so the per-OS directory is exercised for real rather than first on
-   macOS. **Verified in CI on 2026-08-20:** the release workflow runs green on Linux and Windows —
-   tests, both builds, the portable smoke on each, and the installed-form build and smoke on Linux.
+   `LUMA_DIST_FORM` build signal, `build_desktop.py --form`, and the `.env` relocation. All three OS
+   branches are exercised from one platform in `backend/tests/test_packaged_paths.py` by faking
+   `sys.frozen` and `sys.platform`; `scripts/smoke_artifact.py` runs in every build job, and on Linux
+   also against an installed-form artifact, so the per-OS directory is exercised for real rather than
+   first on macOS. All four targets — Linux, Windows, `macos-latest` (arm64), `macos-15-intel` (x64) —
+   build and smoke green, which settles the one thing that could not be reasoned out in advance:
+   PyInstaller puts `sys._MEIPASS` inside the `.app`, where `bundle_root()` looks for it.
 
-   **The Dock work (2026-08-20) builds and launches.** The Swift wrapper compiles, the bundle assembles,
-   and the app runs once ad-hoc signed (see the signing entry below — the first build failed as
-   "damaged").
+   The macOS Dock wrapper, the shutdown signal handling, the stale lockfile, browser-side liveness
+   detection, and TLS trust in a frozen build all landed in this step. Their mechanisms are under
+   *Packaged builds* in [`architecture.md`](../architecture.md) — including the two decisions worth not
+   revisiting: certificate verification goes through the **OS trust store** rather than a pinned CA
+   bundle shipped in the artifact, and a blanket api-layer **request timeout was rejected** (it catches a
+   stalled connection rather than a refused one, and would need a carve-out for every legitimately long
+   request — sync, import, backup, demo load — a list that breaks a feature whenever it is wrong; see
+   [`misc-followups.md`](misc-followups.md)).
 
-   **The shutdown thread is closed in code (2026-08-20), unverified on a Mac.** It opened with an
-   observation that reads as cosmetic and was not: an in-app shutdown logged "Luma has stopped.", and a
-   Dock Quit logged nothing at all. The cause was one line of uvicorn — `Server.capture_signals` restores
-   the *previous* handler on the way out and then re-raises the signal it caught, so the SIGTERM the
-   wrapper sends is delivered a second time, to `SIG_DFL`, and kills the process where it stands: after
-   the clean shutdown, but before the lockfile is released or a word is printed. Ctrl+C escaped it only
-   because Python's default SIGINT handler raises an exception the launcher already catches. Three things
-   followed from fixing it, all recorded under *Packaged builds* in
-   [`architecture.md`](../architecture.md): the handlers themselves (SIGTERM defused, SIGHUP given the
-   one it never had, SIGINT deliberately left alone), the startup line no longer advising Ctrl+C into a
-   log nobody can press it in, and the discovery that the stale lockfile left by every Dock Quit had the
-   same single cause.
+   **Building one platform on demand.** `workflow_dispatch` takes a `platform` choice and a `plan` job
+   turns it into the build matrix, so testing an artifact on a machine somebody is sitting at no longer
+   waits on all four; a tag push carries no inputs and still builds everything. The matrix has to be
+   **computed rather than filtered** — a job-level `if` cannot see the `matrix` context, and filtering an
+   `os` dimension while leaving `include` in place re-adds the very platforms it excluded, since an
+   include entry that cannot merge into a remaining combination is appended as a new one.
 
-   **Telling the browser was the other half, and needed no polling.** Only the tab that pressed the
-   button knew; every other tab, and every shutdown that did not come from a browser at all, decayed into
-   silent failures. The signal turned out to exist already and to be free — a request to a port nothing
-   is listening on is refused immediately — and the "endless loading" that looked like a missing request
-   timeout was a missing *rejection path* at the call sites, the rejection having been arriving in
-   milliseconds and being dropped. So: `frontend/src/lib/backendLiveness.js` acts on the failure,
-   `BroadcastChannel` fans it out to the other tabs, a probe on returning to visibility covers the idle
-   tab (the Dock-Quit case, and equally a machine waking from sleep), and a sweep fixed the load sites
-   whose spinner could never stop. Testing on the Mac then found the one path none of that covered:
-   **lazy-loaded route chunks**, which the browser fetches through its module loader rather than through
-   the api layer, so a stopped backend broke every not-yet-loaded page as a render-time crash — the
-   error boundary showing "Something went wrong" over the notice that would have explained it. Same
-   testing pass established that recovery had to be a reload rather than an unlatch, and that the
-   affordance for it should be a button rather than a sentence telling anyone to click. **A blanket
-   request timeout was considered and rejected**: what it
-   would catch is a *stalled* connection rather than a refused one, which the visibility probe already
-   covers, and applying one across the api layer would have to carve out every legitimately long request
-   (sync, import, backup, demo load) — a list that breaks a real feature whenever it is wrong.
+   **What still needs a Mac.** No Swift toolchain and no Mac here, and two of these are beyond CI
+   whatever machine runs it:
 
-   **The release workflow can build one platform on demand.** `workflow_dispatch` takes a `platform`
-   choice, and a `plan` job turns it into the build matrix — so testing on a machine that is in front of
-   somebody no longer means waiting on all four. A tag push carries no inputs and therefore still builds
-   everything. The matrix has to be *computed* rather than filtered: a job-level `if` cannot see the
-   `matrix` context, and filtering an `os` dimension while leaving `include` in place re-adds the
-   excluded platforms, since an include entry that cannot merge into a remaining combination is appended
-   as a new one.
-
-   What still needs the Mac, none of it checkable here (no Swift toolchain, no Mac): whether the Dock
-   icon appears without the launch bounce; whether Quit and Command-Q shut down cleanly *and leave "Luma
-   has stopped." in the log*, which is the specific claim the signal fix makes; and whether the two
-   death-watches behave — wrapper force-quit stopping the server, and the server exiting quitting the
-   wrapper.
-
-  macOS builds and runs. All four targets — Linux, Windows, `macos-latest` (arm64) and `macos-15-intel`
-   (x64) — go green, smoke tests included, which settles the one thing that could not be reasoned out in
-   advance: PyInstaller puts `sys._MEIPASS` inside the `.app` where `bundle_root()` looks for it, so the
-   bundled SPA and the distribution-form marker are both readable from within the bundle.
-
-   The first macOS run found one real bug, of a kind only a packaged build on that platform can have:
-   **no certificate store**. A frozen build carries an OpenSSL whose default CA path points at the build
-   machine's layout, so every outbound HTTPS call failed with "unable to get local issuer certificate" —
-   both providers, not just the one that surfaced it, since the Plaid SDK reaches the network through
-   urllib3 and hits the same missing defaults. Fixed by verifying against the OS trust store
-   (`truststore`) rather than shipping a pinned CA bundle; see *Packaged builds* in
-   [`architecture.md`](../architecture.md). The smoke test now fails if a packaged build reports falling
-   back, which costs no network call because the bootstrap already says so on stderr.
-
-   Two things CI structurally **cannot** reach, and which the on-demand Mac still has to:
-
-   - **Gatekeeper.** A locally built bundle is never quarantined, so the refusal and the "Open Anyway"
-     path simply do not occur in CI. Only a browser-downloaded artifact carries the flag — and the
-     quarantine has to survive being unarchived, which it does through Finder and does *not* through
+   - Whether the Dock icon appears without the launch bounce; whether Quit and Command-Q shut down
+     cleanly **and** leave "Luma has stopped." in the log, which is the specific claim the signal fix
+     makes; and whether the two death-watches behave — wrapper force-quit stopping the server, and the
+     server exiting quitting the wrapper.
+   - **Gatekeeper**, which CI structurally cannot reach: a locally built bundle is never quarantined, so
+     the refusal and the "Open Anyway" path do not occur at all. Only a browser-downloaded artifact
+     carries the flag — and the quarantine survives being unarchived through Finder but **not** through
      `unzip`, so testing with the wrong tool tests nothing.
-   - **The log file.** It exists for a LaunchServices start, and the smoke harness launches the
-     executable directly — which is deliberate, since it captures the output it would otherwise divert.
-     So the redirect has never actually fired.
+   - **The log file**, for the same reason: it exists for a LaunchServices start, and the smoke harness
+     launches the executable directly — deliberately, since that captures the output the redirect would
+     otherwise divert. So the redirect has never fired.
 
-   Windows and Linux installers are **not** in this step's scope — both platforms keep the portable zip.
+   Windows and Linux installers are **not** in this step's scope; both platforms keep the portable zip.
 
 ### macOS specifics
 
@@ -311,7 +268,9 @@ Four things that are decided rather than discoverable, and that a build has to g
   offers it. On macOS the wrapper adds Dock Quit and Command-Q, sending SIGTERM into that same path.
 
   That SIGTERM needs the launcher to hold a handler of its own, or uvicorn re-raises it into `SIG_DFL`
-  and the process dies before it can clean up — the defect described in step 3 above.
+  and the process dies before it can clean up — after the clean shutdown, but before the lockfile is
+  released or anything is logged. The handlers are under *Packaged builds* in
+  [`architecture.md`](../architecture.md).
 
   Neither process is left behind when the other goes first. The wrapper holds the write end of a pipe
   whose read end is the child's stdin; a **zero-length** read there means every write end is closed,

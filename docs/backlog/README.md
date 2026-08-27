@@ -3,6 +3,13 @@
 Deferred and parked work that is **not** blocking current features. Each file is one initiative,
 written so it can be picked up cold.
 
+> **The keep-and-link rule below is being replaced.** [`../doc-restructure.md`](../doc-restructure.md)
+> is the committed plan to retire completed project files entirely — rewriting what each holds into
+> topic-organized reference docs rather than keeping the file and linking to it, since a link to a
+> project filename decays and one already has. Read it before disposing of a shipped item. It is parked
+> behind two `pre-release.md` features as of 2026-08-26, and takes the **Completed** section with it
+> when it lands.
+
 **When an item ships**, fold its durable "what it is and why" into the main docs (`architecture.md` /
 `data-model.md` / `ui-patterns.md` / `shared-components.md`) — those are what the read-first rule makes
 someone open, so that is where a rule has to live to be found. Then either delete the backlog file or,
@@ -15,6 +22,29 @@ anyway, and both are load-bearing: the main-doc paragraph **links back** to the 
 (ten such links exist today), and the **code carries the decision at the site** — the header comment on
 `ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed", which
 no document could.
+
+**A rejected shape is not a work log, and only one of them belongs here.** The distinction is what
+keeps these files readable: a *rejected shape* answers a question someone is about to ask again — what
+was considered, why it fails, what it would cost to revisit — and an *obstacle* is a trap that would
+bite a second attempt. Both earn their space. What does not is the narrative of arriving at the current
+state: an expectation that turned out wrong, the order in which things were discovered, what a testing
+pass revealed, which symptom looked like a different bug first. Nothing follows from any of it once the
+work has landed, and it buries the notes that do matter. Three tests, all of them cheap to apply:
+
+- **Could a reader re-propose this?** If yes, keep the rejection and its reason. If it could not occur
+  to anyone, cut it.
+- **Would this bite a second attempt?** If yes, keep the obstacle. Being interesting is not the same as
+  being load-bearing.
+- **Does the main doc already say it, better?** Then link, and delete the copy. A shipped mechanism
+  described in two places drifts, and the backlog copy is the one that goes stale — see the fold-into-
+  the-main-docs rule above.
+- **Is it in the wrong file rather than surplus?** Then move it. A cleanup pass is not only deletion:
+  a generalized rule buried in a phase entry belongs in `ui-patterns.md` (or whichever main doc owns
+  that question), and it is unreachable where it sits — nobody building a dialog reads the security
+  model. Relocating is the more valuable half of a pass, and the more easily skipped.
+
+A status line per item is separate from all this and is welcome: *done*, *in progress*, *what remains*
+is exactly what someone picking the file up cold needs first.
 
 **Why many small files rather than one long one:** an agent (or a person) picking up one initiative
 should be able to read one file, not scan a monolith for the paragraph that applies. The same reasoning

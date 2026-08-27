@@ -141,3 +141,43 @@ That is the concrete hole to look at first if this is picked up.
 data side is cheap. That would let the picker say "added here · also from Coffee Shops" and offer the
 two intents as separate actions ("remove my copy, keep the inherited one" vs "hide here"), and would
 let bulk add record a force-on without the ambiguity.
+
+## Finish the backlog prose pass
+
+**Context (started 2026-08-26).** The criterion for what a backlog file keeps — rejected shapes and
+obstacles, not a work log — is stated at the top of [`README.md`](README.md), and two files have been
+worked to it: [`deployment-topologies.md`](deployment-topologies.md) (full pass, 341 → 298 lines) and
+[`security-and-deployment-model.md`](security-and-deployment-model.md) (the safe cuts only, see below).
+Two generalized rules were relocated out of the latter into `ui-patterns.md`, which is the half of this
+work that matters most and the half most easily skipped.
+
+**Where the residue is.** Not where keyword scanning suggests — phrase-matching on "turned out" and the
+like ranked `deployment-topologies.md` near the bottom, and it was the worst offender. The predictor is
+simply **whether the work shipped**: a not-started file is forward-looking design and cannot contain a
+work log, while a shipped one is where the mechanism moved into the main docs and the narrative stayed
+behind. About 15 of the 36 files are shipped or partly shipped; the rest are parked design and can be
+skipped.
+
+**Ranked by words, largest first:** `security-and-deployment-model.md` (11.5k, partly done),
+`backup-restore-scope-and-secrets.md` (5.2k), `dashboard-reporting.md` (4.6k),
+`transaction-splits.md` (2.6k), `list-virtualization.md` (2.0k),
+`optional-env-and-layered-config.md` (1.4k), `multi-payment-purchases.md` (1.4k),
+`account-type-as-rule-criterion.md` (1.0k), `recurring-detection.md`, `cleanup-pass.md`,
+`paypal-amazon-enrichment.md`, `transaction-list-limits.md`, `pre-auth-security-ui.md`,
+`import-history-windowing.md`, `paypal-money-movement-recognition.md`.
+
+**Two files need more than a prose pass.** `transaction-splits.md` and `multi-payment-purchases.md`
+carry **no status line at all** and both features have since shipped ("Support for splitting a
+transaction across multiple categories", "Ability to link transactions which form part of a single
+purchase"). They still read as work that lies ahead, so they need the fold-into-the-main-docs step
+before anything else — the trap being that a reader picking one up cold would believe it unbuilt.
+
+**The one deliberately-skipped chunk.** `security-and-deployment-model.md` still carries ~230 lines of
+`[DONE]` build-phase entries. They are not purely a work log: mixed into them are migration numbers, AAD
+schemes, endpoint names and payload-format versions. Deciding each entry's fate means checking whether
+that fact is already in `architecture.md` — roughly twenty verifications, where a wrong call deletes the
+only record of something like "migration v18 folds `plaid_item` rows in carrying the ciphertext
+verbatim". The likely outcome is **relocation rather than deletion**: the technical detail reads as
+`architecture.md` material, leaving the backlog file holding decisions and rejected shapes. Do it as its
+own pass, not as a tail end of another.
+

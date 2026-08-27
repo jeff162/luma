@@ -16,8 +16,7 @@ impossibility that forced the change. This
 is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
-at rest. Supersedes the exploratory `server_managed`-only privacy mode as the *meaningful* protection
-path. Pick-up-cold summary below; build phases at the end.
+at rest. Pick-up-cold summary below; build phases at the end.
 
 ## Deployment model
 
@@ -69,8 +68,7 @@ path. Pick-up-cold summary below; build phases at the end.
   token is **read-only** (transaction history + balances; not payment-capable, and it doesn't even expose
   account/routing numbers — that's the `auth` product). So the realistic worst case is *ongoing read
   access to financial data*, **revocable** by disconnecting the connection (which calls the provider's
-  item-remove; see the disconnect flow) — **not** "access to the actual bank." Framing the token as
-  uniquely precious "crown jewels" overstated it; the honest framing is below. **This conditioning is on
+  item-remove; see the disconnect flow) — **not** "access to the actual bank." **This conditioning is on
   read-only** — adding a payment-capable token (Teller payments) or `auth`/`identity` would enlarge the
   blast radius past the ledger and this section must be revisited.
 - **The two clauses are independent, and SimpleFIN breaks one of them (2026-08-07).** The conditioning
@@ -155,24 +153,16 @@ not a new mode**:
 2. **Migrate on flip.** Turning sign-in protection *on* converts existing local profiles into
    `user_account`s (each sets a password then), rather than today's behavior of bootstrapping a fresh
    admin and orphaning the profiles.
-3. ~~**Keep the two tables under the hood.**~~ **SUPERSEDED — see "Unified identity model" below.** The
-   original call kept `local_preference_profile` and `user_account` as separate tables (collapsing them
-   "a deep refactor for no user-visible gain"). That rationale turned out to be wrong: the gain is a
-   *coherent single "user" concept* and a **trivial disable** (the two-table split is the only reason
-   turning sign-in protection back off looked like a lossy reverse-migration). The settled direction is
-   now to **unify to one `user_account` table** where the workspace flag toggles only *whether the
-   password is checked*.
-
 The Plaid vault stays **orthogonal**: a fully passwordless (perimeter-off) install can still have
 vault-encrypted tokens, because the vault secret is per-user and independent of the app perimeter.
 
-## Unified identity model (settled — supersedes "keep the two tables")
+## Unified identity model (settled)
 
 **Decision (2026-07-31):** there is **one identity concept — a user** — in a single `user_account`
-table. The "Enable sign-in protection" flag decides *only whether the login password is verified*; it no
-longer switches which table identities come from. This reverses point 3 above. The earlier "no
-user-visible gain" reasoning missed two gains that matter: identities stop changing shape when auth is
-toggled, and **disabling** sign-in protection becomes a flag flip instead of a lossy reverse-migration.
+table. The "Enable sign-in protection" flag decides *only whether the login password is verified*; it
+does not switch which table identities come from. **Two separate tables is the shape to avoid**, and why
+is worth keeping: identities change shape as auth is toggled, and *disabling* sign-in protection becomes
+a lossy reverse-migration rather than a flag flip.
 
 **How each operation behaves under one table:**
 
@@ -192,16 +182,6 @@ toggled, and **disabling** sign-in protection becomes a flag flip instead of a l
 - The **`auth_required()` latch** (`user_count() > 1` forcing auth on) is **dropped**: multiple
   *passwordless* users become ordinary (many rows, flag off), which the current latch wrongly forbids.
   The flag alone governs the perimeter.
-
-**What it touches / supersedes.** This reworks the middleware's local-vs-session branch (`main.py`),
-`auth_required()` + the latch, the local-profile endpoints and the `App.jsx` chooser (retargeted to
-users), and preference-scope keying. It **supersedes part of phase 2b**: `migrate_profiles_to_accounts`
-(a profile→account converter) is replaced by a **one-time** "existing `local_preference_profile` rows
-become `user_account` rows" unification, after which *enable* is trivial. The account model, the
-`must_change_password`/unset-password **sentinel/claim** primitive, and the forced-change login flow all
-carry over unchanged. Can be **staged**: first let auth-off mode authenticate against `user_account`
-(no password) so disable works and nothing is lost, then retire `local_preference_profile` once nothing
-reads it.
 
 **Built (phase 2c, 2026-07-31).** One `user_account` table; `local_preference_profile` retired via a
 one-time `_unify_local_profiles_into_users()` at startup (folds legacy rows into users, re-keys
@@ -293,8 +273,6 @@ provider-neutral. Generalize the Plaid-specific edges into a connection abstract
     status/timestamp**; and a locked-vault "unlock to connect/sync" state.
   - Admin gates *configure*; any vaulted user *connects/syncs* — matching the auth split. The current
     tab copy references a **deprecated Plaid "development mode" in `.env`** — fix that when building.
-  - (Renaming the overloaded `Import / Export / Backup` page is a *separate*, optional cleanup —
-    connections don't live there, so this doesn't force it.)
 
 ## Token custody: multi-wrap envelope encryption
 
@@ -679,35 +657,12 @@ lift (pervasive field encryption or whole-DB) and is **out of scope** for this i
 
 ## Open questions
 
-None substantive remain — the model is fully decided. Remaining unknowns are implementation-level
-(exact table columns, endpoint shapes, UI copy) and belong to the build, not the design.
+None substantive remain — the model is fully decided, and every phase is built. Remaining unknowns are
+implementation-level (exact columns, endpoint shapes, UI copy). Each settled decision is stated in its
+own section above; this section deliberately does not restate them, since two copies of a decision drift
+and the summary is the one that goes stale.
 
-**Resolved:** deployment model (no multi-tenant hosted; one shared workspace, multiple identities; login
-= perimeter, admin gates settings not data; **topology is *detected* not a chosen profile** — Standalone
-vs client-server falls out of per-request loopback/network, the only real user choice is the
-forward-looking "connecting a data source?" declaration, and `security_profile` is demoted to a
-pre-detection stopgap — see "Topology is detected, not a chosen profile"); trusted-server / server-side crypto (browser-side only if we
-ever want an untrusted host); retire `server_managed`, the master-key fallback, **and any `off`/plaintext
-token path** — the vault is the *only* custody, with an **unconditional** passphrase floor (the
-sandbox-lax/Production-enforced tier was removed — see "Passphrase strength is unconditional"); no
-required fallback slot / no recovery escrow (loss of the *last* slot = re-link, though another member's
-slot is now a real way back — see [vault-passphrase-recovery.md](vault-passphrase-recovery.md)); passkeys
-are vault-only, never app login; **identity & perimeter** — password optionality is an all-or-nothing *workspace* toggle
-(the existing two modes), per-user auth when on; **unify to one `user_account` table** (the flag toggles
-only password verification — reverses the earlier "keep two tables" call; makes disable a flag flip);
-**enrollment by keypair slot** — a slot owns an X25519 keypair rather than wrapping the DEK, so access is
-granted from a public key alone: enrol → approve, no bearer secret, no expiry, and a rotation that
-preserves every remaining member (the invite ceremony this replaced is recorded, retired, under
-"Provisioning a new user"); account-creation stays separable from vault-grant; revoke-then-rotate on an
-untrusted departure; **provider-agnostic connections** — a
-`connection` table with a `provider` discriminator + opaque encrypted credential blob and an adapter
-interface, Plaid first then Teller then SimpleFIN, app-level credentials moved from `.env` into the DB
-under the vault, per-provider **data-source cards** on the Accounts → Connections tab (provider config
-moves there out of Settings; "+ Add data source" → configure / connect / sync / last-fetch per card).
-Plaid BYOK has **no approval gate** (free tier ≈10 accounts) — the earlier "sandbox-only until approved"
-premise was wrong.
-
-## Build phases (rough, when unblocked)
+## Build phases (all built — kept as the order things landed in)
 
 1. **[DONE] Drop the multi-tenant pretense** — removed the `multi_tenant` profile; the single-workspace
    / perimeter model is documented in `architecture.md` → "Identity, access & deployment model".
@@ -766,16 +721,12 @@ premise was wrong.
    is a decision rather than an omission. The two hard preconditions (secure context, RP id must be a
    domain) are detected server-side (`_passkey_context`) and reported as stated reasons.
 
-   **Two ceremony lessons, both found in first use (2026-08-13).** Registration originally asked only to
-   *enable* PRF at `create()` and always evaluated the salt in a second `get()`, because `create()`
-   results are not universally returned. Correct, but it made the ordinary case cost **two prompts**, and
-   the second is indistinguishable from a repeat of the first — so dismissing it was the natural response
-   to a registration that appeared finished, and nothing was saved. Asking for `eval` *at creation* costs
-   nothing where unsupported (the field is ignored and the fallback still runs) and removes the prompt
-   where it is not. And the dialog **swallowed a cancelled ceremony**, on the reasoning that declining is
-   the user's own answer. That only holds when they know what they declined: the silent version left the
-   surface untouched, which reads as "press it again". Generalized: **a multi-step ceremony must report
-   every non-success outcome, including the ones the user appears to have chosen.**
+   **Registration asks for PRF `eval` at `create()`, not only at the follow-up `get()`.** Requesting it
+   costs nothing where unsupported — the field is ignored and the salt is still evaluated in the `get()`
+   the fallback needs — and it keeps the ordinary case to one authenticator prompt. Two prompts is not a
+   cosmetic problem here: see *Confirmation and completion flows* in [`ui-patterns.md`](../ui-patterns.md)
+   for why an indistinguishable second prompt gets dismissed, and why every non-success outcome of this
+   ceremony has to be reported.
 5. **[DONE 2026-08-13]** **Enrollment, grant, revocation and rotation.** Built on keypair slots (see "A
    slot holds a keypair"), which replaced the invite ceremony rather than implementing it: setting a
    passphrase as a user the vault does not know enrols them (`vault_access_pending`), any member holding
@@ -785,12 +736,6 @@ premise was wrong.
    Remove access, the approval queue, and Replace vault key. The Connections strip gained the
    request/pending/passkey-unlock states, and the pending queue also surfaces as a computed task for
    members who can act on it.
-
-   **The member list was missing from the first build while the rotate copy already referred to it** —
-   "do this after removing someone's access", with nowhere to see who had access or to take it away. The
-   endpoint existed; only the surface did not. The general shape, worth stating rather than treating as a
-   one-off: *copy that names a capability is a claim the UI has to honour*, and the moment to check is
-   when the copy is written, not when someone tries to follow it.
 
    **Also landed here:** slot **format 2** with a lazy format-1 conversion at unlock (carrying the
    `credentials_export` fingerprint history across, since the passphrase that opens those backups has not
@@ -967,6 +912,6 @@ discussion above:
   Adopting a provider of that shape invalidates the "ongoing *read* access, revocable by disconnecting"
   conditioning above, so the Threat-model section must be reopened before one is built — not after.
   Parked on coverage, not on this; the constraint stands whenever it is picked up.
-- Memory `plaid-deferred-until-approval` — **superseded/corrected here:** Plaid BYOK has no approval gate
-  (free tier ≈10 accounts), so Plaid is the intended *first* connection provider to test, not a deferred
-  one. (Memory updated to match.)
+- **Plaid BYOK has no approval gate** (free tier ≈10 accounts), so Plaid is a connection provider that
+  can be exercised immediately rather than one gated behind an application. The threat-model
+  conditioning above assumes the `transactions` product only.
