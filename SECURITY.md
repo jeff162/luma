@@ -1,7 +1,7 @@
 # Security policy
 
 Luma handles financial transaction history and, when data sources are connected, credentials that grant
-ongoing read access to bank accounts. Security reports are welcome and taken seriously.
+ongoing access to bank accounts (Luma only uses read access but the credentials may grant additional access). Security reports are welcome and taken seriously.
 
 ## Reporting a vulnerability
 
@@ -72,15 +72,20 @@ Stated plainly, because it determines what is worth reporting and what a user sh
 - **A leaked database or unencrypted backup** exposes the transaction history it holds, permanently:
   it was never encrypted, and nothing done afterwards changes the contents of a file someone already
   has. The stored data-source credentials in that copy are encrypted, but they are protected only by
-  how well the vault passphrase resists an **offline** attack against the copy — so they should be
-  treated as reachable given enough time, and **revoked** rather than relied on.
-- **A leaked provider credential** grants **read-only** access to transactions and balances for as long
-  as it remains valid. It cannot move money. Revoking it is the response, and it is the *only* action
-  that reaches a credential already sitting in someone else's copy. Revocation differs by provider —
-  a declared capability, `revokes_on_disconnect`: where the provider supports third-party revocation,
-  disconnecting from Luma genuinely ends the access; where it does not, disconnecting removes only
-  Luma's copy and the credential must be revoked at the provider. The disconnect confirmation states
-  which of the two is about to happen.
+  how well the vault passphrase resists an **offline** attack against the copy — so the data-source credentials should be
+  treated as reachable given enough time, and **revoked** on the provider side.
+- **A leaked provider credential** grants whatever access the provider issued it for, for as long as it
+  remains valid. Luma only ever *uses* read access — transactions, balances, and the account metadata
+  that identifies them — and never requests a money-movement product. But what a credential *can* do is
+  the provider's to define, not Luma's: depending on the provider and what the connection was created
+  with, it may also reach account and routing numbers or identity details, and an app-level credential
+  (a client id and secret) reaches every connection made with it rather than one. Treat the ceiling as
+  whatever that provider's own dashboard says the credential can do, and check it there. Revoking it is
+  the response, and it is the *only* action that reaches a credential already sitting in someone else's
+  copy. Revocation differs by provider — a declared capability, `revokes_on_disconnect`: where the
+  provider supports third-party revocation, disconnecting from Luma genuinely ends the access; where it
+  does not, disconnecting removes only Luma's copy and the credential must be revoked at the provider.
+  The disconnect confirmation states which of the two is about to happen.
 - **After a leaked file, assume the vault secrets are recoverable and change them.** Nothing done
   afterwards protects the copy already taken — only revocation limits that. But whatever an offline
   attack against the copy yields (the passphrase, and through it the slot's private key and the DEK)
