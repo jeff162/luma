@@ -269,6 +269,13 @@ instruction and fix the drift rather than silently choosing the looser version.
   specific falsifiable claims to look for (for a shutdown fix: this exact line in this exact log), so
   one pass produces a usable answer rather than "it didn't seem to work".
 
+- **Scope the test run to what the change can reach.** A change confined to a page, a component, or one
+  backend module is verified by that module's tests plus lint and a build — running the whole ~1,700-test
+  backend suite for a frontend change or a self-contained helper spends nearly two minutes to re-prove
+  code the diff cannot touch. Reach for the full suite when the change is to something shared: a
+  migration, the row source a query selects from, a resolver, an invariant several subsystems read. The
+  frontend's vitest suite is cheap enough (~10s) to run whole after any UI change.
+
 - Test by value, not by reflex. Invest in recurrence-prone bugs, invariants, contracts, and
   cross-component behavior; do not assume every local fix needs a dedicated test.
 

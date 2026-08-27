@@ -7,13 +7,14 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Tooltip } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Toggle, Tooltip } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
+import { NAV_DATA_LOCATION_PREF_KEY } from '../lib/dataLocation.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
@@ -1647,6 +1648,40 @@ function configResetPrompt(row) {
   }
 }
 
+/*
+ * Whether the navigation pane names the database this copy is open on.
+ *
+ * It lives on this panel rather than under Appearance for two reasons. This is where the database
+ * locations are read, so it is where someone thinks "I want that where I can see it" — and the section
+ * is already admin-or-local, which is the same audience the line itself is served to, so one gate covers
+ * the control and the thing it controls instead of two rules that could drift.
+ *
+ * It is a *preference*, not a configured value, and is presented as one: ruled off from the rows above
+ * and carrying no source chip, because no layer supplied it and nothing resolves it at startup. Stored
+ * per user rather than as an app setting for the same reason — a stored setting would need an
+ * environment variable that would then outrank the switch, which is not what a display toggle should do.
+ */
+function DataLocationNavToggle({ dataLocation }) {
+  const [showDataLocation, setShowDataLocation] = useUserPreference(
+    NAV_DATA_LOCATION_PREF_KEY, !!dataLocation?.show_by_default,
+  )
+  if (!dataLocation) return null
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', display: 'grid', gap: 6, paddingTop: 12 }}>
+      <Toggle
+        checked={showDataLocation}
+        onChange={setShowDataLocation}
+        label="Show the data location in the navigation pane"
+      />
+      <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
+        Names the financial database in use beneath the application name, for anyone who can open this
+        section. It is on by default where the databases are somewhere other than this build&rsquo;s own
+        default location.
+      </p>
+    </div>
+  )
+}
+
 function ConfigurationSection({ authEnabled, currentUser }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -1655,6 +1690,8 @@ function ConfigurationSection({ authEnabled, currentUser }) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [resettingKey, setResettingKey] = useState('')
   const [notice, setNotice] = useState('')
+
+  const { dataLocation } = useAppSession()
 
   const canManage = !authEnabled || currentUser?.role === 'admin'
 
@@ -1749,6 +1786,8 @@ function ConfigurationSection({ authEnabled, currentUser }) {
               />
             ))}
           </div>
+
+          <DataLocationNavToggle dataLocation={dataLocation} />
 
           {rowGroups.advanced.length > 0 ? (
             <div style={{ display: 'grid', gap: 2 }}>

@@ -184,6 +184,19 @@ def _require_admin_or_local(request: Request):
     return _require_admin(request)
 
 
+def _session_can_manage_config(user: dict | None) -> bool:
+    """Whether this session may be *told* the configuration, as opposed to being able to demand it.
+
+    The same reach `_require_admin_or_local` grants, phrased as a question rather than a guard: the
+    status payload has to decide whether to include a field, and a 403 is not an answer it can use. Both
+    must stay in step — the database locations are admin-or-local information, and a field that leaked
+    them into a member's status payload would widen that boundary without any endpoint appearing to
+    change."""
+    if not auth_required():
+        return True
+    return bool(user and user.get("role") == "admin")
+
+
 def _require_current_user(request: Request):
     user = getattr(request.state, "user", None)
     if not user:
@@ -268,6 +281,13 @@ def _auth_status_payload(request: Request | None = None) -> dict:
             user = get_user_by_id(user_id)
             if user:
                 payload["user"] = _session_payload(user)
+        # Where this copy's databases are, for the navigation pane's data-location line. Sent only to a
+        # session that could already read it from the configuration report, so the line cannot widen who
+        # knows the filesystem layout; every other session gets no field and renders nothing. It rides
+        # this payload rather than a call of its own because the nav needs it at first paint, and the
+        # answer cannot change while the process runs.
+        if _session_can_manage_config(payload.get("user")):
+            payload["data_location"] = app_config.data_location()
         # Detected transport facts (topology + HTTPS) are per-request, not stored presets. The frontend
         # uses these to steer HTTPS guidance and gate connect-time actions on real HTTPS availability.
         provider_intended = payload["data_provider_intended"]

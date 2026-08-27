@@ -51,6 +51,118 @@ def _row(key: str) -> dict:
     return next(row for row in app_config.effective_config() if row["key"] == key)
 
 
+class DataLocationTests(unittest.TestCase):
+    """Which databases the navigation pane says this copy is open on, and who is told.
+
+    Two properties are worth pinning. The paths come from the modules that own them rather than from
+    re-reading the environment, so the line cannot name a database the process never opened. And
+    `show_by_default` is a *default* for the user preference in front of it, arming itself for the
+    installations where "which database is this?" is a live question — moved data, a checkout, or
+    developer options — and staying quiet for a stock one.
+    """
+
+    @contextmanager
+    def _databases_at(self, db_path: Path, control_db_path: Path):
+        from backend.db import database
+
+        originals = (database.DB_PATH, cdb.CONTROL_DB_PATH)
+        database.DB_PATH = str(db_path)
+        cdb.CONTROL_DB_PATH = str(control_db_path)
+        try:
+            yield
+        finally:
+            database.DB_PATH, cdb.CONTROL_DB_PATH = originals
+
+    @contextmanager
+    def _installed_copy(self, default_dir: Path):
+        """A packaged installation with developer options off — the case that has to stay quiet, and the
+        baseline the other arms are measured against."""
+        with mock.patch.object(app_config, "distribution_form", return_value=runtime_config.DIST_FORM_INSTALLED), \
+             mock.patch.object(app_config, "developer_options_enabled", return_value=False), \
+             mock.patch.object(app_config, "default_data_dir", return_value=str(default_dir)):
+            yield
+
+    def test_it_names_the_databases_the_process_actually_opened(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "luma-data.db", root / "luma-control.db"):
+                location = app_config.data_location()
+
+        self.assertEqual(location["db_path"], str(root / "luma-data.db"))
+        self.assertEqual(location["control_db_path"], str(root / "luma-control.db"))
+
+    def test_a_stock_installation_says_nothing_unprompted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "luma-data.db", root / "luma-control.db"), \
+                 self._installed_copy(root):
+                self.assertFalse(app_config.data_location()["show_by_default"])
+
+    def test_databases_somewhere_other_than_the_default_arm_it(self):
+        # Moved data, a second installation, or the per-file overrides an older install runs on — all
+        # cases where which database is open is a question rather than a given.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "elsewhere" / "ledger.db", root / "luma-control.db"), \
+                 self._installed_copy(root):
+                self.assertTrue(app_config.data_location()["show_by_default"])
+
+    def test_a_control_database_moved_on_its_own_arms_it_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "luma-data.db", root / "elsewhere" / "control.db"), \
+                 self._installed_copy(root):
+                self.assertTrue(app_config.data_location()["show_by_default"])
+
+    def test_a_checkout_always_says_where_its_data_is(self):
+        # The arm that catches a working copy at its own default location: `developer_options` gates
+        # destructive reset tooling, so plenty of people working on the app never turn it on, and
+        # repository-database-or-real-data is the question asked most often there.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "luma-data.db", root / "luma-control.db"), \
+                 self._installed_copy(root), \
+                 mock.patch.object(app_config, "distribution_form", return_value=runtime_config.DIST_FORM_CHECKOUT):
+                self.assertTrue(app_config.data_location()["show_by_default"])
+
+    def test_developer_options_arm_it_on_a_stock_installation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self._databases_at(root / "luma-data.db", root / "luma-control.db"), \
+                 self._installed_copy(root), \
+                 mock.patch.object(app_config, "developer_options_enabled", return_value=True):
+                self.assertTrue(app_config.data_location()["show_by_default"])
+
+    def test_a_path_under_home_is_shortened_for_display_but_kept_whole(self):
+        # The home prefix is the longest part of a path that never distinguishes one installation from
+        # another, and the nav pane is a narrow column — but what is copied has to be usable.
+        home_db = Path.home() / "luma-display-test" / "luma-data.db"
+        with self._databases_at(home_db, home_db.parent / "luma-control.db"):
+            location = app_config.data_location()
+
+        self.assertEqual(location["db_display_path"], "~/luma-display-test/luma-data.db")
+        self.assertEqual(location["db_path"], str(home_db))
+
+    def test_only_a_session_that_could_read_the_configuration_is_told(self):
+        # The database locations are admin-or-local information — `/auth/config` gates them — and a
+        # field on the status payload must not widen that just because no endpoint appears to change.
+        from backend.routers import auth
+
+        with mock.patch.object(auth, "auth_required", return_value=False):
+            self.assertTrue(auth._session_can_manage_config(None))
+
+        with mock.patch.object(auth, "auth_required", return_value=True):
+            self.assertFalse(auth._session_can_manage_config(None))
+            self.assertFalse(auth._session_can_manage_config({"role": "member"}))
+            self.assertTrue(auth._session_can_manage_config({"role": "admin"}))
+
+    def test_the_status_payload_carries_it_to_a_local_session(self):
+        with api_client() as (client, data_path):
+            location = client.get("/api/auth/status").json()["data_location"]
+
+        self.assertEqual(location["db_path"], str(Path(data_path).resolve()))
+
+
 class AppConfigTests(unittest.TestCase):
     def test_session_secret_is_generated_once_and_reused(self):
         with _isolated_control_db(), _env(SESSION_SECRET=None):

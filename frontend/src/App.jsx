@@ -21,6 +21,7 @@ import {
 import { applyLedgerCurrency } from './lib/moneyDisplay.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
+import DataLocationLine from './components/DataLocationLine.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
 import {
@@ -216,6 +217,11 @@ const s = {
     background: 'var(--surface)', borderRight: '1px solid var(--border)',
     display: 'flex', flexDirection: 'column', padding: '24px 0', flexShrink: 0,
     position: 'relative',
+    // The pane is exactly the width the user dragged it to, whatever is inside it. A flex item's
+    // `min-width: auto` is content-based, so one long unbreakable string — a filesystem path — would
+    // otherwise widen the pane past that width, or refuse to let it be dragged narrower. Zero here is
+    // what lets a child elide instead of pushing.
+    minWidth: 0,
   },
   logo: {
     fontSize: 20, fontWeight: 700, color: 'var(--accent2)',
@@ -1073,6 +1079,9 @@ export default function App() {
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [dataProviderIntended, setDataProviderIntended] = useState(false)
   const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
+  // Where this copy's databases are. Absent for a session the server will not tell (a non-admin under
+  // sign-in protection), which is what keeps the nav line and `/auth/config` on one rule.
+  const [dataLocation, setDataLocation] = useState(null)
   // Stopping the whole application, offered only where it would work — see `routers/app_control.py`.
   const [shutdownAvailable, setShutdownAvailable] = useState(false)
   const [pendingShutdown, setPendingShutdown] = useState(false)
@@ -1119,6 +1128,7 @@ export default function App() {
     securityProfile,
     dataProviderIntended,
     developerOptionsEnabled,
+    dataLocation,
     dbInstanceId,
     bundledLicenseAvailable,
     activeLocalProfile,
@@ -1135,6 +1145,7 @@ export default function App() {
     securityProfile,
     dataProviderIntended,
     developerOptionsEnabled,
+    dataLocation,
     dbInstanceId,
     bundledLicenseAvailable,
     activeLocalProfile,
@@ -1205,6 +1216,7 @@ export default function App() {
         setSecurityProfile(status.security_profile || 'local_private')
         setDataProviderIntended(!!status.data_provider_intended)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
+        setDataLocation(status.data_location || null)
         setShutdownAvailable(!!status.app_shutdown_available)
         setDbInstanceId(status.db_instance_id || '')
         setBundledLicenseAvailable(!!status.bundled_license_available)
@@ -1829,6 +1841,7 @@ export default function App() {
                               v{APP_VERSION}
                             </div>
                           ) : null}
+                          <DataLocationLine dataLocation={dataLocation} />
                         </div>
                         {NAV_LINKS.map(([to, label]) => (
                           <NavLink

@@ -34,6 +34,8 @@ from dotenv import dotenv_values
 from backend.db import control_database, database
 from backend.db.control_database import delete_app_setting, get_app_setting, set_app_setting
 from backend.runtime_config import (
+    CONTROL_DB_FILENAME,
+    DB_FILENAME,
     DEFAULT_APP_NAME,
     DEFAULT_BACKEND_PORT,
     DEFAULT_BACKEND_READY_TIMEOUT,
@@ -41,7 +43,9 @@ from backend.runtime_config import (
     DEFAULT_FRONTEND_HOST,
     DEFAULT_FRONTEND_PORT,
     anchor_relative,
+    DIST_FORM_CHECKOUT,
     default_data_dir,
+    distribution_form,
     env_file_path,
     generate_session_secret,
     is_placeholder_session_secret,
@@ -340,6 +344,65 @@ def _absolute_display(value: str) -> str | None:
     The whole point of showing this row is that the location stays visible rather than inferred."""
     resolved = str(anchor_relative(Path(value).expanduser()).resolve())
     return None if resolved == value else resolved
+
+
+
+def _home_relative(path: Path) -> str:
+    """A `~`-prefixed form when the path sits inside the user's home, the path itself otherwise.
+
+    For display only, and always carried alongside the absolute form: the point of showing a location is
+    that it can be read at a glance in a narrow column, and the home prefix is the longest part of it
+    that never distinguishes one installation from another."""
+    try:
+        return str(Path("~") / path.relative_to(Path.home()))
+    except (OSError, RuntimeError, ValueError):
+        # No home to speak of, or the path is elsewhere — either way the absolute form is the answer.
+        return str(path)
+
+
+def data_location() -> dict:
+    """Which databases this copy is open on, and whether that is worth saying without being asked.
+
+    The paths are read from the modules that own them rather than re-resolved here, for the same reason
+    the configuration report's `live` hook exists: a re-derivation can name a file the process is not
+    actually using. They are resolved to absolute form because a checkout's default is a *relative*
+    path (`DEFAULT_DATA_DIR`), and "luma-data.db" answers nothing.
+
+    `show_by_default` is the answer to "would this installation want to say where its data is, unasked".
+    Three ways to qualify, any one of which is enough:
+
+    - **The databases are not where a fresh copy of this build would put them.** Someone moved them, or
+      is running a second installation, or is on per-file overrides — all cases where which database is
+      open is a live question rather than a given.
+    - **This copy is a checkout.** A working copy is a development context by definition, and the
+      question it answers there — repository database or real data — is the one asked most often. Tying
+      this to `developer_options` instead would miss it: that flag gates destructive reset tooling, so
+      plenty of people working on the app never turn it on.
+    - **Developer options are on**, which keeps the line in step with the version badge beside it and
+      lets a packaged installation at its default location opt in.
+
+    It is a *default*, not a rule: the user preference behind the nav line overrides it in both
+    directions, and an untouched preference follows this — so setting `DATA_DIR` later makes the line
+    appear on its own.
+    """
+    db_path = Path(database.DB_PATH).resolve()
+    control_db_path = Path(control_database.CONTROL_DB_PATH).resolve()
+    default_dir = anchor_relative(Path(default_data_dir()))
+    stock_location = (
+        db_path == (default_dir / DB_FILENAME).resolve()
+        and control_db_path == (default_dir / CONTROL_DB_FILENAME).resolve()
+    )
+    return {
+        "db_path": str(db_path),
+        "db_display_path": _home_relative(db_path),
+        "control_db_path": str(control_db_path),
+        "control_db_display_path": _home_relative(control_db_path),
+        "show_by_default": (
+            not stock_location
+            or distribution_form() == DIST_FORM_CHECKOUT
+            or developer_options_enabled()
+        ),
+    }
 
 
 def clear_stored_value(key: str) -> dict:
