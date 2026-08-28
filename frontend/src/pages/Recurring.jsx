@@ -9,6 +9,11 @@
  *
  * Confirm/suppress/edit all mark a series user-owned so the next Scan preserves the decision — the
  * page's whole job is turning the detector's guesses into a curated list.
+ *
+ * Above that list sits the signal review section (`RecurringSignals`): what is missing, what changed
+ * price, what was just detected, and which rule's amount range a charge has drifted out of — plus the
+ * forward view of what is due next. Signals are derived server-side on every read, so the page never
+ * patches one in place: any action that could change a finding re-fetches the whole set.
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
@@ -16,16 +21,19 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
-  PageHeader, Spinner, Button, Select, Input, EmptyState, AppDialog, getFloatingPanelSurfaceStyle,
+  PageHeader, Spinner, Button, Select, Input, EmptyState, AppDialog, SegmentedToggle,
+  getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
+import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
+import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -71,6 +79,20 @@ function seriesCategory(series) {
   if (key === 'manual') return 'confirmed'
   return key  // confirmed | ended | suppressed
 }
+
+// The page's three peer views. Findings and the series they refer to were originally stacked on one
+// screen, where they crowded each other out; they are now chosen between. `sessionStorage` remembers the
+// choice for the session (matching the Accounts/Import-Export tab convention) while a URL param — the
+// Tasks page's `?signal=<kind>` link — wins over it, so a deep link lands where it means to.
+const VIEW_SERIES = 'series'
+const VIEW_SIGNALS = 'signals'
+const VIEW_UPCOMING = 'upcoming'
+const VIEW_IDS = [VIEW_SERIES, VIEW_SIGNALS, VIEW_UPCOMING]
+const VIEW_STORAGE_KEY = 'ui.recurring.view'
+
+// The page's content column. Named once because it is measured in three places — the header, the
+// scrolling body and the drill-down — and three copies of a number are three chances to disagree.
+const PAGE_COLUMN = 860
 
 const SORT_OPTIONS = [{ value: 'name', label: 'A–Z' }, { value: 'next_due', label: 'Next due' }]
 const DEFAULT_FILTERS = ['suggested', 'confirmed', 'ended']
@@ -419,33 +441,42 @@ function RemovedSection({ excluded, onAddBack }) {
 
 // The drill-down uses the shared TransactionListTable (pill header, shared row cells + row menu), so it
 // looks and edits exactly like every other transaction list in the app rather than being a one-off.
+// The drill-down's surface spans the page (its own background and top border make it a distinct
+// docked panel), but its *content* sits in the same column as the list above — otherwise the panel's
+// title and table start at the page edge while the cards start at the column, and the page reads as
+// three different left margins stacked on each other.
 function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, scrollRef, sortState, onSort }) {
+  // The column goes on an element *inside* the padding, never on the padded element itself — putting a
+  // maxWidth on a padded box measures the column inside the padding and shifts it by that amount.
+  const column = { maxWidth: PAGE_COLUMN, margin: '0 auto', width: '100%' }
   return (
     <div style={{
       flex: '1 1 0%', minHeight: 0, display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--surface2)',
     }}>
-      <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: 12, padding: '12px 32px', borderBottom: '1px solid var(--border)',
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {series.display_name}
+      {/* The divider spans the panel; the title inside it sits in the page column. */}
+      <div style={{ flexShrink: 0, padding: '12px 32px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ ...column, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {series.display_name}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {loading ? 'Loading…' : `${total} matching transaction${total === 1 ? '' : 's'}`}
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-            {loading ? 'Loading…' : `${total} matching transaction${total === 1 ? '' : 's'}`}
-          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close matching transactions"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20, lineHeight: 1, padding: 4 }}
+          >
+            ×
+          </button>
         </div>
-        <button
-          onClick={onClose}
-          aria-label="Close matching transactions"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20, lineHeight: 1, padding: 4 }}
-        >
-          ×
-        </button>
       </div>
+      {/* Both boxes stay flex columns so the table's fillHeight still resolves against the panel. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px 20px' }}>
+        <div style={{ ...column, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {loading && rows.length === 0 ? (
           <Spinner />
         ) : (
@@ -465,6 +496,7 @@ function ReportPanel({ series, rows, excluded, total, categories, loading, onClo
           />
         )}
         <RemovedSection excluded={excluded} onAddBack={onAddBack} />
+        </div>
       </div>
     </div>
   )
@@ -673,6 +705,15 @@ export default function Recurring() {
   const [payeeDetail, setPayeeDetail] = useState(null)  // txn opened in the shared TransactionDetail panel
   const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
   const [searchParams, setSearchParams] = useSearchParams()
+  // Signals are derived server-side; the page holds only the last fetch and what the user is looking at.
+  const [signalData, setSignalData] = useState(null)
+  const [signalKind, setSignalKind] = useState('all')
+  const [view, setViewState] = useState(() => {
+    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(VIEW_STORAGE_KEY) : null
+    return VIEW_IDS.includes(stored) ? stored : VIEW_SERIES
+  })
+  const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
+  const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
 
   // The drill-down serves two shapes through one paged list: a single series (recurring_series_id) or
   // the all-series report (recurring_only — every row linked to any series). `openSeries._all` flags the
@@ -744,6 +785,32 @@ export default function Recurring() {
 
   useEffect(() => { load() }, [load])
 
+  const setView = useCallback((next) => {
+    setViewState(next)
+    try { sessionStorage.setItem(VIEW_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+  }, [])
+
+  // Signals recompute from the ledger on every read, so anything that could change one — an action on a
+  // series, a scan, a rule edit — just re-fetches rather than trying to patch a row in place.
+  const loadSignals = useCallback(
+    () => api.getRecurringSignals().then(setSignalData).catch(() => {}),
+    [],
+  )
+  useEffect(() => { loadSignals() }, [loadSignals])
+
+  // Landing from a Tasks card (?signal=<kind>) opens the findings view with that kind preselected, then
+  // strips the param so the view and the filter are the user's to change from there.
+  const landedSignalRef = useRef(null)
+  useEffect(() => {
+    const wanted = searchParams.get('signal')
+    if (!wanted || landedSignalRef.current === wanted) return
+    landedSignalRef.current = wanted
+    setSignalKind(wanted)
+    setView(VIEW_SIGNALS)
+    const next = new URLSearchParams(searchParams); next.delete('signal')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams, setView])
+
   // Rebuild the frozen layout when the filter or sort changes (deliberate re-sorts — this also picks up
   // the persisted values once preferences finish loading). Keyed on selection/sort, NOT allSeries, so an
   // in-place card update never triggers a re-sort. Reads current data via a ref.
@@ -801,10 +868,11 @@ export default function Recurring() {
     const s = allSeries.find(x => x.id === wanted)
     if (!s) return
     landedRef.current = wanted
+    setView(VIEW_SERIES)
     openReport(s)
     const next = new URLSearchParams(searchParams); next.delete('series')
     setSearchParams(next, { replace: true })
-  }, [allSeries, searchParams, openReport, setSearchParams])
+  }, [allSeries, searchParams, openReport, setSearchParams, setView])
 
   async function scan() {
     setScanning(true)
@@ -812,6 +880,7 @@ export default function Recurring() {
     try {
       const summary = await api.scanRecurring()
       await load()  // a scan is a deliberate re-sort
+      loadSignals()  // membership and next_due move, so every signal is restated
       setScanSummary(summary)
       if (openSeries) setReportNonce(n => n + 1)  // membership may have shifted → re-fetch members
     } finally {
@@ -843,7 +912,75 @@ export default function Recurring() {
     // A characterization change means the user is done inspecting → collapse the drill-down. A cadence
     // tweak is not a characterization change, so it leaves the report open.
     if (CHARACTERIZATION_ACTIONS.has(kind)) setOpenSeries(null)
+    loadSignals()  // confirming, ending or suppressing a series resolves the signals about it
   }
+
+  // --- Signal actions ------------------------------------------------------------------------------
+  // Each one is an existing endpoint plus a re-fetch; the signal itself is derived, so there is nothing
+  // local to reconcile.
+
+  const seriesById = (id) => (allSeries || []).find(x => x.id === id) || null
+
+  async function dismissSignal(signal) {
+    await api.dismissRecurringSignal(signal.key, signal.kind)
+    setSignalUndo({ key: signal.key, kind: signal.kind })
+    loadSignals()
+  }
+
+  async function restoreSignal(key) {
+    await api.restoreRecurringSignal(key)
+    setSignalUndo(null)
+    loadSignals()
+    if (dismissedSignals) {
+      api.getDismissedRecurringSignals().then(r => setDismissedSignals(r.signals || [])).catch(() => {})
+    }
+  }
+
+  function signalSeriesAction(kind, signal) {
+    const series = seriesById(signal.series_id)
+    if (series) handleAction(kind, series)
+  }
+
+  // Opens *in place*, under whichever view is showing. Sending the user to the series list instead was
+  // worse in both directions: it took them away from the finding they were working through, and the
+  // list's own filter can exclude the very series being opened (a Confirmed series while only Suggested
+  // is selected), so the drill-down would describe a card that was nowhere on screen.
+  function openSignalSeries(signal) {
+    const series = seriesById(signal.series_id)
+    if (series) openReport(series)
+  }
+
+  // Move the rule's limit out to this charge and re-apply it, which is the whole maintenance action the
+  // signal exists to offer — the alternative is the rule editor and mental arithmetic. Manual per-row
+  // edits are preserved: widening a range says which rows the rule should claim, not that someone's
+  // hand-categorization was wrong.
+  async function widenRuleRange(signal) {
+    const amount = Math.abs(Number(signal.amount) || 0)
+    const patch = signal.bound === 'max'
+      ? { amount_max: Math.ceil(amount * 100) / 100 }
+      : { amount_min: Math.floor(amount * 100) / 100 }
+    await api.updateRule(signal.rule_id, patch)
+    await txnMutations.applyRule(signal.rule_id, { preserveManual: true })
+    loadSignals()
+    load()
+  }
+
+  // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable — an inline arrow
+  // restarts the countdown on every render and the toast never closes on its own.
+  const dismissUndoToast = useCallback(() => setSignalUndo(null), [])
+
+  async function showDismissedSignals() {
+    setDismissedSignals([])
+    const r = await api.getDismissedRecurringSignals().catch(() => ({ signals: [] }))
+    setDismissedSignals(r.signals || [])
+  }
+
+  // The drill-down docks below whichever view is showing, so a finding can be inspected without leaving
+  // the list of findings.
+  const drillOpen = !!openSeries
+  const signalCounts = signalData?.counts || {}
+  const anomalyCount = signalData?.anomaly_count || 0
+  const upcomingCount = signalCounts.upcoming || 0
 
   const byId = new Map((allSeries || []).map(s => [s.id, s]))
   // Search is a live display filter over the frozen layout — it narrows which cards show (and hides
@@ -858,74 +995,130 @@ export default function Recurring() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '32px 32px 0', maxWidth: 860, width: '100%', margin: '0 auto', flexShrink: 0 }}>
-        <PageHeader
-          title="Recurring Transactions"
-          titleAdornment={allSeries && allSeries.length > 0 && (
-            // The standard report ↗ next to the title opens a transaction report of every recurring row
-            // (all series). Toggles closed when it's already the open view.
-            <button
-              onClick={openAllReport}
-              aria-label="Open a report of all recurring transactions"
-              title={openSeries?._all ? 'Close the recurring transactions report' : 'Open a report of all recurring transactions'}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent2)',
-                fontSize: 17, lineHeight: 1, padding: '2px 6px', borderRadius: 6,
-                opacity: openSeries?._all ? 1 : 0.75,
-                textDecoration: openSeries?._all ? 'underline' : 'none',
-              }}
-            >↗</button>
-          )}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Button variant="ghost" onClick={() => load()} title="Reload the list">Refresh</Button>
-            <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
-            <Button variant="primary" onClick={scan} disabled={scanning}>
-              {scanning ? 'Scanning…' : 'Scan for recurring'}
-            </Button>
+      {/* Page padding on the outer element, the content column on an inner one — the same two-step the
+          scrolling body and the drill-down use below. Putting `maxWidth` on the *padded* element instead
+          measures the column inside the padding, so a centred header sits 32px in from a centred list of
+          the same nominal width and reads as a stray indent. */}
+      <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
+        <div style={{ maxWidth: PAGE_COLUMN, margin: '0 auto' }}>
+          <PageHeader
+            title="Recurring Transactions"
+            titleAdornment={allSeries && allSeries.length > 0 && (
+              // The standard report ↗ next to the title opens a transaction report of every recurring row
+              // (all series). Toggles closed when it's already the open view.
+              <button
+                onClick={openAllReport}
+                aria-label="Open a report of all recurring transactions"
+                title={openSeries?._all ? 'Close the recurring transactions report' : 'Open a report of all recurring transactions'}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent2)',
+                  fontSize: 17, lineHeight: 1, padding: '2px 6px', borderRadius: 6,
+                  opacity: openSeries?._all ? 1 : 0.75,
+                  textDecoration: openSeries?._all ? 'underline' : 'none',
+                }}
+              >↗</button>
+            )}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Button variant="ghost" onClick={() => load()} title="Reload the list">Refresh</Button>
+              <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
+              <Button variant="primary" onClick={scan} disabled={scanning}>
+                {scanning ? 'Scanning…' : 'Scan for recurring'}
+              </Button>
+            </div>
+          </PageHeader>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 10px' }}>
+            {scanSummary
+              ? `Scan complete — ${scanSummary.inserted} new, ${scanSummary.preserved} kept${scanSummary.resumed ? `, ${scanSummary.resumed} resumed` : ''}.`
+              : 'Detects subscriptions, bills, and taxes that recur on a schedule. Confirm the ones that look right; mark the rest "not recurring."'}
           </div>
-        </PageHeader>
-        <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 10px' }}>
-          {scanSummary
-            ? `Scan complete — ${scanSummary.inserted} new, ${scanSummary.preserved} kept${scanSummary.resumed ? `, ${scanSummary.resumed} resumed` : ''}.`
-            : 'Detects subscriptions, bills, and taxes that recur on a schedule. Confirm the ones that look right; mark the rest "not recurring."'}
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <ContextualExplainer topic="recurring-transactions" active={allSeries !== null} tipKey="recurring-intro" placement="bottom-left" />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {CATEGORY_ORDER.map(cat => (
-              <FilterPill
-                key={cat}
-                label={CATEGORY_LABELS[cat]}
-                count={layout?.counts?.[cat] ?? 0}
-                on={selected.has(cat)}
-                onClick={() => togglePill(cat)}
-              />
-            ))}
+          <div style={{ marginBottom: 10 }}>
+            <ContextualExplainer topic="recurring-transactions" active={allSeries !== null} tipKey="recurring-intro" placement="bottom-left" />
           </div>
-          <SortToggle value={sortOrder} onChange={setSortOrder} />
-        </div>
-        <div style={{ marginBottom: 8 }}>
-          <Input
-            value={search}
-            onChange={setSearch}
-            placeholder="Search merchant, category, or account…"
-            aria-label="Search recurring series"
-            style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
-          />
+          {/* The view selector. The badge lives on the control rather than inside the view it names —
+              a count only visible after switching cannot tell anyone to switch. */}
+          <div style={{ marginBottom: 10 }}>
+            <SegmentedToggle
+              value={view}
+              onChange={setView}
+              ariaLabel="Recurring view"
+              options={[
+                { value: VIEW_SERIES, label: 'Series' },
+                {
+                  value: VIEW_SIGNALS,
+                  label: 'Needs attention',
+                  badge: anomalyCount || null,
+                  badgeTone: 'warning',
+                },
+                { value: VIEW_UPCOMING, label: 'Upcoming', badge: upcomingCount || null },
+              ]}
+            />
+          </div>
+          {/* Filtering, sorting and search apply to the series list alone, so they travel with it. */}
+          {view === VIEW_SERIES ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {CATEGORY_ORDER.map(cat => (
+                    <FilterPill
+                      key={cat}
+                      label={CATEGORY_LABELS[cat]}
+                      count={layout?.counts?.[cat] ?? 0}
+                      on={selected.has(cat)}
+                      onClick={() => togglePill(cat)}
+                    />
+                  ))}
+                </div>
+                <SortToggle value={sortOrder} onChange={setSortOrder} />
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <Input
+                  value={search}
+                  onChange={setSearch}
+                  placeholder="Search merchant, category, or account…"
+                  aria-label="Search recurring series"
+                  style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
+                />
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
 
-      {/* Split: the series list stays visible above while the drill-down opens below. */}
+      {/* Split: the series list stays visible above while the drill-down opens below. Whichever view is
+          selected owns this whole scrolling region, which is what keeps a long list of findings from
+          crowding out the series they refer to — they no longer share a viewport at all. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* When a report is open the list shrinks to its content but is capped so a long series list can't
             crowd out the report; the report (flex:1 below) then fills all remaining space — so a short
             list (even one series) yields a large report instead of a fixed small strip. */}
-        <div ref={listRef} style={{ flex: openSeries ? '0 1 auto' : '1 1 auto', maxHeight: openSeries ? '50%' : undefined, minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
-          <div style={{ maxWidth: 860, margin: '0 auto' }}>
-            {allSeries === null ? (
+        <div ref={listRef} style={{ flex: drillOpen ? '0 1 auto' : '1 1 auto', maxHeight: drillOpen ? '50%' : undefined, minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
+          <div style={{ maxWidth: PAGE_COLUMN, margin: '0 auto' }}>
+            {view === VIEW_SIGNALS ? (
+              signalData === null ? <Spinner /> : (
+                <RecurringSignalsView
+                  signals={signalData.signals || []}
+                  counts={signalData.counts || {}}
+                  dismissedCount={signalData.dismissed_count || 0}
+                  kind={signalKind}
+                  onKindChange={setSignalKind}
+                  activeSeriesId={openSeries?.id || null}
+                  onDismiss={dismissSignal}
+                  onSeriesAction={signalSeriesAction}
+                  onOpenSeries={openSignalSeries}
+                  onEditRule={(signal) => setRuleModal({ mode: 'edit', ruleId: signal.rule_id })}
+                  onWidenRange={widenRuleRange}
+                  onShowDismissed={showDismissedSignals}
+                />
+              )
+            ) : view === VIEW_UPCOMING ? (
+              signalData === null ? <Spinner /> : (
+                <RecurringUpcomingView
+                  signals={signalData.signals || []}
+                  horizonDays={signalData.horizon_days || 30}
+                />
+              )
+            ) : allSeries === null ? (
               <Spinner />
             ) : allSeries.length === 0 ? (
               <EmptyState message='No recurring series yet. Click "Scan for recurring" to detect them from your transactions.' />
@@ -961,7 +1154,7 @@ export default function Recurring() {
           </div>
         </div>
 
-        {openSeries && (
+        {drillOpen && (
           <ReportPanel
             series={openSeries}
             rows={membersPaged.rows}
@@ -995,6 +1188,24 @@ export default function Recurring() {
           onClose={() => setRuleModal(null)}
           // Editing the rule can change the series' membership/cadence/name, so reload the list.
           onSaved={() => { setRuleModal(null); load() }}
+        />
+      )}
+
+      {dismissedSignals !== null && (
+        <DismissedSignalsDialog
+          signals={dismissedSignals}
+          loading={false}
+          onRestore={(signal) => restoreSignal(signal.key)}
+          onClose={() => setDismissedSignals(null)}
+        />
+      )}
+
+      {signalUndo && (
+        <UndoToast
+          title="Signal dismissed"
+          description="It stays hidden; a new finding about the same series still appears."
+          onUndo={() => restoreSignal(signalUndo.key)}
+          onDismiss={dismissUndoToast}
         />
       )}
 

@@ -234,6 +234,48 @@ def _resolve_effective_account(
     )
 
 
+# Larger than any amount bound a real rule will carry, standing in for an open end so that an unbounded
+# range compares as the widest possible one — "+infinity, expressible in SQL".
+_AMOUNT_SPAN_OPEN_END = 1000000000000.0
+
+
+def rule_specificity_order_sql(prefix: str = "cr.", *, most_specific_first: bool = True) -> str:
+    """The rule precedence contract, as ORDER BY terms — defined once because three surfaces depend on
+    it agreeing: the engine (which rule categorizes a row), the preview/apply mirror in `routers/rules`
+    (what the user is told *would* happen), and the rules list (which reads general -> specific). Three
+    hand-kept copies of an ordering are three chances for the app to disagree with itself.
+
+    Most specific first: owner scope, then account scope, then account *type* scope, then the longer
+    keyword — a longer substring matches a strict subset of the rows a shorter one does.
+
+    **Then the narrower amount range**, which is the same idea on the amount axis: `>= 3000` matches a
+    strict subset of `>= 300`, so it must win. Counting how many bounds a rule sets — the previous
+    measure — cannot see that, and scored those two rules identically; the tie then fell to whatever
+    order SQLite happened to return, so a town's property tax could be categorized as its water bill.
+    Comparing the *span* fixes it and never contradicts containment: whenever one range contains
+    another, the contained one has the smaller span. An open upper end takes a sentinel rather than
+    being treated as unbounded, so `[3000, inf)` still scores narrower than `[300, inf)`; an open lower
+    end takes 0, which is exact rather than approximate, since bounds are compared against |amount|.
+
+    Ranges that merely *overlap* — `[300, 4000]` against `[3000, inf)` — have no principled winner, and
+    span picks one only by arithmetic accident. Surfacing such a pair to the user is parked work
+    (`docs/backlog/rule-amount-overlaps.md`); ordering cannot answer it.
+
+    The final term is the rule id, so a genuine tie resolves the same way every time rather than by
+    query plan — without it the same ledger can categorize differently after a VACUUM.
+    """
+    d, a = ("DESC", "ASC") if most_specific_first else ("ASC", "DESC")
+    p = prefix
+    return f"""
+               CASE WHEN {p}owner_id     IS NOT NULL THEN 1 ELSE 0 END {d},
+               CASE WHEN {p}account_id   IS NOT NULL THEN 1 ELSE 0 END {d},
+               CASE WHEN {p}account_type IS NOT NULL THEN 1 ELSE 0 END {d},
+               LENGTH({p}keyword) {d},
+               (COALESCE({p}amount_max, {_AMOUNT_SPAN_OPEN_END}) - COALESCE({p}amount_min, 0)) {a},
+               CASE WHEN COALESCE({p}debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END {d},
+               {p}id {a}"""
+
+
 def load_categorization_rules(conn: sqlite3.Connection) -> list:
     """Load the ordered rule set ONCE so a per-transaction matcher can reuse it across a whole pass.
 
@@ -253,20 +295,9 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
            -- categorize into an inactive category. Tag-only rules (category_id NULL) still apply.
            -- A trashed rule (deleted_at set) is excluded so it stops categorizing while recoverable.
            WHERE  (cr.category_id IS NULL OR c.is_active = 1) AND cr.deleted_at IS NULL
-           -- Precedence: a specific account beats an account *type* beats global; then longer keyword,
-           -- then more conditions. (account_id > account_type: a rule pinned to one account is more
-           -- specific than one covering every account of a type.)
-           ORDER  BY
-               CASE WHEN cr.owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               CASE WHEN cr.account_type IS NOT NULL THEN 1 ELSE 0 END DESC,
-               LENGTH(cr.keyword) DESC,
-               (CASE WHEN cr.amount_min IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN cr.amount_max IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN COALESCE(cr.debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-                CASE WHEN cr.owner_id     IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN cr.account_id   IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN cr.account_type IS NOT NULL THEN 1 ELSE 0 END) DESC"""
+           -- Precedence: a specific account beats an account *type* beats global, then the longer
+           -- keyword, then the narrower amount range. rule_specificity_order_sql owns the contract.
+           ORDER  BY {rule_specificity_order_sql()}"""
     ).fetchall()
 
 

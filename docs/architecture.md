@@ -194,7 +194,8 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 - **Frontend:** `frontend/src/pages/Recurring.jsx` (route `/recurring`, nav "Recurring")
 
 - **Storage:** `recurring_series` (+ `rule_id` for rule-backed series) + the `txn.recurring_series_id`
-  membership link + `recurring_membership_override` (per-transaction pin/exclude corrections)
+  membership link + `recurring_membership_override` (per-transaction pin/exclude corrections) +
+  `recurring_signal_dismissal` (the only durable state the anomaly signals have)
 
 - **Handles:** detection of recurring obligations (subscriptions, bills, taxes) and their curation. A
   **scan** is idempotent — it rewrites auto-detected+unconfirmed series while preserving the user's
@@ -212,8 +213,25 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
     home of the payee-key re-derivation repair.
 
   The scan is one function (`scan_and_store`) with an optional `payee_keys` scope; scoped and full share
-  the whole pipeline. Anomaly/forecast signals (missed/duplicated/off-amount charge) are the deferred
-  payoff and hang off the scoped path (`scan_imported_payees`, which knows exactly which payees changed).
+  the whole pipeline. A third caller uses the scoped path: `rescan_edited_transactions`, wired into the
+  transaction edit endpoints so a hand edit re-evaluates the payees it touched — membership is a cache,
+  and without it a recategorized row stays linked to the series it has left. Bulk edits scan once for
+  the batch, never per row.
+
+- **Anomaly/forecast signals are a read-time projection** (`backend/services/recurring_signals.py`),
+  *not* an event fired from the scan. The ingest seam looks like the natural home — it knows which
+  payees changed — but a stored finding would be orphaned within a day (an auto series is re-minted
+  with a new id on every scan) and stale on the next edit (a recategorize, a trash, a membership
+  override). Deriving from the series and their members on each read is self-healing, idempotent, and
+  cheap: the pass is bounded by series membership rather than by ledger size, and the rule-range half is
+  skipped outright when no rule gates on amount. See `data-model.md` → Recurring series for the five
+  kinds, why the stored amount band cannot detect a price change, and why lateness is measured against
+  data freshness rather than the calendar.
+
+- **Two surfaces, split by whether the thing is wrong.** The four anomaly kinds become Tasks items
+  (`routers/tasks.py` reads the same computed counts) linking into the Recurring page's review section,
+  where the per-signal actions live. **Upcoming** is a forward view on that page only, never a task: a
+  badge that counts ordinary life stops meaning anything.
 
 - **User-driven series are rule-backed.** Rather than force a rename so the derived key groups a
   varying-name payee, a rule flagged `is_recurring` owns a `source='rule'` series whose membership is the

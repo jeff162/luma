@@ -205,27 +205,17 @@ def _reference_amount(rows: list[dict]) -> float:
     return statistics.median(pool) if pool else 0.0
 
 
-def _one_per_date(rows: list[dict], ref_amount: float, preferred_ids: frozenset = frozenset()) -> list[dict]:
+def _one_per_date(rows: list[dict], ref_amount: float) -> list[dict]:
     """One charge per date, sorted by date — a periodic series holds at most one charge per occurrence.
     When a date carries several charges the representative is the one whose amount is closest to
     `ref_amount`; the rest are NOT part of this series. This is what keeps an annual tax filing that
     lands on the same day as a quarterly estimate from being folded into the quarterly series (and its
     amount summed into a bogus total). Returns the chosen member rows themselves (each has date/amount/
-    id), usable directly as occurrences for scoring.
-
-    `preferred_ids` (a user's pinned rows) win a contested date outright: a pinned charge is the one the
-    user explicitly assigned to the series, so it beats the amount-closeness heuristic."""
+    id), usable directly as occurrences for scoring."""
     by_date: dict[date, dict] = {}
     for row in rows:
         cur = by_date.get(row["date"])
-        if cur is None:
-            by_date[row["date"]] = row
-            continue
-        cur_pref = cur["id"] in preferred_ids
-        row_pref = row["id"] in preferred_ids
-        if row_pref and not cur_pref:
-            by_date[row["date"]] = row
-        elif row_pref == cur_pref and abs(row["amount"] - ref_amount) < abs(cur["amount"] - ref_amount):
+        if cur is None or abs(row["amount"] - ref_amount) < abs(cur["amount"] - ref_amount):
             by_date[row["date"]] = row
     return [by_date[d] for d in sorted(by_date)]
 
@@ -454,34 +444,44 @@ def _assign_membership(conn: sqlite3.Connection, series_id: str, member_ids: lis
         )
 
 
-def _insert_series(conn: sqlite3.Connection, series: dict, *, source: str, confirmed: int) -> str:
+def _insert_series(conn: sqlite3.Connection, series: dict, *, source: str, confirmed: int,
+                   created_at: str | None = None) -> str:
+    """Insert a series row. `created_at` is passed when an auto series is being re-minted over an
+    identity a previous scan had already detected, so the column means "first detected" rather than
+    "last rebuilt" — see `_auto_first_seen`. Omitted, it takes the DDL default (now)."""
     series_id = str(uuid.uuid4())
     conn.execute(
         """
         INSERT INTO recurring_series
             (id, payee_key, display_name, category_id, account_id, cadence, period_days,
              expected_amount, amount_min, amount_max, last_txn_date, next_due_date,
-             occurrence_count, confidence, status, source, confirmed, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, datetime('now'))
+             occurrence_count, confidence, status, source, confirmed, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
+                COALESCE(?, datetime('now')), datetime('now'))
         """,
         (
             series_id, series["payee_key"], series["display_name"], series["category_id"],
             series["account_id"], series["cadence"], series["period_days"],
             series["expected_amount"], series["amount_min"], series["amount_max"],
             series["last_txn_date"], series["next_due_date"], series["occurrence_count"],
-            series["confidence"], source, confirmed,
+            series["confidence"], source, confirmed, created_at,
         ),
     )
     return series_id
 
 
-def _series_occurrences(series: sqlite3.Row, members: list[dict],
-                        preferred_ids: frozenset = frozenset()) -> list[dict]:
+def _auto_identity(payee_key, category_id, account_id) -> tuple:
+    """The identity an auto series keeps across rebuilds — the same tuple `_covered_by_owned` dedupes
+    candidates by. An auto series' *id* cannot carry anything across a scan (each scan deletes and
+    re-inserts it), so anything that must outlive a rebuild is keyed by this instead."""
+    return (payee_key, category_id, account_id)
+
+
+def _series_occurrences(series: sqlite3.Row, members: list[dict]) -> list[dict]:
     """One charge per date for a user-owned series, closest to its expected amount — the candidate rows
-    it would own before exclusive de-duplication against other series. `preferred_ids` (pinned rows) win
-    a contested date."""
+    it would own before exclusive de-duplication against other series."""
     ref = series["expected_amount"] if series["expected_amount"] is not None else _reference_amount(members)
-    return _one_per_date(members, ref if ref is not None else 0.0, preferred_ids)
+    return _one_per_date(members, ref if ref is not None else 0.0)
 
 
 def _write_series_stats(conn: sqlite3.Connection, series: sqlite3.Row, occ: list[dict], *,
@@ -543,15 +543,24 @@ def _reconcile_priority(series: sqlite3.Row):
     )
 
 
-def _load_overrides(conn: sqlite3.Connection) -> tuple[dict, dict]:
-    """Sparse per-transaction membership corrections, grouped by series: (pins, excludes). A pin forces a
-    row into a series it wouldn't otherwise match; an exclude keeps a matched row out. Both are applied on
-    every reconcile so a user's correction survives a rescan (the "cache" is rebuilt, the override isn't)."""
-    pins: dict = defaultdict(set)
+def _load_overrides(conn: sqlite3.Connection) -> dict:
+    """Sparse per-transaction exclusions, grouped by series: rows the user has taken *out* of a series
+    they match. Applied on every reconcile so the correction survives a rescan (the "cache" is rebuilt,
+    the override isn't).
+
+    Only exclusions. The table's `state` also allowed `pinned` — forcing a row *into* a series it does
+    not match — which was withdrawn deliberately: a series is defined by what recurs, so a charge that
+    only happens to share a payee and category (a late fee on a tax payment) is not part of it, and
+    forcing it in misrepresents the series and every total derived from it. The endpoint now rejects the
+    state, so no row can carry it; a legacy row would simply never match this filter. See
+    `docs/backlog/recurring-detection.md`.
+    """
     excludes: dict = defaultdict(set)
-    for r in conn.execute("SELECT txn_id, series_id, state FROM recurring_membership_override").fetchall():
-        (pins if r["state"] == "pinned" else excludes)[r["series_id"]].add(r["txn_id"])
-    return pins, excludes
+    for r in conn.execute(
+        "SELECT txn_id, series_id FROM recurring_membership_override WHERE state = 'excluded'"
+    ).fetchall():
+        excludes[r["series_id"]].add(r["txn_id"])
+    return excludes
 
 
 def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
@@ -600,8 +609,7 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict]) ->
       save work, never to change the outcome.
 
     Per-transaction overrides layer on top: an `excluded` row is dropped from its series even when it
-    matches; a `pinned` row is forced in even when it doesn't (bounded by the pool), and wins a contested
-    occurrence date. Both survive the rescan because they live in their own table, not the rebuilt cache.
+    matches. It survives the rescan because it lives in its own table, not the rebuilt cache.
 
     An ended series resumes (→ active) only when a charge it owns lands on/after its frozen next_due."""
     ids = [s["id"] for s in series_list]
@@ -616,26 +624,15 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict]) ->
     claimed = {
         r["id"] for r in conn.execute("SELECT id FROM txn WHERE recurring_series_id IS NOT NULL").fetchall()
     }
-    pins, excludes = _load_overrides(conn)
+    excludes = _load_overrides(conn)
     series_rules = _load_series_rules(conn, series_list)
-    pool_by_id = {row["id"]: row for row in pool}
 
     resumed = 0
     for series in sorted((s for s in series_list if s["status"] != "suppressed"), key=_reconcile_priority):
         sid = series["id"]
         excluded = excludes.get(sid, frozenset())
         members = [m for m in _candidate_members(pool, series, series_rules) if m["id"] not in excluded]
-        # Force in this series' pinned rows (present in the pool, not already owned by a higher-priority
-        # series); a pin then wins its occurrence date in the one-per-date selection below.
-        pinned = pins.get(sid, frozenset())
-        have = {m["id"] for m in members}
-        for txn_id in pinned:
-            row = pool_by_id.get(txn_id)
-            if row is not None and txn_id not in have and txn_id not in claimed:
-                members.append(row)
-                have.add(txn_id)
-        occ = [o for o in _series_occurrences(series, members, preferred_ids=frozenset(pinned))
-               if o["id"] not in claimed]
+        occ = [o for o in _series_occurrences(series, members) if o["id"] not in claimed]
         advance_next_due = True
         if series["status"] == "ended":
             # Resume only if a charge the series actually owns landed on/after its frozen next_due.
@@ -737,6 +734,15 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     user_owned_ids = {r["id"] for r in user_owned}
     auto_ids = [r["id"] for r in existing if r["id"] not in user_owned_ids]
 
+    # When each auto identity was FIRST detected, captured before the rows carrying it are dropped. An
+    # auto series is re-minted from scratch on every scan, so without this its created_at would advance
+    # to the last rebuild and "detected since you last looked" could never be answered — every daily
+    # catch-up would re-announce the entire list.
+    first_seen = {
+        _auto_identity(r["payee_key"], r["category_id"], r["scope_account_id"]): r["created_at"]
+        for r in existing if r["id"] in set(auto_ids)
+    }
+
     # Drop the auto-managed series, clearing their members' links first so those rows are free to be
     # reassigned and never dangle at a now-deleted series. User-owned series keep their links until
     # reconcile reclaims them (the partial index on recurring_series_id keeps the clear cheap).
@@ -775,7 +781,10 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         if not member_ids:
             continue
         cand["occurrence_count"] = len(member_ids)  # keep count == rows actually assigned
-        series_id = _insert_series(conn, cand, source="auto", confirmed=0)
+        series_id = _insert_series(
+            conn, cand, source="auto", confirmed=0,
+            created_at=first_seen.get(_auto_identity(cand["payee_key"], cand["category_id"], cand["account_id"])),
+        )
         _assign_membership(conn, series_id, member_ids)
         claimed.update(member_ids)
         inserted += 1
@@ -832,14 +841,41 @@ def scan_imported_payees(conn: sqlite3.Connection, payee_keys: set[str], *,
     (dedupe merges, a normalization change) or repair stale payee keys, so the daily app-load catch-up
     must still run a global `run_auto_scan`. Scoped passes give immediacy between those daily rebuilds.
 
-    Anomaly/forecast signals (missed / duplicated / off-amount charge — see
-    `docs/backlog/recurring-detection.md` §2) are the deferred payoff of this path and belong here: this
-    is the point that knows exactly which payees changed and has just refreshed their series stats
-    (next_due, expected_amount, amount band) and membership. Left unwired until that work lands; the seam
-    is this function, so adding it needs no change to the scan or the callers."""
+    Anomaly/forecast signals deliberately do NOT hang off this function, although it was long marked as
+    their natural home. They are derived on read instead (`services/recurring_signals.py`): a finding
+    stored here would be orphaned within a day (an auto series is re-minted with a new id on every scan)
+    and stale on the next recategorize, trash or membership override. Nothing about the signals needs a
+    hook in the ingest path."""
     if not payee_keys:
         return {"detected": 0, "inserted": 0, "preserved": 0, "removed_auto": 0, "resumed": 0}
     return scan_and_store(conn, window_months=window_months, payee_keys=payee_keys)
+
+
+# Bulk-edit paths call this once per request, never once per row: a scan loads the whole detection
+# window before it filters by payee, so per-row calls would repeat that load for every row in a batch.
+def rescan_edited_transactions(conn: sqlite3.Connection, txn_ids, *,
+                               prior_payee_keys=frozenset(),
+                               window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict:
+    """Re-evaluate recurring membership after the user edits transactions by hand.
+
+    Membership is a cache only a scan rewrites, so before this existed an edit could leave a row linked
+    to a series it no longer belonged to — recategorizing a bill still showed it under its old series,
+    the series' own drill-down never gained it, and a missed-charge signal about it stayed open. None of
+    the existing triggers covered the case: import and sync scan the payees they touched, a global
+    recategorize scans everything, and the app-load catch-up is watermark-gated to roughly a day.
+
+    The scope is the payees the edited rows belong to *now*, plus any they belonged to *before* — a
+    rename moves a row between payee groups, so the group it left has to be reconsidered too, and the
+    caller captures those keys before it writes. A category edit needs no prior key: the key is derived
+    from the name, so both the old and the new series for that payee are already in scope.
+
+    Re-evaluation is the whole contract, not re-attachment: a row that still belongs where it was stays
+    put, and one that no longer matches is released for whatever else claims it.
+    """
+    keys = set(prior_payee_keys) | payee_keys_for_ids(conn, [i for i in txn_ids if i])
+    if not keys:
+        return {"detected": 0, "inserted": 0, "preserved": 0, "removed_auto": 0, "resumed": 0}
+    return scan_imported_payees(conn, keys, window_months=window_months)
 
 
 def maybe_auto_scan(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT,

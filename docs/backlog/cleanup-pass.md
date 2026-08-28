@@ -81,6 +81,18 @@ renders a `↻ Refresh` next to the bar only when a host passes one (shared half
 Nothing structural — a prop plus per-host one-liners. See the bulk-select section of `ui-patterns.md`
 for the in-place reconcile contract this complements.
 
+## Schema leftovers to fold into the next migration
+
+Not worth a migration of their own; take them the next time one is written for another reason.
+
+- **`idx_recurring_override_pin`** — the partial unique index on
+  `recurring_membership_override(txn_id) WHERE state = 'pinned'`. It guarded the withdrawn pinning
+  feature (see `backlog/recurring-detection.md` — a series is defined by what recurs, so forcing a row
+  in misrepresents it). Nothing writes the state: the endpoint rejects it and `_load_overrides` filters
+  on `'excluded'`. The index is inert, and dropping it does not change behavior — which is exactly why
+  it should ride along rather than justify its own version bump. Drop the index; leave the `state`
+  column, since `'excluded'` still uses it.
+
 ## Press-scoped transient labels (from the 2026-08-19 flicker sweep)
 
 A sweep for flicker converted the busy indicators driven by a **load** (`useBusyIndicator`) and the

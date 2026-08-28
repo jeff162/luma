@@ -22,6 +22,7 @@ from backend.services.categorizer import (
     match_expr_clause_texts,
     bump_rule_effect_dates,
     rule_scope_account_sql,
+    rule_specificity_order_sql,
 )
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
@@ -126,23 +127,15 @@ def _find_matching_rule(conn, txn):
         return None
 
     # Mirror the engine's specificity ordering so "match this transaction" previews and
-    # explicit apply flows agree with what future imports/syncs would pick automatically.
+    # explicit apply flows agree with what future imports/syncs would pick automatically. Shared from
+    # the engine rather than copied — a preview that disagrees with what the import will do is worse
+    # than no preview.
     rules = conn.execute(
-        """
+        f"""
         SELECT id
         FROM   category_rule
         WHERE  deleted_at IS NULL
-        ORDER  BY
-            CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-            CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-            CASE WHEN account_type IS NOT NULL THEN 1 ELSE 0 END DESC,
-            LENGTH(keyword) DESC,
-            (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
-             CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
-             CASE WHEN COALESCE(debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-             CASE WHEN owner_id     IS NOT NULL THEN 1 ELSE 0 END +
-             CASE WHEN account_id   IS NOT NULL THEN 1 ELSE 0 END +
-             CASE WHEN account_type IS NOT NULL THEN 1 ELSE 0 END) DESC
+        ORDER  BY {rule_specificity_order_sql("")}
         """
     ).fetchall()
 
@@ -553,15 +546,11 @@ def list_rules(search: Optional[str] = Query(None)):
             {where}
             ORDER BY
                 cr.keyword ASC,
-                -- Within the same keyword, list less-specific rules first
-                -- (more-specific rules evaluate first but are listed last,
-                --  so the list reads: general → specific, top → bottom)
-                LENGTH(cr.keyword) ASC,
-                (CASE WHEN cr.amount_min IS NOT NULL THEN 1 ELSE 0 END +
-                 CASE WHEN cr.amount_max IS NOT NULL THEN 1 ELSE 0 END +
-                 CASE WHEN COALESCE(cr.debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-                 CASE WHEN cr.owner_id   IS NOT NULL THEN 1 ELSE 0 END +
-                 CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END) ASC
+                -- Within the same keyword, list less-specific rules first (more-specific rules
+                -- evaluate first but are listed last, so the list reads general → specific, top →
+                -- bottom). The engine's own ordering, reversed, so the list cannot describe a
+                -- precedence the engine does not apply.
+                {rule_specificity_order_sql("cr.", most_specific_first=False)}
             """,
             params,
         ).fetchall()

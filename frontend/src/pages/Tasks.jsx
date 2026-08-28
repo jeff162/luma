@@ -1,11 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Spinner } from '../components/ui.jsx'
+import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
+
+/*
+ * The nag inbox. Tasks are computed server-side (routers/tasks.py) and re-fetched whenever work
+ * elsewhere resolves one, so nothing here is patched in place.
+ *
+ * A task carrying a `dismiss_key` can be put away. What that stores is the count it was dismissed at,
+ * and the task returns when the count rises above it — so dismissing is "not now", never "never
+ * again", and new work always resurfaces. The dismissed ones stay reachable at the foot of the page
+ * rather than vanishing, because a card that disappears without a trace is indistinguishable from one
+ * that was lost.
+ */
+
+// The page's content column, named once so the header, the cards and the dismissed list agree.
+const TASK_COLUMN = 640
 
 const SEVERITY_COLORS = {
   warning: { bg: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))', border: 'var(--warning)', icon: '!' },
@@ -44,7 +59,7 @@ function TaskSeverityIcon({ severity }) {
   )
 }
 
-function TaskCard({ task }) {
+function TaskCard({ task, onDismiss }) {
   const style = SEVERITY_COLORS[task.severity] || SEVERITY_COLORS.info
   const { clearAll } = useFilters()
   // Task counts are global (e.g. all-time uncategorized), but the shared FilterBar defaults to a
@@ -84,24 +99,81 @@ function TaskCard({ task }) {
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
           {task.description}
         </div>
-        <Link
-          to={task.link}
-          onClick={handleClick}
-          style={{
-            display: 'inline-block',
-            fontSize: 13,
-            fontWeight: 500,
-            color: 'var(--accent2)',
-            textDecoration: 'none',
-            padding: '5px 14px',
-            borderRadius: 6,
-            border: '1px solid var(--border)',
-            background: 'var(--surface)',
-          }}
-        >
-          {task.link_label} {'->'}
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <Link
+            to={task.link}
+            onClick={handleClick}
+            style={{
+              display: 'inline-block',
+              fontSize: 13,
+              fontWeight: 500,
+              color: 'var(--accent2)',
+              textDecoration: 'none',
+              padding: '5px 14px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+            }}
+          >
+            {task.link_label} {'->'}
+          </Link>
+          {task.dismiss_key ? (
+            <button
+              onClick={() => onDismiss(task)}
+              title="Hide this until there is more of it"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)',
+                fontSize: 12, fontWeight: 500, padding: '5px 4px',
+              }}
+            >
+              Dismiss
+            </button>
+          ) : null}
+        </div>
       </div>
+    </div>
+  )
+}
+
+// The dismissed ones, kept at the foot of the page. Collapsed by default: they are deliberately quiet,
+// but they must stay reachable, and each says what it is hiding so restoring one is an informed choice.
+function DismissedSection({ dismissed, onRestore }) {
+  const [open, setOpen] = useState(false)
+  if (!dismissed || dismissed.length === 0) return null
+  return (
+    <div style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border)', maxWidth: TASK_COLUMN }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 12, fontWeight: 600, padding: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+      >
+        <span style={{ fontSize: 9 }}>{open ? '▾' : '▸'}</span>
+        {dismissed.length} dismissed
+      </button>
+      {open ? (
+        <div style={{ marginTop: 8 }}>
+          {dismissed.map(task => (
+            <div
+              key={task.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '7px 2px',
+                borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)',
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{task.title}</span>
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>{task.count}</span>
+              <button
+                onClick={() => onRestore(task)}
+                style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6,
+                  cursor: 'pointer', color: 'var(--text)', fontSize: 11.5, fontWeight: 500, padding: '3px 9px',
+                }}
+              >
+                Restore
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -109,6 +181,7 @@ function TaskCard({ task }) {
 export default function Tasks() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [undo, setUndo] = useState(null)  // { dismiss_key, title } of the last dismissal
 
   useEffect(() => {
     let cancelled = false
@@ -130,10 +203,30 @@ export default function Tasks() {
     }
   }, [])
 
+  // Both calls return the recomputed list, so the page never has to guess what dismissing changed.
+  const dismiss = useCallback(async (task) => {
+    setResult(await api.dismissTask(task.dismiss_key))
+    setUndo({ dismiss_key: task.dismiss_key, title: task.title })
+  }, [])
+
+  const restore = useCallback(async (task) => {
+    setResult(await api.restoreTask(task.dismiss_key))
+    setUndo(null)
+  }, [])
+
+  // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
+  const closeUndo = useCallback(() => setUndo(null), [])
+
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '32px 32px 0', maxWidth: 640, flexShrink: 0 }}>
-        <PageHeader title="Tasks" />
+      {/* The column goes inside the padding, not on the padded element — a maxWidth on a padded box
+          measures the column inside the padding, which leaves the header a padding's width narrower
+          than the cards below it. Invisible here only because both are left-aligned; it would show the
+          moment either was centred. */}
+      <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
+        <div style={{ maxWidth: TASK_COLUMN }}>
+          <PageHeader title="Tasks" />
+        </div>
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         {loading ? (
@@ -145,7 +238,7 @@ export default function Tasks() {
             style={{
               textAlign: 'center',
               padding: '48px 32px',
-              maxWidth: 640,
+              maxWidth: TASK_COLUMN,
               border: '2px dashed var(--border)',
               borderRadius: 12,
               background: 'var(--surface2)',
@@ -159,11 +252,21 @@ export default function Tasks() {
             </div>
           </Card>
         ) : (
-          <div style={{ maxWidth: 640 }}>
-            {result?.tasks?.map(task => <TaskCard key={task.id} task={task} />)}
+          <div style={{ maxWidth: TASK_COLUMN }}>
+            {result?.tasks?.map(task => <TaskCard key={task.id} task={task} onDismiss={dismiss} />)}
           </div>
         )}
+        <DismissedSection dismissed={result?.dismissed} onRestore={restore} />
       </div>
+
+      {undo && (
+        <UndoToast
+          title="Task dismissed"
+          description={`"${undo.title}" is hidden until there is more of it.`}
+          onUndo={() => restore({ dismiss_key: undo.dismiss_key })}
+          onDismiss={closeUndo}
+        />
+      )}
     </div>
   )
 }

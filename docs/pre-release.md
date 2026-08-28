@@ -84,20 +84,96 @@ topics rather than in the author's own hand, so it is placed rather than finishe
 four defects in an hour, every one of them in how a component sits in the live tree rather than in its
 logic — the reason that pass was treated as blocking rather than as a formality.
 
-### 2. Recurring anomaly signals
+### 2. Recurring anomaly signals  ✅ *built 2026-08-27*
 
-[`backlog/recurring-detection.md`](backlog/recurring-detection.md) → *§2 only*.
+[`backlog/recurring-detection.md`](backlog/recurring-detection.md) → *§2*, plus two additions taken
+deliberately (see below).
 
-Detection, listing and curation are already live; this is the payoff for substrate that exists. The four
-signals: **upcoming**, **missed**, **new series detected**, **price change**. Additive, low blast
-radius, and the most demonstrable thing in the backlog for a stranger reading the README.
+Detection, listing and curation were already live; this is the payoff for substrate that existed. The
+four signals — **upcoming**, **missed**, **new series detected**, **price change** — plus a fifth,
+**rule amount-range drift**, and dismissal on the Tasks page.
 
-**Not in scope:** §4 (fixed-vs-variable series and its price-increase review), which is marked phase 2
-and overlaps the price-change signal without being needed by it.
+**The owed decision was settled: all four ship**, but *upcoming* is a **view**, not a task. It is a
+forward-looking budgeting aid rather than an anomaly, some users will not care about it at all, and a
+badge that counts ordinary life stops meaning anything. It lives as a tab on the Recurring page's review
+section with no actions and no dismissal.
 
-*Owed decision:* whether all four signals ship or only **missed** and **price change** — the two that
-motivated this. *New series detected* is cheap once the surface exists and catches the forgotten free
-trial; *upcoming* is a forward view rather than an anomaly.
+**Two things were added past the file's named scope**, both on the user's call that this plan is a
+minimum rather than a limit:
+
+- **Rule amount-range drift.** The user's actual use of amount ranges on rules is *disambiguation* —
+  separating several bills from one biller by size — which makes the range a **matching gate**. When a
+  bill drifts past the bound the row stops matching, so it loses the rule's category *and* its place in
+  the rule's series, and nothing else in the app notices: the row is categorized, just not as intended.
+  The signal reports a charge that missed by a little (and, more quietly, one sitting just inside a
+  limit) and offers **Widen to include**, which moves the bound and re-applies the rule.
+- **Task dismissal**, which applies to tasks predating this work. The mark is the count at dismissal and
+  **ratchets down** to any lower count seen since — a mark that only held at its original value swallows
+  new work precisely because the user cleared some. `txn` has no insertion timestamp, so the alternative
+  ("members newer than the dismissal") would have meant a new column on the largest table and every
+  insert site updated; the ratchet gets the same behavior for none of that.
+
+**What the design as written could not have done**, both recorded in the backlog file as
+don't-re-impose:
+
+- **"A charge outside the established `amount_min`/`amount_max` band" is not implementable.** That band
+  is rewritten from exactly the rows the series owns, so a hiked charge is inside it by the time anything
+  looks. Price change is measured against the occurrences *preceding* the latest charge.
+- **"Missed" had to be judged against data freshness, not the calendar.** Against today, a month without
+  an import reports every active series as missing.
+
+The signals are **derived on read**, not fired from the import scan the seam had been marked for two
+versions: an auto series is re-minted with a new id on every scan, so a stored finding is orphaned within
+a day and stale on the next edit. The only durable state is the user's dismissals. Fixed on the way:
+`recurring_series.created_at` now means *first detected* rather than *last rebuilt*.
+
+**Still not in scope:** §4's identity half (`amount_mode`, amount-gated fixed membership, the pinned
+expectation band). §2 settled its design — the rule owns the matching gate, the series owns the
+expectation band, and every amount gate needs a grace band — and the backlog file carries it.
+
+**First real-app pass, 2026-08-27 — one defect, invisible to the suite by construction, and a structural
+change behind it.** The findings section rendered into the Recurring page's pinned header (`flexShrink: 0`
+over a `minHeight: 0` body) with no height cap, so nine real findings collapsed the series list and the
+drill-down region to zero height: "Open series" drew its report into nothing and read as a dead button.
+
+Capping the height was the patch. The diagnosis was that the page was carrying two things at once, so it
+became **three peer views** on the shared `SegmentedToggle` — Series / Needs attention / Upcoming — each
+owning the scrolling body, with the open-findings count as a badge on the control. Filter/sort/search
+travel with the series view; Upcoming was promoted out of the findings panel, which is what its own
+"not an anomaly" argument had implied all along. A finding's "Open series" opens the drill-down **in
+place** under the findings — switching to the series view for it was tried and dropped, because it left
+the list being worked through and could land on a filter that excluded the very series being opened. `SegmentedToggle` was extracted
+from `Dashboard.jsx` into `ui.jsx` on the way (second instance = the `shared-components.md` watchlist
+trigger), gaining optional count badges.
+
+**Also from that pass:** the page carried three different left margins — header, cards and drill-down —
+because `maxWidth` sat on the elements that also carried the page padding, which measures the column
+*inside* the padding and leaves a centred header a padding's width in from a centred list. Fixed to one
+named column per page, applied inside the padding; the Tasks page had the same latent mismatch (hidden
+only because it is left-aligned) and was harmonized too. All three lessons are generalized into
+`ui-patterns.md`.
+
+**Second real-app pass, 2026-08-27 — a stale membership cache, found by using the feature to do real
+work.** Recategorizing a charge so it would join the series it belonged to changed nothing: the row's
+menu still opened the *old* series, the new series' drill-down never gained it, and the missed-charge
+finding stayed open. All three read `txn.recurring_series_id`, which only a scan rewrites, and none of
+the scan triggers covered a hand edit — import and sync scan the payees they touched, a global
+recategorize scans everything, the app-load catch-up is watermark-gated to about a day. The edit
+endpoints now run the scoped scan for the payees they touch (`rescan_edited_transactions`), for the
+fields the detector actually reads. Two costs shaped it: a no-op re-save skips the scan, and bulk edits
+scan once for the batch — a scoped scan loads the whole detection window before filtering, measured at
+~125 ms on a 20,000-row ledger, which is what makes a per-row version untenable.
+
+**Rejected in the same pass:** pinning a transaction into a series it would not otherwise match. The API,
+`reconcile_series` and `data-model.md` all supported it and the Help topic promised it, but no UI ever
+sent it — and the user's judgement is that it misrepresents what a series *is* (a late fee on a tax
+payment shares the category without being part of the series). The docs and Help text were corrected to
+match; see the backlog file.
+
+**Otherwise not exercised in the running app.** Backend and component contracts are under test (18 backend signal
+tests, 6 task-dismissal tests, 12 frontend), but the review section's placement, its copy at real
+density, and the Tasks dismiss/undo flow are the class of thing a green unit suite cannot see. Worth a
+pass before screenshots.
 
 ### 3. Cash-flow reporting  ✅ *built 2026-08-25*
 
@@ -286,9 +362,9 @@ guard, the summary-endpoint tests, and a before/after comparison over a real-dat
    onto an in-memory export and restore is what would make that defect user-visible — and 5 now also owns
    the envelope and the two document decisions that 1 builds on, so the order is a dependency rather than
    a preference. Nothing else waits on either.
-2. **The other three in any order** — they do not touch each other. Recurring anomalies are the cheapest and
-   most visible; vault recovery is the one whose absence is a real hazard; attachments are the one the
-   README already promises.
+2. **The other three in any order** — they do not touch each other. Recurring anomalies (done) were the
+   cheapest and most visible; vault recovery is the one whose absence is a real hazard; attachments are
+   the one the README already promises.
 3. **Splits (6) can run alongside any of them** — it shares no surface with the other five. It should
    land before screenshots for the same reason cash-flow reporting does: a category drill-down looks
    different once a split renders in it.

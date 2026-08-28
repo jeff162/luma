@@ -575,6 +575,10 @@ export const api = {
   clearSyncDiagnostics: () => request('/sync/diagnostics', { method: 'DELETE' }),
 
   getTasks:    () => request('/tasks'),
+  // Task dismissal is a ratcheting high-water mark on the task's count (see routers/tasks.py), so both
+  // calls return the freshly recomputed task list rather than just an ack.
+  dismissTask: (key) => request(`/tasks/dismiss/${encodeURIComponent(key)}`, { method: 'POST' }),
+  restoreTask: (key) => request(`/tasks/dismiss/${encodeURIComponent(key)}`, { method: 'DELETE' }),
 
   // Recurring series: detection is an on-demand scan; the rest curate the recurring_series records.
   getRecurringSeries: (includeSuppressed = false) =>
@@ -593,6 +597,15 @@ export const api = {
   // Pin/exclude/clear one transaction's membership in a series (a scan-durable override).
   setRecurringMembership: (id, transaction_id, state) =>
     request(`/recurring/${id}/membership`, { method: 'POST', body: JSON.stringify({ transaction_id, state }) }),
+  // Anomaly/forecast signals. Derived on read from the series and the ledger — nothing is stored but the
+  // user's dismissals, which are keyed by each signal's own fingerprint so they survive a rescan.
+  getRecurringSignals: (horizonDays) =>
+    request(`/recurring/signals${horizonDays ? `?horizon_days=${horizonDays}` : ''}`),
+  getDismissedRecurringSignals: () => request('/recurring/signals/dismissed'),
+  dismissRecurringSignal: (key, kind) =>
+    request('/recurring/signals/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
+  restoreRecurringSignal: (key) =>
+    request('/recurring/signals/restore', { method: 'POST', body: JSON.stringify({ key }) }),
 
   getOwners:   () => request('/owners'),
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),

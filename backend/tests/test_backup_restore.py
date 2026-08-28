@@ -105,6 +105,7 @@ TABLE_TO_SECTION = {
     "ui_preference": "ui_preferences",
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
+    "recurring_signal_dismissal": "recurring_signal_dismissals",
     "txn_link": "txn_links",
     "txn_link_member": "txn_link_members",
     "amazon_funding_map": "amazon_funding_map",
@@ -241,6 +242,13 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO recurring_membership_override (txn_id, series_id, state) VALUES (?, ?, 'pinned')",
                     (txn, series),
+                )
+                # A dismissed anomaly signal. Its key is a fingerprint, not a row id (the signals
+                # themselves are derived), so this is the only durable state that side has to carry.
+                conn.execute(
+                    "INSERT INTO recurring_signal_dismissal (signal_key, kind, dismissed_at) "
+                    "VALUES (?, 'price_change', '2026-04-16T09:00:00')",
+                    (f"price_change:{txn}",),
                 )
 
                 # A typed transaction link (an Amazon-style charge↔item association) plus a second txn

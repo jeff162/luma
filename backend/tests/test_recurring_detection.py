@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
@@ -488,19 +490,22 @@ class RecurringDetectionTests(unittest.TestCase):
             update_rule(rule_id, RuleUpdate(keyword="chef"), on_existing="reject")
         self.assertEqual(len(self._members(series["id"])), 1)  # now matches Green Chef, not Blue Apron
 
-    def test_pin_forces_membership_and_survives_scan(self):
+    def test_a_row_cannot_be_forced_into_a_series_it_does_not_match(self):
+        # Pinning was withdrawn deliberately. A series is defined by what recurs, so a charge that merely
+        # shares a payee and category with one — a late fee on a tax payment — is not part of it, and
+        # forcing it in would misrepresent the series and every total read from it. A row that ought to
+        # belong and does not is a matching problem: fix the name, or widen the rule.
         self._add_series(payee="Gym", category="Streaming", count=6, period_days=30, amount=40.0)
-        # An oddly-named charge (different payee AND category) the derived Gym series would never match.
         odd = self._add_txn(payee="ACH DEBIT 99", category="Water", amount=40.0,
                             d=(date.today() - timedelta(days=15)).isoformat())
         self._scan()
         gym = next(s for s in self._series() if s["display_name"] == "Gym")
         from backend.routers.recurring import set_membership, MembershipOverride
         with self._use_db_path():
-            set_membership(gym["id"], MembershipOverride(transaction_id=odd, state="pinned"))
-        self.assertIn(odd, self._members(gym["id"]))
-        self._scan()  # the override lives in its own table, so the rebuild re-applies it
-        self.assertIn(odd, self._members(gym["id"]))
+            with self.assertRaises(HTTPException) as raised:
+                set_membership(gym["id"], MembershipOverride(transaction_id=odd, state="pinned"))
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertNotIn(odd, self._members(gym["id"]))
 
     def test_exclude_removes_member_and_survives_scan(self):
         self._add_series(payee="Netflix", category="Streaming", count=6, period_days=30, amount=15.99)

@@ -30,6 +30,13 @@ from backend.services.recurring_detection import (
     maybe_auto_scan,
     scan_and_store,
 )
+from backend.services.recurring_signals import (
+    UPCOMING_HORIZON_DAYS,
+    compute_signals,
+    dismiss_signal,
+    dismissed_signals,
+    restore_signal,
+)
 
 router = APIRouter()
 
@@ -126,6 +133,50 @@ def auto_scan(window_months: int = 25):
         raise HTTPException(status_code=400, detail="window_months must be between 1 and 120")
     with get_db() as conn:
         return maybe_auto_scan(conn, window_months=window_months)
+
+
+# Signal routes are declared ahead of the `/{series_id}` ones so "signals" is never read as a series id.
+
+@router.get("/signals")
+def list_signals(horizon_days: int = UPCOMING_HORIZON_DAYS, include_dismissed: bool = False):
+    """The open anomaly/forecast signals over the current series (see `services/recurring_signals.py`).
+    Derived on read, so this is always consistent with the ledger as it stands rather than with whatever
+    was true at the last import."""
+    if horizon_days < 1 or horizon_days > 365:
+        raise HTTPException(status_code=400, detail="horizon_days must be between 1 and 365")
+    with get_db() as conn:
+        return compute_signals(conn, horizon_days=horizon_days, include_dismissed=include_dismissed)
+
+
+@router.get("/signals/dismissed")
+def list_dismissed_signals(horizon_days: int = UPCOMING_HORIZON_DAYS):
+    """The signals a dismissal is currently hiding — what the review surface offers to bring back."""
+    with get_db() as conn:
+        return {"signals": dismissed_signals(conn, horizon_days=horizon_days)}
+
+
+class SignalDismissal(BaseModel):
+    key: str
+    kind: str = ""
+
+
+@router.post("/signals/dismiss")
+def dismiss_signal_route(body: SignalDismissal):
+    """"Seen it, it's fine." Keyed by the signal's fingerprint, so the same finding stays dismissed
+    across scans while a genuinely new one (a later missed date, a different charge) still surfaces."""
+    if not (body.key or "").strip():
+        raise HTTPException(status_code=400, detail="key is required")
+    with get_db() as conn:
+        dismiss_signal(conn, body.key.strip(), (body.kind or "").strip())
+        return {"ok": True}
+
+
+@router.post("/signals/restore")
+def restore_signal_route(body: SignalDismissal):
+    """Undo a dismissal — both the immediate toast and the dismissed list route here."""
+    with get_db() as conn:
+        restore_signal(conn, (body.key or "").strip())
+        return {"ok": True}
 
 
 @router.post("/{series_id}/confirm")
@@ -320,21 +371,23 @@ def create_series(body: SeriesCreate):
 
 class MembershipOverride(BaseModel):
     transaction_id: str
-    state: str  # 'pinned' | 'excluded' | 'clear'
+    state: str  # 'excluded' | 'clear'
 
 
 @router.post("/{series_id}/membership")
 def set_membership(series_id: str, body: MembershipOverride):
     """Surgically correct one transaction's membership in a series and make it stick across scans:
-    - **pinned**  — force this row into the series even if it wouldn't match (a member the detector/rule
-      missed). A transaction can be pinned to only one series, so any prior pin is replaced and the row is
-      unlinked from wherever it currently sits before this series reclaims it.
     - **excluded** — keep this row out even though it matches (the detector grabbed one it shouldn't).
     - **clear**   — drop any override for this (transaction, series) pair.
     The override lives in its own table, so `reconcile_series` re-applies it on every scan. Membership is
-    refreshed immediately via `link_series_members` so the change shows without waiting for a scan."""
-    if body.state not in ("pinned", "excluded", "clear"):
-        raise HTTPException(status_code=400, detail="state must be 'pinned', 'excluded', or 'clear'")
+    refreshed immediately via `link_series_members` so the change shows without waiting for a scan.
+
+    There is deliberately no way to force a row *in*. A series is defined by what recurs, so a charge
+    that merely shares a payee and category with one — a late fee on a tax payment, say — is not part of
+    it, and pinning it in would misrepresent the series and every total read from it. A row that ought to
+    belong and does not is a matching problem: correct the name, or widen the rule."""
+    if body.state not in ("excluded", "clear"):
+        raise HTTPException(status_code=400, detail="state must be 'excluded' or 'clear'")
     with get_db() as conn:
         _fetch(conn, series_id)
         txn = conn.execute("SELECT id FROM txn WHERE id = ?", (body.transaction_id,)).fetchone()
@@ -346,15 +399,6 @@ def set_membership(series_id: str, body: MembershipOverride):
         if body.state == "clear":
             conn.execute(
                 "DELETE FROM recurring_membership_override WHERE txn_id = ? AND series_id = ?",
-                (body.transaction_id, series_id),
-            )
-        elif body.state == "pinned":
-            # A pin is exclusive: drop any other pin for this row and detach it from its current series so
-            # the target series can reclaim it (reconcile treats already-owned rows as off-limits).
-            conn.execute("DELETE FROM recurring_membership_override WHERE txn_id = ? AND state = 'pinned'", (body.transaction_id,))
-            conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE id = ?", (body.transaction_id,))
-            conn.execute(
-                "INSERT OR REPLACE INTO recurring_membership_override (txn_id, series_id, state) VALUES (?, ?, 'pinned')",
                 (body.transaction_id, series_id),
             )
         else:  # excluded

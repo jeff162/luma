@@ -78,6 +78,12 @@ than by feature.
   series subsystem is live (detect + list + curate), and the "Mark as recurring" row action has since
   shipped in the shared context menu (`markRecurringFromMenu`). Deferred pieces are the per-import
   matching hook and the anomaly/forecast signals (upcoming / missed / new / price-change).
+- [rule-amount-overlaps.md](rule-amount-overlaps.md) — **parked, not started (2026-08-27).** Rule
+  precedence now ranks by the *span* of an amount range, so a contained range wins (`>= 3000` beats
+  `>= 300`) and a genuine tie resolves deterministically. What is left is the case ordering cannot
+  answer: two ranges that overlap without one containing the other. Shape agreed — an on-demand button
+  on the Rules page listing conflicting pairs, rather than a maintained count.
+
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the

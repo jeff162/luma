@@ -1691,7 +1691,7 @@ export const HELP_TOPICS = [
     section: 'recurring',
     title: 'Recurring transactions',
     surfaces: ['Recurring', 'Rules (recurring series)', 'Transactions (row menu)'],
-    summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions.',
+    summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions. A review section reports what is missing, what changed price, and what was just detected, alongside a forward view of what is due next.',
     body: () => (
       <>
         <p>
@@ -1746,15 +1746,83 @@ export const HELP_TOPICS = [
             transaction’s own right-click menu (<em>Restore to recurring series</em>), or from
             the <em>removed</em> list inside the series.
           </li>
-          <li>
-            <strong>Add a transaction</strong> -- pins a specific transaction into the series even if it would
-            not match on its own.
-          </li>
         </ul>
+        <p>
+          There is no way to force a transaction into a series it does not match, on purpose. A series is
+          defined by what recurs, so a charge that merely shares a payee and category with one -- a late
+          fee on a tax payment, say -- is not part of it, and forcing it in would distort the series and
+          the totals read from it. A charge that ought to belong and does not is a matching problem:
+          correct its merchant name, or widen the rule that defines the series. Editing a transaction
+          re-checks which series it belongs to, so a correction takes effect straight away.
+        </p>
         <p>
           A transaction carries a small ↻ marker while it belongs to a series, and its editor links through
           to that series. Right-clicking a transaction offers <em>Mark as recurring</em>, <em>Remove</em>,
           or <em>Restore</em>, whichever fits.
+        </p>
+
+        <h4>What needs attention</h4>
+        <p>
+          The Recurring page has three views, chosen from the selector under its title: the
+          <em> Series</em> list itself, <em>Needs attention</em>, and <em>Upcoming</em>. The count beside
+          <em> Needs attention</em> is how many findings are open, so it is visible without switching.
+        </p>
+        <p>
+          Each finding names one thing and offers the action that settles it. The same items appear on
+          the Tasks page as a reminder to come back to them.
+        </p>
+        <ul>
+          <li>
+            <strong>Missing charge</strong> -- an occurrence that was due and never arrived. Lateness is
+            measured against how current the data is rather than against the calendar, so a ledger that
+            has not been imported into for a while stays quiet instead of reporting every series at once.
+            After a couple of missed cycles the series is treated as probably canceled, and
+            <em> Mark ended</em> is offered alongside it. Nothing is ended automatically.
+          </li>
+          <li>
+            <strong>Amount changed</strong> -- a charge that came in away from what the series has been
+            charging. A series with a steady price reports a modest step; one that moves every month
+            reports only a charge beyond anything it has done before. Once a second charge arrives at the
+            new price the change is treated as the new normal and stops being reported.
+          </li>
+          <li>
+            <strong>Newly detected</strong> -- a series found for the first time in the last month. This
+            is where a forgotten trial that has started billing turns up.
+          </li>
+          <li>
+            <strong>Outside a rule’s range</strong> -- a charge that a rule would have claimed except for
+            its amount. An amount range decides which transactions a rule matches, so a bill that grows
+            past the limit quietly stops being categorized by that rule and drops out of its series.
+            <em> Widen to include</em> moves the limit out to that charge and re-applies the rule. A charge
+            that is still inside the range but close to a limit is reported the same way, one occurrence
+            earlier.
+          </li>
+        </ul>
+        <p>
+          <em>Open series</em> on a finding opens that series’ transactions in a panel below the
+          findings, without leaving the list being worked through.
+        </p>
+        <p>
+          A finding can be <strong>dismissed</strong> once it has been seen. Dismissal covers that one
+          finding only -- a later missed cycle, or a different charge, is reported again. Anything
+          dismissed stays listed at the foot of the section and can be brought back.
+        </p>
+        <p>
+          On a bill whose amount moves -- gas, electricity, water -- dismissing an amount also
+          <strong> teaches the range</strong>. A heating bill that peaks every January is worth
+          mentioning the first winter and not the ones after, and dismissing that peak is what says so:
+          later charges up to the amounts already accepted pass without comment, while a charge beyond
+          them is still reported. Restoring a dismissal takes the acceptance back with it. Fixed-price
+          subscriptions work differently on purpose -- there a dismissal means the price rose, and the
+          next increase is still reported.
+        </p>
+
+        <h4>What is coming up</h4>
+        <p>
+          The <em>Upcoming</em> view lists the charges due in the next month with what they are expected
+          to cost, and a total. Nothing there is wrong, so it carries no actions, no dismissal, and never
+          appears on the Tasks page -- it is there to be consulted, not resolved. It sits alongside
+          <em> Needs attention</em> rather than inside it for that reason.
         </p>
 
         <h4>Ended is not the same as not recurring</h4>

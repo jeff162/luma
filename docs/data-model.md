@@ -343,6 +343,26 @@ Important behavior:
   single keywords); summed length is the metric, and scope + the one-rule-per-matcher conflict surfacing
   remain the explicit levers. This stays a **static, computed-once rule ordering** — no per-row scoring.
 
+- **amount specificity is the *span* of a rule's range, not the number of bounds it sets.** Where two
+  rules match the same row, the one whose amount range is *contained* in the other's wins — `>= 3000`
+  matches a strict subset of the rows `>= 300` does, which is the same argument `LENGTH(keyword)` makes
+  on the text axis. Counting bounds cannot see that (both rules set exactly one), which scored a town's
+  water rule and its property-tax rule identically and let a $3,618 property-tax bill be categorized as
+  water. `COALESCE(amount_max, sentinel) − COALESCE(amount_min, 0)` never contradicts containment: if one
+  range contains another, the contained one has the smaller span. Amount ranks **below** keyword length —
+  the name stays the stronger discriminator — and ranges that merely *overlap* (`[300, 4000]` vs
+  `[3000, ∞)`) have no principled winner at all, which is a modelling ambiguity for the user to resolve
+  rather than something ordering can answer; see [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+
+- **the ordering ends in the rule id, so a genuine tie is stable.** Without a final tiebreak two
+  indistinguishable rules are separated by whatever order SQLite returns, which means the same ledger can
+  categorize differently after a `VACUUM` or an index change
+
+- **the precedence contract lives in one function**, `categorizer.rule_specificity_order_sql`, consumed by
+  the engine, by the "what would this rule do" preview/apply mirror in `routers/rules`, and by the rules
+  list (which renders it reversed, general → specific). It was three hand-kept copies; a preview that
+  disagrees with what the import will actually do is worse than no preview
+
 - amount comparisons use absolute values, with debit/credit scope applied separately through transaction sign when a rule is limited to one side
 
 - owner-scoped rules beat global rules when otherwise similar
@@ -500,14 +520,21 @@ Key invariants:
   editor's status row read membership directly, and the row menu's "Mark as recurring…" routes into the
   rule editor rather than a separate dialog.
 
-- **`recurring_membership_override` is a surgical, scan-durable pin/exclude layered over the matcher.**
-  Membership is a rebuilt cache, so a one-off correction (`state='pinned'` forces a row in even when it
-  wouldn't match; `state='excluded'` keeps a matched row out) can't live in `txn.recurring_series_id` —
-  it lives in its own `(txn_id, series_id, state)` table that `reconcile_series` re-applies every scan.
-  A pin is exclusive (a partial unique index enforces one pinned series per transaction) and **wins a
-  contested occurrence date** in the one-per-date selection; an exclude is subtracted before it. Setting
-  either **confirms the series** (like edit/confirm) so an auto series isn't deleted and re-minted with a
-  fresh id out from under the override. Stats derive from the effective (override-adjusted) set, so
+- **`recurring_membership_override` is a surgical, scan-durable *exclusion* layered over the matcher.**
+  Membership is a rebuilt cache, so a one-off correction (`state='excluded'` keeps a matched row out)
+  can't live in `txn.recurring_series_id` — it lives in its own `(txn_id, series_id, state)` table that
+  `reconcile_series` re-applies every scan, subtracting the exclusions before the one-per-date selection.
+  Setting one **confirms the series** (like edit/confirm) so an auto series isn't deleted and re-minted
+  with a fresh id out from under the override.
+
+  **There is deliberately no way to force a row *in*.** A `pinned` state existed — API, reconcile and
+  a partial unique index — and was withdrawn without ever having had a UI: a series is defined by *what
+  recurs*, so a charge that merely shares a payee and category with one (a late fee on a tax payment)
+  is not part of the series, and pinning it in would misrepresent the series and every total read from
+  it. A row that ought to belong and does not is a **matching** problem — correct its name, or widen the
+  rule — which is also why a hand edit now re-runs the scoped scan. The endpoint rejects the state and
+  `_load_overrides` filters on `'excluded'`, so nothing can write one; the index is vestigial. Don't
+  re-propose it. Stats derive from the effective (override-adjusted) set, so
   `occurrence_count` still equals the linked-row count. Surfaced as the row menu's "Remove from recurring
   series" (`POST /recurring/{id}/membership`). A removal is recoverable three ways: an immediate **Undo**
   toast (clears the override right away); the removed row's own right-click menu, which offers **Restore
@@ -523,6 +550,24 @@ Key invariants:
   still resume it — end means "stopped", not "not recurring". Deleting the rule (or an edit that merges it
   away) drops its backing series; unchecking `is_recurring` on the rule drops the series while keeping the
   rule if it still has another action.
+
+- **A hand edit re-evaluates the payees it touched.** Membership is a cache only a scan rewrites, so
+  before this a manual recategorization left the row linked to the series it used to belong to: the
+  row's menu opened the *old* series, the new series' drill-down never gained it, and a missed-charge
+  signal about it stayed open — one stale link with three faces, since all three read through it. None
+  of the other triggers covered it (import and sync scan the payees *they* touched, a global
+  recategorize scans everything, and the app-load catch-up is watermark-gated to roughly a day).
+  `rescan_edited_transactions` runs the scoped scan from the transaction edit endpoints for the fields
+  the detector actually reads — **category** (part of a derived series' identity), **merchant name**
+  (it *is* the key), **date**, and **trash**; tags, notes and the review flag are read by nothing.
+  Scope is the payees the rows belong to *now* plus any they belonged to *before*, because a rename
+  moves a row between groups and the group it left has to be reconsidered too — so the caller captures
+  those keys before it writes. The contract is **re-evaluation, not re-attachment**: a row that still
+  belongs where it was stays put. Two costs shape the wiring: a no-op edit (re-saving the same
+  category) skips the scan, and a **bulk** edit scans **once for the batch**, because a scan loads the
+  whole detection window before it filters by payee — measured at ~125 ms on a 20,000-row ledger,
+  effectively the same as a full scan, which is what makes the per-row version untenable and the
+  parked `payee_key` materialization worth more than it was.
 
 - **The scan also runs automatically, at two scopes, gated so it never does redundant heavy work.**
   `scan_and_store` takes an optional `payee_keys` scope, so the same pipeline serves both:
@@ -554,8 +599,11 @@ Key invariants:
   a resumed subscription revives the same record rather than spawning a duplicate. (Reactivate also
   happens manually via the same `restore` path suppressed series use.) The auto-*end* trigger — a
   missed expected charge — is deferred with the rest of the anomaly signals; today ended is set by the
-  user (a button on a confirmed series, or the "Not recurring" split control's "Mark canceled" on a
-  detected one).
+  user, or offered by the missed-charge signal once a series has gone two whole periods without a charge
+  (a button on a confirmed series, the "Not recurring" split control's "Mark canceled" on a detected
+  one, or "Mark ended" on the signal). **The signal never writes the status itself** — a presumed-ended
+  series is a *derived reading*, not a stored one, because silently freezing a confirmed series'
+  `next_due` is invisible until it is wrong.
 
 - **Money-movement series are classified, not hidden.** A series whose category (or its parent group)
   is `exclude_from_totals` — a transfer or a credit-card payment — is *money movement*, not spending or
@@ -567,10 +615,65 @@ Key invariants:
   same-category adjacency sort covers the common case, and pairing can't span an untracked external
   account anyway.
 
+- **`created_at` on a series means *first detected*, not *last rebuilt*.** An auto series is deleted and
+  re-inserted with a fresh `uuid` on every scan, so the column would otherwise advance daily and no
+  surface could answer "what appeared since I last looked". `scan_and_store` captures each dropped auto
+  series' `created_at` keyed by its identity tuple `(payee_key, category_id, scope_account_id)` — the
+  same tuple candidate de-duplication uses — and carries it onto the row that replaces it. That
+  identity, not the id, is the only stable handle an auto series has; anything that must outlive a
+  rebuild is keyed by it.
+
+- **Anomaly/forecast signals are derived on read and never stored** (`services/recurring_signals.py`).
+  Five kinds: **upcoming**, **missed**, **new series detected**, **price change**, and a rule whose
+  **amount range** a charge has drifted out of. Two facts force the derivation rather than the
+  event-driven alternative the scan seam was originally marked for:
+  - **The stored `amount_min`/`amount_max` band cannot detect a price change.** `_write_series_stats`
+    rewrites it from exactly the rows the series owns, so a hiked charge is *inside* the band by the
+    time anything could compare against it. Price change is measured against the occurrences
+    *preceding* the latest charge, which only a read-time derivation has. **Tightness is judged over the
+    whole prior history, the range over the recent window.** The split matters for a seasonal bill: four
+    consecutive winter gas bills look tight in isolation, so a trailing-window tightness test would
+    classify the series as fixed-price and then report the following spring as a price collapse. A step
+    whose *previous* occurrence already made it is not reported again.
+
+    **A dismissal on a variable series teaches its range.** A gas bill that reaches its peak every
+    January should say so once, not every January — and a trailing window cannot remember across a full
+    cycle, since by the next winter the last one has long left it. So the amounts whose price-change
+    warnings the user has dismissed are folded into the range a later charge is compared against
+    (`_load_accepted_amounts`), and the seasonal envelope is *learned* from what the user accepts rather
+    than modelled from dates. Three properties make that safe: the band widens only to what has been
+    **explicitly accepted** — an untriaged outlier still reports next time, which using the full history
+    instead would not give; it widens only *to* the accepted amount, so a genuinely larger charge is
+    still reported; and it is **derived from the dismissals**, reconstructing the fingerprint by join
+    rather than storing an amount, so restoring a dismissal narrows the band again and a charge that
+    leaves the series takes its acceptance with it. Deliberately **not** applied to a fixed series: there
+    a dismissal means "yes, the price went up", the next charge at the new price is already silent under
+    the settled rule, and widening the band would mask the *next* hike.
+  - **Lateness is measured against data freshness, not the calendar.** The reference "now" for a missed
+    charge is the newest live transaction on the series' account (the ledger's newest, for an
+    account-agnostic series), never later than today. Comparing `next_due_date` to today would turn a
+    month without an import into a wall of false alarms, and an account that has stopped syncing has no
+    opinion about whether its charge arrived.
+
+  The rule-range signal exists because **an amount range on a rule is a matching gate**: when a bill
+  drifts past the bound the row stops matching, so it loses the rule's category *and* its place in the
+  rule's series, and nothing else in the app notices — the row is categorized, just not as intended. A
+  row already carrying the rule's own category is never reported, and each rule reports at most its
+  three most recent near-misses, since a drifted range says one thing however many rows hit it.
+
+- **`recurring_signal_dismissal` is the whole of the signals' durable state.** Keyed by each signal's
+  own fingerprint — a transaction id, or a series' identity tuple plus the date concerned — deliberately
+  *not* a `recurring_series` id, which an auto series loses on every scan. It carries no foreign key: a
+  dismissal whose subject is later trashed simply stops matching, which costs a row and no correctness.
+  Shared at the data-DB level rather than per-user, because "seen it, it's fine" is curation of the
+  ledger like confirm/suppress, not a UI preference. Dismissal is **per finding**, so a later missed
+  cycle or a different charge still surfaces.
+
 This is the same "algorithm proposes, user disposes" idiom as import rule suggestions, and the same
 "the rule is the cache" split as the parked online-categorizer note: detection is the expensive
 bounded-window pass, while matching a new transaction to an existing series is a cheap keyed lookup.
-Per-import matching and anomaly/forecast signals (missed charge, price change, upcoming) are deferred.
+The signals sit on the other side of that split again: they are cheap enough to recompute per request
+that storing them would only create state to keep true.
 
 ## Import batches and profiles
 

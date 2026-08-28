@@ -26,6 +26,8 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Confirmation and completion flows](#confirmation-and-completion-flows)
 
+- [Dismissing what the app is nagging about](#dismissing-what-the-app-is-nagging-about)
+
 - [Import-specific patterns](#import-specific-patterns)
 
 - [Ownership and tag-driven reporting](#ownership-and-tag-driven-reporting)
@@ -192,6 +194,14 @@ Most pages should follow this structure:
 Prefer page-local scrolling for long lists, with header and controls remaining visually stable above the scrolling region.
 
 When a page hosts several distinct management surfaces that don't need to be seen at once, prefer **in-page tabs** over a stack of collapsible cards — each surface gets the full width/height of the content area and the page reads as one thing at a time. The Import/Export page (`Import / Export / Backup`) and the Accounts page (`Accounts / Owners / Connections`) both use this: a simple tab-button row under the `PageHeader` over conditionally-rendered content. The active tab is **session-scoped** (mirrored to `sessionStorage`, not the durable preference store), so it persists while the app is open but resets to the primary tab on next launch — a within-session convenience, not a saved preference. A surface that *is* the only thing on its tab should render its content directly (or in a non-collapsible panel), not in a collapsible card — there's nothing to collapse it away from.
+
+**A page's content column is measured inside the padding, not on it.** `maxWidth` on the element that also carries the page padding yields a column `2 × padding` narrower than one measured on an inner element — so a centred header sits a padding's width in from a centred list of the same nominal width, which reads as a stray indent rather than as a bug. Put the padding on the outer element and the `maxWidth` on a child, everywhere on the page including a docked panel's header and body, and name the width once per page rather than repeating the number. The Recurring page had three different left margins stacked on each other for exactly this reason.
+
+**Tabs or a segmented toggle?** Both switch the body of a page; the difference is what the options *are*. A **tab row** names several separate management surfaces that happen to live on one page (Accounts / Owners / Connections). The shared **`SegmentedToggle`** (`components/ui.jsx`) names peer *views of one subject* — the Dashboard's reporting frame and analysis mode, the Recurring page's Series / Needs attention / Upcoming. Where a view's contents are the reason to switch to it, put the count on the control as a `badge` (`badgeTone: 'warning'` where the number is what wants attention): a count only visible after switching cannot tell anyone to switch. Both follow the same persistence rule — session-scoped in `sessionStorage`, with a URL parameter winning over the stored value so a deep link from elsewhere (the Tasks page's `?signal=<kind>`) lands where it means to.
+
+**Split a page into views when two things are competing for one viewport, rather than rationing the space between them.** Findings about recurring series and the series list itself were stacked on one screen; the findings crowded the list and the drill-down panel out of the viewport entirely. Capping the findings' height made the page survivable, but the two were never usefully read together — the fix was to make them peer views.
+
+**Separating views must not cost the connection between them — and the way to keep it is usually to bring the detail to the user, not the user to the detail.** Acting on a finding first *switched* to the series view with that series' drill-down open, which was worse in both directions: it took the user out of the list of findings they were working through, and the series list carries its own filter, which can exclude the very series being opened — leaving a drill-down describing a card that is nowhere on screen. A docked detail panel belongs to the *page*, not to one view, so it opens in place under whichever view is showing. Where a shared panel can be opened from more than one view, mark the row that opened it (the findings row highlights the way a series card does): the panel's own title does not say which of several rows it belongs to.
 
 ### Horizontal sizing of data regions
 
@@ -674,6 +684,54 @@ a one-line `summary` sized for a popover and a longer `body` for the `/help` pag
 
 The import/reconciliation guidance is authored from `docs/import-reconciliation-playbook.md`, which
 stays the content source of truth; keep the topics in step with it as the tools evolve.
+
+## Dismissing what the app is nagging about
+
+Anything the app raises unprompted — a Tasks card, a recurring anomaly signal — needs an answer for "I
+have seen this and it is fine". Which mechanism depends on whether the thing being dismissed is one
+identifiable finding or a running count of work.
+
+- **An individually identifiable finding is dismissed one at a time, by fingerprint.** A recurring
+  signal names a specific charge, a specific missed date, or a specific rule, so "seen it" is an answer
+  about *that*. The fingerprint must be stable across whatever rebuilds the underlying record — the
+  recurring signals key on a transaction id or a series' derived identity, never on a series id, because
+  an auto-detected series is re-minted with a new id on every scan. A new finding of the same kind is a
+  new fingerprint and surfaces on its own, which is what makes this mechanism safe.
+
+- **A running count is dismissed with a high-water mark that ratchets *down*.** A task like
+  "uncategorized transactions" has no individually addressable items on the surface that raises it, so
+  what is stored is the count at dismissal and the card returns when the count rises above it. **The
+  mark must also fall to any lower count observed since**, and that half is not an optimization: a mark
+  that only held at its original value swallows new work precisely *because* the user did some. Dismiss
+  at forty, clear ten, and five new ones arrive — thirty-five is still under forty, so five genuinely new
+  items stay hidden forever. Ratcheting down means the comparison is always against the quietest the list
+  has been since. A mark whose task has stopped applying entirely is dropped, so the dismissal expires on
+  its own rather than covering the task's next appearance.
+
+- **Not everything raised should be dismissible.** A request from another person (the vault access
+  queue) is not the user's backlog, and something that is *required* rather than advisory (the HTTPS
+  warning with a provider configured) must not be put away at all. Offer the control only where
+  dismissing is a legitimate answer, and let the task itself declare that — `dismiss_key` present means
+  dismissible; the surface never infers it.
+
+- **A dismissed item leaves a way back, in two places.** An immediate `UndoToast` for the press that was
+  a mistake, and a durable collapsed list at the foot of the surface ("N dismissed") for the one noticed
+  later. A card that vanishes with no trace is indistinguishable from work that was lost — the same
+  reason a removal from a recurring series is recoverable three ways.
+
+- **Nothing variable-length belongs in a pinned header.** A page whose header block is `flexShrink: 0`
+  over a body that is `flex: 1; minHeight: 0` will let the header grow without limit and collapse the
+  body to nothing. The Recurring page's findings section did exactly that: a busy ledger's findings
+  pushed the series list and the drill-down panel off the viewport, so opening a series drew its report
+  into a region with no height and read as a dead button. Capping the section's height *rations* the
+  symptom; the fix was that findings and the series they refer to had no business sharing a viewport at
+  all, and they became peer views instead (next bullet). Where something variable genuinely must sit in
+  a header, scroll it inside a capped box and keep its controls and counts *outside* that scroll so they
+  stay reachable — but treat the need for that cap as a sign the surface is carrying two things.
+
+- **Purely forward-looking information is not a nag and gets no badge.** Upcoming recurring charges are
+  a budgeting view someone may want to consult; nothing about them is wrong, so they carry no actions, no
+  dismissal, and never reach the Tasks page. A badge that counts ordinary life stops meaning anything.
 
 ## Import-specific patterns
 

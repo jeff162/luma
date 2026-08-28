@@ -15,12 +15,17 @@ import unittest
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi import HTTPException
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.tasks import get_tasks
+from backend.routers.tasks import dismiss_task, get_tasks, restore_task
 
 
-class TasksUncategorizedCountTests(unittest.TestCase):
+class TasksFixtureTestCase(unittest.TestCase):
+    """One account, one category, and a private database — shared by the count and dismissal cases."""
+
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "tasks.db"
@@ -88,6 +93,8 @@ class TasksUncategorizedCountTests(unittest.TestCase):
                 return task["count"]
         return 0
 
+
+class TasksUncategorizedCountTests(TasksFixtureTestCase):
     def test_counts_only_live_settled_uncategorized_rows(self):
         # Should count: one settled, non-trashed, uncategorized row.
         self._insert_txn(category_id=None)
@@ -222,3 +229,86 @@ class TasksSuspectDuplicateDescriptionTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class TaskDismissalTests(TasksFixtureTestCase):
+    """Dismissing a task and the ratchet that decides when it comes back.
+
+    The mark is the count at dismissal, and it falls to any lower count observed since. The falling
+    half is the whole design: a mark that only ever held at its original value would swallow new work
+    precisely because the user had cleared some — clear two of four and one arrives, and three is
+    still under four, so a genuinely new item would stay hidden forever.
+    """
+
+    def _request(self):
+        return SimpleNamespace(
+            url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
+            state=SimpleNamespace(user={"id": "test-user"}),
+        )
+
+    def _visible_ids(self, result=None) -> set[str]:
+        with self._use_db_path():
+            result = result if result is not None else get_tasks(self._request())
+        return {t["id"] for t in result["tasks"]}
+
+    def _dismiss(self):
+        with self._use_db_path():
+            return dismiss_task("uncategorized_txns", self._request())
+
+    def _categorize_one(self):
+        with self._use_db_path():
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT id FROM txn WHERE category_id IS NULL AND trashed_at IS NULL LIMIT 1").fetchone()
+                conn.execute("UPDATE txn SET category_id = ? WHERE id = ?", (self.group, row["id"]))
+
+    def test_dismissing_hides_the_task_and_lists_it_as_dismissed(self):
+        self._insert_txn(category_id=None)
+        self.assertIn("uncategorized_txns", self._visible_ids())
+
+        result = self._dismiss()
+        self.assertNotIn("uncategorized_txns", {t["id"] for t in result["tasks"]})
+        self.assertEqual([t["id"] for t in result["dismissed"]], ["uncategorized_txns"])
+        # The badge count must agree with the list it summarizes.
+        self.assertEqual(result["open_items"], len(result["tasks"]))
+
+    def test_more_work_arriving_brings_the_task_back(self):
+        self._insert_txn(category_id=None)
+        self._dismiss()
+        self._insert_txn(category_id=None)
+        self.assertIn("uncategorized_txns", self._visible_ids())
+
+    def test_the_mark_falls_with_the_count_so_new_work_still_surfaces(self):
+        for _ in range(4):
+            self._insert_txn(category_id=None)
+        self._dismiss()                      # mark = 4
+        self._categorize_one()
+        self._categorize_one()
+        self.assertNotIn("uncategorized_txns", self._visible_ids())  # count 2, mark ratchets to 2
+
+        self._insert_txn(category_id=None)   # count 3 — above the ratcheted mark, not the original one
+        self.assertIn("uncategorized_txns", self._visible_ids())
+
+    def test_a_dismissal_expires_once_its_task_goes_away(self):
+        self._insert_txn(category_id=None)
+        self._dismiss()
+        self._categorize_one()               # the task no longer applies at all
+        self.assertEqual(self._visible_ids(), set())
+
+        self._insert_txn(category_id=None)
+        self.assertIn("uncategorized_txns", self._visible_ids())
+
+    def test_restoring_brings_it_back_immediately(self):
+        self._insert_txn(category_id=None)
+        self._dismiss()
+        with self._use_db_path():
+            result = restore_task("uncategorized_txns", self._request())
+        self.assertIn("uncategorized_txns", {t["id"] for t in result["tasks"]})
+        self.assertEqual(result["dismissed"], [])
+
+    def test_a_task_that_is_not_dismissible_cannot_be_dismissed(self):
+        self._insert_txn(category_id=None)
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as raised:
+                dismiss_task("configure_https", self._request())
+        self.assertEqual(raised.exception.status_code, 404)

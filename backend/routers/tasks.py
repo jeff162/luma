@@ -9,9 +9,24 @@ unresolved duplicate suspects, uncategorized transactions, etc.
 The conditions here are intentionally curated and behavior-sensitive (e.g., owner-related
 tasks stay hidden until the household actually uses owner tracking) so a fresh install doesn't
 greet the user with a wall of warnings about features they haven't opted into yet.
+
+**Dismissal is a ratcheting high-water mark, not a flag.** A task carrying a `dismiss_key` can be
+put away; what is stored is the count it was dismissed at, and the task returns when the count rises
+above it. The mark also *falls* to whatever lower count is later observed, and that half is the point:
+a plain "hide until the count exceeds 40" swallows new work precisely because the user did some — clear
+ten of forty and five new ones arrive, and thirty-five is still under forty, so five genuinely new
+items stay hidden forever. Ratcheting down means the comparison is always against the quietest the
+list has been since, so anything new re-surfaces. A dismissal for a task that has since gone away
+entirely is dropped, which lets the dismissal expire on its own.
+
+The recurring anomaly signals deliberately do NOT use this: each of those is an individually
+identifiable finding, so they are dismissed one at a time by fingerprint on the Recurring page
+(`services/recurring_signals.py`) and their task counts only ever describe findings still open.
 """
 
-from fastapi import APIRouter, Request
+import json
+
+from fastapi import APIRouter, HTTPException, Request
 from backend.db.database import get_db
 from backend.db.control_database import (
     auth_required,
@@ -20,11 +35,17 @@ from backend.db.control_database import (
 )
 from backend import transport
 from backend.services import crypto_service
+from backend.services.preferences import get_preferences, set_preference
+from backend.services.recurring_signals import compute_signals
 
 router = APIRouter()
 
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO    = "info"
+
+# Where the per-user dismissal marks live: the data DB's `ui_preference` table, so they ride data
+# backups and stay with the ledger they describe.
+DISMISSED_PREF_KEY = "ui.tasks.dismissed"
 
 
 def _https_setup_task(request: Request | None) -> dict | None:
@@ -89,8 +110,8 @@ def _vault_access_task(request: Request | None) -> dict | None:
     }
 
 
-@router.get("")
-def get_tasks(request: Request = None):
+def _build_tasks(request: Request | None) -> list[dict]:
+    """Every task that currently applies, before dismissal is taken into account."""
     tasks = []
 
     https_task = _https_setup_task(request)
@@ -127,6 +148,7 @@ def get_tasks(request: Request = None):
                     "link":        "/accounts?tab=accounts",
                     "link_label":  "Review accounts",
                     "severity":    SEVERITY_WARNING,
+                    "dismiss_key": "unowned_accounts",
                 })
 
         # Pending transactions are intentionally excluded because the rest of the product
@@ -151,6 +173,7 @@ def get_tasks(request: Request = None):
                 "link":        "/transactions?uncategorized=1",
                 "link_label":  "Review transactions",
                 "severity":    SEVERITY_INFO,
+                "dismiss_key": "uncategorized_txns",
             })
 
         # Soft-detected duplicates flagged at import time (new account on either side) or after
@@ -198,6 +221,7 @@ def get_tasks(request: Request = None):
                 "link":        "/import-export",
                 "link_label":  "Open Import / Export",
                 "severity":    SEVERITY_WARNING,
+                "dismiss_key": "suspect_duplicates",
             })
 
         # Amazon imports whose reconciliation has actionable items — a duplicate charge to merge/discard, or a
@@ -220,10 +244,173 @@ def get_tasks(request: Request = None):
                 "link":        "/import-export",
                 "link_label":  "Open Import / Export",
                 "severity":    SEVERITY_WARNING,
+                "dismiss_key": "amazon_reconciliation",
             })
 
+        tasks.extend(_recurring_signal_tasks(conn))
+
+    return tasks
+
+
+# Each anomaly kind becomes one task naming what it is and pointing at the Recurring page's review
+# section, which is where the per-signal actions live. `upcoming` is deliberately not here: a forward
+# view of what is due is a budgeting aid, and a badge that counts ordinary life stops meaning anything.
+# The two amount-range kinds share a task — a range that has drifted and one that is about to are the
+# same maintenance, one occurrence apart.
+_SIGNAL_TASKS = [
+    {
+        "kinds": ("missed",),
+        "id": "recurring_missed",
+        "title": "Expected recurring charge missing",
+        "severity": SEVERITY_WARNING,
+        "singular": "recurring charge that was due has not arrived",
+        "plural": "recurring charges that were due have not arrived",
+        "detail": "A canceled service, a failed payment, or a bill that simply has not been imported yet.",
+    },
+    {
+        "kinds": ("price_change",),
+        "id": "recurring_price_change",
+        "title": "Recurring charge changed amount",
+        "severity": SEVERITY_WARNING,
+        "singular": "recurring charge came in away from its established amount",
+        "plural": "recurring charges came in away from their established amounts",
+        "detail": "A price increase worth knowing about, or a one-off that is not really part of the series.",
+    },
+    {
+        "kinds": ("new_series",),
+        "id": "recurring_new_series",
+        "title": "New recurring series detected",
+        "severity": SEVERITY_INFO,
+        "singular": "new recurring series was detected recently",
+        "plural": "new recurring series were detected recently",
+        "detail": "Confirm the ones that are real — this is where a forgotten trial that started billing shows up.",
+    },
+    {
+        "kinds": ("rule_range", "rule_range_edge"),
+        "id": "rule_amount_range",
+        "title": "Rule amount range may need adjusting",
+        "severity": SEVERITY_WARNING,
+        "singular": "recent transaction sits outside a rule's amount range, or right at its edge",
+        "plural": "recent transactions sit outside a rule's amount range, or right at its edge",
+        "detail": "An amount range decides which rows the rule claims, so a charge that drifts past it "
+                  "quietly stops being categorized by that rule.",
+    },
+]
+
+
+def _recurring_signal_tasks(conn) -> list[dict]:
+    """The recurring anomaly signals, one task per kind. These carry no `dismiss_key`: the signals are
+    individually identifiable, so they are dismissed one at a time on the page the task links to, and
+    the count here only ever describes findings that are still open."""
+    counts = compute_signals(conn)["counts"]
+    tasks = []
+    for spec in _SIGNAL_TASKS:
+        n = sum(counts.get(k, 0) for k in spec["kinds"])
+        if not n:
+            continue
+        tasks.append({
+            "id":          spec["id"],
+            "title":       spec["title"],
+            "description": f"{n} {spec['singular'] if n == 1 else spec['plural']}. {spec['detail']}",
+            "count":       n,
+            "link":        f"/recurring?signal={spec['kinds'][0]}",
+            "link_label":  "Review recurring",
+            "severity":    spec["severity"],
+        })
+    return tasks
+
+
+def _dismissal_scope(request: Request | None) -> str | None:
+    """The preference scope for dismissals, or None when no identity is resolved — an unauthenticated
+    caller sees the undismissed list rather than an error, since the badge is fetched early."""
+    user = getattr(request, "state", None) and getattr(request.state, "user", None)
+    return user["id"] if user else None
+
+
+def _read_dismissals(scope_id: str | None) -> dict[str, int]:
+    if not scope_id:
+        return {}
+    raw = get_preferences(scope_id).get(DISMISSED_PREF_KEY)
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): int(v) for k, v in parsed.items() if isinstance(v, (int, float))}
+
+
+def _write_dismissals(scope_id: str | None, marks: dict[str, int]) -> None:
+    if scope_id:
+        set_preference(scope_id, DISMISSED_PREF_KEY, json.dumps(marks))
+
+
+def _apply_dismissals(tasks: list[dict], scope_id: str | None) -> tuple[list[dict], list[dict]]:
+    """Split the task list into what is shown and what a dismissal is hiding, ratcheting each mark down
+    to the lowest count seen since it was set (see the module docstring for why that half matters). A
+    mark for a task that no longer applies at all is dropped, so the dismissal expires rather than
+    silently covering the task's next appearance."""
+    marks = _read_dismissals(scope_id)
+    if not marks:
+        return tasks, []
+    by_key = {t["dismiss_key"]: t for t in tasks if t.get("dismiss_key")}
+    updated = dict(marks)
+    for key, mark in marks.items():
+        task = by_key.get(key)
+        if task is None:
+            del updated[key]
+        elif task["count"] < mark:
+            updated[key] = task["count"]
+    if updated != marks:
+        _write_dismissals(scope_id, updated)
+        marks = updated
+
+    visible, hidden = [], []
+    for task in tasks:
+        mark = marks.get(task.get("dismiss_key"))
+        if mark is not None and task["count"] <= mark:
+            hidden.append(task)
+        else:
+            visible.append(task)
+    return visible, hidden
+
+
+@router.get("")
+def get_tasks(request: Request = None):
+    tasks = _build_tasks(request)
+    visible, hidden = _apply_dismissals(tasks, _dismissal_scope(request))
     return {
-        "tasks":       tasks,
-        "total_count": sum(t["count"] for t in tasks),
-        "open_items":  len(tasks),
+        "tasks":       visible,
+        "total_count": sum(t["count"] for t in visible),
+        "open_items":  len(visible),
+        "dismissed":   [{"id": t["id"], "dismiss_key": t["dismiss_key"], "title": t["title"], "count": t["count"]}
+                        for t in hidden],
     }
+
+
+@router.post("/dismiss/{dismiss_key}")
+def dismiss_task(dismiss_key: str, request: Request = None):
+    """Put a task away at its current count. It returns when the count rises above that mark — and the
+    mark falls with the count, so work that arrives after some has been cleared still surfaces."""
+    scope_id = _dismissal_scope(request)
+    if not scope_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    task = next((t for t in _build_tasks(request) if t.get("dismiss_key") == dismiss_key), None)
+    if task is None:
+        raise HTTPException(status_code=404, detail="No such dismissible task")
+    marks = _read_dismissals(scope_id)
+    marks[dismiss_key] = task["count"]
+    _write_dismissals(scope_id, marks)
+    return get_tasks(request)
+
+
+@router.delete("/dismiss/{dismiss_key}")
+def restore_task(dismiss_key: str, request: Request = None):
+    """Bring a dismissed task back — the undo behind the toast and the dismissed list."""
+    scope_id = _dismissal_scope(request)
+    if not scope_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    marks = _read_dismissals(scope_id)
+    marks.pop(dismiss_key, None)
+    _write_dismissals(scope_id, marks)
+    return get_tasks(request)

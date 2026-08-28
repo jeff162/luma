@@ -1015,6 +1015,54 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
   )
 }
 
+/*
+ * Shared segmented control: a row of mutually exclusive options in one enclosed track, for choosing
+ * which *view* of a surface is on screen. The Dashboard uses it twice in its header (the reporting
+ * frame and the analysis mode) and the Recurring page once (series / findings / forward view).
+ *
+ * Prefer this over an in-page tab row when the options are peer views of one subject rather than
+ * several separate management surfaces — see `ui-patterns.md` → Page structure for that distinction.
+ *
+ * An option may carry a `badge` (a count, usually), with `badgeTone: 'warning'` where the number is
+ * the reason to look. The badge belongs on the control rather than the view it names: a count that is
+ * only visible once you have switched cannot tell you to switch.
+ */
+export function SegmentedToggle({ value, options, onChange, ariaLabel }) {
+  return (
+    <div role="group" aria-label={ariaLabel} style={{
+      display: 'flex', background: 'var(--surface2)',
+      borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
+    }}>
+      {options.map(opt => {
+        const on = value === opt.value
+        const warn = opt.badgeTone === 'warning'
+        return (
+          <button key={opt.value} onClick={() => onChange(opt.value)} aria-pressed={on} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
+            background: on ? 'var(--accent)' : 'transparent',
+            color: on ? '#fff' : 'var(--muted)',
+          }}>
+            {opt.label}
+            {opt.badge != null && opt.badge !== '' ? (
+              <span style={{
+                fontSize: 11, fontWeight: 700, minWidth: 16, textAlign: 'center',
+                padding: '0 5px', borderRadius: 99, lineHeight: '16px',
+                background: on
+                  ? 'rgba(255, 255, 255, 0.24)'
+                  : warn ? 'color-mix(in srgb, var(--warning) 20%, var(--surface))' : 'var(--surface)',
+                color: on ? '#fff' : warn ? 'var(--warning)' : 'var(--muted)',
+              }}>
+                {opt.badge}
+              </span>
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 // Shared on/off switch for boolean settings. A pill track with a sliding knob (flex alignment
 // positions the knob, so there is no manual offset math), rendered as an accessible role="switch"
 // button with an optional trailing label. Prefer this over a bare checkbox for settings toggles so

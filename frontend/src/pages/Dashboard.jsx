@@ -26,7 +26,7 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -123,28 +123,6 @@ const DASHBOARD_MODE_OPTIONS = [
   { value: 'compare', label: 'Compare' },
   { value: 'trends', label: 'Trends' },
 ]
-
-// The Dashboard header's two pill toggles — the frame and the analysis mode — are the same control with
-// different options, so they share one renderer rather than two copies of the markup that have to be
-// kept looking alike.
-function SegmentedToggle({ value, options, onChange, ariaLabel }) {
-  return (
-    <div role="group" aria-label={ariaLabel} style={{
-      display: 'flex', background: 'var(--surface2)',
-      borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden',
-    }}>
-      {options.map(opt => (
-        <button key={opt.value} onClick={() => onChange(opt.value)} aria-pressed={value === opt.value} style={{
-          padding: '7px 14px', border: 'none', fontSize: 13, cursor: 'pointer',
-          background: value === opt.value ? 'var(--accent)' : 'transparent',
-          color: value === opt.value ? '#fff' : 'var(--muted)',
-        }}>
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  )
-}
 
 // Compare mode has no cash-flow form (its two-period breakdown is specified for spending and income
 // only), and the frame selector is hidden there — so a persisted cash-flow preference has to be read as

@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 43
+CURRENT_VERSION = 44
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1213,6 +1213,23 @@ def _add_restore_state(conn):
     )
 
 
+@migration(44)
+def _add_recurring_signal_dismissal(conn):
+    # The user's dismissals of recurring anomaly signals — see the baseline CREATE for why the signals
+    # themselves are derived and this is the whole of their durable state. Created here as well because
+    # an existing database has never seen the table; nothing is backfilled, since no signal could have
+    # been dismissed before there were any to dismiss.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recurring_signal_dismissal (
+            signal_key   TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2128,13 +2145,30 @@ def init_db(db_path: str | None = None):
             );
             CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
             -- Surgical, scan-durable membership corrections layered over the derived/rule matcher:
-            -- 'pinned' forces a row into a series it wouldn't otherwise match; 'excluded' keeps a
-            -- matched row out. Reconcile applies these every scan so they survive a rebuild.
+            -- 'excluded' keeps a matched row out of its series. Reconcile applies these every scan so
+            -- they survive a rebuild. A 'pinned' state (forcing a row *in*) existed and was withdrawn:
+            -- a series is defined by what recurs, so a charge that merely shares a payee and category
+            -- is not part of it, and forcing it in misrepresents the series and every total read from
+            -- it. The endpoint rejects the state and reconcile filters on 'excluded', so no row can
+            -- carry it; the partial index below is therefore vestigial and kept only because dropping
+            -- it would cost a migration for nothing.
             CREATE TABLE IF NOT EXISTS recurring_membership_override (
                 txn_id     TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
                 series_id  TEXT NOT NULL REFERENCES recurring_series(id) ON DELETE CASCADE,
                 state      TEXT NOT NULL,
                 PRIMARY KEY (txn_id, series_id)
+            );
+            -- "I have seen this and it is fine": the user's dismissal of one anomaly signal
+            -- (services/recurring_signals.py). Signals themselves are derived on read and never
+            -- stored, so this is the whole of their durable state. The key is the signal's own
+            -- fingerprint -- a transaction id, or a series' derived identity plus the date concerned --
+            -- deliberately NOT a recurring_series id, which an auto series loses on every scan. It is
+            -- therefore not a foreign key: a dismissal whose subject is later trashed or deleted simply
+            -- stops matching anything, which costs a row and no correctness.
+            CREATE TABLE IF NOT EXISTS recurring_signal_dismissal (
+                signal_key   TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             -- Typed links between transactions: a general association primitive (services/txn_links.py).
@@ -2237,6 +2271,9 @@ def init_db(db_path: str | None = None):
         # list, and the indicator the ledger draws — and deliberately *not* unique, since a transaction
         # may carry several.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_document_txn ON document(txn_id)")
+        # Vestigial: guarded the withdrawn 'pinned' state (see the CREATE above), which nothing writes.
+        # Queued to be dropped alongside the next migration written for another reason — see
+        # docs/backlog/cleanup-pass.md; on its own it would be a version bump that changes nothing.
         # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
         # constrained — a row can be excluded from more than one candidate series.
         conn.execute(

@@ -18,6 +18,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
 from backend.db.database import get_db
+from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
     tag_filter_membership_sql,
@@ -1169,7 +1170,7 @@ def _resolved_tags_response(conn, txn_id: str) -> dict:
 def override_category(txn_id: str, body: CategoryOverride):
     with get_db() as conn:
         txn = conn.execute(
-            "SELECT id, is_split FROM txn WHERE id = ?", (txn_id,)
+            "SELECT id, is_split, category_id FROM txn WHERE id = ?", (txn_id,)
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
@@ -1192,6 +1193,13 @@ def override_category(txn_id: str, body: CategoryOverride):
             """,
             (body.category_id, body.notes, txn_id),
         )
+        # Category is part of a derived series' identity, so a manual recategorization can move a row
+        # between series — or out of one. Membership is a cache only a scan rewrites (see
+        # rescan_edited_transactions), and nothing else re-runs after a hand edit. Gated on the category
+        # actually changing: a re-save of the same category is a common no-op (the picker fires on every
+        # confirm) and a scan costs a pass over the whole detection window.
+        if body.category_id != txn["category_id"]:
+            rescan_edited_transactions(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
     return {"ok": True, **resolved}
 
@@ -1449,6 +1457,7 @@ def restore_categorization(body: CategorizationRestore):
                 (row.category_id, row.category_source, int(row.category_overridden or 0), row.id),
             )
             restored += 1
+        rescan_edited_transactions(conn, [r.id for r in body.rows])
     return {"restored": restored}
 
 
@@ -1458,10 +1467,17 @@ def update_merchant(txn_id: str, body: dict):
     if not name:
         raise HTTPException(status_code=400, detail="merchant_name required")
     with get_db() as conn:
+        # The payee key is derived from the name, so a rename moves the row between payee groups. The
+        # group it is leaving has to be reconsidered too, and only a read before the write can name it.
+        current = conn.execute("SELECT display_name FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        changed = current is not None and (current["display_name"] or "") != name
+        prior = payee_keys_for_ids(conn, [txn_id]) if changed else frozenset()
         conn.execute(
             "UPDATE txn SET display_name = ?, display_name_source = 'manual' WHERE id = ?",
             (name, txn_id),
         )
+        if changed:
+            rescan_edited_transactions(conn, [txn_id], prior_payee_keys=prior)
     return {"ok": True}
 
 @router.patch("/{txn_id}/notes")
@@ -1491,12 +1507,16 @@ def update_transaction_tag(txn_id: str, body: TransactionTagUpdate):
 @router.patch("/{txn_id}/uncategorize")
 def clear_override(txn_id: str):
     with get_db() as conn:
+        prior = conn.execute("SELECT category_id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        had_category = prior is not None and prior["category_id"] is not None
         # Clearing an override resets both the lock bit and the stored category so rule application can fully
         # re-derive the transaction instead of leaving a stale manual category behind.
         conn.execute(
             "UPDATE txn SET category_overridden = 0, category_id = NULL, category_source = NULL WHERE id = ?",
             (txn_id,),
         )
+        if had_category:
+            rescan_edited_transactions(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
     return {"ok": True, **resolved}
 
@@ -1693,6 +1713,13 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
     return 0
 
 
+# Bulk actions that can move a row between recurring series, or out of one: category is part of a
+# derived series' identity, the merchant name *is* its key, the date decides which occurrence a charge
+# is and whether one was missed, and a trashed row stops being an occurrence at all. Tags, notes and
+# the review flag are read by nothing the detector does.
+_RECURRING_RELEVANT_BULK_ACTIONS = {"set_category", "set_merchant", "set_date", "trash"}
+
+
 @router.post("/bulk")
 def bulk_update_transactions(body: BulkUpdateRequest):
     # One transaction so a multi-field apply (e.g. set category + add tag) is all-or-nothing.
@@ -1700,9 +1727,17 @@ def bulk_update_transactions(body: BulkUpdateRequest):
         target_ids = _resolve_bulk_target_ids(conn, body.selection)
         if not target_ids:
             return {"updated_count": 0}
+        kinds = {a.type for a in body.actions}
+        touches_recurring = bool(kinds & _RECURRING_RELEVANT_BULK_ACTIONS)
+        # Captured before the writes, since a rename moves rows out of the payee group they are in now.
+        prior_keys = payee_keys_for_ids(conn, target_ids) if "set_merchant" in kinds else frozenset()
         skipped_splits = 0
         for action in body.actions:
             skipped_splits += _apply_bulk_action(conn, target_ids, action)
+        # Once for the whole batch, never per row: a scan loads the entire detection window before it
+        # filters by payee, so a per-row call would repeat that load for every row selected.
+        if touches_recurring:
+            rescan_edited_transactions(conn, target_ids, prior_payee_keys=prior_keys)
     # `skipped_splits` counts rows a set_category action left alone because they are split. Reported
     # rather than folded into the total: "updated 40" when 3 of them kept their old categorization is
     # a number the user would act on wrongly.
