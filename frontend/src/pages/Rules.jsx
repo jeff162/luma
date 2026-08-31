@@ -5,7 +5,8 @@ import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
+import { createPortal } from 'react-dom'
+import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary, RulePreviewDetail } from '../components/RuleForm.jsx'
@@ -15,6 +16,7 @@ import { TagBadge } from '../components/TagUi.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
+import RuleOverlapsDialog from '../components/RuleOverlapsDialog.jsx'
 import { formatDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -267,7 +269,7 @@ function AlphaRail({ present, current, onJump }) {
   )
 }
 
-function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel }) {
+export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onDelete, onCancel }) {
   const formRef = useRef(null)
   const [draftState, setDraftState] = useState({
     data: null,
@@ -278,6 +280,11 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
   // Opt-in (off by default): re-evaluate the transactions this rule previously categorized, so rows this
   // edit drops from scope revert instead of retaining the old category.
   const [reconcile, setReconcile] = useState(false)
+  // Delete confirmation state, kept separate from the edit's own `reconcile`: the two answer the same
+  // question but about different acts, and carrying one answer over to the other would silently apply a
+  // choice made about an edit the user then abandoned.
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteReconcile, setDeleteReconcile] = useState(false)
 
   if (!rule) return null
 
@@ -296,6 +303,11 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
       // Save button — visible on reopen because this overlay renders null instead of unmounting.
       setWorking(false)
     }
+  }
+
+  function closeDeleteConfirm() {
+    setConfirmDelete(false)
+    setDeleteReconcile(false)
   }
 
   const quietHeaderButtonStyle = {
@@ -380,6 +392,25 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
             >
               Cancel
             </button>
+            {/* Destructive, so it sits at the far end rather than beside Save, and behind a confirm.
+                Deleting from here saves opening the rule, deciding against it, and hunting the same rule
+                down in the list to remove it. */}
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              disabled={working}
+              title="Delete this rule"
+              aria-label="Delete this rule"
+              style={{
+                ...quietHeaderButtonStyle,
+                marginLeft: 4,
+                padding: '5px 9px',
+                fontSize: 14,
+                lineHeight: 1,
+              }}
+            >
+              🗑
+            </button>
           </div>
         </div>
         <div style={{ maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
@@ -414,6 +445,38 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
           />
         </div>
       </Card>
+
+      {/* Portalled: `AppDialog` does not portal itself, and mounted here it would stack and position
+          against this overlay's own fixed, blurred backdrop rather than the viewport. See
+          docs/shared-components.md. */}
+      {confirmDelete ? createPortal(
+        <AppConfirmDialog
+          title="Delete this rule?"
+          description="The rule moves to the rules trash, where it can be restored from Settings."
+          confirmLabel="Delete rule"
+          // Not "Cancel": the editor's own Cancel is on screen behind this, abandoning the whole edit
+          // rather than just the deletion, and two buttons reading the same word mean different things.
+          cancelLabel="Keep rule"
+          confirmVariant="danger"
+          onConfirm={() => { const revert = deleteReconcile; closeDeleteConfirm(); onDelete(rule.id, revert) }}
+          onCancel={closeDeleteConfirm}
+          borderColor="var(--danger)"
+        >
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, color: 'var(--muted)', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={deleteReconcile}
+              onChange={e => setDeleteReconcile(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Also re-evaluate the transactions this rule categorized, so they fall to another matching
+              rule or back to uncategorized. Off leaves their categories as they are.
+            </span>
+          </label>
+        </AppConfirmDialog>,
+        document.body,
+      ) : null}
     </div>
   )
 }
@@ -455,6 +518,7 @@ export default function Rules() {
   const [sortMode, setSortMode] = useState('alpha') // 'alpha' | 'lastUsed'
   const [cleanupWindow, setCleanupWindow] = useUserPreference('ui.rules.cleanupWindow', '')
   const [cleanupOpen, setCleanupOpen] = useState(false)
+  const [overlapsOpen, setOverlapsOpen] = useState(false)
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
@@ -773,6 +837,22 @@ export default function Rules() {
               <ActionCountBadge count={importedRuleSuggestionCount} />
             </span>
           </Button>
+          {/* Sits beside "Generate rules" because it is the same shape of thing — analyse the rule set,
+              present findings, let the user act — rather than in the toolbar below, which is search,
+              filter and sort. Gated only on there being a pair to compare, deliberately *not* on any rule
+              carrying amount bounds: the nesting half of the check is about merchant matchers and is just
+              as useful without them. */}
+          <Button
+            small
+            variant="ghost"
+            disabled={rules.length < 2}
+            onClick={() => setOverlapsOpen(true)}
+            title={rules.length < 2
+              ? 'Nothing to compare until there are two rules'
+              : 'Find rules that could both claim the same transaction'}
+          >
+            Check overlaps
+          </Button>
           {/* Empty-state-only, like the Categories starter offer: a head start shown only while there
               are no rules yet. Once any rule exists it's gone (add more via "Add rule"). */}
           {!loading && rules.length === 0 ? (
@@ -983,8 +1063,9 @@ export default function Rules() {
       </div>
 
       <div style={{ flexShrink: 0, padding: '7px 32px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-        Rules are evaluated most-specific first (longer keywords and more conditions win; owner-scoped beats
-        global). The list is alphabetical by merchant — use the “Jump to” strip above to skip around.
+        Rules are evaluated most-specific first (owner- and account-scoped beat global, then longer keywords,
+        then narrower amount ranges). The list is alphabetical by merchant — use the “Jump to” strip above to
+        skip around.
       </div>
 
       {/* Mounted only while open, so its local working/error/reconcile state can't leak into the next
@@ -996,6 +1077,7 @@ export default function Rules() {
           owners={owners}
           accounts={accounts}
           onSave={handleEditSave}
+          onDelete={handleDelete}
           onCancel={closeForm}
         />
       ) : null}
@@ -1048,6 +1130,14 @@ export default function Rules() {
           accounts={accounts}
           onClose={() => setCleanupOpen(false)}
           onDone={() => { setCleanupOpen(false); loadRules(); loadRecategorizePreview(); setCleanupCountKey(k => k + 1) }}
+        />
+      ) : null}
+
+      {overlapsOpen ? (
+        <RuleOverlapsDialog
+          onClose={() => setOverlapsOpen(false)}
+          onEditRule={id => { setOverlapsOpen(false); openEditForm(id) }}
+          onRulesChanged={() => { loadRules(); loadRecategorizePreview() }}
         />
       ) : null}
 

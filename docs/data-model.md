@@ -352,7 +352,54 @@ Important behavior:
   range contains another, the contained one has the smaller span. Amount ranks **below** keyword length —
   the name stays the stronger discriminator — and ranges that merely *overlap* (`[300, 4000]` vs
   `[3000, ∞)`) have no principled winner at all, which is a modelling ambiguity for the user to resolve
-  rather than something ordering can answer; see [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+  rather than something ordering can answer — it is **surfaced rather than resolved**, see below
+
+- **rules that compete for the same rows are surfaced on demand**, from *Check overlaps* on the
+  Rules page (`GET /rules/overlaps`, `services/rule_overlaps.py`). Two findings with opposite intents.
+  An **amount overlap** is the case above: two rules the ordering can separate only by the span term,
+  whose ranges intersect with neither containing the other. **Nothing is offered but Edit** — inventing a
+  tiebreak would dress a coin flip as a decision, and *removing* a side is picking a winner rather than
+  fixing the model, so the resolution is to refine the two rules' conditions until only one applies.
+  A **matcher nesting** (`amazon` inside `amazon prime`, or a clause superset) is *not* a problem, and is
+  reported for two reasons. The winner is not the one a reader predicts: keyword length is
+  consulted only after scope, so an owner-scoped `amazon` rule beats a global `amazon prime` rule on
+  that owner's rows. And where the pair files to the **same category under the same scope and direction**
+  (`narrower_is_redundant`), the narrow rule changes no categorization at all and is simply surplus —
+  this is the half that carries **Delete**, on the *narrow* rule only, since removing the broad one would
+  strand every row the narrow matcher does not reach. The delete carries the rules list's own opt-in to
+  re-evaluate that rule's transactions, defaulted off as it is there. **Same category alone is not
+  sufficient** for redundancy: a scope or direction difference means the broad rule is not a superset,
+  and the narrow rule is what categorizes the rows the broad one cannot reach. The flag is also about the
+  *category* only — a rename or tag held by just one of the two changes hands on removal, which the panel
+  states before the fact rather than folding into the flag. Which rule wins is read from `rule_specificity_order_sql`'s own ordering rather
+  than re-decided, so the check cannot describe a precedence the engine does not apply. **Containment is
+  deliberately not a finding** — precedence answers it correctly, and flagging it would cry wolf on the
+  two-rule split that is the recommended way to model several bills from one biller. Bounds are
+  inclusive on both sides, so capping one rule at the other's floor leaves a **one-value** overlap that
+  is still reported: a rule set split at a round number is one whose bills land on that number. Managed
+  rules, trashed rules and rules targeting a deactivated category are excluded — a finding naming one
+  would name something the user cannot act on. Substring containment is compared between *matchers*
+  only; see [`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md)
+
+- **a nesting finding can be dismissed; an amount overlap cannot** (`rule_overlap_dismissal`, keyed by
+  the finding's fingerprint — the check's only durable state). The asymmetry is the policy, and it is
+  owned by `rule_overlaps.DISMISSIBLE_KINDS` and enforced where findings are assembled, so no stored row
+  can suppress a warning however it got there (the API refuses a non-dismissible kind with a 400 rather
+  than a silent no-op). A nesting pair is *information*, and most are deliberate: a panel listing thirty
+  of them forever is one nobody opens twice, so an acknowledged pair drops out of the list and out of the
+  counts, with a *Show dismissed* toggle bringing the set back flagged and restorable. An amount overlap
+  is **nondeterminism** — nothing decides which of the two rules categorizes the charge — so it stays
+  listed until the conditions are refined; letting it be waved through would leave the ledger categorized
+  by an arithmetic accident with the app reporting that as settled.
+  **The key carries the pair *and* the redundancy verdict**, which is what keeps a dismissal honest: it
+  holds through edits that do not change the situation (a rename, a tag) and lapses when one does, so a
+  pair that becomes redundant re-raises the offer to delete its surplus half — an offer the user was
+  never asked about. Keyed by fingerprint rather than by rule id, so it is deliberately **not** a foreign
+  key: a dismissal whose pair later dissolves stops matching anything, which costs a row and no
+  correctness, and is why nothing prunes them. Shared rather than per-user, like the recurring signals'
+  dismissals — saying a pair of rules is fine is curation of the rule set, not a UI preference — and
+  carried in the data backup (payload version 14), without which a restore would re-raise every pair the
+  user had already waved through.
 
 - **the ordering ends in the rule id, so a genuine tie is stable.** Without a final tiebreak two
   indistinguishable rules are separated by whatever order SQLite returns, which means the same ledger can

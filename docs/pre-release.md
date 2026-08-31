@@ -7,6 +7,12 @@ in the backlog files; this is the ordered plan and the decisions still owed.
 **Delete this file once the release ships.** It is a plan with an expiry date, not a record — anything
 in it worth keeping belongs in the backlog file it came from, or in the main docs.
 
+**This is a *minimum*, not a ceiling** (stated by the user, 2026-08-27). The named scope under each
+feature is what has to ship, not a boundary on what may. Adjacent work that is clearly right and low
+risk should be taken while the code is open rather than deferred to keep a scope line clean — the
+rule-range signal and the Tasks dismissal both arrived that way. State what was added past the named
+scope so it can be scoped back; do not ask permission to stay inside the line.
+
 "Public" here means three things happening together: a tagged release with downloadable kits attached,
 the repository visibility flipped, and the README describing what actually exists on that day.
 
@@ -169,6 +175,10 @@ scan once for the batch — a scoped scan loads the whole detection window befor
 sent it — and the user's judgement is that it misrepresents what a series *is* (a late fee on a tax
 payment shares the category without being part of the series). The docs and Help text were corrected to
 match; see the backlog file.
+
+**Built after that pass and not yet exercised at all:** the seasonal amount-range learning (a dismissal
+on a variable series widens the range a later charge is judged against) and the re-evaluation on edit
+itself. Both are under test, and neither has been seen in the app.
 
 **Otherwise not exercised in the running app.** Backend and component contracts are under test (18 backend signal
 tests, 6 task-dismissal tests, 12 frontend), but the review section's placement, its copy at real

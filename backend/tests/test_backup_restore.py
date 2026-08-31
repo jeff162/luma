@@ -106,6 +106,7 @@ TABLE_TO_SECTION = {
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
     "recurring_signal_dismissal": "recurring_signal_dismissals",
+    "rule_overlap_dismissal": "rule_overlap_dismissals",
     "txn_link": "txn_links",
     "txn_link_member": "txn_link_members",
     "amazon_funding_map": "amazon_funding_map",
@@ -249,6 +250,12 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "INSERT INTO recurring_signal_dismissal (signal_key, kind, dismissed_at) "
                     "VALUES (?, 'price_change', '2026-04-16T09:00:00')",
                     (f"price_change:{txn}",),
+                )
+                # An acknowledged rule-overlap finding — same story on the rules side: the findings are
+                # recomputed from the rules every run, so the dismissal is all there is to carry.
+                conn.execute(
+                    "INSERT INTO rule_overlap_dismissal (finding_key, kind, dismissed_at) "
+                    "VALUES ('matcher_nesting:r1:r2:r', 'matcher_nesting', '2026-04-16T09:00:00')"
                 )
 
                 # A typed transaction link (an Amazon-style charge↔item association) plus a second txn

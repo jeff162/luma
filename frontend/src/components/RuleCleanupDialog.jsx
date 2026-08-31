@@ -11,8 +11,8 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Badge, Spinner } from './ui.jsx'
-import { TagBadge } from './TagUi.jsx'
+import { Button, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, Spinner } from './ui.jsx'
+import RuleSummary from './RuleSummary.jsx'
 import { formatDate } from '../lib/utils.js'
 
 export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone }) {
@@ -75,7 +75,6 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
             <div style={{ padding: 24 }}><Spinner /></div>
           ) : total === 0 ? null : (
             candidates.map(rule => {
-              const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
               const checked = selected.has(rule.id)
               return (
                 <label
@@ -89,17 +88,9 @@ export default function RuleCleanupDialog({ before, windowLabel, onClose, onDone
                 >
                   <input type="checkbox" checked={checked} onChange={() => toggle(rule.id)} style={{ accentColor: 'var(--danger)', cursor: 'pointer' }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
-                      {clauses.map((c, i) => (
-                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
-                          <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{c}</span>
-                        </span>
-                      ))}
-                      {rule.category_name ? <Badge label={rule.category_name} toneKey={rule.category_id || rule.category_name} /> : null}
-                      {Array.isArray(rule.tags) && rule.tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
-                      {rule.is_recurring ? <span style={{ fontSize: 11, color: 'var(--muted)' }} title="Tracked as a recurring series">↻ recurring</span> : null}
-                    </div>
+                    {/* Scope is deliberately not shown: this review asks whether a rule is still wanted,
+                        and its owner/account/amount limits say nothing about that. */}
+                    <RuleSummary rule={rule} />
                   </div>
                   <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                     {rule.last_effect_date ? `used ${formatDate(rule.last_effect_date)}` : 'never used'}

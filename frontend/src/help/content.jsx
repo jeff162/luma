@@ -619,6 +619,87 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'rule-precedence',
+    section: 'organizing',
+    title: 'When two rules match the same transaction',
+    surfaces: ['Rules page'],
+    summary: 'Rules are never ordered by hand -- the most specific one wins, on a fixed ranking that puts scope first, then keyword length, then the narrower amount range. Two situations are worth a look and the Rules page can list them on demand: amount ranges that overlap without one containing the other, which nothing can settle on its own and which is resolved by refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads -- and where a rule that files nothing differently can be deleted outright.',
+    body: () => (
+      <>
+        <p>
+          More than one rule can match a transaction, and there is no priority list to maintain. The
+          <strong> most specific</strong> rule wins, ranked in a fixed order: a rule scoped to an owner
+          beats one that is not, then a rule pinned to an account, then one scoped to an account type,
+          then the <strong>longer keyword</strong>, and last the <strong>narrower amount range</strong>.
+          The order matters as much as the terms -- scope is settled before keyword length, and keyword
+          length before amount.
+        </p>
+        <p>
+          Narrower on the amount axis means the <em>smaller range</em>, not the rule with more limits
+          set. A rule for charges over $3,000 matches strictly fewer transactions than one for charges
+          over $300, so it wins wherever both apply -- which is what makes a single biller&rsquo;s
+          several bills separable by size, one rule per band.
+        </p>
+        <h4>Checking for rules that compete</h4>
+        <p>
+          <strong>Check overlaps</strong> on the Rules page lists the pairs that can both claim
+          a transaction. Running the check changes nothing on its own; the panel it opens reports what it
+          found, and each rule can be opened for editing from there. Two kinds of finding appear, and
+          they mean opposite things.
+        </p>
+        <ul>
+          <li>
+            <strong>Amount ranges that overlap</strong> -- two rules for the same merchant whose ranges
+            cross without one sitting inside the other, such as $300 to $4,000 against $3,000 and up. A
+            $3,500 charge matches both and neither rule is the more specific one, so which of them wins
+            is arbitrary. This is the finding that needs attention, and the way to settle it is to refine
+            the two rules&rsquo; conditions until only one of them applies -- deleting one is choosing a
+            winner rather than removing the ambiguity. Note that both limits are inclusive, so capping
+            one rule at exactly the figure the other starts at still leaves that single amount claimed
+            twice.
+          </li>
+          <li>
+            <strong>Merchant matchers that nest</strong> -- one rule&rsquo;s keyword contained in
+            another&rsquo;s, such as <em>northgate</em> and <em>northgate prime</em>. Nothing is wrong
+            here, and it is listed only so the outcome is visible: usually the longer keyword wins, but
+            because scope is settled first, a short keyword scoped to an owner or an account takes those
+            transactions from a longer keyword that is global. Each pair names the rule that wins.
+          </li>
+          <li>
+            <strong>A nesting pair can also be surplus.</strong> Where both rules file to the same
+            category and carry the same owner, account and debit/credit limits, the narrower one changes
+            nothing -- the broader rule would file those transactions identically -- so the finding
+            offers to <strong>delete</strong> it, recoverable from the rules trash. The offer appears on
+            the narrower rule alone: removing the broader one would leave every transaction the narrower
+            keyword does not cover without a rule. It also appears only where the two really are
+            interchangeable, so a narrower rule filing somewhere else, or scoped differently, is doing
+            work of its own and is listed without the offer. Where the two differ in a rename or a tag,
+            the finding says what those transactions would gain or lose before anything is removed.
+          </li>
+        </ul>
+        <p>
+          Plenty of the nesting pairs are deliberate, so those can be <strong>dismissed</strong> -- an
+          acknowledgement, not a fix, which drops the pair from the list and from the counts so what is
+          left is what still wants a decision. Nothing is lost: <em>Show dismissed</em> brings the
+          acknowledged set back, and each one can be restored. A dismissal covers the situation it was
+          made about rather than the pair of rules forever, so an edit that changes what the finding says
+          -- a narrower rule that becomes surplus and can now be deleted -- raises it again.
+        </p>
+        <p>
+          <strong>Overlapping amount ranges cannot be dismissed.</strong> Every other finding is
+          something to know about, but an overlap means it is genuinely undecided which of the two rules
+          applies to a charge in the shared band, and no acknowledgement makes that decided. Those stay
+          listed until the conditions are refined.
+        </p>
+        <p>
+          Ranges where one sits entirely inside the other are deliberately not reported. That case has a
+          clear answer already -- the inner range wins -- and it is the recommended way to split one
+          merchant&rsquo;s charges across categories.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'transaction-splits',
     section: 'organizing',
     title: 'Splitting one transaction across categories',

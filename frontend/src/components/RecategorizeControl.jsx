@@ -46,7 +46,9 @@ export function useRecategorize() {
   return { pendingCount, result, run, reloadPreview, dismissResult }
 }
 
-export function RecategorizeButton({ pendingCount, onRun, label = '↻ Re-run categorization', showCount = false }) {
+// Default label is "Run categorization", which is what the Help topics have always called it — the
+// button read "Re-run categorization" and the docs read "Run categorization" for the same control.
+export function RecategorizeButton({ pendingCount, onRun, label = '↻ Run categorization', showCount = false }) {
   const hasPending = pendingCount > 0
   const style = hasPending
     ? {

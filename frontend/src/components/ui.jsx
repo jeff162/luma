@@ -688,10 +688,17 @@ export function DialogActions({ children, align = 'end', style, background = 'va
 // app's consistent launcher spot for "what is this page" help (pass a node, e.g. <FeatureExplainer …/>,
 // so this primitive stays free of help-module imports). `leftAdornment` renders to the right of the
 // title for page-scoped controls; `children` are the right-aligned actions.
+// The action cluster wraps rather than squeezing: a page that accumulates a fourth or fifth control ran
+// its buttons into each other on a narrow window, since a non-wrapping flex row shrinks its children
+// instead. Both the cluster and the outer row wrap, and the cluster keeps `marginLeft: auto` so a wrapped
+// line still sits hard right — dropped flush left it would read as content belonging to the heading, and
+// the title would stop looking like a title. Every one of these properties is inert until the row
+// actually overflows, so no page's current layout moves.
 export function PageHeader({ title, children, leftAdornment, help, titleAdornment }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      flexWrap: 'wrap', rowGap: 12,
       marginBottom: 24,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
@@ -702,7 +709,9 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
         </div>
         {leftAdornment}
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>{children}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginLeft: 'auto' }}>
+        {children}
+      </div>
     </div>
   )
 }

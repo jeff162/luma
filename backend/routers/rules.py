@@ -24,6 +24,7 @@ from backend.services.categorizer import (
     rule_scope_account_sql,
     rule_specificity_order_sql,
 )
+from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
@@ -1138,3 +1139,60 @@ def cleanup_rules(body: RuleCleanupBody):
             _trash_rule(conn, rid, reconcile=body.reconcile)
             trashed += 1
     return {"trashed": trashed}
+
+
+@router.get("/overlaps")
+def rule_overlaps(include_dismissed: bool = Query(False)):
+    """Rule pairs that compete for the same transactions — the on-demand check behind the Rules page's
+    *Check overlaps* control. Two kinds: an `amount_overlap` the precedence order cannot
+    meaningfully settle (a warning), and a `matcher_nesting` where one merchant matcher is a subset of
+    the other (information). See `services/rule_overlaps.py` for what qualifies and why.
+
+    Nothing is changed: an overlap is an ambiguity in the rules themselves, so it is named rather than
+    resolved. `rules` carries each referenced rule once, in the same shape the rules list returns, so
+    the dialog can render a finding's two rules the way the list renders them.
+
+    Dismissed findings are excluded and counted in `dismissed_count`; `include_dismissed` brings them
+    back flagged, which is what the panel's "show dismissed" toggle asks for."""
+    with get_db() as conn:
+        result = find_rule_overlaps(conn, include_dismissed=include_dismissed)
+        referenced = {rid for finding in result["findings"] for rid in finding["rule_ids"]}
+        rules = []
+        if referenced:
+            placeholders = ",".join("?" for _ in referenced)
+            rows = conn.execute(
+                _TRASH_DISPLAY_SQL + f" WHERE cr.id IN ({placeholders})", list(referenced)
+            ).fetchall()
+            rules = _decorate_rule_rows(conn, rows)
+    return {**result, "rules": {rule["id"]: rule for rule in rules}}
+
+
+class RuleOverlapDismissBody(BaseModel):
+    key: str
+    kind: str = ""
+
+
+@router.post("/overlaps/dismiss")
+def dismiss_rule_overlap(body: RuleOverlapDismissBody):
+    """Acknowledge a finding so the check stops listing it. Not a fix and not an assertion that the
+    rules are right — just "this pair is deliberate". The key carries what made the finding actionable,
+    so a later edit that changes the situation produces a different key and surfaces again.
+
+    Only the informational kind may be acknowledged. An amount overlap is nondeterminism — nothing
+    decides which rule categorizes the charge — so it stays listed until the conditions are refined; the
+    refusal is 400 rather than a silent no-op, since a caller that thinks it dismissed something and did
+    not is worse than one that is told."""
+    with get_db() as conn:
+        try:
+            dismiss_finding(conn, body.key, body.kind)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err))
+    return {"ok": True}
+
+
+@router.post("/overlaps/restore")
+def restore_rule_overlap(body: RuleOverlapDismissBody):
+    """Undo a dismissal, putting the finding back in the open list."""
+    with get_db() as conn:
+        restore_finding(conn, body.key)
+    return {"ok": True}

@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 44
+CURRENT_VERSION = 45
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1230,6 +1230,22 @@ def _add_recurring_signal_dismissal(conn):
     )
 
 
+@migration(45)
+def _add_rule_overlap_dismissal(conn):
+    # The user's acknowledgements of rule-overlap findings — see the baseline CREATE for why the findings
+    # themselves are derived and this is the whole of their durable state. Nothing is backfilled: no
+    # finding could have been dismissed before there were any to dismiss.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rule_overlap_dismissal (
+            finding_key  TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2167,6 +2183,18 @@ def init_db(db_path: str | None = None):
             -- stops matching anything, which costs a row and no correctness.
             CREATE TABLE IF NOT EXISTS recurring_signal_dismissal (
                 signal_key   TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- The same shape for the rule-overlap check (services/rule_overlaps.py): "this pair of rules
+            -- is deliberate". Its findings are recomputed from the rules on every run, so these are their
+            -- whole durable state. The key is the finding's fingerprint -- the rule pair plus what made
+            -- it actionable (the contested amount band, or whether the narrow rule was redundant) -- so an
+            -- edit that changes the situation produces a different key and surfaces again rather than
+            -- staying acknowledged. Not a foreign key, for the same reason as above: a dismissal whose
+            -- pair later dissolves stops matching anything, which costs a row and no correctness.
+            CREATE TABLE IF NOT EXISTS rule_overlap_dismissal (
+                finding_key  TEXT PRIMARY KEY,
                 kind         TEXT NOT NULL,
                 dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );

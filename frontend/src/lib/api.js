@@ -509,6 +509,18 @@ export const api = {
   // Bulk-trash a reviewed set of stale rules. `reconcile` (default off) also reverts their categorizations.
   cleanupRules: (ruleIds, { reconcile = false } = {}) =>
     request('/rules/cleanup', { method: 'POST', body: JSON.stringify({ rule_ids: ruleIds, reconcile }) }),
+  // Rule pairs competing for the same transactions: overlapping amount ranges (a warning — nothing
+  // decides which rule claims the charge) and nested merchant matchers (information). Read-only, run
+  // on demand from the Rules page: { count, counts, findings, rules: { id: ruleRow } }.
+  getRuleOverlaps: ({ includeDismissed = false } = {}) =>
+    request(`/rules/overlaps${includeDismissed ? '?include_dismissed=true' : ''}`),
+  // Acknowledge a finding ("this pair is deliberate") so the check stops listing it, and the undo. The
+  // key carries what made the finding actionable, so a later edit that changes the situation surfaces
+  // again under a different key rather than staying hidden.
+  dismissRuleOverlap: (key, kind) =>
+    request('/rules/overlaps/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
+  restoreRuleOverlap: (key) =>
+    request('/rules/overlaps/restore', { method: 'POST', body: JSON.stringify({ key }) }),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
   // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save

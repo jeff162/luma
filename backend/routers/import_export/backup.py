@@ -633,6 +633,11 @@ BACKUP_SECTIONS = (
     # without them a restore would re-raise every finding the user had already worked through.
     ("recurring_signal_dismissals", "recurring_signal_dismissal",
      "SELECT * FROM recurring_signal_dismissal ORDER BY rowid"),
+    # The same thing for the rule-overlap check: its findings are derived from the rules on every run, so
+    # these acknowledgements are their whole durable state. Without them a restore would re-raise every
+    # deliberate rule pair the user had already waved through.
+    ("rule_overlap_dismissals", "rule_overlap_dismissal",
+     "SELECT * FROM rule_overlap_dismissal ORDER BY rowid"),
     # Split allocations. txn.is_split rides along in the transactions section above, but the parts are
     # the categorization itself: without these a restore would leave rows flagged as split with nothing
     # to expand into, and every category rollup would silently drop that money.
@@ -681,10 +686,11 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # a section is unchanged from 9, which is why the restore's per-section handling is shared with the
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
-# `recurring_signal_dismissals` section — all purely additive, which is why an older archive still
-# restores through exactly the same path with the new section simply absent.
-BACKUP_PAYLOAD_VERSION = 13
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13)
+# `recurring_signal_dismissals` section, and 14 the `rule_overlap_dismissals` section — all purely
+# additive, which is why an older archive still restores through exactly the same path with the new
+# section simply absent.
+BACKUP_PAYLOAD_VERSION = 14
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14)
 
 # Which of the two backups a file is. Stamped into every container the app writes and read back by the
 # identification pass below, so the restore surface can route a file rather than asking the person
@@ -1134,6 +1140,7 @@ def _wipe_user_data_tables(conn):
     # Signal dismissals hold no foreign key (their subject is a fingerprint, not a row id), so nothing
     # cascades them — the wipe has to name the table or pre-restore dismissals would survive it.
     conn.execute("DELETE FROM recurring_signal_dismissal")
+    conn.execute("DELETE FROM rule_overlap_dismissal")
     # Link members reference txn (and link) via ON DELETE CASCADE; the link rows themselves have no FK
     # to txn, so they must be deleted explicitly or they'd survive the wipe as orphans.
     conn.execute("DELETE FROM txn_link_member")
