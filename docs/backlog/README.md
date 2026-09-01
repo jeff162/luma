@@ -7,8 +7,9 @@ written so it can be picked up cold.
 > is the committed plan to retire completed project files entirely — rewriting what each holds into
 > topic-organized reference docs rather than keeping the file and linking to it, since a link to a
 > project filename decays and one already has. Read it before disposing of a shipped item. It is parked
-> behind two `pre-release.md` features as of 2026-08-26, and takes the **Completed** section with it
-> when it lands.
+> behind two `pre-release.md` features as of 2026-08-26 — **both of which have since landed** (recurring
+> anomaly signals 2026-08-27, vault recovery 2026-09-01), so the gate it named is met. It takes the
+> **Completed** section with it when it lands.
 
 **When an item ships**, fold its durable "what it is and why" into the main docs (`architecture.md` /
 `data-model.md` / `ui-patterns.md` / `shared-components.md`) — those are what the read-first rule makes
@@ -52,7 +53,7 @@ splits the main docs by question — structure, field semantics, UI behavior, co
 than by feature.
 
 > **Before going public:** [`../pre-release.md`](../pre-release.md) holds the committed, blocking
-> plan — five features drawn from the files below, plus the release mechanics. Items named there are
+> plan — six features drawn from the files below, plus the release mechanics. Items named there are
 > scoped: only part of `dashboard-reporting.md` and `recurring-detection.md` is in that scope.
 
 ## Items
@@ -74,17 +75,19 @@ than by feature.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams.
-- [recurring-detection.md](recurring-detection.md) — **follow-ups to a shipped feature.** The recurring-
-  series subsystem is live (detect + list + curate), and the "Mark as recurring" row action has since
-  shipped in the shared context menu (`markRecurringFromMenu`). Deferred pieces are the per-import
-  matching hook and the anomaly/forecast signals (upcoming / missed / new / price-change).
+- [recurring-detection.md](recurring-detection.md) — **§§1–3 shipped; §4 deferred.** The recurring-series
+  subsystem is live (detect + list + curate) and three of the four follow-ups have since landed: automatic
+  + scoped detection (the per-import matching hook and the watermark-gated app-load catch-up), the
+  **anomaly/forecast signals** — upcoming / missed / new / price-change, derived on read with per-finding
+  dismissal (2026-08-27) — and "Mark as recurring" in the shared context menu (`markRecurringFromMenu`).
+  The ended/canceled lifecycle shipped alongside. What remains is §4: the identity half (`amount_mode`,
+  amount-gated fixed membership, the pinned expectation band).
 - [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** *Check overlaps*
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
   winner is not always the one a reader predicts). The mechanism is in `data-model.md` → Category rules;
   the file keeps the rejected shapes (a one-click fix, a badge, a keyword-length floor) and the one
   deferred case, two equal-length keywords matching one row.
-
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
@@ -102,24 +105,22 @@ than by feature.
   account-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are folded into
   the main docs. What remains: fold the dedicated review into the generic rule-suggestion engine (cluster by
   `Type`), and migrate the rules from account-id to account-type scope once that axis exists.
-- [transaction-attachments.md](transaction-attachments.md) — **backlog, not started (2026-08-20).**
-  Attach a receipt or invoice to a transaction — photo, PDF, screenshot, pasted clipboard content —
-  through **one format-agnostic ingestion seam**, and where possible make its text searchable. Tiered so
-  most of the value needs no network call: store-only always, **PDF text-layer extraction free and
-  unconditional** (the emailed-invoice case), local OCR as a *declared capability* (Tesseract is a system
-  binary, painful in the frozen builds), and structured line-item extraction only as an opt-in BYOK
-  adapter with per-result approval. Records why local document-ML and template-based tooling are both
-  out, and that **email means copy/paste — never a mailbox**. Key finding: tier 3 is the *same subsystem*
-  as [online-categorizer.md](online-categorizer.md) (opt-in external call, structured output,
-  approve-before-apply) and the two should be designed together. Blocked on one real decision — where
-  attachments live, which belongs to the backup-scope work.
-- [transaction-splits.md](transaction-splits.md) — **backlog, not started (2026-07-23).** Let a single
-  transaction's amount be split across several categories (a Costco run, an Amazon order with mixed items).
-  A **general** feature on any transaction, modeled as a `txn_split` allocation table (one ledger row, N
-  category/amount parts) with reporting routed through an "effective category rows" seam — deliberately not
-  the abandoned per-item-rows model. Amazon orders **pre-fill** the split by reallocating net cash across
-  items in proportion to list price (list prices exclude tax/shipping/discounts, so they can't be used
-  directly). Main cost is the cross-cutting reporting-expansion change.
+- [transaction-attachments.md](transaction-attachments.md) — **phase 1 built and exercised in the running
+  app 2026-08-24; phases 2–4 deferred.** Attach a receipt or invoice to a transaction through **one
+  format-agnostic ingestion seam**, and where possible make its text searchable. Phase 1 shipped: the
+  `document` table and the on-disk store under `DATA_DIR/documents/`, the backup half (a `documents`
+  section plus each file as a zip member) with `restore_state` and the resumable documents phase, the
+  attach/list/serve/detach endpoints, **tier-1 PDF text extraction** and the FTS5 index, plus the shared
+  `DropZone`, `DocumentsPanel`, the ledger paperclip and `DocumentViewerDialog`; Help topic written. The
+  storage decision that once blocked this is settled. **The ingestion seam ended up wider than the file
+  first described**, all of it from real use: pasted text, the `text/html` flavour that keeps an emailed
+  receipt's table intact, and a saved `.eml` — and two calls were **reversed** under real use and are
+  recorded as don't-re-impose. Still deferred: OCR (tier 2), structured line-item extraction (tier 3, an
+  opt-in BYOK adapter with per-result approval), and the splits hand-off (phase 4). Records why local
+  document-ML and template-based tooling are both out, and that **email means copy/paste — never a
+  mailbox**. Key finding that still holds: tier 3 is the *same subsystem* as
+  [online-categorizer.md](online-categorizer.md) (opt-in external call, structured output,
+  approve-before-apply) and the two should be designed together.
 - [reimbursable-expenses.md](reimbursable-expenses.md) — **backlog, not started (2026-08-21).** Money
   that leaves as an expense and returns later (tickets bought for friends, work expenses claimed back).
   The categorization is already right; the problem is that the netting **crosses period boundaries**, so
@@ -130,7 +131,8 @@ than by feature.
   repayment and an unpaid one are indistinguishable by amount, so a **settle** action is what moves the
   leftover to a real category. Pairing is **optional and late** — needed only to settle, and served by
   `txn_link` (`kind='reimbursement'`) rather than a new table. Downstream of
-  [transaction-splits.md](transaction-splits.md), and a second consumer justifying it.
+  [transaction-splits.md](transaction-splits.md), **which has since shipped** — so the dependency is met
+  and this can start.
 - [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
@@ -139,10 +141,12 @@ than by feature.
   `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
   use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
   that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
-- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **parked, not started (2026-07-26).**
-  A small inline note on the Dashboard tag-report view when a filter chip references a tag the active
-  report is built from (the exclude is honored, not suppressed — the note just explains the subset).
-  Parked for a larger tag-report pass rather than a one-off; the behavior is already correct without it.
+- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **exclude case shipped 2026-07-28; the
+  include case still parked.** The inline note on the Dashboard report when a filter chip references a slice
+  the active report is built from shipped for **exclude** chips (`FilterConflictNote` in `ui.jsx`, driven by
+  `lib/reportFilterConflicts.js`) — the exclude is honored, not suppressed, and the note just explains the
+  subset. The parallel **include** case stays parked for a larger tag-report pass rather than a one-off; the
+  behavior is already correct without it.
 - [transaction-list-limits.md](transaction-list-limits.md) — **surveyed, mostly resolved (2026-07-27).**
   Every scoped transaction list now paginates with server-side sort (the `limit: 1000`/`500`/`200` caps
   that silently truncated rendered lists are gone), plus a `limit=0` no-limit opt-in and a dev-mode
@@ -169,33 +173,42 @@ than by feature.
 - [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Four dashboard tag-report
   follow-ups: a Settings-page manager mirror, capturing filters in a preset, cross-user sharing
   (a real `tag_report` table), and a richer (drag/NL) report builder.
-- [dashboard-reporting.md](dashboard-reporting.md) — **designed, not started (2026-08-20).** Cash flow
-  as a third frame on the Expenses/Income selector — a **Sankey** for a single period, diverging bars
-  plus a net line for trends — settled on the existing `exclude_from_totals` flag rather than any new
-  transfer-pairing or per-view exclusion machinery, with a deferred `cash_date` phase for cash-basis
-  timing. Plus a **Trends-tab double-count audit** to do before the tag-report selector reaches Trends
-  mode.
-- [import-input-formats.md](import-input-formats.md) — **deferred, ranked.** New ingestion formats
-  behind a shared **parse-seam extraction**: XLSX (Tier 1, reuses everything), OFX/QFX/QBO (Tier 2,
-  mapping-free + FITID dedupe), and SimpleFIN (a Plaid-parallel connection/sync track).
+- [dashboard-reporting.md](dashboard-reporting.md) — **cash flow built 2026-08-25; the Trends-tab audit
+  still deferred.** Cash flow shipped as a third frame on the Expenses/Income selector — a **Sankey** for a
+  single period, diverging bars plus a net line for trends — resting on the existing `exclude_from_totals`
+  flag rather than any new transfer-pairing or per-view exclusion machinery. Still deferred: the `cash_date`
+  phase for cash-basis timing, a cash-flow form for **Compare** (left open deliberately, not an oversight),
+  and the **Trends-tab double-count audit**, which is gated on the Trends tab gaining a tag-report selector
+  and is unrelated to the cash-flow half despite sharing the file.
+- [import-input-formats.md](import-input-formats.md) — **SimpleFIN shipped 2026-08-07; the file formats
+  deferred, ranked.** New *file* ingestion formats behind a shared **parse-seam extraction**: XLSX (Tier 1,
+  reuses everything) and OFX/QFX/QBO (Tier 2, mapping-free + FITID dedupe). SimpleFIN was the separate
+  Plaid-parallel connection/sync track in the same file, and has landed.
 - [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
   deduped rows when a contributing import is undone, and a duplicate-resolution history view + batch
   undo. Both convenience only — per-row restore already prevents loss.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **unblocked: the phase-6
-  gate is MET and the credentials-backup piece has landed (2026-08-10).** What remains is the scope/UX
-  half. Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
+- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **credentials backup landed
+  2026-08-10; streaming both directions landed 2026-08-23; the scope/UX half is what remains.** The payload
+  version-10 envelope (`meta.json` + `sections/<name>.ndjson` + `documents/<id>`), streaming export and
+  restore, the incremental cipher, referential repair as SQL and the CSV export all shipped — and
+  `restore_state` plus the resumable documents phase landed with
+  [transaction-attachments.md](transaction-attachments.md) on 2026-08-24. Fixed on the way: a data restore
+  left every connection's `transactions_cursor` ahead of the ledger it had just rolled back. What remains is
+  the scope/UX half. Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
   secrets** backup — the control DB (identities, perimeter, `vault_slot`) **plus** the data DB's vaulted
   tokens, which phase 3 made cryptographically coupled (ciphertext in data DB, keys in control DB). Adds a
   sectioned **back up all**, moves recipient management onto the Backup page, and a **restore flow that asks
   how to reconcile identities** (always preserves the current admin → no self-lockout, no silent perimeter
   overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh.
-- [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3
-  deferred; Shape A notes only.** Also records the Python 3.12–3.13 build ceiling (pydantic-core has no
-  3.14 wheels) and the tag-triggered release workflow, which has not yet run — the Windows artifact is
-  the one piece of step 2 never actually produced. How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
+- [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3 in
+  progress from 2026-08-20; Shape A notes only.** All four build targets (Linux, Windows, macOS arm64 and
+  x64) now build and smoke green in CI, and the shutdown paths are answered in code; what remains is what CI
+  structurally cannot reach — Gatekeeper, the LaunchServices log path, and the Dock's Quit end to end. Also
+  records the Python 3.12–3.13 build ceiling (pydantic-core has no
+  3.14 wheels). How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
   **single-user desktop** shape. The shell question is settled by passkeys — the browser-launcher wins
   because `prf` needs a real browser, and the RP id being the *hostname* makes `localhost` (never
   `127.0.0.1`) load-bearing, and makes mDNS + HTTPS a passkey precondition on the LAN rather than
@@ -214,7 +227,9 @@ than by feature.
   config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist.** Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
-  post-rebrand migration), and rule-suggestion owner-scope stability.
+  post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for
+  `Settings.jsx`, which has none of any kind. Also records the E2E harness that *is* available
+  (`npm run ui:test` against its own throwaway stack).
 - [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
   ever checks that the databases are intact — no health surface, and notably no check of the *target*
   before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms
@@ -223,7 +238,11 @@ than by feature.
 - [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file:
   the unwritten CHANGELOG entry for the category-owner → tag migration, a denser Connections-tab card
   layout, SimpleFIN's 90-day window becoming a silent cap, whether timestamps should ever be relative,
-  and the stalled-request gap a blanket request timeout was rejected for.
+  the stalled-request gap a blanket request timeout was rejected for, and what checking a tag on a
+  transaction should *mean* — the open question being whether a hand-checked tag survives a later
+  recategorization, with a concrete hole in bulk `add_tags` to look at first. Its *Finish the backlog
+  prose pass* entry is superseded by [`../doc-restructure.md`](../doc-restructure.md) and should be removed
+  from there when the first disposal lands.
 
 ## Completed (kept for the record)
 
@@ -231,7 +250,35 @@ Shipped work whose durable rules now live in the main docs. These files are kept
 carry something the main docs should not — a rejected design, an obstacle list, a "read this before
 reintroducing X". Nothing here is pending.
 
-- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **shipped 2026-08-31; kept for its
+- [transaction-splits.md](transaction-splits.md) — **complete 2026-08-24; kept for its rejected shapes.**
+  A single transaction's amount split across several categories, as a **general** feature on any
+  transaction: the `txn_split` allocation table (one ledger row, N category/amount parts) with every
+  summary and category-scoped list reading through the "effective category rows" expansion seam. The
+  mechanism is in `data-model.md` → Transaction splits (plus the split-source rollup rule and the
+  feature-owned `split` category source). What this file still holds is the forks: the per-item-rows model
+  abandoned twice and why reviving it is wrong, the **two-parts-in-one-category** rule that was imposed and
+  then reversed (*don't re-impose it* — the fix is `COUNT(DISTINCT t.id)`, not a constraint on what the user
+  may record), and the three settled non-goals — **rules never author splits**, mixed-sign allocations are a
+  coherent later relaxation deliberately outside v1, and the marketplace pre-fill's refusal edges. Nothing
+  is pending: the dependency runs one way only, and splits waits on nothing. Both of its downstream
+  consumers — [reimbursable-expenses.md](reimbursable-expenses.md) and
+  [transaction-attachments.md](transaction-attachments.md) phase 4, which would feed a second pre-fill
+  source into a seam that already works — are that file's work, not this one's.
+- [multi-payment-purchases.md](multi-payment-purchases.md) — **complete 2026-08-24; kept for the
+  neighbours it is not.** Grouping several transactions that are one purchase — a deposit and a final
+  payment, an instalment plan — on the existing `txn_link` primitive with **no schema change**. It is the
+  cheapest possible client of that primitive: pure association, mutating nothing, which is what makes it
+  incapable of breaking a total (the other two clients recategorize a leg and must stash the prior in
+  `metadata_json` to reverse it). The mechanism is in `data-model.md` → Multi-payment purchases and
+  `architecture.md`; the row marker's behavior — including the *third* time this repo withheld a capability
+  because another route existed, and the third time that was wrong — is in `ui-patterns.md`. What this file
+  still holds is the three adjacent features it is deliberately **not**, and four reasoned exclusions:
+  automatic suggestion, a document attached to the purchase rather than to one payment, an age-gated Tasks
+  entry for an unaccounted purchase, and a purchases list page. Suggestion has a named precondition —
+  it needs OCR ([transaction-attachments.md](transaction-attachments.md) → tier 2) before an invoice yields
+  anything to match on, the weaker signals having been judged not worth acting on. That is a **re-open
+  condition, not pending work**: if OCR ever lands, reopen this or file a fresh item then.
+- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **complete 2026-09-01; kept for its
   rejected shapes and one owed test.** The recovery ladder is built: a **vault recovery code** (a third
   `vault_slot.method`, one per user, recovered and re-keyed in a single atomic request), the destructive
   **reset** with its lost-vs-compromise split and capability-driven revocation, `VaultDecryptError`
@@ -240,8 +287,13 @@ reintroducing X". Nothing here is pending.
   `building-a-connector.md` (where the connection handle comes from). What this file still holds is the
   reasoning behind two reversals worth not re-litigating — why the other-member check became a
   **redirect rather than a refusal**, and why a **single** recovery code is as safe as a set — plus the
-  corrected account of what a re-link actually strands (coverage and cursor, *not* the mappings). One
-  test is still owed: reset → set → restore a credentials backup taken under the old passphrase.
+  corrected account of what a re-link actually strands (coverage and cursor, *not* the mappings). The
+  **second pass (2026-09-01)** closed two defects in what shipped and one wider finding behind them:
+  `set_passphrase`, `register_passkey_slot` and `issue_recovery_code` each minted a *durable* unlock method
+  from a DEK merely found in the unlock cache, turning transient access to an unlocked session into
+  permanent independent access — now a five-minute proof window on every door that mints one, plus a passkey
+  route to a new passphrase and the re-enrollment rung that had never executed. One test is still owed:
+  reset → set → restore a credentials backup taken under the old passphrase.
 - [list-virtualization.md](list-virtualization.md) — **effectively complete (2026-07-19); kept for its
   notes.** `MatchReport`, `TransactionListTable`, the Transactions ledger and the Rules list all window
   through the shared `WindowedRows`. The durable rules live in `ui-patterns.md` (windowing needs a

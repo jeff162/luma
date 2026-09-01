@@ -21,10 +21,12 @@ half of the design below:
 **Still parked, unstarted:** the sectioned "back up all" artifact, the restore-time identity
 reconciliation flow, and `backup_recipient` inclusion.
 
-**Not parked:** *Streaming both directions*, below, is committed release work rather than backlog — see
-[`../pre-release.md`](../pre-release.md), which owns its scope boundary. It is the prerequisite for documents riding the
-backup, and it settles the payload-version-10 envelope that
-[`transaction-attachments.md`](transaction-attachments.md) then builds on.
+**Not parked, and now shipped:** *Streaming both directions*, below, was committed release work rather
+than backlog — see [`../pre-release.md`](../pre-release.md), which owned its scope boundary. It landed
+2026-08-23 and settled the payload-version-10 envelope that
+[`transaction-attachments.md`](transaction-attachments.md) then built on (documents took **12**; splits
+spent 11 in between). Its one deliberate omission — `restore_state` and the documents phase — **landed
+with attachments on 2026-08-24**, so nothing in that section is outstanding.
 
 **Original status: parked, do after phase 6 (2026-08-01).** A backup/restore redesign that makes the *scope* of
 each backup explicit on the Backup page, adds a coherent "accounts & secrets" backup (the control DB +
@@ -192,14 +194,17 @@ the start, so an interrupted restore leaves litter instead of losing originals.
 
 ## Streaming both directions, and the envelope that makes it possible (settled 2026-08-23)
 
-**Built 2026-08-23, except the documents half.** Everything below is implemented and in the tree —
-version 10, the streaming export and restore, the incremental cipher, referential repair as SQL, the
-CSV export — and the durable half of it now lives in `docs/data-model.md` → Backups. What is *not* built
-is `restore_state` and the documents phase: there are no documents yet, so a phase marker would have
-nothing to guard and a resume nothing to resume. That section stays here as the settled design for
-[`transaction-attachments.md`](transaction-attachments.md) to build against. Measured on the same
-~18,500-transaction ledger as below: export peak fell from ~275 MB to ~9 MB, restore from ~178 MB to
-under 2 MB, and all 36,935 rows across 27 tables round-tripped exactly.
+**Built 2026-08-23; the documents half followed on 2026-08-24.** Everything below is implemented and in
+the tree — version 10, the streaming export and restore, the incremental cipher, referential repair as
+SQL, the CSV export — and the durable half of it now lives in `docs/data-model.md` → Backups. Measured on
+the same ~18,500-transaction ledger as below: export peak fell from ~275 MB to ~9 MB, restore from ~178 MB
+to under 2 MB, and all 36,935 rows across 27 tables round-tripped exactly.
+
+`restore_state` and the documents phase were deliberately held back on 2026-08-23 — there were no
+documents yet, so a phase marker would have had nothing to guard and a resume nothing to resume — and
+they **shipped with [`transaction-attachments.md`](transaction-attachments.md) on 2026-08-24**, built as
+the two sections below describe. What those sections now hold is the reasoning behind a structure that is
+easy to simplify wrongly, not a design waiting to be built.
 
 The defect this fixed: the export assembled the entire payload as a Python structure, serialized it to
 one JSON string, zipped that into a `BytesIO`, and returned it as a single yield — so the streaming was
@@ -250,10 +255,11 @@ Both directions become line-at-a-time with no incremental JSON parser and no new
 7–9 still restore through the existing whole-payload path, unchanged; those keep today's memory profile,
 which is the status quo and decays as backups are retaken.
 
-**The bump belongs here rather than in the attachments feature**, which needs a 9 → 10 change anyway for
-its table and its members. Splitting them would mean two envelope changes and, worse, an incremental
-JSON parser built for the monolithic format and deleted a feature later. One format change, and
-attachments become purely additive to a container already shaped for them.
+**The bump belonged here rather than in the attachments feature**, which needed an envelope change anyway
+for its table and its members. Splitting them would have meant two envelope changes and, worse, an
+incremental JSON parser built for the monolithic format and deleted a feature later. One format change,
+and attachments became purely additive to a container already shaped for them — which is what happened:
+documents took a plain version **12** (splits spent 11 first) and added nothing to the container's shape.
 
 ### Integrity under the new layout
 
@@ -317,10 +323,12 @@ own before the wipe; on the encrypted path that means decrypting to a temp file 
 *before* the inner zip is opened, because GCM authenticates only at the end and nothing may act on
 unverified plaintext. Two passes over a local file is the honest price and it is disk I/O, not memory.
 
-### `restore_state`: making the documents phase resumable
+### `restore_state`: making the documents phase resumable — built 2026-08-24
 
-Files are not transactional, which is the whole difficulty: a restore that fails partway can leave the
-database cleanly rolled back and the documents directory half-rewritten, and built the obvious way it
+`backend/services/restore_state.py` plus the two writes in `routers/import_export/backup.py`; an import
+or a sync refuses while a marker is set (`require_no_pending_restore`), and the table is excluded from the
+backup payload. Files are not transactional, which is the whole difficulty: a restore that fails partway
+can leave the database cleanly rolled back and the documents directory half-rewritten, and built the obvious way it
 would already have deleted the originals it was replacing. A small `restore_state` table in the data DB
 carries the operation across that gap: a phase, a timestamp, the staged artifact's path, and enough of the
 artifact's identity to recognize it again.
@@ -339,9 +347,9 @@ attachment phase, which is the exact failure the structure exists to prevent. A 
 the wipe list has no such coupling, and it stays out of the backup payload for free: this is machine-local
 operational state and must never travel to another install.
 
-It is a new table, so it lands in both places a schema change has to — the baseline `CREATE` in
+It is a new table, so it landed in both places a schema change has to — the baseline `CREATE` in
 `init_db` and a registered `@migration` — with `CURRENT_VERSION` bumped last, after the code that reads it
-is in place.
+was in place.
 
 Two writes to one row, deliberately in different transactions:
 
@@ -366,7 +374,7 @@ is deleted only when documents complete. If it is gone anyway, the recorded iden
 confirmed as *the same backup* before it resumes, rather than silently filling a directory from a
 different artifact.
 
-### The documents phase itself
+### The documents phase itself — built 2026-08-24
 
 Written **in place**, each file to a temporary name then `os.replace()` (atomic on both platforms within
 a volume), so a torn write can never be mistaken for a complete file. Staging the whole set into a
@@ -401,8 +409,9 @@ with a smaller blast radius.
 ### Deliberately not in this work
 
 Streaming the *legacy* v7–v9 restore path (they keep the whole-payload reader), and the document delta
-below — for which this work nonetheless lands the two prerequisites it always needed: an id-addressed
-document member layout, and a digest per document.
+below — for which this work nonetheless landed the two prerequisites it always needed: an id-addressed
+document member layout, and a digest per document. Both remain untaken; the *documents phase* named
+above is a separate thing and did ship, with attachments, the day after.
 
 ## Windowed and incremental backups — what is cheap and what is not
 
