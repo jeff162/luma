@@ -60,8 +60,12 @@ oversights, and reports about them will be closed with a pointer here:
   know is that those names are a disclosure: a key named after a person or a place reveals that name to
   anyone who obtains the file, while the ledger inside stays sealed. Name keys for what they are
   (`Offsite drive`) rather than for who or where.
-- **The vault passphrase is unrecoverable by design** and is never stored. Losing every way into the
-  vault means re-linking data sources; the ledger is unaffected.
+- **The vault passphrase is unrecoverable by design** and is never stored — no unlock secret can be
+  reconstructed from anything on disk, and that remains true of the recovery code, which is also stored
+  only as the KEK it derives. What a recovery code changes is that a *forgotten* passphrase need not be
+  a dead end: it opens the vault and re-keys the passphrase against the same DEK, so nothing is
+  re-encrypted. Losing every way in — passphrase, passkeys and recovery code — still means re-linking
+  data sources; the ledger is unaffected either way.
 - Findings from automated scanners with no demonstrated path to impact, and vulnerabilities in
   dependencies that Luma does not actually exercise.
 

@@ -73,6 +73,21 @@ instruction and fix the drift rather than silently choosing the looser version.
   a per-imported-row path (15 ms a row) that nothing had noticed. The same habit applied to a rendering
   rule found three surfaces re-deriving one judgement from `mode`, disagreeing with each other on screen.
 
+- **A gate written against *current state* where the right predicate is *capability*.** The same
+  one-word mistake appeared three times in one feature (2026-09-01), each time with a comment
+  confidently justifying it. A pending vault-access request was hidden from anyone whose vault was not
+  open right now — `is_unlocked` where the question is `user_has_slot` — in the Tasks nag and again on
+  the Connections strip, both reasoning that a locked member "has no action available". They do: they
+  unlock, then act. Hiding it removed the only signal that would tell them to, so the person waiting
+  waited on a notification nobody was ever shown. The same conflation shaped the first draft of a
+  security rule in the same session.
+
+  **How to apply.** When a check hides, refuses, or skips something, say which question it is asking —
+  *can this actor ever do this?* or *can they do it this second?* — and which one the surface needs. A
+  transient state (unlocked, connected, in-flight) as the predicate for a *durable* judgement (who may
+  approve, who should be told) is the shape to distrust. Then grep for the other readers of that same
+  state: the reasoning that produced one instance almost always produced the others.
+
 - **Ask structural questions of a diff, not just "is this correct?"** Most of that session's defects were
   invisible to a correctness reading and obvious to a specific question — *is everything between BEGIN and
   COMMIT part of what this transaction is for?*, *is a durable state being used as an event?* (`mode`
@@ -151,6 +166,35 @@ instruction and fix the drift rather than silently choosing the looser version.
   disturbed, `git stash pop` conflicts on any file that was both staged and unstaged (`MM`);
   recover the content from `stash@{0}` and the index from `stash@{0}^2` per file, then confirm with
   an empty `git diff stash@{0}` before dropping the stash.
+
+### Separate "I know the mechanism" from "I know the cause"
+
+A diagnosis can be solidly right about *how* a symptom is produced and still have no idea *why the
+precondition held* — and only the second licenses a preventive fix. Worked example (2026-08-31): an
+import card showed a raw provider account id instead of an account name. The mechanism was confirmable
+and eventually reproducible in a test — a sync resolves a row's account through the durable
+`account.external_account_id` but labels it from the per-connection `connection_account`, so a row whose
+`connection_account` entry is missing imports correctly under an unreadable label. What could *not* be
+established was why that entry was missing: the connection had already been deleted, cascading the
+evidence away.
+
+The first diagnosis was also simply **wrong** — it named a nearby fallback on the *skipped-row* path,
+which writes `account_id: None`, while the card in question had a real account id and an imported row.
+Reading one line further is what caught it. State which line, then check the observed data actually
+matches that line's preconditions.
+
+**How to apply.** Say plainly which half you have. When the mechanism is confirmed and the cause is not,
+prefer the change that is correct regardless of the cause — here, a presentational fix plus a recorded
+diagnostic — over one aimed at the unproven cause, which may fix nothing and cannot be validated. And
+prefer a fix with no semantic blast radius: the label in that example is not display text, it is written
+into row evidence and feeds duplicate matching, so "just correct the label" would have altered matching
+on the strength of a guess. **The user asked for exactly this distinction and declined a speculative
+fix; treat being asked "how confident are you?" as a request for the split, not for reassurance.**
+
+Where a cause is unrecoverable, leave something behind that makes a recurrence diagnosable — a log entry
+on the path that fired, recorded where a developer would look. Pick the surface by who can act on it:
+in that example the advisory went to the log-only `advisories`, never to `last_sync_warnings`, which is
+shown on the connection card and is reserved for what the *user* can act on.
 
 ## Implementation Bias
 
@@ -256,6 +300,22 @@ instruction and fix the drift rather than silently choosing the looser version.
   siblings), but it had also been throttling request *rate*, and removing it immediately tripped a
   CDN limit nothing in the code modelled. Fixing the stated bug was right; not asking what the
   accident was covering is what turned it into a live outage.
+
+- **"Our own UI never calls it" is not a security boundary, and one instance is not the class.** An
+  authenticated endpoint let an unlocked session replace the vault passphrase with no proof of the old
+  one — turning transient access to someone's screen into durable, independent access that survives a
+  relock. It was reported to the user as *optional* hardening, on the reasoning that the app's client
+  never makes that call. The user pushed back, correctly: reachability for an authenticated endpoint is
+  the API surface, not the client, and the repo was heading for public release. Then their follow-up —
+  *does that leave any actions that still don't require proof?* — found a fourth operation in the same
+  class with a **shorter** path to abuse than the three being fixed, which had not been enumerated
+  because only the reported instance was in view.
+
+  **How to apply.** Never grade a reachable-by-request gap by whether the shipped client exercises it.
+  When adopting a security rule, enumerate every operation in its class before implementing, and write
+  the ones deliberately left out into the docs **with the reason for each** — an exception with a
+  recorded rationale is a decision, while an exception nobody wrote down is indistinguishable from a
+  gap, including to the next agent who audits it.
 
 ## Verification And Tests
 

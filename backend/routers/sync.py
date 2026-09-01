@@ -1151,7 +1151,28 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             merchant_name = t.get("merchant_name")
             if t.get("check_number"):
                 merchant_name = f"Check #{t['check_number']}"
-            source_label = dedupe.label_by_external.get(t["external_account_id"], t["external_account_id"])
+            # The fallback is the provider's opaque account id, and it reaching a card means two lookups
+            # disagreed: `_account_for` resolved this row to a local account through the durable
+            # `account.external_account_id`, while `label_by_external` — built from `connection_account`,
+            # per connection — had no entry for it. The row imports correctly either way; only its source
+            # label is unreadable, which is why this records rather than refuses.
+            #
+            # Recorded as an **advisory**, not a warning: advisories are log-only, and this is a developer
+            # diagnostic about Luma's own bookkeeping that the user cannot act on — `last_sync_warnings`
+            # is shown on the card and must stay for things they can. Observed once on a connection whose
+            # `connection_account` rows were missing for reasons that could not be recovered afterwards
+            # (the connection was deleted, cascading them away), so this exists to make a recurrence
+            # diagnosable rather than to assert a cause.
+            source_label = dedupe.label_by_external.get(t["external_account_id"])
+            if source_label is None:
+                source_label = t["external_account_id"]
+                _add_advisory(
+                    connection_advisories,
+                    "A transaction was imported for a provider account this connection has no record of, "
+                    "so its import card shows the raw provider id as the source. The row itself landed in "
+                    "the right account.",
+                    context=f"external_account_id={t['external_account_id']} account_id={acc['id']}",
+                )
             evidence_json = build_sync_evidence(
                 t, source_label=source_label, captured_fields=dedupe.captured_fields,
             )
@@ -1590,6 +1611,32 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 log_warning(f"[sync] connection {connection['id']} needs reconnecting: {e}")
                 _record_sync_failure(conn, connection["id"], str(e), reauth_required=True)
                 _record(error=str(e))
+                continue
+            except crypto_service.MissingCredential:
+                # Nothing is stored to authenticate with — the state a vault reset leaves behind, since it
+                # clears the credentials and keeps the connection rows so a re-link lands back on them.
+                # `reauth_required` is already set by whatever cleared it, and is set again here so a row
+                # that arrived in this state by any other route says the same thing.
+                message = ("This connection has no stored credential. Connect the data source again to "
+                           "store a fresh one.")
+                log_warning(f"[sync] connection {connection['id']} has no stored credential")
+                _record_sync_failure(conn, connection["id"], message, reauth_required=True)
+                _record(error=message)
+                continue
+            except crypto_service.VaultDecryptError:
+                # The stored credential will not open under the DEK this unlock produces — a rotated or
+                # rebuilt vault over ciphertext sealed to the old key. Classified with the rejection above
+                # rather than left to the generic arm, because it is the same *user* situation: retrying
+                # can never succeed and the only way forward is to re-link. Left to fall through it read as
+                # "this connection has stopped working", which sends the user looking for an outage.
+                #
+                # The message is written here because the exception carries none: it is raised bare, having
+                # no context at the point it is detected (see `crypto_service.decrypt_secret`).
+                message = ("This connection's stored credential can no longer be read with the current "
+                           "vault key. Reconnect the data source to store a fresh credential.")
+                log_warning(f"[sync] connection {connection['id']} credential is unreadable under the current DEK")
+                _record_sync_failure(conn, connection["id"], message, reauth_required=True)
+                _record(error=message)
                 continue
             except UnknownProviderError as e:
                 log_warning(f"[sync] skipping connection {connection['id']}: {e}")

@@ -155,28 +155,6 @@ than by feature.
   Deferred: the actual windowing — a per-source recent window with a reachable **"Older imports"** archive
   grouped by year (marketplace cards too), a *reachable* re-bound on the fetch, and an explicit
   batch-history deletion strategy (purge records, not the imported transactions).
-- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **backlog, not started (2026-08-13).**
-  A forgotten vault passphrase is currently a dead end — `unlock` needs it and `set_passphrase` needs the
-  vault already unlocked — with no endpoint and no UI for a state every install eventually reaches. Sets
-  out the recovery ladder in order: a **credentials backup opened with the passphrase it was made under**
-  is a complete recovery needing no re-linking (and `credentials_export` already knows whether one
-  exists), with a destructive **reset** — drop the slot, clear the two encrypted columns, flag every
-  connection for reconnection, keep every account and transaction — as the only other option. Names the
-  wrinkle that decides how good this can be: `connect` upserts on `(provider, external_id)`, so a
-  provider whose handle is **issued** (Plaid's `item_id`) re-links in place while one whose handle is
-  **derived from the credential** (SimpleFIN's access-URL hash) arrives as a new connection, stranding the
-  old one's account mappings. Open: multi-user (another member's slot still opens the same DEK — that is
-  re-enrollment, phase 5, not a reset). **Expanded 2026-08-21:** compromise is a second, independent
-  motivation for the same reset (re-linking retires a stolen credential by re-issuing it, which beats
-  trusting a revocation call); reset should **revoke on the way out**, driven by `revokes_on_disconnect`
-  rather than by naming a provider — except in the very case that motivated this file, since revocation
-  needs a decrypted token, so a *lost*-passphrase reset can revoke nothing at all and must instruct
-  manually for every provider. That split is why the dialog asks which situation the user is in. Also adds
-  **vault recovery codes**: the 2FA sign-in path has them, the vault has none, and `vault_slot.method`
-  already generalizes to a third kind — they would give the single-user install a rung above "destroy it",
-  making the destructive reset rare rather than routine. Also flags an existing bug worth fixing regardless
-  — `VaultDecryptError` is unclassified and reports as a generic sync failure instead of "reconnect
-  needed".
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
@@ -253,6 +231,17 @@ Shipped work whose durable rules now live in the main docs. These files are kept
 carry something the main docs should not — a rejected design, an obstacle list, a "read this before
 reintroducing X". Nothing here is pending.
 
+- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **shipped 2026-08-31; kept for its
+  rejected shapes and one owed test.** The recovery ladder is built: a **vault recovery code** (a third
+  `vault_slot.method`, one per user, recovered and re-keyed in a single atomic request), the destructive
+  **reset** with its lost-vs-compromise split and capability-driven revocation, `VaultDecryptError`
+  classified as *reconnect needed*, and **re-link adoption**. The durable rules live in
+  `architecture.md` (the vault section), `data-model.md` (a connection may hold no credential) and
+  `building-a-connector.md` (where the connection handle comes from). What this file still holds is the
+  reasoning behind two reversals worth not re-litigating — why the other-member check became a
+  **redirect rather than a refusal**, and why a **single** recovery code is as safe as a set — plus the
+  corrected account of what a re-link actually strands (coverage and cursor, *not* the mappings). One
+  test is still owed: reset → set → restore a credentials backup taken under the old passphrase.
 - [list-virtualization.md](list-virtualization.md) — **effectively complete (2026-07-19); kept for its
   notes.** `MatchReport`, `TransactionListTable`, the Transactions ledger and the Rules list all window
   through the shared `WindowedRows`. The durable rules live in `ui-patterns.md` (windowing needs a

@@ -49,6 +49,10 @@ class ConnectRequest(BaseModel):
     # untyped: a Link provider posts {"public_token": …}, a token provider {"setup_token": …}, and the
     # router has no business knowing which.
     payload: dict = {}
+    # Which existing connection this authorization *replaces*, where the user was asked. Only meaningful
+    # for a provider whose handle is derived from its credential (`stable_external_id = False`) — see
+    # `establish_connection` for why the question has to be answered before the provider is called.
+    adopt_connection_id: str | None = None
 
 
 class DisconnectRequest(BaseModel):
@@ -91,7 +95,8 @@ def require_app_config(request: Request, provider: str) -> dict:
     return app_config
 
 
-def establish_connection(request: Request, provider: str, payload: dict) -> dict:
+def establish_connection(request: Request, provider: str, payload: dict,
+                         *, adopt_connection_id: str | None = None) -> dict:
     """Authorize a data source and record it — the whole connect flow, shared by every provider.
 
     Only the handshake differs between providers, and the adapter's `connect` absorbs that; everything
@@ -105,6 +110,19 @@ def establish_connection(request: Request, provider: str, payload: dict) -> dict
     non-zero on a fresh connect: the client must run the mapping step before the backfill, since an
     unmapped provider account has no account to sync into and the mapping is what gives duplicate
     detection its cross-account alias.
+
+    **`adopt_connection_id` re-points an existing connection instead of inserting a new one.** It exists
+    for a provider that declares `stable_external_id = False`: its handle is derived from the credential,
+    so re-authorizing the same source yields a *different* `external_id` and the upsert below would insert
+    a second row, stranding the first. Nothing keyed to `connection_id` moves when the row is re-pointed —
+    per-account coverage, the cursor, sync history and `account.connection_id` all survive because they
+    were never touched — which is the whole reason this is a re-point rather than an insert-and-migrate.
+    (The account *mappings* survive either way: `record_provider_accounts` and sync both key on
+    `account.external_account_id`.)
+
+    **The caller must ask before this runs, not after.** A claim or exchange is single-use, so by the time
+    the handle is known there is no authorizing again to act on a different answer — which is why this
+    takes a decision rather than returning candidates for one.
     """
     with get_db() as conn:
         if is_demo_data_loaded(conn):
@@ -172,25 +190,70 @@ def establish_connection(request: Request, provider: str, payload: dict) -> dict
         stored_credential, stored_credential_enc = crypto_service.encrypt_connection_credential(
             user, provider, external_id, credential
         )
-        # Upsert the connection atomically on its (provider, external_id) unique key. A user can complete
-        # the connect step more than once for the same bank (Plaid's onSuccess may fire twice; a re-link
-        # re-exchanges), and those calls can race — a check-then-insert would let the loser hit the UNIQUE
-        # constraint and 500. ON CONFLICT makes a duplicate connect a clean credential-refresh instead.
-        conn.execute(
-            """
-            INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(provider, external_id) DO UPDATE SET
-                credential = excluded.credential,
-                credential_enc = excluded.credential_enc,
-                institution = COALESCE(excluded.institution, connection.institution)
-            """,
-            (str(uuid.uuid4()), provider, external_id, stored_credential, stored_credential_enc, institution),
-        )
-        connection_id = conn.execute(
-            "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
-            (provider, external_id),
-        ).fetchone()["id"]
+        # Whether the user's "this replaces X" answer can actually be honored, resolved here rather than
+        # up front **because the authorization is already spent**: a claim or exchange is single-use, so
+        # refusing the request before calling the provider would burn the user's token over a decision the
+        # ordinary path can absorb. Both ways it can be stale are absorbed the same way — by falling
+        # through to the upsert below and reporting that adoption did not happen:
+        #
+        #   * the named connection is gone (disconnected in another tab since the dialog was filled in);
+        #   * the handle the provider just issued already belongs to a *different* row, which means this is
+        #     really a credential refresh of that row. Re-pointing would trip the UNIQUE index, and the
+        #     upsert lands it on the right connection anyway.
+        adopt_target = None
+        if adopt_connection_id:
+            named = conn.execute(
+                "SELECT id FROM connection WHERE id = ? AND provider = ?",
+                (adopt_connection_id, provider),
+            ).fetchone()
+            holder = conn.execute(
+                "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
+                (provider, external_id),
+            ).fetchone()
+            if named and (holder is None or holder["id"] == named["id"]):
+                adopt_target = named["id"]
+
+        if adopt_target:
+            # Re-point the surviving row: swap the handle and the credential, and leave every other column
+            # exactly as it is. That is the entire feature — per-account coverage, the cursor, sync history
+            # and `account.connection_id` all live on or point at this row, so not moving them is what
+            # preserves them.
+            #
+            # `reauth_required` is deliberately NOT cleared here, matching the upsert below. The flag is
+            # retired by *proof* — a pull that returned data (see `routers/sync.py`) — not by a claim that
+            # the credential is fresh, and clearing it on one connect path but not the other would leave
+            # the two disagreeing about what the flag means.
+            conn.execute(
+                """
+                UPDATE connection
+                   SET external_id = ?, credential = ?, credential_enc = ?,
+                       institution = COALESCE(?, institution)
+                 WHERE id = ?
+                """,
+                (external_id, stored_credential, stored_credential_enc, institution, adopt_target),
+            )
+            connection_id = adopt_target
+        else:
+            # Upsert the connection atomically on its (provider, external_id) unique key. A user can
+            # complete the connect step more than once for the same bank (Plaid's onSuccess may fire twice;
+            # a re-link re-exchanges), and those calls can race — a check-then-insert would let the loser
+            # hit the UNIQUE constraint and 500. ON CONFLICT makes a duplicate connect a clean
+            # credential-refresh instead.
+            conn.execute(
+                """
+                INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(provider, external_id) DO UPDATE SET
+                    credential = excluded.credential,
+                    credential_enc = excluded.credential_enc,
+                    institution = COALESCE(excluded.institution, connection.institution)
+                """,
+                (str(uuid.uuid4()), provider, external_id, stored_credential, stored_credential_enc, institution),
+            )
+            connection_id = conn.execute(
+                "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
+                (provider, external_id),
+            ).fetchone()["id"]
 
         # A connection is connection-centric: one authorization can fan out to many accounts, and later
         # sync discovers the credential by connection, matching transactions to accounts by external id.
@@ -206,6 +269,10 @@ def establish_connection(request: Request, provider: str, payload: dict) -> dict
     return {
         "ok": True, "accounts_added": len(accounts), "connection_id": connection_id,
         "provider": provider, "unmapped": pending_mapping,
+        # Reported rather than assumed: a re-link the user asked for can legitimately land as an ordinary
+        # connect (see the staleness cases above), and the two outcomes leave them looking at different
+        # things — one connection carrying its history, or a second one alongside the first.
+        "adopted": bool(adopt_target),
     }
 
 
@@ -215,7 +282,8 @@ def connect(provider: str, body: ConnectRequest, request: Request):
     Link-style providers keep their own entry point (`/plaid/exchange`) because their payload arrives from
     the widget's callback, but both routes converge on `establish_connection` immediately."""
     _validate_provider(provider)
-    return establish_connection(request, provider, body.payload or {})
+    return establish_connection(request, provider, body.payload or {},
+                                adopt_connection_id=body.adopt_connection_id)
 
 
 @router.get("")
@@ -231,8 +299,14 @@ def list_providers(request: Request):
             **get_provider_config_status(p),
             "connections": list_connections(p),
             "connect_spec": adapter.connect_spec,
+            # The noun for the connect button, where one connect action adds a nameable thing (Plaid: one
+            # institution). None where it does not, and the button stays a bare "+ Connect".
+            "connect_noun": adapter.connect_noun,
             "requires_app_config": adapter.requires_app_config,
             "revokes_on_disconnect": adapter.revokes_on_disconnect,
+            # Drives the re-link question in the connect dialog: False means a fresh credential produces a
+            # fresh handle, so the UI must ask which connection this replaces before the provider is called.
+            "stable_external_id": adapter.stable_external_id,
         })
     return {"providers": out}
 
@@ -331,6 +405,7 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
     if not row:
         raise HTTPException(status_code=404, detail="Connection not found")
     app_config = require_app_config(request, provider)
+    credential = None
     try:
         credential = crypto_service.decrypt_connection_credential(
             user, provider, row["external_id"], row["credential"], row["credential_enc"]
@@ -340,15 +415,26 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
             "code": "vault_locked",
             "message": "Unlock the vault to disconnect this data source.",
         })
-    try:
-        get_adapter(provider).remove(app_config, credential)
-    except Exception as exc:
-        # Keep the local connection if provider-side revocation failed, so the user can retry rather than
-        # believe the token is dead when it may still be live.
-        raise HTTPException(status_code=502, detail=f"Could not revoke the connection at the provider: {exc}")
+    except (crypto_service.MissingCredential, crypto_service.VaultDecryptError):
+        # There is no credential to revoke *with* — a vault reset clears them and deliberately keeps the
+        # connection rows. The revoke is skipped rather than attempted: sending an empty token earns a
+        # provider error, and the 502 below would then make the row undeletable, which is precisely the
+        # cleanup the reset leaves the user needing to do. Reported so the response can say the access was
+        # not revoked, which for a provider that *can* revoke is a real caveat.
+        credential = None
+
+    revoked = False
+    if credential is not None:
+        try:
+            get_adapter(provider).remove(app_config, credential)
+            revoked = get_adapter(provider).revokes_on_disconnect
+        except Exception as exc:
+            # Keep the local connection if provider-side revocation failed, so the user can retry rather
+            # than believe the token is dead when it may still be live.
+            raise HTTPException(status_code=502, detail=f"Could not revoke the connection at the provider: {exc}")
     with get_db() as conn:
         conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
-    return {"ok": True}
+    return {"ok": True, "revoked": revoked}
 
 
 @router.post("/{provider}/refresh-accounts")
@@ -378,6 +464,12 @@ def refresh_accounts(provider: str, body: RefreshAccountsRequest, request: Reque
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to refresh this data source.",
+        })
+    except (crypto_service.MissingCredential, crypto_service.VaultDecryptError):
+        raise HTTPException(status_code=409, detail={
+            "code": "no_credential",
+            "message": "This connection has no usable credential, so its accounts cannot be refreshed. "
+                       "Connect the data source again, then disconnect this one.",
         })
     try:
         accounts = get_adapter(provider).fetch_accounts(app_config, credential)

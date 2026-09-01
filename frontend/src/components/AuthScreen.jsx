@@ -3,6 +3,7 @@
 
 import { useRef, useState } from 'react'
 import { api } from '../lib/api.js'
+import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -253,9 +254,8 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
               restoreOnEscape
               onBlurCommit={false}
               placeholder="123456"
-              inputMode="numeric"
-              autoComplete="one-time-code"
               style={s.input}
+              {...ONE_TIME_CODE_PROPS}
             />
           )}
         </div>

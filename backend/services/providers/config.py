@@ -216,7 +216,7 @@ def list_connections(provider: str) -> list[dict]:
         rows = conn.execute(
             "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
             "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at, "
-            "sync_progress, last_sync_outcome, last_sync_summary "
+            "sync_progress, last_sync_outcome, last_sync_summary, credential, credential_enc "
             "FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
@@ -237,6 +237,13 @@ def list_connections(provider: str) -> list[dict]:
             # wrong, this says the user has to do something about it, and only one of the two is
             # actionable. A card showing both should lead with this one.
             "reauth_required": bool(r["reauth_required"]),
+            # Whether anything is stored to authenticate with — **not** whether it still works. False is a
+            # real state rather than a fault: a vault reset clears every credential and keeps the
+            # connection rows, so the accounts and coverage hanging off them survive for a re-link. The UI
+            # needs it to stop offering actions that cannot succeed — re-authorizing in place and
+            # refreshing accounts both need a credential to start from, and a disconnect can no longer
+            # revoke anything. Never the credential itself, which this listing must not carry.
+            "has_credential": crypto_service.connection_has_credential(r["credential"], r["credential_enc"]),
             "last_sync": _last_sync_summary(r),
             # Read through the staleness check rather than as a bare "is the column set": a process that
             # died mid-sync leaves the marker behind, and a card that believed it would disable syncing

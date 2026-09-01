@@ -1400,7 +1400,7 @@ def init_db(db_path: str | None = None):
         is_fresh_db = len(existing_tables) == 0
 
         conn.executescript("""
-            -- Provider-agnostic data-source connections (Plaid first; Teller/SimpleFIN later). One row per
+            -- Provider-agnostic data-source connections (Plaid, SimpleFIN, and any adapter after). One row per
             -- linked connection, carrying a `provider` discriminator and the opaque per-connection
             -- credential vault-encrypted under the workspace DEK (`credential_enc`; the plaintext column is
             -- always ''). `external_id` is the provider's stable handle (Plaid's item_id); accounts link

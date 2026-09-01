@@ -36,14 +36,17 @@ class PlaidAdapter(ProviderAdapter):
     # Link-style: the frontend opens Plaid's widget against a minted link token, so there is no payload
     # form to describe. Plaid caps transaction history at ~24 months, which is what "all history" means here.
     connect_spec = None
+    # Link authorizes exactly one institution per connect, so the button can name what it adds.
+    connect_noun = "Institution"
     max_history_days = 730
     has_cursor = True
     # Kept: Plaid revises a transaction in place, so a $0 pending row is what the settled amount lands
     # on — through `modified`, or through `pending_transaction_id` when the posted row gets a new id.
     zero_amount_rows = KEEP_ZERO_AMOUNT
 
-    def create_link_token(self, app_config: dict, user_id: str = "local-user") -> str:
-        return plaid_service.create_link_token(app_config, user_id)
+    def create_link_token(self, app_config: dict, user_id: str = "local-user",
+                          access_token: str | None = None) -> str:
+        return plaid_service.create_link_token(app_config, user_id, access_token)
 
     def connect(self, app_config: dict, payload: dict) -> dict:
         # Link hands back a short-lived public_token; the institution name comes from Link's metadata on

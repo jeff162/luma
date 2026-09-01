@@ -769,22 +769,34 @@ function ImportTab({ onAmazonDetected }) {
       const [prefix] = String(filename || '').split(' · ')
       return (prefix || '').trim() || 'Connection'
     }
+    // A card whose connection is gone keeps its history on purpose — `connection_id` is ON DELETE SET
+    // NULL, because these cards are the provenance of transactions still in the ledger and outlive the
+    // credential that fetched them. What they must not do is pile into one bucket: keyed together, a
+    // group takes its name from whichever orphan is newest and files every other source under it, so a
+    // SimpleFIN import ends up sitting beneath a bank's name. Each card still carries its own identity in
+    // the filename prefix, so that is what they are grouped by instead.
     const connectionGroups = new Map()
     for (const batch of batches) {
       if (!isConnectionSyncBatch(batch)) continue
-      const key = batch.connection_id || 'connection:unknown'
+      const key = batch.connection_id
+        || `disconnected:${connectionLabelFromFilename(batch.filename)}`
       if (!connectionGroups.has(key)) connectionGroups.set(key, [])
       connectionGroups.get(key).push(batch)
     }
-    for (const [connectionId, connBatches] of connectionGroups) {
+    for (const [groupKey, connBatches] of connectionGroups) {
       const byImport = connBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+      // Absent for a disconnected group, which is what tells the row it is history rather than a live
+      // connection — there is no connection left for its actions to act on.
+      const connectionId = byImport[0]?.connection_id || null
       savedSourceRows.push({
-        key: `connection:${connectionId}`,
+        key: `connection:${groupKey}`,
         kind: 'connection',
         connectionId,
+        disconnected: !connectionId,
         // Prefer the connection's own institution/provider (real fields) over parsing them out of the
         // card filename; the filename parse stays as a fallback for older cards created before the
-        // provenance was plumbed through.
+        // provenance was plumbed through — and it is the only source for a disconnected group, whose
+        // connection row is gone along with the fields it carried.
         label: byImport[0]?.connection_institution || connectionLabelFromFilename(byImport[0]?.filename),
         provider: byImport[0]?.connection_provider || null,
         profile: null,

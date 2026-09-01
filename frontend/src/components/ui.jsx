@@ -772,7 +772,12 @@ export function Select({ value, onChange, options, style, id, ...rest }) {
   )
 }
 
-export function Input({ value, onChange, placeholder, style, id, suppressAutofillId = false, ...rest }) {
+// `forwardRef` because these fields cannot be reached any other way: a sensitive field renders with
+// `suppressAutofillId`, deliberately carrying no id or name, so a caller wanting to move focus to the
+// next one (Enter-to-advance in the vault dialogs) has no selector to query and needs the node itself.
+export const Input = forwardRef(function Input(
+  { value, onChange, placeholder, style, id, suppressAutofillId = false, ...rest }, ref,
+) {
   // `...rest` forwards a11y/form props (aria-label, name, type, …) the wrapper used to swallow —
   // a placeholder alone isn't an accessible name, so callers can give the field a real label.
   // A stable auto-`id` (caller-supplied wins) satisfies the browser's "field needs an id/name"
@@ -788,6 +793,7 @@ export function Input({ value, onChange, placeholder, style, id, suppressAutofil
   return (
     <input
       {...rest}
+      ref={ref}
       id={suppressAutofillId ? undefined : (id || autoId)}
       value={value}
       onChange={e => onChange(e.target.value)}
@@ -798,7 +804,7 @@ export function Input({ value, onChange, placeholder, style, id, suppressAutofil
       }}
     />
   )
-}
+})
 
 // Password field with an inline show/hide reveal. Controlled like `Input` (value/onChange as a string).
 // `wrapperStyle` sizes the field (e.g. a maxWidth so it doesn't stretch to the full card); the reveal

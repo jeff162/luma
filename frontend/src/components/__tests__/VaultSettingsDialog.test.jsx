@@ -21,6 +21,12 @@ const approveVaultAccess = vi.fn(async () => ({ requests: [] }))
 const rotateVault = vi.fn(async () => ({ result: {} }))
 const removeVaultPasskey = vi.fn(async () => ({}))
 const revokeVaultAccess = vi.fn(async () => ({ ok: true }))
+const getCurrentUser = vi.fn(async () => ({ user: { id: 'u1', vault_has_recovery_code: false } }))
+const issueVaultRecoveryCode = vi.fn(async () => ({ recovery_code: 'AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD' }))
+// Presenting the secret again *is* an unlock — that is what the server records as proof — so the confirm
+// prompt this dialog raises ends in the same call the lock screen makes.
+const unlockVault = vi.fn(async () => ({ user: { id: 'u1', vault_proof_seconds_remaining: 300 } }))
+const discardVaultRecoveryCode = vi.fn(async () => ({ user: { id: 'u1' } }))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -32,22 +38,58 @@ vi.mock('../../lib/api.js', () => ({
     removeVaultPasskey: (...a) => removeVaultPasskey(...a),
     revokeVaultAccess: (...a) => revokeVaultAccess(...a),
     registerVaultPasskey: vi.fn(async () => ({})),
+    getCurrentUser: (...a) => getCurrentUser(...a),
+    issueVaultRecoveryCode: (...a) => issueVaultRecoveryCode(...a),
+    unlockVault: (...a) => unlockVault(...a),
+    discardVaultRecoveryCode: (...a) => discardVaultRecoveryCode(...a),
   },
 }))
 
 const { VaultSettingsDialog } = await import('../VaultSettingsDialog.jsx')
+const { AppSessionProvider } = await import('../../lib/AppSessionContext.jsx')
 
-function renderDialog(props = {}) {
+// Proof of a recently presented secret, as the server reports it. The dialog reads the countdown to
+// decide whether to ask *before* an action that mints a new way into the vault, so the default here is a
+// live window — the state most cases are not about — and the ones that are about it pass 0.
+const SESSION = {
+  currentUser: {
+    id: 'u1',
+    // Both halves matter: every gated action here needs the key in hand *and* a recently presented
+    // secret, and the dialog asks a different question depending on which is missing.
+    vault_unlocked: true,
+    vault_proof_seconds_remaining: 300,
+    vault_passphrase_min_length: 20,
+    vault_passphrase_min_distinct: 6,
+  },
+  setCurrentUser: () => {},
+}
+
+function renderDialog(props = {}, session = SESSION) {
   return render(
-    <VaultSettingsDialog
-      currentUserId="u1"
-      isAdmin
-      onChangePassphrase={() => {}}
-      onChanged={async () => {}}
-      onClose={() => {}}
-      {...props}
-    />,
+    <AppSessionProvider value={session}>
+      <VaultSettingsDialog
+        currentUserId="u1"
+        isAdmin
+        onChangePassphrase={() => {}}
+        onChanged={async () => {}}
+        onClose={() => {}}
+        {...props}
+      />
+    </AppSessionProvider>,
   )
+}
+
+// The same dialog with the proof window lapsed, which is what makes it ask.
+const LAPSED = {
+  ...SESSION,
+  currentUser: { ...SESSION.currentUser, vault_proof_seconds_remaining: 0 },
+}
+
+// And with the vault shut, which makes it ask a different question. Both are missing here, as they
+// always are together: locking drops the proof stamp with the key.
+const LOCKED = {
+  ...SESSION,
+  currentUser: { ...SESSION.currentUser, vault_unlocked: false, vault_proof_seconds_remaining: 0 },
 }
 
 // The dialog folds the browser's own capability into the server's verdict, so a jsdom run with no
@@ -64,6 +106,206 @@ afterEach(() => {
   vaultAccessRequests.mockResolvedValue({ requests: [] })
   vaultMembers.mockResolvedValue({ members: [] })
   vaultPasskeyParams.mockResolvedValue({ available: true, reason: null, rp_id: 'luma.example', register_salt: 'AAAA', credentials: [] })
+  getCurrentUser.mockResolvedValue({ user: { id: 'u1', vault_has_recovery_code: false } })
+  issueVaultRecoveryCode.mockResolvedValue({ recovery_code: 'AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD' })
+  unlockVault.mockResolvedValue({ user: { id: 'u1', vault_proof_seconds_remaining: 300 } })
+  discardVaultRecoveryCode.mockResolvedValue({ user: { id: 'u1' } })
+})
+
+describe('removing the recovery code', () => {
+  // Replacing a code and not recording the new one leaves `vault_has_recovery_code` true, so the recovery
+  // ladder goes on offering "use your recovery code" to somebody who deliberately has none. Removing is
+  // the only way to make the ladder tell the truth.
+  const withCode = () => getCurrentUser.mockResolvedValue({
+    user: { id: 'u1', vault_has_recovery_code: true, vault_recovery_code_issued_at: '2026-09-01' },
+  })
+
+  it('is offered only when there is a code to remove', async () => {
+    renderDialog()
+    expect(await screen.findByText('No recovery code')).toBeTruthy()
+    expect(screen.queryByText('Remove')).toBeNull()
+
+    cleanup()
+    withCode()
+    renderDialog()
+    expect(await screen.findByText('Remove')).toBeTruthy()
+  })
+
+  it('confirms before removing, and says what is lost', async () => {
+    // Unlike removing a passkey, which is one of several ways in. This is often the only rung between a
+    // forgotten passphrase and rebuilding every connection.
+    withCode()
+    renderDialog()
+    await userEvent.click((await screen.findByText('Remove')).closest('button'))
+    expect(await screen.findByText('Remove the recovery code?')).toBeTruthy()
+    expect(discardVaultRecoveryCode).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByText('Remove code').closest('button'))
+    await waitFor(() => expect(discardVaultRecoveryCode).toHaveBeenCalled())
+  })
+
+  it('asks for proof first when the window has lapsed', async () => {
+    // Removal joins the same window as adding: someone at an unlocked machine could otherwise strip every
+    // way in, leaving the owner one forgotten passphrase from a rebuild.
+    withCode()
+    renderDialog({}, LAPSED)
+    await userEvent.click((await screen.findByText('Remove')).closest('button'))
+    await userEvent.click(screen.getByText('Remove code').closest('button'))
+    expect(await screen.findByText('Confirm it’s you')).toBeTruthy()
+    expect(discardVaultRecoveryCode).not.toHaveBeenCalled()
+  })
+})
+
+describe('proof before a new way into the vault is minted', () => {
+  // Adding a passkey and minting a recovery code each create a credential that keeps working after lock,
+  // relock, and the owner changing their passphrase. So an open vault is not enough on its own — the
+  // secret has to have been presented recently, or anyone reaching an unlocked screen could add their
+  // own way in and keep it.
+  it('asks first when the window has lapsed', async () => {
+    renderDialog({}, LAPSED)
+    await userEvent.click((await screen.findByText('Create a recovery code')).closest('button'))
+    expect(await screen.findByText('Confirm it’s you')).toBeTruthy()
+    expect(issueVaultRecoveryCode).not.toHaveBeenCalled()
+  })
+
+  it('does not ask while the window is live', async () => {
+    // The friction this window exists to avoid: unlocking, opening this dialog and minting a code is one
+    // sitting, and asking again for the secret typed seconds earlier is what makes people pick a weaker
+    // one. The countdown is the server's; this only reads it.
+    renderDialog()
+    await userEvent.click((await screen.findByText('Create a recovery code')).closest('button'))
+    await waitFor(() => expect(issueVaultRecoveryCode).toHaveBeenCalled())
+    expect(screen.queryByText('Confirm it’s you')).toBeNull()
+  })
+
+  it('runs the held action once the secret is presented', async () => {
+    // The user already clicked; making them find the control again after answering for it would read as
+    // the click having been lost.
+    unlockVault.mockResolvedValue({ user: { id: 'u1', vault_proof_seconds_remaining: 300 } })
+    renderDialog({}, LAPSED)
+    await userEvent.click((await screen.findByText('Create a recovery code')).closest('button'))
+    await userEvent.type(await screen.findByPlaceholderText('Vault passphrase'),
+                         'a-strong-vault-passphrase{Enter}')
+    await waitFor(() => expect(issueVaultRecoveryCode).toHaveBeenCalled())
+  })
+
+  it('asks when the server refuses even though the local countdown said otherwise', async () => {
+    // The backstop. A sleeping tab, a second session, or a restarted backend all leave the client's copy
+    // saying there is time left when there is not — so the refusal has to be answerable, not just
+    // reported. The client copy is allowed to be wrong; being wrong costs one prompt.
+    const refusal = Object.assign(new Error('Confirm your passphrase or passkey'), {
+      status: 403, detail: { code: 'proof_required' },
+    })
+    issueVaultRecoveryCode.mockRejectedValueOnce(refusal)
+    renderDialog()
+    await userEvent.click((await screen.findByText('Create a recovery code')).closest('button'))
+    expect(await screen.findByText('Confirm it’s you')).toBeTruthy()
+  })
+})
+
+describe('the access queue', () => {
+  const WAITING = {
+    requests: [{
+      slot_id: 's1', user_id: 'u2', display_name: 'Frances', method: 'passphrase',
+      requested_at: '2026-09-01T10:00:00', replaces_access: false,
+    }],
+  }
+
+  it('answers a locked vault by asking to unlock, then approves', async () => {
+    // Approving seals the key into the waiting slot, so it needs the key in hand. Reaching this dialog
+    // with a locked vault is now the ordinary path — the queue is surfaced to members who have not
+    // unlocked — so the 423 has to be a question rather than an error string the user must decode.
+    vaultAccessRequests.mockResolvedValue(WAITING)
+    approveVaultAccess.mockRejectedValueOnce(Object.assign(new Error('Unlock the vault'), { status: 423 }))
+    renderDialog()
+    await userEvent.click((await screen.findByText('Approve')).closest('button'))
+
+    expect(await screen.findByText('Unlock the vault')).toBeTruthy()
+    // ...and not the wording for a vault that is already open.
+    expect(screen.queryByText('Confirm it’s you')).toBeNull()
+
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'),
+                         'a-strong-vault-passphrase{Enter}')
+    await waitFor(() => expect(approveVaultAccess).toHaveBeenCalledTimes(2))
+  })
+
+  it('asks to unlock before approving, without troubling the server first', async () => {
+    // Approving mints a durable unlock method for somebody else, so it needs the key in hand and a
+    // recently presented secret. Both are missing on a locked vault, and asking up front beats sending a
+    // request that can only come back refused.
+    vaultAccessRequests.mockResolvedValue(WAITING)
+    renderDialog({}, LOCKED)
+    await userEvent.click((await screen.findByText('Approve')).closest('button'))
+    expect(await screen.findByText('Unlock the vault')).toBeTruthy()
+    expect(approveVaultAccess).not.toHaveBeenCalled()
+  })
+
+  it('leads with the queue when somebody is waiting', async () => {
+    // The badge on the button that opens this dialog says "(1 waiting)", so the request is why it was
+    // opened — finding it below three other sections means hunting for what you were just told about.
+    vaultAccessRequests.mockResolvedValue(WAITING)
+    renderDialog()
+    // The eyebrow is its own styled div, so the section it heads is one level up.
+    const heading = await screen.findByText('Vault access')
+    expect(heading.parentElement.style.order).toBe('-1')
+  })
+
+  it('leaves it in its usual place when nobody is', async () => {
+    renderDialog()
+    const heading = await screen.findByText('Vault access')
+    expect(heading.parentElement.style.order).toBe('')
+  })
+
+  it('says when a request replaces access that already existed', async () => {
+    // A newcomer enrolling and a member who lost their passphrase look identical here, and they are not
+    // the same decision — the second hands back access to whoever wrote the request. The approver is the
+    // only person who can tell, so the row has to say which it is.
+    vaultAccessRequests.mockResolvedValue({
+      requests: [{
+        slot_id: 's1', user_id: 'u2', display_name: 'Frances', method: 'passphrase',
+        requested_at: '2026-09-01T10:00:00', replaces_access: true,
+      }],
+    })
+    renderDialog()
+    expect(await screen.findByText(/lost their passphrase/)).toBeTruthy()
+  })
+
+  it('does not say it for an ordinary enrollment', async () => {
+    vaultAccessRequests.mockResolvedValue({
+      requests: [{
+        slot_id: 's2', user_id: 'u3', display_name: 'Sam', method: 'passphrase',
+        requested_at: '2026-09-01T10:00:00', replaces_access: false,
+      }],
+    })
+    renderDialog()
+    expect(await screen.findByText(/^asked /)).toBeTruthy()
+    expect(screen.queryByText(/lost their passphrase/)).toBeNull()
+  })
+})
+
+describe('recovery code', () => {
+  it('shows the code once, and only after it is minted', async () => {
+    // The whole contract of a shown-once secret: it is absent until asked for, present exactly once
+    // afterwards, and the copy beside it says it will not come back.
+    renderDialog()
+    expect(await screen.findByText('No recovery code')).toBeTruthy()
+    expect(screen.queryByText(/AAAAAAAA/)).toBeNull()
+
+    await userEvent.click(screen.getByText('Create a recovery code'))
+    expect(await screen.findByText(/AAAAAAAA-BBBBBBBB/)).toBeTruthy()
+    expect(screen.getByText(/shown once and cannot be recovered/)).toBeTruthy()
+  })
+
+  it('offers to replace an existing code, and says the old one stops working', async () => {
+    // Someone regenerating after a scare is relying on exactly that, so it is stated at the button
+    // rather than only inside the reveal they have not opened yet.
+    getCurrentUser.mockResolvedValue({
+      user: { id: 'u1', vault_has_recovery_code: true, vault_recovery_code_issued_at: '2026-08-01T00:00:00' },
+    })
+    renderDialog()
+    expect(await screen.findByText('Replace code')).toBeTruthy()
+    expect(screen.getByText(/Replacing it stops the old one working/)).toBeTruthy()
+  })
 })
 
 describe('unlock methods', () => {

@@ -3,7 +3,7 @@
 
 """
 Provider-adapter registry: `get_adapter(provider)` is the one lookup the routers/sync path use to reach
-an aggregator, so adding Teller or SimpleFIN is registering an adapter here, not touching the callers.
+an aggregator, so adding a provider is registering an adapter here, not touching the callers.
 """
 
 from __future__ import annotations

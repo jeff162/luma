@@ -75,7 +75,7 @@ class AppCredentialCryptoTests(unittest.TestCase):
         user = {"id": self.alice}
         _, enc = cs.encrypt_app_credential(user, "plaid", "x")
         with self.assertRaises(cs.VaultDecryptError):
-            cs.decrypt_app_credential(user, "teller", "", enc)
+            cs.decrypt_app_credential(user, "simplefin", "", enc)
 
 
 class ProviderConfigServiceTests(unittest.TestCase):

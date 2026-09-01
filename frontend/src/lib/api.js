@@ -135,6 +135,22 @@ export const api = {
     request('/auth/vault/change-passphrase', { method: 'POST', body: JSON.stringify({ old_passphrase, new_passphrase }) }),
   unlockVault: (passphrase) =>
     request('/auth/vault/unlock', { method: 'POST', body: JSON.stringify({ passphrase }) }),
+  // Prove with a passkey and set a new passphrase in one request, the passkey sibling of `recoverVault`.
+  // One call rather than prove-then-set, so no ceremony is ever spent with no passphrase written. Also
+  // the only route by which a passkey-only member gets a first passphrase.
+  setVaultPassphraseWithPasskey: (credential_id, prf_output, new_passphrase) =>
+    request('/auth/vault/passkey/set-passphrase', {
+      method: 'POST',
+      body: JSON.stringify({ credential_id, prf_output, new_passphrase }),
+    }),
+  // "Let me back in": replaces an unopenable passphrase slot with a pending one for a member to approve.
+  // Opens nothing on its own — the DEK cannot be reached from here, which is the whole situation.
+  // Delete the recovery code without minting another. `issueVaultRecoveryCode` always *replaces*, so
+  // invalidating one could only be done by replacing it and not recording the new one — which leaves
+  // `vault_has_recovery_code` true and the recovery ladder offering a rung the user does not have.
+  discardVaultRecoveryCode: () => request('/auth/vault/recovery-code', { method: 'DELETE' }),
+  requestVaultReenrolment: (new_passphrase) =>
+    request('/auth/vault/reenrol', { method: 'POST', body: JSON.stringify({ new_passphrase }) }),
   lockVault: () => request('/auth/vault/lock', { method: 'POST' }),
   // Credentials backups taken against the wrapping currently in force — the ones a passphrase change is
   // about to strand. Only those: a backup from before an earlier change is already stranded, and saying
@@ -159,6 +175,22 @@ export const api = {
   unlockVaultWithPasskey: (credential_id, prf_output) =>
     request('/auth/vault/passkey/unlock', { method: 'POST', body: JSON.stringify({ credential_id, prf_output }) }),
   removeVaultPasskey: (slotId) => request(`/auth/vault/passkey/${slotId}`, { method: 'DELETE' }),
+  // Recovery code — one per user, and the only rung between a forgotten passphrase and rebuilding every
+  // connection on a single-user install. Issuing returns the code in the clear exactly once; nothing
+  // else ever can, since only its KEK is stored.
+  issueVaultRecoveryCode: () => request('/auth/vault/recovery-code', { method: 'POST' }),
+  // Deliberately one call, not unlock-then-change: there must be no window where the code has been
+  // consumed and no replacement passphrase exists yet. Returns a fresh code alongside the session.
+  recoverVault: (code, new_passphrase) =>
+    request('/auth/vault/recover', { method: 'POST', body: JSON.stringify({ code, new_passphrase }) }),
+  // What the reset dialog must say before the user commits — the free alternatives first, then the cost.
+  // Its credentials-backup list is unfiltered, unlike `vaultCredentialsBackups`: recovery restores a
+  // backup with the passphrase *it* was made under, so an older one is the rescue rather than noise.
+  vaultResetPreview: () => request('/auth/vault/reset-preview'),
+  // Irreversible. `reason` is 'lost' or 'compromised' — only the latter can revoke at the provider, and
+  // only the former is refused while another member can still open the vault.
+  resetVault: (reason, confirm) =>
+    request('/auth/vault/reset', { method: 'POST', body: JSON.stringify({ reason, confirm }) }),
   // Per-provider app-level credentials (the Configure card). Status never returns the secret.
   getProviders: () => request('/providers'),
   getProviderConfig: (provider) => request(`/providers/${provider}/config`),
@@ -170,8 +202,15 @@ export const api = {
   getProviderSecret: (provider) => request(`/providers/${provider}/secret`),
   // Connect a data source whose authorization is not a Link widget — the payload shape is whatever that
   // provider's `connect_spec` asked the UI to collect (e.g. { setup_token }).
-  connectProvider: (provider, payload) =>
-    request(`/providers/${provider}/connect`, { method: 'POST', body: JSON.stringify({ payload }) }),
+  // `adoptConnectionId` names the existing connection this authorization *replaces*, for a provider whose
+  // handle is derived from its credential (`stable_external_id: false`) — the server re-points that row
+  // instead of inserting a second one, so its coverage and cursor survive. Must be decided before the
+  // call, never after: a setup token is single-use, so there is no second attempt to act on a later answer.
+  connectProvider: (provider, payload, adoptConnectionId = null) =>
+    request(`/providers/${provider}/connect`, {
+      method: 'POST',
+      body: JSON.stringify({ payload, adopt_connection_id: adoptConnectionId }),
+    }),
   // Drop a linked connection. Where the provider supports it this also revokes the credential at the
   // provider; where it does not (SimpleFIN has no revocation call) only the local copy goes.
   disconnectProvider: (provider, external_id) =>
@@ -415,7 +454,17 @@ export const api = {
   setCategoryTags: (id, tag_ids) =>
     request(`/categories/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
 
-  getLinkToken: () => request('/plaid/link-token'),
+  // Passing a connection id asks for an **update-mode** token: Link re-authorizes the Item that
+  // connection already holds instead of creating a new one. Without it, "reconnect" mints a second
+  // connection and strands the first with its coverage, cursor and a badge that can never clear.
+  getLinkToken: (connectionId = null) => request(
+    connectionId ? `/plaid/link-token?connection_id=${encodeURIComponent(connectionId)}` : '/plaid/link-token',
+  ),
+  // Finishes an update-mode session. Deliberately not an exchange — update mode issues no new credential,
+  // and Plaid's guidance is not to exchange the public token it returns. The server proves the Item is
+  // live by fetching accounts before it clears the reconnect flag.
+  repairPlaidConnection: (connection_id) =>
+    request('/plaid/repair', { method: 'POST', body: JSON.stringify({ connection_id }) }),
   exchangeToken: (public_token, institution_name) =>
     request('/plaid/exchange', {
       method: 'POST',

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { runVaultPasskeyUnlock } from './vaultPasskey.js'
+import { runVaultPasskeySetPassphrase, runVaultPasskeyUnlock } from './vaultPasskey.js'
 
 // The "Unlock with a passkey" control, everywhere it appears.
 //
@@ -32,7 +32,12 @@ import { runVaultPasskeyUnlock } from './vaultPasskey.js'
 export const VAULT_PASSKEY_LABEL = 'Unlock with a passkey'
 export const VAULT_PASSKEY_WAITING_LABEL = 'Waiting for passkey…'
 
-export function useVaultPasskeyUnlock({ onUnlocked, onRefused }) {
+// `getNewPassphrase` turns the control into the *other* passkey ceremony: one that ends by writing a new
+// passphrase instead of by unlocking. It is a getter rather than a value because the hook's `unlock` is a
+// stable callback — reading a captured passphrase would hand the server whatever was typed on the render
+// that created it. Same busy flag, same refusal handling, same one-ceremony-at-a-time guard, because
+// what differs is only which request the ceremony ends in.
+export function useVaultPasskeyUnlock({ onUnlocked, onRefused, getNewPassphrase, label }) {
   const [busy, setBusy] = useState(false)
   // The in-flight test is a ref, not the state above. State does not change until a re-render, so two
   // presses landing in one tick would both read `false` and both start a ceremony — the very case this
@@ -43,15 +48,20 @@ export function useVaultPasskeyUnlock({ onUnlocked, onRefused }) {
   // Mirrored so `unlock` can be a stable reference while still calling the current handlers — the same
   // pattern `useVaultGate` uses. Without it every render rebuilds `unlock`, which is harmless today and
   // a trap for the first caller who puts it in a dependency array or hands it to a memoized child.
-  const handlersRef = useRef({ onUnlocked, onRefused })
-  useEffect(() => { handlersRef.current = { onUnlocked, onRefused } }, [onUnlocked, onRefused])
+  const handlersRef = useRef({ onUnlocked, onRefused, getNewPassphrase })
+  useEffect(() => {
+    handlersRef.current = { onUnlocked, onRefused, getNewPassphrase }
+  }, [onUnlocked, onRefused, getNewPassphrase])
 
   const unlock = useCallback(async () => {
     if (busyRef.current) return
     busyRef.current = true
     setBusy(true)
     try {
-      const result = await runVaultPasskeyUnlock()
+      const forPassphrase = handlersRef.current.getNewPassphrase
+      const result = forPassphrase
+        ? await runVaultPasskeySetPassphrase(forPassphrase())
+        : await runVaultPasskeyUnlock()
       if (!result.ok) {
         // A dismissed prompt reports nothing — the user closed it on purpose — and so does a duplicate
         // press, which `runVaultPasskeyUnlock` refuses with an empty message. Both are answered by
@@ -74,5 +84,5 @@ export function useVaultPasskeyUnlock({ onUnlocked, onRefused }) {
     }
   }, [])
 
-  return { busy, unlock, label: busy ? VAULT_PASSKEY_WAITING_LABEL : VAULT_PASSKEY_LABEL }
+  return { busy, unlock, label: busy ? VAULT_PASSKEY_WAITING_LABEL : (label || VAULT_PASSKEY_LABEL) }
 }

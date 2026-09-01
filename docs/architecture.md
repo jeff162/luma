@@ -484,19 +484,57 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
 - **Unlocking** holds the DEK in a **server-side, in-process cache keyed by `user_id` with an idle TTL** —
   *never* the signed session cookie (which serializes to the browser). Dropped on logout and on restart
   (re-unlock ⇒ "first sync of the day"). Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,
-  unlock,lock}`, `/auth/vault/passkey/{params,register,unlock}`; status via `vault_configured`/
-  `vault_has_passphrase`/`vault_unlocked`/`vault_access_pending`. Connect/sync and credential
+  unlock,lock}`, `/auth/vault/passkey/{params,register,unlock,set-passphrase}`, `/auth/vault/reenrol`;
+  status via `vault_configured`/`vault_has_passphrase`/`vault_unlocked`/`vault_access_pending`. Connect/sync and credential
   export/restore require an unlocked vault (`423`; connect on an unconfigured vault `409`). There is **no
   `off`/plaintext path and no app-held master key** — the vault is the only custody. Every passphrase must
   meet **≥ 20 chars and ≥ 6 distinct characters** (`passphrase_meets_production_min`; the distinct-char
   guard rejects a long-but-degenerate repeat), an *all-slots* property since the DEK is only as strong as
   its weakest wrap. The passphrase is meant to live in a password manager, so length is cheap; the set
   dialog shows an **advisory strength meter** that blocks nothing.
+- **Changing how the vault is opened needs a *recently presented* secret, not just an open vault.**
+  Three operations mint a **durable** unlock method — writing a passphrase slot, registering a passkey,
+  issuing a recovery code — and each would otherwise turn transient access to an unlocked session into
+  permanent, independent access that survives lock, relock and the owner's own attempts to get back in.
+  So each requires proof inside a five-minute window (`PROOF_TTL_SECONDS`), stamped by the four places a
+  secret is actually verified (`unlock`, `unlock_with_passkey`, `change_passphrase`, `recover_with_code`)
+  and by choosing a first passphrase. **The stamp is absolute, not sliding** — the unlock cache's own TTL
+  is pushed out on every read, so a stamp riding on it would be renewed by ordinary decryption and never
+  expire. A lapsed window returns `403 proof_required`, deliberately *not* `423 vault_locked`: the vault
+  is open and what is missing is recency, so the answer is to present a secret again rather than to
+  unlock. The session carries `vault_proof_seconds_remaining` so a surface can ask *before* an action;
+  that copy is advisory and being wrong costs one extra prompt. Because unlocking counts, the ordinary
+  sitting — unlock, open Vault settings, add a passkey — is never prompted twice. Vault settings asks
+  whichever question actually applies — *unlock* when the vault is shut, *confirm* when it is open and
+  only the recency has lapsed — and runs the held action once the secret is given, so the click is never
+  lost. **Not gated:** `set-passphrase` (both surviving branches have no existing access to escalate
+  from), `rotate` (re-seals the slots that already exist and grants nothing new), `reset` (admin-gated
+  and behind a typed confirm phrase), and the credentials export (it copies ciphertext and never
+  decrypts, so the file is exactly as strong as the passphrase, which is asked for at restore).
+- **Any method that opens the vault can also replace the passphrase.** `POST
+  /auth/vault/passkey/set-passphrase` proves with a ceremony and writes the new passphrase in **one**
+  request, the passkey sibling of `/auth/vault/recover` and one call for the same reason: no proof is
+  ever spent with no passphrase written. It is also how a passkey-only member sets a *first* passphrase,
+  since `set-passphrase` refuses a caller who already holds a working slot.
 - **Enrollment, revocation and rotation.** Setting a passphrase (or registering a passkey) as a user the
   vault does not yet know **enrols** them: the slot is written with no sealed DEK and reports
   `vault_access_pending` — a state distinct from "locked", because no secret they could enter would help.
+  A member who *had* access and lost the secret that opened it cannot enrol that way — their slot still
+  holds the DEK, which is what makes it unopenable rather than absent — so `POST /auth/vault/reenrol`
+  replaces it with a pending one, refusing when no other member could ever grant it (otherwise the only
+  path to the DEK is destroyed with nobody able to seal it back). Such a request carries
+  `replaces_access`, because handing access *back* is a different decision from admitting a newcomer and
+  only the approver can tell them apart.
   Any member holding the DEK approves it (`/auth/vault/access-requests/{slot}/approve`, `423` if locked);
-  admins revoke (`/auth/vault/access/{user}/revoke`). `GET /auth/vault/members` lists who currently holds
+  admins revoke (`/auth/vault/access/{user}/revoke`).
+  **A waiting request is surfaced to every member who could approve it, not only to one whose vault is
+  currently open** — the Tasks nag (`_vault_access_task`) and the Connections vault strip both scope on
+  holding an unlock method. Scoping them on *being unlocked* hid the queue from exactly the person who
+  needed telling: someone who does not routinely unlock never learns there is anything to unlock for, so
+  the requester waits on a signal nobody sends. A locked member's task names the unlock step, the locked
+  strip names who is waiting beside its Unlock button, and an approve that returns `423` raises the
+  unlock prompt and then completes the approval rather than reporting a string. A non-member is still
+  told nothing: there is no moment at which they could act. `GET /auth/vault/members` lists who currently holds
   access, grouped per person with a count of their unlock methods — the counterpart to the request queue,
   and what makes "remove someone's access, then rotate" an instruction with something to act on. `POST /auth/vault/rotate` mints a new DEK and
   re-encrypts every registered column under it, in **three phases** — seal the new key into every slot
@@ -504,6 +542,35 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
   — because no transaction spans the control and data DBs, and a failure between the two writes would
   otherwise strand every credential under a key no slot can produce. An interrupted rotation is **resumed**
   on the next call, never restarted. Revoke *then* rotate: rotation re-seals for whatever slots remain.
+- **Recovery and reset.** A forgotten passphrase used to be an unhandled dead end — `unlock` needs the
+  passphrase and `set_passphrase` on a configured vault takes the `require_dek` path — so the vault now
+  carries a **recovery ladder**, offered strictly cheapest-first because only the last rung costs
+  anything. (1) Another member re-enrols the stuck user; nothing moves. (2) A **recovery-code slot**
+  (`method='recovery'`, one per user by partial unique index) opens the vault and re-keys the passphrase
+  **against the same DEK**, so no ciphertext is rewritten and no source is re-linked. It is a third slot
+  method needing no schema — `_derive_kek` does not care whether its secret was typed or generated — but
+  it has its **own generator at ≥ 128 bits**, deliberately not the 40-bit sign-in one, because a slot's
+  wrap is offline-attackable where a hash-checked 2FA code is rate-limited. `POST /auth/vault/recover`
+  takes `{code, new_passphrase}` as **one operation**: the replacement slot is written *before* the
+  recovery slot is deleted, so any failure leaves the code live and the attempt repeatable — which is
+  what makes a single code safe — and a fresh code is issued on the way out. (3) A credentials backup,
+  restorable with the passphrase *it* was made under. (4) `POST /auth/vault/reset` — destructive:
+  every slot deleted, every `ENCRYPTED_COLUMNS` value cleared (driven off the registry rotation uses, so
+  a column added later is reached without anyone remembering), and `reauth_required` set on every
+  connection. Connections, accounts, transactions, mappings and coverage all **survive**: only two
+  columns are ever encrypted, and the expensive state sits in plaintext beside them. The reset is
+  **admin-gated** and asks *lost or compromised*, because the two differ: a compromised passphrase still
+  opens the vault, so each credential is revoked at its provider first — driven by
+  `revokes_on_disconnect`, reporting **per-connection outcomes** rather than aborting the way
+  `disconnect` does — while a lost one can decrypt nothing and revokes nothing. **Nothing on the ladder
+  blocks the reset**: the rungs are led with and named (the preview returns members by display name, and
+  the caller's own granted passkeys), and a reset run anyway reports `also_locked_out`, since one DEK per
+  workspace means it ends *every* member's access. An earlier design refused the lost path while another
+  member held a slot; that was dropped because a slot row cannot prove the holder is reachable, the admin
+  gate already settles who may do this, and the compromise path permitted the identical destruction — so
+  it only stopped users who described their situation accurately. `VaultDecryptError` during a sync is
+  classified as `reauth_required` rather than a generic failure — it is the one failure retrying can
+  never fix.
 - **Transport** is a per-topology property, not an app mode: the backend always speaks HTTP; a
   client-server deployment terminates TLS at a reverse proxy (Caddy) with uvicorn on `--proxy-headers`,
   so `request.url.scheme` reflects the external scheme. `backend/transport.py` detects loopback-vs-network
@@ -517,7 +584,7 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
 ### Provider connections (the aggregator seam)
 
 Data-source aggregators reach the app through **one provider-neutral seam** (security-and-deployment-model
-phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the connect/sync callers.
+phase 6a), so adding a provider is an adapter, not a change to the connect/sync callers.
 
 **One sync writes to three stores, and which one a fact belongs in is decided by who may lose it**:
 durable *connection status* on `connection` / `connection_account` (cursor, last outcome + summary,
@@ -528,13 +595,27 @@ like a CSV import card apart from the monthly-vs-per-file boundary. Full rule, a
 came of leaving it unstated, in `docs/data-model.md`.
 
 - **Storage.** A `connection` row (`backend/db/database.py`) is the durable credential boundary: a
-  `provider` discriminator, the provider's stable `external_id` (Plaid's item_id), and the opaque
+  `provider` discriminator, the provider's `external_id` (Plaid's item_id), and the opaque
   per-connection credential vault-encrypted under the DEK (`credential_enc`; plaintext column always ''
   — see the vault above). It **superseded `plaid_item`**, which was dropped in migration v20 (phase 6b-3).
   Accounts link to their connection via an explicit `account.connection_id` FK (→ `connection.id`,
   `ON DELETE SET NULL` — a disconnected account keeps its rows but drops to `NULL`); `account.provider`
   records origin (`plaid`/`csv`/`manual`) and `account.external_account_id` (renamed from the old
-  `plaid_account_id`) is the provider's per-account handle / sync upsert key. CSV and manual accounts have
+  `plaid_account_id`) is the provider's per-account handle / sync upsert key. **`external_id` is only
+  stable where the provider issues it *and* the app can re-authorize in place** — declared per adapter as
+  `stable_external_id`. For Plaid that means Link **update mode** (`create_link_token(access_token=…)`,
+  `POST /plaid/repair`): a plain Link session mints a new Item, so without update mode "reconnect" would
+  strand the connection it was meant to fix. The repair exchanges no token — it re-fetches accounts as
+  proof the Item answers, then clears `reauth_required`. Where the handle
+  is derived from the credential instead (SimpleFIN hashes the access URL, since the URL *is* the
+  credential and cannot also be the public handle), re-authorizing yields a new handle and the upsert
+  would insert a *second* row. The account mappings survive that regardless — both
+  `record_provider_accounts` and sync key on `account.external_account_id` — but everything hanging off
+  `connection_id` does not: per-account coverage, the cursor, sync history. So connect takes an
+  `adopt_connection_id` and **re-points the surviving row** rather than inserting and migrating. The
+  choice is collected **before** the provider call, because a claim or exchange is single-use and there
+  is no second attempt to act on a later answer; a stale choice falls through to the ordinary upsert and
+  reports `adopted: false`. Full rationale in `building-a-connector.md`. CSV and manual accounts have
   `connection_id IS NULL`.
 - **Adapter interface.** `backend/services/providers/` exposes `get_adapter(provider)` over a
   `ProviderAdapter` (`connect(app_config, payload)` → `{external_id, credential, institution}` /
@@ -764,7 +845,7 @@ came of leaving it unstated, in `docs/data-model.md`.
   See `data-model.md` → "Sync import cards" and `ui-patterns.md` for the decisions behind it.
 - **Captured fields are declared by the adapter, not hardcoded per provider.**
   `ProviderAdapter.capture_fields()` returns `[{key, label, locked, default_on}]`, so each adapter states
-  its own set and a Teller/SimpleFIN adapter is unaffected by the Plaid choices. **Locked** fields are the
+  its own set and the SimpleFIN adapter is unaffected by the Plaid choices. **Locked** fields are the
   ones duplicate detection depends on and are not the user's to disable (`authorized_date`,
   `provider_description`, `counterparties`, `merchant_entity_id`, `check_number`); optional ones
   (`location`) are user-selectable and persist as `connection.captured_fields`. `authorized_date` is a

@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event'
 
 const vaultCredentialsBackups = vi.fn(async () => ({ backups: [] }))
 const runVaultPasskeyUnlock = vi.fn(async () => ({ ok: true, user: { id: 'u1' } }))
+const runVaultPasskeySetPassphrase = vi.fn(async () => ({ ok: true, user: { id: 'u1' } }))
 
 vi.mock('../../lib/api.js', () => ({
   api: { vaultCredentialsBackups: (...a) => vaultCredentialsBackups(...a) },
@@ -25,6 +26,7 @@ vi.mock('../../lib/api.js', () => ({
 vi.mock('../../lib/vaultPasskey.js', async (importOriginal) => ({
   ...(await importOriginal()),
   runVaultPasskeyUnlock: (...a) => runVaultPasskeyUnlock(...a),
+  runVaultPasskeySetPassphrase: (...a) => runVaultPasskeySetPassphrase(...a),
 }))
 
 const { VaultPassphraseDialog } = await import('../VaultPassphraseDialog.jsx')
@@ -57,7 +59,120 @@ const withPasskey = (...passkeys) => ({
   currentUser: { ...SESSION.currentUser, vault_passkeys: passkeys },
 })
 
-afterEach(() => { cleanup(); vaultCredentialsBackups.mockClear(); runVaultPasskeyUnlock.mockClear() })
+afterEach(() => {
+  cleanup()
+  vaultCredentialsBackups.mockClear()
+  runVaultPasskeyUnlock.mockClear()
+  runVaultPasskeySetPassphrase.mockClear()
+})
+
+describe('a passkey as the proof of the current passphrase', () => {
+  // The gap this closes: a passkey opened the vault but could not replace the passphrase, so someone who
+  // had forgotten theirs and held a passkey had to lock themselves out on purpose to reach a recovery
+  // code. The passkey stands in for the CURRENT secret; the new one is still typed.
+  const STRONG = 'a-strong-vault-passphrase'
+
+  async function fillNewPassphrase() {
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), STRONG)
+  }
+
+  it('is offered while changing, and the current-passphrase field says so', async () => {
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    expect(screen.getByText('Use a passkey')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Current passphrase (or use a passkey)')).toBeTruthy()
+  })
+
+  it('sends the new passphrase with the ceremony, in one call', async () => {
+    // One request, not prove-then-set: a ceremony spent with no passphrase written would leave the user
+    // having proved themselves and gained nothing.
+    const onUnlockedByPasskey = vi.fn()
+    renderDialog({ mode: 'change', onUnlockedByPasskey }, withPasskey({ id: 'pk1' }))
+    await fillNewPassphrase()
+    await userEvent.click(screen.getByText('Use a passkey').closest('button'))
+    await waitFor(() => expect(runVaultPasskeySetPassphrase).toHaveBeenCalledWith(STRONG))
+    expect(onUnlockedByPasskey).toHaveBeenCalled()
+  })
+
+  it('will not run the ceremony until the new passphrase clears the floor', async () => {
+    // The passkey submits the whole operation, so it has to be held to the same floor as the button
+    // beside it — otherwise the ceremony is spent and the server refuses what it was spent on.
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), 'short')
+    await userEvent.click(screen.getByText('Use a passkey').closest('button'))
+    expect(runVaultPasskeySetPassphrase).not.toHaveBeenCalled()
+  })
+
+  it('will not run it when the two new passphrases disagree', async () => {
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), `${STRONG}-typo`)
+    await userEvent.click(screen.getByText('Use a passkey').closest('button'))
+    expect(runVaultPasskeySetPassphrase).not.toHaveBeenCalled()
+  })
+
+  it('is not offered when there is no passkey to use', async () => {
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() })
+    expect(screen.queryByText('Use a passkey')).toBeNull()
+  })
+})
+
+describe('confirming for an already-open vault', () => {
+  it('asks to confirm rather than to unlock, and never says the vault is locked', async () => {
+    // Mechanically an unlock — presenting the secret is what the server records as proof — but the vault
+    // is open, so wording it as unlocking would describe an action that is not needed.
+    renderDialog({ mode: 'confirm', onSubmit: vi.fn(), onUnlockedByPasskey: vi.fn() },
+                 withPasskey({ id: 'pk1' }))
+    expect(screen.getByText('Confirm it’s you')).toBeTruthy()
+    expect(screen.getByText('Confirm with a passkey')).toBeTruthy()
+    expect(screen.queryByText('Unlock the vault')).toBeNull()
+  })
+
+  it('submits the passphrase as an ordinary single field', async () => {
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'confirm', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'),
+                         'a-strong-vault-passphrase{Enter}')
+    expect(onSubmit).toHaveBeenCalledWith('a-strong-vault-passphrase')
+  })
+})
+
+describe('the Enter key', () => {
+  it('unlocks straight from the passphrase field', async () => {
+    // The single-field case, and the whole interaction: type the passphrase, press Enter.
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'unlock', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase{Enter}')
+    expect(onSubmit).toHaveBeenCalledWith('a-strong-vault-passphrase')
+  })
+
+  it('advances to the confirm field instead of submitting when choosing a new passphrase', async () => {
+    // Submitting from here would skip the very check the second field exists to make.
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'set', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase{Enter}')
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Confirm passphrase'))
+  })
+
+  it('submits from the confirm field', async () => {
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'set', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'a-strong-vault-passphrase')
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'a-strong-vault-passphrase{Enter}')
+    expect(onSubmit).toHaveBeenCalledWith('a-strong-vault-passphrase')
+  })
+
+  it('will not submit a passphrase the button would refuse', async () => {
+    // Enter is gated on the same `blocked` as the button, so the floor cannot be walked past with a
+    // keystroke — which would be the one way to get a weak passphrase to the server.
+    const onSubmit = vi.fn()
+    renderDialog({ mode: 'set', onSubmit })
+    await userEvent.type(screen.getByPlaceholderText('Vault passphrase'), 'short')
+    await userEvent.type(screen.getByPlaceholderText('Confirm passphrase'), 'short{Enter}')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+})
 
 describe('the passphrase floor is enforced, not suggested', () => {
   it('blocks submit below the length floor and says how much is missing', async () => {

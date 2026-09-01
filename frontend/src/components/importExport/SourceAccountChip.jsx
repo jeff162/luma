@@ -19,6 +19,25 @@ function truncate(s) {
   return s && s.length > TRUNCATE_AT ? `${s.slice(0, TRUNCATE_AT - 2)}…` : s
 }
 
+// A source label that is really a provider's internal account id rather than a name.
+//
+// A sync falls back to the raw id when its `connection_account` record is missing for an account the row
+// nonetheless resolved to (the backend records an advisory when this happens). The stored value cannot be
+// rewritten — it is matched against each row's evidence — so the card renders around it instead: the
+// account the rows landed in is shown, and the id stays available on hover for anyone who needs it.
+//
+// Detected by shape rather than by a flag, because a card carries no record of *why* its label reads the
+// way it does. Provider ids here are long, unbroken and mixed-case; a real label carries a space or the
+// "···1234" mask separator, which is what the two positive checks below are for.
+const PROVIDER_ID_MIN_LENGTH = 20
+
+function looksLikeProviderId(label) {
+  const value = (label || '').trim()
+  if (value.length < PROVIDER_ID_MIN_LENGTH) return false
+  if (/[\s·]/.test(value)) return false
+  return /[a-z]/.test(value) && /[A-Z0-9]/.test(value)
+}
+
 export function SourceAccountChip({ label, mappedLabel = '', count = null, skipped = false }) {
   const n = Number(count || 0)
   const noNewRows = !skipped && n === 0
@@ -27,11 +46,18 @@ export function SourceAccountChip({ label, mappedLabel = '', count = null, skipp
   // Both are shown — the card should match what the source called the account, with the destination as a
   // faded suffix — and this is one form for every source: a connection's label is its provider account
   // name, so "what the source called it → where it went" reads the same for a sync card as for a file.
-  const showMapping = !skipped && mappedLabel && label && mappedLabel !== label
+  const opaque = looksLikeProviderId(label)
+  const showMapping = !skipped && !opaque && mappedLabel && label && mappedLabel !== label
+  // An opaque id tells the reader nothing, so where the rows actually landed takes its place. The id is
+  // still the truth about the card and rides the tooltip rather than being discarded.
+  // What the chip actually reads as. An opaque id is stood down in favour of where the rows landed; every
+  // other case keeps the source's own label, which is the chip's whole point.
+  const primaryLabel = opaque && mappedLabel ? mappedLabel : label
   const base = showMapping ? `${label} → ${mappedLabel}` : (skipped ? label : (mappedLabel || label))
+  const detail = opaque && mappedLabel ? `${primaryLabel} · reported by the source as ${label}` : base
   return (
     <span
-      title={noNewRows ? `${base} · no new transactions` : base}
+      title={noNewRows ? `${detail} · no new transactions` : detail}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         fontSize: 11, padding: '2px 7px', borderRadius: 99,
@@ -43,7 +69,7 @@ export function SourceAccountChip({ label, mappedLabel = '', count = null, skipp
       <span style={{ color: muted ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
         {skipped ? '✕' : noNewRows ? '−' : '✓'}
       </span>
-      {truncate(label)}
+      {truncate(primaryLabel)}
       {showMapping ? (
         <>
           <span style={{ color: 'var(--muted)', opacity: 0.7 }}>→</span>

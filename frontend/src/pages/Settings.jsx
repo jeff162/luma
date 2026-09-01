@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef, useId, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
@@ -931,9 +932,9 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
             value={setupCode}
             onChange={e => setSetupCode(e.target.value)}
             placeholder="Enter 6-digit code"
-            inputMode="numeric"
             aria-label="Authenticator app setup code"
             style={inputStyle}
+            {...ONE_TIME_CODE_PROPS}
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button small type="submit" disabled={saving || setupCode.trim().length < 6}>
@@ -958,9 +959,9 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
               value={disableCode}
               onChange={e => setDisableCode(e.target.value)}
               placeholder="Enter 6-digit code"
-              inputMode="numeric"
               aria-label="Authenticator code to disable 2FA"
               style={inputStyle}
+              {...ONE_TIME_CODE_PROPS}
             />
             <div>
               <Button small type="submit" disabled={saving || disableCode.trim().length < 6}>
@@ -979,9 +980,9 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
               value={regenCode}
               onChange={e => setRegenCode(e.target.value)}
               placeholder="Enter current 6-digit code"
-              inputMode="numeric"
               aria-label="Authenticator code to regenerate recovery codes"
               style={inputStyle}
+              {...ONE_TIME_CODE_PROPS}
             />
             <div>
               <Button small type="submit" disabled={saving || regenCode.trim().length < 6}>

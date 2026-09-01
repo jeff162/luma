@@ -30,7 +30,7 @@ const CATEGORIZED_BY_LABEL = {
 // Display names for data-connection providers. A synced batch's `import_batch_provider` is the raw
 // provider key (e.g. 'plaid'); this renders it for the origin hover / group header so a user can tie a
 // transaction back to which connection it came from. Unknown keys fall back to a capitalized form.
-const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN' }
+const PROVIDER_LABELS = { plaid: 'Plaid', simplefin: 'SimpleFIN' }
 
 export function providerLabel(provider) {
   const key = String(provider || '').toLowerCase()

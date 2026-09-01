@@ -27,6 +27,7 @@ from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
+from backend.services import crypto_service
 from backend.services.ledger_currency import set_ledger_currency
 from backend.services.providers.simplefin import (
     REQUEST_BUDGET_CAPACITY,
@@ -96,14 +97,17 @@ class ConnectionScenarioTests(unittest.TestCase):
             )
         return local
 
-    def _sync(self, *, days=0, full_history=False, transport=None):
+    def _sync(self, *, days=0, full_history=False, transport=None, credential_error=None):
         """One `POST /sync`, with the clock and the transport pointed at the simulator, then every
         invariant checked. Deliberately goes through `run_sync` and the database rather than calling the
         adapter — two of the three bugs this file exists for lived in the write, not the fetch.
 
         `transport` replaces the simulator as the HTTP layer, for a test that needs to observe the world
         *at the moment a provider call is in flight* — which is the only point at which "is a write
-        transaction being held across this?" can be asked."""
+        transaction being held across this?" can be asked.
+
+        `credential_error` makes the vault fail to produce the credential instead of returning it, for the
+        one failure that happens *before* any provider call — see the `VaultDecryptError` scenario."""
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
 
         class _Clock(date):
@@ -130,6 +134,7 @@ class ConnectionScenarioTests(unittest.TestCase):
         try:
             with mock.patch.object(sync_module.crypto_service, "is_unlocked", return_value=True), \
                  mock.patch.object(sync_module.crypto_service, "decrypt_connection_credential",
+                                   side_effect=credential_error,
                                    return_value="https://u:p@bridge.example/simplefin"), \
                  mock.patch.object(sync_module, "get_adapter", return_value=self.adapter), \
                  mock.patch.object(sync_module, "date", _Clock), \
@@ -959,6 +964,54 @@ class ConnectionScenarioTests(unittest.TestCase):
         row = self._connection_row()
         self.assertFalse(row["reauth_required"])
         self.assertEqual(row["consecutive_sync_failures"], 0)
+
+    def test_an_unreadable_stored_credential_asks_for_a_reconnect(self):
+        # A DEK the stored ciphertext was not sealed under — a rebuilt or rotated vault over an older
+        # credential. Retrying can never succeed, so counting it alongside network blips would leave the
+        # card advising patience for the one failure that is purely the user's to fix, and would tell them
+        # the connection "stopped working" when what they need to hear is "store a fresh credential".
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True)
+
+        self.sim.advance_days(1)
+        self._sync(days=90, credential_error=crypto_service.VaultDecryptError())
+        row = self._connection_row()
+        self.assertTrue(row["reauth_required"])
+        self.assertIn("vault key", row["last_sync_error"])
+
+    def test_a_row_for_an_unrecorded_provider_account_is_logged_not_hidden(self):
+        # The card's source label falls back to the provider's opaque id when `connection_account` has no
+        # row for an account that `account.external_account_id` nonetheless resolves — the two lookups
+        # disagree, the row imports correctly, and only its label is unreadable. Observed once on a real
+        # connection whose provider-account rows were missing for reasons that could not be recovered, so
+        # what is pinned here is that a recurrence leaves evidence rather than a mystery.
+        local = self._offer(CHECKING)
+        with self._db() as conn:
+            conn.execute("DELETE FROM connection_account WHERE external_account_id = ?", (CHECKING,))
+        self._sync(days=90, full_history=True)
+
+        with self._db() as conn:
+            label = conn.execute(
+                "SELECT csv_value FROM import_batch_account WHERE account_id = ?", (local,)
+            ).fetchone()
+            advisories = conn.execute(
+                "SELECT advisories FROM connection_sync_log ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()["advisories"]
+        # The symptom, reproduced: the raw provider id stands in for a readable account name.
+        self.assertEqual(label["csv_value"], CHECKING)
+        # …and the diagnostic that makes it explicable, recorded where a developer would look.
+        self.assertIn("no record of", advisories or "")
+        self.assertIn(CHECKING, advisories or "")
+
+    def test_an_advisory_like_that_never_reaches_the_user_facing_warnings(self):
+        # `last_sync_warnings` is shown on the connection card, so it is reserved for things the user can
+        # act on. Luma's own bookkeeping being inconsistent is not one of them, and a permanent notice
+        # about it is how a warning surface stops being read.
+        self._offer(CHECKING)
+        with self._db() as conn:
+            conn.execute("DELETE FROM connection_account WHERE external_account_id = ?", (CHECKING,))
+        self._sync(days=90, full_history=True)
+        self.assertFalse(self._connection_row()["last_sync_warnings"])
 
     def test_an_ordinary_outage_does_not_ask_the_user_to_redo_their_setup(self):
         # The flag is sticky, so raising it on a transient failure would leave a working connection telling

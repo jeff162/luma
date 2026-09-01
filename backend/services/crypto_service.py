@@ -70,6 +70,16 @@ DEK_BYTES = 32  # AES-256
 # also drops it (re-unlock required). Sliding — each use pushes the deadline out.
 UNLOCK_TTL_SECONDS = 8 * 60 * 60
 
+# How long a freshly presented unlock secret keeps authorizing *changes to the unlock methods
+# themselves* — adding a passkey, minting a recovery code, writing a passphrase slot. Deliberately far
+# shorter than the unlock above, and deliberately NOT sliding: see `_stamp_proof`.
+#
+# Five minutes covers a run of related actions in one sitting (unlock, open Vault settings, add a
+# passkey) without ever asking twice, while leaving an unattended session closed. The alternative
+# considered — proof at every boundary — is the kind of prompt that gets answered by choosing a weaker
+# secret, which would cost more than it bought.
+PROOF_TTL_SECONDS = 5 * 60
+
 # The vault-passphrase floor. **Every** passphrase meets it — there is no weaker tier and no test-mode
 # exemption. This is the *vault* minimum, separate from the app-login password policy.
 #
@@ -88,6 +98,22 @@ VAULT_PRODUCTION_MIN_LEN = 20
 VAULT_PRODUCTION_MIN_DISTINCT = 6
 
 
+# A vault recovery code's entropy, in raw bytes before base32 encoding. 20 bytes is 160 bits and encodes
+# to exactly 32 unpadded base32 characters.
+#
+# **Deliberately not `control_database.generate_recovery_codes`**, which is the sign-in generator: that
+# produces 40 bits, which is sound for a 2FA code because the server checks it against a hash and can rate
+# limit and lock out. A vault slot is the opposite situation — its wrap is offline-attackable by anyone
+# holding the control DB, which is the exact threat the vault exists to answer, and no rate limit reaches
+# an attacker working on their own machine. Reusing the sign-in generator here would quietly reintroduce
+# the weak wrap that the passphrase floor below was raised to eliminate.
+RECOVERY_CODE_BYTES = 20
+
+# Base32 (RFC 4648) rather than hex: it carries more bits per character and its alphabet already excludes
+# the digits most often misread off a printout (0/1/8 have no letter twin in it).
+_RECOVERY_CODE_GROUP = 8
+
+
 class VaultLocked(Exception):
     """The workspace vault is not unlocked for this user, so the DEK is unavailable."""
 
@@ -100,12 +126,40 @@ class VaultAccessPending(VaultLocked):
     to approve it. Told the first story, a waiting user retypes a passphrase that was never wrong."""
 
 
+class ProofRequired(Exception):
+    """A change to the unlock methods was attempted without a recently presented secret.
+
+    Deliberately not a `VaultLocked`: the vault *is* open, and telling the caller to unlock would send
+    them to a dialog that has nothing to do. What is missing is recency, and the answer is to present a
+    passphrase or a passkey again — which is why this carries its own type all the way to its own HTTP
+    code rather than reusing the locked one.
+    """
+
+
 class WeakPassphrase(ValueError):
     """A passphrase below the floor in `passphrase_meets_production_min` was offered for a vault slot.
 
     Typed rather than a bare ValueError because the endpoints turn it into a specific error code the UI
     keys on, and because the two numbers a user needs to hear are the constants above — a caller that has
     to parse a message string to say "20 characters, 6 distinct" will drift from them."""
+
+
+class MissingCredential(Exception):
+    """This connection has no stored credential at all — neither ciphertext nor a legacy plaintext value.
+
+    A real state, not a corruption: a vault reset clears both columns and keeps the connection rows on
+    purpose, so the accounts, mappings and coverage hanging off them survive for a re-link to land back
+    on. Typed because the alternative was worse than an error — the decrypt used to return `""` here, and
+    an empty string is indistinguishable from a credential, so every caller went on to hand it to a
+    provider. Plaid answers that with *"access_token must be a non-empty string"*, which surfaced as a
+    failed **disconnect**: the one row that could not be revoked was also the one that could not be
+    deleted.
+
+    What each caller should do differs, which is why this is raised rather than handled here: a disconnect
+    should drop the local row without calling the provider (there is nothing to revoke *with*), a
+    re-authorize should refuse and send the user to a fresh connect (there is no credential to repair),
+    and a sync should skip.
+    """
 
 
 class VaultDecryptError(Exception):
@@ -185,12 +239,67 @@ def lock(user_id: str) -> None:
     """Drop this user's unlocked DEK from the cache (logout, explicit lock)."""
     with _unlock_lock:
         _unlocked.pop(user_id, None)
+        _proved_at.pop(user_id, None)
 
 
 def lock_all() -> None:
     """Drop every unlocked DEK (e.g. when sign-in protection is disabled)."""
     with _unlock_lock:
         _unlocked.clear()
+        _proved_at.clear()
+
+
+# --- Recent proof ---------------------------------------------------------------------------------
+#
+# Holding the DEK is *not* authority to hand out new ways of reaching it. Three operations mint a
+# durable unlock method — writing a passphrase slot, registering a passkey, issuing a recovery code —
+# and each one turns transient access to an unlocked session into permanent independent access that
+# survives lock, relock, and the owner trying to get back in. So each requires a secret presented
+# recently, not merely a DEK found in the cache.
+#
+# **Kept in its own dict, and absolute rather than sliding.** `_cache_get_all` pushes the unlock's
+# deadline out on every read, which is what makes it an *idle* timeout. A proof stamp living on that
+# same entry would be renewed by ordinary decryption and would never expire — a control that reads as
+# enforced and is not. Storing it separately also means `_cache_put`, which rewrites the whole cache
+# entry, cannot silently reset it.
+_proved_at: dict[str, float] = {}
+
+
+def _stamp_proof(user_id: str) -> None:
+    """Record that this user has just presented an unlock secret.
+
+    Called only from the four places one is actually verified — `unlock`, `unlock_with_passkey`,
+    `change_passphrase`, `recover_with_code`. Never from a cache read, and never from an operation that
+    merely *uses* the DEK.
+    """
+    with _unlock_lock:
+        _proved_at[user_id] = time.monotonic()
+
+
+def proof_seconds_remaining(user_id: str) -> int:
+    """How much longer this user's proof authorizes a change to their unlock methods; 0 when none.
+
+    Served to the client so a surface can ask for proof *before* an action rather than only after a
+    refusal. Seconds remaining rather than an expiry timestamp on purpose: the browser then needs no
+    clock agreement with the server, and can run its own countdown from it.
+    """
+    with _unlock_lock:
+        stamped = _proved_at.get(user_id)
+    if stamped is None:
+        return 0
+    return max(0, int(PROOF_TTL_SECONDS - (time.monotonic() - stamped)))
+
+
+def has_recent_proof(user_id: str) -> bool:
+    return proof_seconds_remaining(user_id) > 0
+
+
+def require_recent_proof(user_id: str) -> None:
+    """Gate for the three doors above. Raises `ProofRequired` when the window has lapsed."""
+    if not has_recent_proof(user_id):
+        raise ProofRequired(
+            "Confirm your passphrase or passkey to change how this vault is opened"
+        )
 
 
 # --- KDF + wrap/unwrap primitives ----------------------------------------------------------------
@@ -328,12 +437,24 @@ def require_deks(user_id: str) -> list[bytes]:
 
 # --- Slot lifecycle (set / unlock / change) ------------------------------------------------------
 
+# The slot methods whose secret is *typed by a person* and therefore stretched, each carrying its own
+# scrypt parameters. Named once because two places must agree about it forever: `_write_slot`, which
+# decides whether to mint a salt, and `_slot_kek`, which decides how to derive. A passkey is the
+# exception either way — its PRF output is already uniform key material.
+#
+# A recovery code is in the set even though it is generated and carries real entropy. Stretching it is
+# belt-and-braces rather than load-bearing, and it costs one scrypt derivation on a path taken once in a
+# disaster; the alternative — a second, unstretched derivation rule — would be a second thing to get
+# right for no measurable gain.
+KDF_METHODS = ("passphrase", "recovery")
+
+
 def _slot_kek(slot: dict, secret: str) -> bytes:
     """The KEK a slot's own unlock secret derives, per its method.
 
-    A passphrase is stretched (it is low-entropy and the wrap is offline-attackable); a passkey's PRF
-    output is already 32 uniform bytes from the authenticator, so it only needs domain separation, not
-    hardening — stretching it would cost seconds of CPU to add nothing."""
+    A typed secret is stretched (a passphrase is low-entropy and the wrap is offline-attackable); a
+    passkey's PRF output is already 32 uniform bytes from the authenticator, so it only needs domain
+    separation, not hardening — stretching it would cost seconds of CPU to add nothing."""
     if slot["method"] == "passkey":
         return HKDF(
             algorithm=hashes.SHA256(), length=32,
@@ -372,6 +493,7 @@ def _write_slot(
     slot_id: str | None = None, label: str | None = None,
     credential_id: str | None = None, prf_salt: str | None = None,
     private_key: bytes | None = None, meets_production_min: bool = True,
+    replaces_access: bool = False,
 ) -> str:
     """Write one format-2 slot. `dek=None` leaves it pending a grant.
 
@@ -379,12 +501,15 @@ def _write_slot(
     here too: a check on each caller would have to be remembered on the next one, and the one that got
     missed would be the hole.
     """
-    if method == "passphrase":
-        if not passphrase_meets_production_min(secret):
-            raise WeakPassphrase(
-                f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters with at least "
-                f"{VAULT_PRODUCTION_MIN_DISTINCT} distinct characters"
-            )
+    # The floor is a *passphrase* policy, not a KDF one: a recovery code is generated to a fixed entropy
+    # by `generate_recovery_code` and has no user-chosen weakness to guard against, so applying a
+    # length-and-distinct-character rule to it would only ever reject well-formed key material.
+    if method == "passphrase" and not passphrase_meets_production_min(secret):
+        raise WeakPassphrase(
+            f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters with at least "
+            f"{VAULT_PRODUCTION_MIN_DISTINCT} distinct characters"
+        )
+    if method in KDF_METHODS:
         salt = os.urandom(16)
         kdf = {"kdf_algo": "scrypt", "kdf_salt": _b64e(salt), "kdf_n": SCRYPT_N, "kdf_r": SCRYPT_R, "kdf_p": SCRYPT_P}
     else:
@@ -392,10 +517,10 @@ def _write_slot(
 
     # The id is resolved here, before any wrapping, rather than by the storage layer: it is bound into
     # the AAD of the material written alongside it, so composing the row against a fresh id and then
-    # storing it over an existing one would produce a wrap that nothing can open. A passphrase slot is
-    # unique per user, so replacing one means adopting its id.
-    if not slot_id and method == "passphrase":
-        current = cdb.get_vault_slot(user_id, "passphrase")
+    # storing it over an existing one would produce a wrap that nothing can open. A passphrase slot and a
+    # recovery slot are each unique per user, so replacing one means adopting its id.
+    if not slot_id and method in KDF_METHODS:
+        current = cdb.get_vault_slot(user_id, method)
         slot_id = current["id"] if current else None
     slot_id = slot_id or str(uuid.uuid4())
     slot_shape = dict(kdf, id=slot_id, method=method, credential_id=credential_id, prf_salt=prf_salt)
@@ -420,17 +545,24 @@ def _write_slot(
             _seal(public_key, dek, aad=_sealed_dek_aad(user_id, slot_id)) if dek is not None else None
         ),
         meets_production_min=meets_production_min,
+        replaces_access=replaces_access,
         **kdf,
     )
 
 
 def set_passphrase(user_id: str, passphrase: str) -> None:
-    """Create or replace this user's passphrase slot.
+    """Create this user's passphrase slot, in the two cases where no existing access is at stake.
 
-    Three cases, distinguished by what the caller can already reach. The first passphrase in the
-    workspace mints the DEK. A user who already holds it (their own slot, unlocked) re-seals the same
-    DEK. Anyone else is **enrolling**: the slot is written with no DEK and waits for a member to grant
-    it, which is a normal outcome here rather than a refusal.
+    The first passphrase in the workspace mints the DEK. Anyone with no working slot is **enrolling**:
+    the slot is written with no DEK and waits for a member to grant it, which is a normal outcome here
+    rather than a refusal.
+
+    **A third case used to live here and was removed (2026-09-01):** a user who already held the DEK,
+    unlocked, could re-seal it under a passphrase of their choosing with no proof of the old one. That
+    turned a session someone had merely walked up to into a durable, independent way into the vault —
+    the new passphrase kept working after lock and relock, and the owner's stopped. Replacing a working
+    slot now goes through a path that carries proof: `change_passphrase`, `set_passphrase_with_passkey`,
+    or `recover_with_code`. A locked-out holder who has none of them uses `request_reenrolment`.
     """
     if not passphrase:
         raise ValueError("passphrase is required")
@@ -439,14 +571,20 @@ def set_passphrase(user_id: str, passphrase: str) -> None:
     if not vault_configured():
         dek = os.urandom(DEK_BYTES)
     elif user_has_slot(user_id):
-        # Replacing a working slot must not mint a second DEK over the top of the real one, so the
-        # caller has to be holding the genuine one.
-        dek = require_dek(user_id)
+        raise ValueError(
+            "this user can already open the vault — changing the passphrase needs the current "
+            "passphrase, a passkey, or a recovery code"
+        )
     else:
         dek = None
 
     _write_slot(user_id, method="passphrase", secret=passphrase, dek=dek, slot_id=existing["id"] if existing else None,
                 meets_production_min=passphrase_meets_production_min(passphrase))
+    # Choosing the secret counts as presenting it — otherwise setting up a vault and immediately adding
+    # a passkey would ask for the passphrase that was typed seconds earlier. Safe in both surviving
+    # branches: one has no existing access to escalate from, the other writes a slot that opens nothing
+    # until it is granted.
+    _stamp_proof(user_id)
     if dek is not None:
         _cache_put(user_id, dek)
 
@@ -464,6 +602,7 @@ def change_passphrase(user_id: str, old_passphrase: str, new_passphrase: str) ->
     if not slot:
         raise VaultLocked("no passphrase is set for this user")
     private_key, deks = _open_slot(slot, old_passphrase, user_id=user_id)  # verifies the old passphrase
+    _stamp_proof(user_id)
     if slot["format"] == 1:
         # No keypair to rewrap yet — the change is also the conversion.
         _write_slot(
@@ -568,6 +707,9 @@ def _unlock_with_slot(slot: dict, secret: str, *, user_id: str) -> bytes:
     if slot["format"] == 1:
         _upgrade_slot_to_keypair(slot, secret, deks[0], user_id=user_id)
     _cache_put(user_id, deks)
+    # The choke point both unlock paths pass through, so a passphrase and a passkey ceremony stamp
+    # proof identically and neither can be forgotten separately.
+    _stamp_proof(user_id)
     return deks[0]
 
 
@@ -668,10 +810,10 @@ def decrypt_secret(dek: bytes | list[bytes], payload: str, *, aad: bytes) -> str
 
 # --- Per-connection credential storage (provider-agnostic) ----------------------------------------
 #
-# A connection holds one opaque provider secret (Plaid: the access_token; Teller/SimpleFIN: their own
-# shapes). The vault doesn't care which — it wraps a string under the DEK. Storage contract for callers
-# is (credential, credential_enc): the credential is *always* ciphertext-only, the plaintext column left
-# empty. Both paths require the caller's vault unlocked.
+# A connection holds one opaque provider secret (Plaid: the access_token; SimpleFIN: the access URL; a
+# further provider: its own shape). The vault doesn't care which — it wraps a string under the DEK.
+# Storage contract for callers is (credential, credential_enc): the credential is *always*
+# ciphertext-only, the plaintext column left empty. Both paths require the caller's vault unlocked.
 
 def _connection_aad(provider: str, external_id: str) -> bytes:
     # Plaid continuity: access tokens written before provider-agnostic connections used exactly this AAD
@@ -700,12 +842,22 @@ def decrypt_connection_credential_with_dek(dek: bytes | list[bytes], provider: s
     return credential or ""
 
 
+def connection_has_credential(credential: str | None, credential_enc: str | None) -> bool:
+    """Whether there is anything to decrypt. Callers that only need to *offer* an action — a UI deciding
+    whether "Reconnect" can work — ask this rather than attempting a decrypt they would discard."""
+    return bool(credential_enc) or bool(credential)
+
+
 def decrypt_connection_credential(user: dict, provider: str, external_id: str, credential: str | None, credential_enc: str | None) -> str:
     if credential_enc:
         return decrypt_connection_credential_with_dek(
             require_deks(user["id"]), provider, external_id, credential, credential_enc,
         )
-    return credential or ""
+    if credential:
+        return credential
+    # Never `""`. See `MissingCredential` — an empty string reads as a credential to every caller and
+    # reaches the provider as one.
+    raise MissingCredential(f"no credential is stored for this {provider} connection")
 
 
 # --- App-level provider credential storage (the aggregator's own app secret) ----------------------
@@ -755,6 +907,10 @@ def pending_access_requests() -> list[dict]:
             "method":       s["method"],
             "label":        s["label"],
             "requested_at": s["created_at"],
+            # A newcomer enrolling and a locked-out member coming back read identically in this queue,
+            # and they ask different things of the approver — the second hands back access that already
+            # existed, to whoever wrote the request. Surfaced so the approval can say so.
+            "replaces_access": bool(s["replaces_access"]),
         }
         for s in cdb.list_pending_vault_slots()
     ]
@@ -785,6 +941,8 @@ def grant_access(granter_id: str, slot_id: str) -> dict:
     whether or not they are signed in — which is what removes the invite ceremony's requirement that
     the two people coincide, and what lets a passkey slot be granted even though its PRF output exists
     only during a live browser ceremony.
+
+    Requires the granter to have presented a secret recently — see `require_recent_proof` below.
     """
     slot = cdb.get_vault_slot_by_id(slot_id)
     if not slot:
@@ -792,6 +950,12 @@ def grant_access(granter_id: str, slot_id: str) -> dict:
     if slot_holds_dek(slot):
         raise ValueError("this user already has vault access")
     dek = require_dek(granter_id)
+    # The fourth door, and the only one that mints a durable unlock method for *somebody else*. Gated for
+    # the same reason as the other three, with a shorter path to abuse than any of them: with sign-in
+    # protection off, anyone can create an identity, set a passphrase on it (which lands pending), and
+    # then approve it from a session left unlocked — walking away from a machine would hand over a
+    # permanent slot of their own. Checked after the DEK so a locked vault reports itself as locked.
+    require_recent_proof(granter_id)
     cdb.set_vault_slot_sealed_dek(
         slot_id,
         _seal(_b64d(slot["public_key"]), dek, aad=_sealed_dek_aad(slot["user_id"], slot_id)),
@@ -952,6 +1116,10 @@ def register_passkey_slot(user_id: str, *, credential_id: str, prf_output: str,
         # it pending instead would put someone who already has access into the approval queue, and
         # minting a key would strand every credential — so the caller has to be holding the genuine one.
         dek = require_dek(user_id)
+        # And holding it is not enough on its own: this is one of the three doors that mint a durable
+        # credential. Checked after the DEK so a locked vault reports itself as locked, which is the
+        # more useful answer and the one the caller can act on.
+        require_recent_proof(user_id)
     else:
         dek = None
     slot_id = _write_slot(
@@ -973,12 +1141,96 @@ def unlock_with_passkey(credential_id: str, prf_output: str) -> tuple[str, bytes
     return slot["user_id"], _unlock_with_slot(slot, prf_output, user_id=slot["user_id"])
 
 
+def set_passphrase_with_passkey(credential_id: str, prf_output: str, new_passphrase: str) -> str:
+    """Prove with a passkey and write the passphrase slot in the same request. Returns the user id.
+
+    The passkey counterpart of `recover_with_code`, and one request for the same reason: the proof and
+    the replacement travel together, so there is no window in which a ceremony has been spent and no
+    passphrase exists yet.
+
+    It serves three situations that are one operation underneath — a passkey holder who has forgotten
+    the passphrase, one who simply wants to change it, and a passkey-only member setting a *first*
+    passphrase. All three write the same slot sealed to the same DEK, so none of them re-encrypts a
+    credential or costs a re-link.
+
+    The proof is fresher than the one it replaces: a ceremony happens at this moment, where a typed old
+    passphrase may have been read off a note beside the keyboard.
+    """
+    if not new_passphrase:
+        raise ValueError("a new passphrase is required")
+    slot = cdb.get_vault_slot_by_credential(credential_id)
+    if not slot:
+        raise VaultLocked("that passkey is not registered with this vault")
+    user_id = slot["user_id"]
+
+    _, deks = _open_slot(slot, prf_output, user_id=user_id)  # ValueError when the PRF output is wrong
+    if not deks:
+        raise VaultAccessPending("vault access has not been granted for this passkey yet")
+    _stamp_proof(user_id)
+
+    # Before any write, so a passphrase below the floor is refused with the old slot untouched and the
+    # attempt simply repeatable — the same ordering property that makes a single recovery code safe.
+    existing = cdb.get_vault_slot(user_id, "passphrase")
+    _write_slot(
+        user_id, method="passphrase", secret=new_passphrase, dek=deks[0],
+        slot_id=existing["id"] if existing else None,
+        meets_production_min=passphrase_meets_production_min(new_passphrase),
+    )
+    _cache_put(user_id, deks)
+    return user_id
+
+
+def request_reenrolment(user_id: str, new_passphrase: str) -> dict:
+    """Replace an unopenable passphrase slot with a **pending** one, for a member to grant.
+
+    The rung for a user whose access is intact but whose secret is gone: the slot still holds the DEK,
+    which is exactly why `set_passphrase` refuses them — `user_has_slot` is true. Nothing here can seal
+    the DEK, because nothing here can reach it; the new slot opens nothing until an unlocked member
+    approves it, at which point the DEK is unchanged and no data source is reconnected.
+
+    **Refused when nobody else could grant it.** Otherwise this is a self-brick: the only slot that
+    holds the DEK is overwritten with one that does not, and there is no one to seal it back. That check
+    belongs here rather than only in the dialog offering the rung — a UI-side gate is a suggestion.
+    """
+    if not new_passphrase:
+        raise ValueError("a new passphrase is required")
+    if not user_has_slot(user_id):
+        raise ValueError("this user has no vault access to replace — set a passphrase to enrol instead")
+    if is_unlocked(user_id):
+        # Being able to open the vault means a proof-carrying path is available, and those keep the
+        # user's access instead of parking it behind someone else's approval.
+        raise ValueError("this vault is already open — change the passphrase instead of re-enrolling")
+    if not [m for m in vault_members() if m["user_id"] != user_id]:
+        raise VaultLocked(
+            "nobody else can open this vault, so a new passphrase could never be approved — "
+            "use a recovery code, or rebuild the vault"
+        )
+
+    existing = cdb.get_vault_slot(user_id, "passphrase")
+    _write_slot(
+        user_id, method="passphrase", secret=new_passphrase, dek=None,
+        slot_id=existing["id"] if existing else None,
+        meets_production_min=passphrase_meets_production_min(new_passphrase),
+        replaces_access=True,
+    )
+    # The old wrapping is gone either way; dropping any cached DEK keeps the session honest about it.
+    lock(user_id)
+    return {"pending": True}
+
+
 def remove_slot(user_id: str, slot_id: str) -> None:
     """Remove one unlock method, refusing to remove the last one that works.
 
     The refusal is the point: the vault has no recovery path by design, so deleting a final slot would
     silently destroy this user's access to every stored credential — and where they are the only member,
     the workspace's. Losing access should take a deliberate reset, never a tidy-up.
+
+    **Removal joins the proof window (2026-09-01)**, which the original mint-only rule left out. Taking a
+    method away grants nothing, so it is vandalism rather than escalation — but someone at an unlocked
+    machine could strip every passkey and the recovery code, leaving the owner one forgotten passphrase
+    away from rebuilding every connection. "Any change to how the vault is opened needs recent proof" is
+    also a simpler rule to hold than "any addition does", and a rule with a carve-out is the one that gets
+    forgotten at the next call site.
     """
     slot = cdb.get_vault_slot_by_id(slot_id)
     if not slot or slot["user_id"] != user_id:
@@ -986,4 +1238,216 @@ def remove_slot(user_id: str, slot_id: str) -> None:
     remaining = [s for s in cdb.list_vault_slots(user_id) if s["id"] != slot_id and slot_holds_dek(s)]
     if slot_holds_dek(slot) and not remaining:
         raise ValueError("this is the only way you can open the vault — add another before removing it")
+    # After the refusal above, so a removal that could never be allowed says so instead of asking for a
+    # secret and then refusing what it was given for.
+    require_recent_proof(user_id)
     cdb.delete_vault_slot(slot_id)
+
+
+def discard_recovery_code(user_id: str) -> None:
+    """Delete this user's recovery code without minting a replacement.
+
+    `issue_recovery_code` always replaces, so "invalidate the one I wrote down" was only expressible as
+    *replace and then do not record the new one* — which leaves `has_recovery_code` true. That flag drives
+    rung 2 of the recovery ladder, so the app would go on offering "use your recovery code" as the free
+    rung above rebuilding, to somebody who deliberately has none. The ladder is ordered by what the user
+    can actually do, and a phantom rung corrupts exactly that.
+
+    Replace-and-discard also *renders* a fresh code on screen before abandoning it — clipboard, a
+    screenshot, a synced notes app. Deleting shows nothing.
+
+    Routed through `remove_slot`, so the last-way-in guard covers it: a user who removed their passphrase
+    slot while holding a code has the code as their only access, and that case must refuse.
+    """
+    slot = cdb.get_vault_slot(user_id, "recovery")
+    if not slot:
+        raise ValueError("no recovery code has been issued for this user")
+    remove_slot(user_id, slot["id"])
+
+
+# --- Recovery-code slots -------------------------------------------------------------------------
+#
+# The rung between "another member re-enrols you" and the destructive reset — and on a single-user
+# install, the *only* rung, which is why the vault having none left that install a forgotten passphrase
+# away from rebuilding every connection.
+#
+# A recovery code is a third slot method and needs no schema of its own: `vault_slot.method` is a column
+# rather than an enum, and `_derive_kek` does not care whether the secret it is fed was typed by a person
+# or generated. What differs from the sign-in recovery codes in `control_database` is *verification*. A
+# 2FA code is checked against a stored hash, so it can be marked used with a flag. A vault code has no
+# hash to check — it must actually derive a KEK that unwraps a slot's private key — so "used" can only
+# mean the slot is deleted, which is a real destructive step and has to be sequenced accordingly.
+#
+# **One code, and recovery is one request.** Each code is an independent path to the same DEK, so a set
+# of N multiplies the exposure to buy redundancy that keeping two copies of one code already provides
+# (they are written down together and lost together). The hazard that argues for a set — the code spent,
+# then something failing before the replacement passphrase is set, leaving the user with neither — is
+# real but belongs to a *two-step* flow, so `recover_with_code` is a single operation ordered such that
+# every failure is safe: the replacement slot is written before the recovery slot is deleted. A failure
+# before that point leaves the code untouched and the whole thing retryable; a failure at the deletion
+# leaves the user holding both a working passphrase and a live code, which costs nothing. Reissuing on
+# the way out closes the other version of the worry — forgetting the *replacement* passphrase is not a
+# return to the dead end.
+
+def generate_recovery_code() -> str:
+    """A fresh vault recovery code, grouped for transcription. See `RECOVERY_CODE_BYTES` for why this
+    does not reuse the sign-in generator."""
+    raw = base64.b32encode(os.urandom(RECOVERY_CODE_BYTES)).decode("ascii").rstrip("=")
+    return "-".join(raw[i:i + _RECOVERY_CODE_GROUP] for i in range(0, len(raw), _RECOVERY_CODE_GROUP))
+
+
+def normalize_recovery_code(code: str) -> str:
+    """The canonical form a code is hashed into a KEK from.
+
+    Grouping and case are presentation, so they are stripped rather than demanded back: a code read off a
+    printout arrives with the dashes the user saw, pasted from a manager without them, and typed by hand
+    in either case. Only base32's own alphabet survives, so a stray space cannot change the KEK.
+    """
+    return "".join(c for c in (code or "").upper() if c.isalnum())
+
+
+def has_recovery_code(user_id: str) -> bool:
+    return cdb.get_vault_slot(user_id, "recovery") is not None
+
+
+def recovery_code_issued_at(user_id: str) -> str | None:
+    """When the current code was issued — the only thing the UI can honestly say about a secret it is
+    never shown again. A date lets someone recognize a code they still hold."""
+    slot = cdb.get_vault_slot(user_id, "recovery")
+    return slot["updated_at"] if slot else None
+
+
+def issue_recovery_code(user_id: str) -> str:
+    """Mint a recovery code for this user, replacing any current one, and return it to be shown once.
+
+    Requires the vault open, for the same reason enrollment does: the code has to carry the DEK, and only
+    an unlocked member holds it. Replacing rather than accumulating is the `vault_slot_one_recovery`
+    invariant — issuing a new code retires the old one, so a code written down and then regenerated stops
+    working, which is the property the user is relying on when they regenerate after a scare.
+    """
+    dek = require_dek(user_id)
+    require_recent_proof(user_id)  # after the DEK, so a locked vault reports itself as locked
+    code = generate_recovery_code()
+    _write_slot(user_id, method="recovery", secret=normalize_recovery_code(code), dek=dek)
+    return code
+
+
+def recover_with_code(user_id: str, code: str, new_passphrase: str) -> str:
+    """Open the vault with a recovery code and set a new passphrase in its place. Returns a fresh code.
+
+    One operation rather than unlock-then-change, and the ordering is the safety property — see the
+    section comment above. The steps are: open the recovery slot, write the passphrase slot sealed to the
+    same DEK, delete the recovery slot, issue a replacement.
+
+    The DEK is unchanged throughout, so **nothing is re-encrypted and no connection needs re-linking**.
+    That is the whole point of this rung: the passphrase was the only thing lost, and a passphrase only
+    ever guarded the wrapping.
+    """
+    if not new_passphrase:
+        raise ValueError("a new passphrase is required")
+    slot = cdb.get_vault_slot(user_id, "recovery")
+    if not slot:
+        raise VaultLocked("no recovery code has been issued for this user")
+
+    _, deks = _open_slot(slot, normalize_recovery_code(code), user_id=user_id)  # ValueError on a wrong code
+    _stamp_proof(user_id)
+    if not deks:
+        # A recovery slot is only ever written with the DEK in hand, so this is a corrupted row rather
+        # than the pending-enrollment state the same shape means on a passphrase slot.
+        raise VaultLocked("this recovery code no longer carries the workspace key")
+
+    # Before the deletion below, and the reason a failed step here is harmless: a weak passphrase raises
+    # out of `_write_slot` having written nothing, leaving the code live and the attempt repeatable.
+    existing = cdb.get_vault_slot(user_id, "passphrase")
+    _write_slot(
+        user_id, method="passphrase", secret=new_passphrase, dek=deks[0],
+        slot_id=existing["id"] if existing else None,
+        meets_production_min=passphrase_meets_production_min(new_passphrase),
+    )
+    cdb.delete_vault_slot(slot["id"])
+    _cache_put(user_id, deks)
+    return issue_recovery_code(user_id)
+
+
+# --- The destructive reset -----------------------------------------------------------------------
+#
+# The bottom of the recovery ladder, and the only rung that costs something. Everything above it — a
+# credentials backup opened with the passphrase it was made under, another member re-enrolling the stuck
+# user, a recovery code — leaves the DEK intact and re-links nothing. This one replaces the DEK, which
+# permanently strands every secret sealed under the old one.
+#
+# **What it must not do is as load-bearing as what it does.** Connections, accounts and transactions
+# survive untouched: only two columns are ever encrypted, and the account mappings, per-account coverage,
+# cursors and sync history that make a connection expensive to rebuild are all plaintext beside them.
+# Deleting connection rows to "clean up" would discard exactly the part that is not lost with the
+# credential, and would turn a re-link into a re-mapping.
+#
+# **Two reasons lead here and they are not the same operation.** A *lost* passphrase is a dead end, and
+# the vault cannot be opened, so no credential can be decrypted and nothing can be revoked at the
+# provider. A *compromised* one is still known, so the vault can be unlocked first and every revocable
+# credential retired properly on the way out. The caller asks the user which it is; this function only
+# needs to know because the refusal below applies to one of them.
+
+# **A member who can unlock is a redirect, not a refusal (revised 2026-08-31).**
+#
+# This used to refuse the lost-passphrase reset outright while anyone else held a slot, on the reasoning
+# that destroying reachable credentials is the worse outcome. The reasoning is right about which path is
+# *better*; it was wrong that the system can insist on it, for three reasons:
+#
+#   * It asserts something it cannot know. A `vault_slot` row does not prove the other person is
+#     reachable, still holds their secret, or is willing — which is the *same* argument this module
+#     already makes for the stuck user's own leftover slots.
+#   * The authority question is settled elsewhere: reset is admin-gated precisely because it destroys
+#     shared workspace state.
+#   * It was not a safety property. The compromise path permits the identical destruction with other
+#     members present (deliberately — a leaked key is no less leaked for someone else holding a slot), so
+#     the block only ever stopped a user who described their situation accurately.
+#
+# So the caller leads with the free alternative, names the person, and — if the user says none of them
+# apply — carries out the reset and tells them what it also costs the other members.
+
+
+def reset_vault(user_id: str, *, reason: str) -> dict:
+    """Destroy the workspace vault: every slot, every stored secret, and the DEK behind them.
+
+    Afterwards `vault_configured()` is false, so the next passphrase mints a fresh DEK — which is what
+    makes the reset → set → restore-a-credentials-backup sequence work, and equally what makes the old
+    ciphertext permanently unopenable if there is no backup.
+
+    Clearing the ciphertext is not tidiness. Once no slot can produce the old DEK the stored values are
+    unopenable forever, so leaving them behind only yields `VaultDecryptError` at every future sync — the
+    clean-break behaviour the model has always described as meaning *re-link*.
+
+    It destroys **every** member's access, not just the caller's — there is one DEK per workspace. That is
+    a consequence to state before the fact, not a reason to refuse; the note above this section records why
+    the other-member check is a redirect rather than a block.
+
+    The columns come from `ENCRYPTED_COLUMNS` rather than being named here, so a secret added to the
+    vault later is cleared by this without anyone remembering to come back — the same registry rotation
+    reads, with the same test standing behind it.
+    """
+    if reason not in ("lost", "compromised"):
+        raise ValueError("a vault reset must state whether the passphrase was lost or compromised")
+
+    with get_db() as conn:
+        # Counted and flagged *before* anything is cleared, because the flag's meaning depends on what was
+        # there: `reauth_required` says "this connection's credential is gone", and after the UPDATE below
+        # there is no longer any way to tell which ones that was true of.
+        connections = conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0]
+        conn.execute("UPDATE connection SET reauth_required = 1")
+        for spec in ENCRYPTED_COLUMNS:
+            conn.execute(f"UPDATE {spec.table} SET {spec.column} = NULL WHERE {spec.column} IS NOT NULL")
+        # The pre-vault plaintext columns go too. New writes never populate them (`encrypt_*` returns an
+        # empty plaintext beside the ciphertext), so on any current install this clears nothing — but a
+        # legacy row that survived would otherwise keep syncing after a reset that told the user every
+        # connection needs re-linking, and for the compromise path it would leave the single most exposed
+        # copy of a credential sitting in the database the reset was run *because of*.
+        conn.execute("UPDATE connection SET credential = '' WHERE credential != ''")
+        conn.execute("UPDATE provider_config SET secret = '' WHERE secret != ''")
+
+    # Last, and only once the ciphertext is gone. Reversed, an interruption between the two would leave
+    # unopenable rows behind a vault that still looked configured — a state with no way out but a second
+    # reset, and no screen that would say so.
+    cdb.delete_all_vault_slots()
+    lock_all()
+    return {"connections_needing_relink": connections, "reason": reason}

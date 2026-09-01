@@ -14,14 +14,17 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { AppConfirmDialog, AppDialog, Button, DialogActions, Input, SectionEyebrow, Spinner } from './ui.jsx'
-import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
+import { NO_AUTOFILL_PROPS } from '../lib/sensitiveFields.js'
 import { PASSKEY_UNAVAILABLE, passkeyAvailability, registerPasskey } from '../lib/vaultPasskey.js'
+import { RecoveryCodeReveal } from './VaultRecoveryDialog.jsx'
+import { VaultPassphraseDialog } from './VaultPassphraseDialog.jsx'
 import { api } from '../lib/api.js'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { formatDate } from '../lib/utils.js'
 
-function Section({ title, description, children }) {
+function Section({ title, description, children, style }) {
   return (
-    <div style={{ display: 'grid', gap: 8 }}>
+    <div style={{ display: 'grid', gap: 8, ...style }}>
       <SectionEyebrow>{title}</SectionEyebrow>
       {description ? (
         <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>{description}</p>
@@ -47,12 +50,27 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   const [requests, setRequests] = useState(null)
   const [members, setMembers] = useState(null)
   const [passkeyParams, setPasskeyParams] = useState(null)
+  // Owned here rather than read off a session prop, for the reason the passkey list is: this dialog is
+  // what mints a recovery code, and a surface that mutates something has to be the surface that re-reads
+  // it — otherwise a code created here can never show up as created.
+  const [recoveryCode, setRecoveryCode] = useState(null)
   const [busy, setBusy] = useState('')          // which action is running, so only that control disables
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [newPasskeyLabel, setNewPasskeyLabel] = useState('')
+  const [issuedRecoveryCode, setIssuedRecoveryCode] = useState('')
   const [confirmingRotate, setConfirmingRotate] = useState(false)
   const [confirmingRevoke, setConfirmingRevoke] = useState(null)
+  // Confirmed, unlike removing a passkey. A passkey is usually one of several ways in; the recovery code
+  // is frequently the *only* rung between a forgotten passphrase and rebuilding every connection, and
+  // that asymmetry is worth one dialog.
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false)
+  // The action waiting on a secret, and which question to ask for it: `{ action, mode }`. The two are not
+  // the same ask. 'confirm' means the vault is open and only the *recency* of the proof has lapsed;
+  // 'unlock' means it is genuinely shut. Wording them alike would tell a user with a locked vault that it
+  // is already open, or send someone whose vault is open to unlock it again.
+  const [proofPending, setProofPending] = useState(null)
+  const session = useAppSession()
 
   // Registered passkeys come from this dialog's own fetch, not from a session prop. They were read off
   // `currentUser.vault_passkeys`, which the page that owns it never re-read — so a passkey added here
@@ -60,21 +78,28 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   const passkeys = passkeyParams?.credentials || []
 
   const load = useCallback(async () => {
-    const [reqs, mems, params] = await Promise.all([
+    const [reqs, mems, params, me] = await Promise.all([
       api.vaultAccessRequests().catch(() => ({ requests: [] })),
       api.vaultMembers().catch(() => ({ members: [] })),
       // A connection that cannot host a ceremony is a normal answer, not a failure — the payload says
       // which of the two reasons applies and the Add control explains itself from it.
       api.vaultPasskeyParams().catch(() => null),
+      api.getCurrentUser().catch(() => null),
     ])
     setRequests(reqs.requests || [])
     setMembers(mems.members || [])
     setPasskeyParams(params)
+    setRecoveryCode(me?.user
+      ? { has: !!me.user.vault_has_recovery_code, issuedAt: me.user.vault_recovery_code_issued_at }
+      : null)
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  async function run(key, action, successMessage) {
+  // `rethrow` is for the proof gate alone: it has to see the server's refusal to know an ask is needed,
+  // and a swallowed error would leave the user looking at "that did not work" with no way to answer it.
+  // Every other caller keeps the swallowing behaviour, which is what makes an error land in one place.
+  async function run(key, action, successMessage, { rethrow = false } = {}) {
     setBusy(key)
     setError('')
     setStatus('')
@@ -84,6 +109,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
       await onChanged?.()
       if (successMessage) setStatus(successMessage)
     } catch (e) {
+      if (rethrow) throw e
       setError(e?.message || 'That did not work.')
     } finally {
       setBusy('')
@@ -92,7 +118,75 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
 
   const availability = passkeyAvailability(passkeyParams)
 
+  // The tail of a successful proof, shared by both ways of giving one. The session is refreshed first so
+  // the countdown this component reads is the one the proof just created — otherwise the held action
+  // would consult a stale zero and ask all over again.
+  async function finishProof(user) {
+    if (user) session?.setCurrentUser?.(user)
+    await onChanged?.()
+    const pending = proofPending
+    setProofPending(null)
+    if (pending?.action) await pending.action()
+  }
+
+  // Adding a passkey and minting a recovery code each create a credential that keeps working after lock,
+  // relock, and the owner changing their passphrase — so each needs a secret presented recently, not
+  // merely a DEK sitting in the unlock cache. The window is the server's (five minutes); this reads the
+  // remaining seconds it reports so the ask comes *before* the ceremony rather than after a refusal
+  // halfway through one.
+  //
+  // The local reading is allowed to be wrong — a sleeping tab, a second session — which is why the
+  // refusal is still handled below. Being wrong costs one extra prompt and can never admit anything.
+  // Which secret this action still needs, if any: null when it can just run, otherwise the *question* to
+  // ask. The two are different asks and must not be worded alike — 'unlock' for a vault that is shut,
+  // 'confirm' for one that is open with only the proof's recency lapsed. Every gated action here needs
+  // the key in hand as well as recent proof, and unlocking satisfies both at once, so a locked vault is
+  // always answered by unlocking.
+  function neededSecret() {
+    if (!session?.currentUser?.vault_unlocked) return 'unlock'
+    if (!(Number(session?.currentUser?.vault_proof_seconds_remaining || 0) > 0)) return 'confirm'
+    return null
+  }
+
+  // `run`, with the proof gate around it. Two chances to notice the window has lapsed, because the
+  // cheap one is not reliable: the session's countdown is asked first so the prompt arrives before a
+  // WebAuthn ceremony rather than in the middle of one, and the server's refusal is caught behind it for
+  // the cases a client copy cannot know about — a sleeping tab, a second session, a restarted backend.
+  //
+  // Both land in the same place: hold the action, ask, and run it once the secret is presented. Stored
+  // through a setter callback because `useState` calls a bare function argument instead of storing it.
+  // Every action that changes how this vault is opened goes through here. Two chances to notice a secret
+  // is needed, because the cheap one is not reliable: the session is asked first so the prompt arrives
+  // before a WebAuthn ceremony rather than in the middle of one, and the server's own refusals are caught
+  // behind it for what a client copy cannot know — a sleeping tab, a second session, a restarted backend.
+  //
+  // Both refusals land here and both are questions rather than failures. `423` means the vault is shut;
+  // `403 proof_required` means it is open but the proof has aged out. Either way: hold the action, ask,
+  // and run it once the secret is given, so the click the user already made is honoured instead of
+  // becoming an error string whose remedy they have to work out and repeat by hand.
+  async function runWithProof(key, action, successMessage) {
+    const attempt = () => run(key, action, successMessage, { rethrow: true })
+    const needed = neededSecret()
+    if (needed) { setProofPending({ action: attempt, mode: needed }); return }
+    try {
+      await attempt()
+    } catch (e) {
+      if (e?.detail?.code === 'proof_required') { setProofPending({ action: attempt, mode: 'confirm' }); return }
+      if (e?.status === 423) { setProofPending({ action: attempt, mode: 'unlock' }); return }
+      setError(e?.message || 'That did not work.')
+    }
+  }
+
   async function addPasskey() {
+    const needed = neededSecret()
+    if (needed) { setProofPending({ action: addPasskeyProved, mode: needed }); return }
+    await addPasskeyProved()
+  }
+
+  // Registration runs its own sequence rather than `run`'s, because a refused ceremony is an ordinary
+  // answer with its own wording. The server's proof refusal still has to be caught, for the window
+  // lapsing between the check above and the ceremony finishing.
+  async function addPasskeyProved() {
     setBusy('add-passkey')
     setError('')
     setStatus('')
@@ -110,7 +204,12 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
         setError(PASSKEY_UNAVAILABLE[result.reason] || 'That authenticator could not be registered.')
         return
       }
-      await api.registerVaultPasskey(result)
+      try {
+        await api.registerVaultPasskey(result)
+      } catch (e) {
+        if (e?.detail?.code === 'proof_required') { setProofPending({ action: addPasskeyProved, mode: 'confirm' }); return }
+        throw e
+      }
       // Cleared only here, on the far side of the save: the label is the user's typing, and wiping it on
       // a failed attempt would take their input away along with the thing it was for.
       setNewPasskeyLabel('')
@@ -135,7 +234,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
       <div style={{ display: 'grid', gap: 20 }}>
         <Section
           title="Unlock methods"
-          description="Any one of these opens the vault. The last one cannot be removed — there is no recovery if you lose them all."
+          description="Any one of these opens the vault. The last one cannot be removed — if you lose them all, only a recovery code stands between you and rebuilding the vault."
         >
           {/* Changing a passphrase is ordinary maintenance most of the time, so it lives here rather
             than under a compromise heading. The one thing that is not obvious is what it does *not*
@@ -162,7 +261,8 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
               <Button
                 variant="ghost" small style={{ marginLeft: 'auto' }}
                 disabled={busy === `remove-${pk.slot_id}`}
-                onClick={() => run(`remove-${pk.slot_id}`, () => api.removeVaultPasskey(pk.slot_id), 'Passkey removed.')}
+                onClick={() => runWithProof(`remove-${pk.slot_id}`,
+                  () => api.removeVaultPasskey(pk.slot_id), 'Passkey removed.')}
               >
                 Remove
               </Button>
@@ -175,7 +275,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
                 value={newPasskeyLabel} onChange={setNewPasskeyLabel}
                 placeholder="Name this device (optional)"
                 style={{ flex: 1, minWidth: 160 }}
-                {...SENSITIVE_FIELD_PROPS}
+                {...NO_AUTOFILL_PROPS}
               />
               <Button small disabled={busy === 'add-passkey'} onClick={addPasskey}>
                 {busy === 'add-passkey' ? 'Waiting…' : 'Add a passkey'}
@@ -188,7 +288,62 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           )}
         </Section>
 
+        {/* Between the unlock methods and the people, because that is what it is: a way in that belongs
+            to nobody but this user. It is the only rung a single-user install has between forgetting the
+            passphrase and rebuilding every connection — on a shared workspace another member covers the
+            same ground, which is why the description says which case it is really for. */}
         <Section
+          title="Recovery code"
+          description="A one-time code that opens the vault and sets a new passphrase, without changing the key your credentials are encrypted with — so nothing is re-encrypted and no data source is reconnected. Worth having if you are the only person who can open this vault: without one, a forgotten passphrase means rebuilding the vault and reconnecting every data source."
+        >
+          <Row>
+            <span>
+              {recoveryCode?.has
+                ? `Issued ${formatDate(String(recoveryCode.issuedAt || '').slice(0, 10))}`
+                : 'No recovery code'}
+            </span>
+            <Button
+              variant="ghost" small style={{ marginLeft: 'auto' }}
+              disabled={busy === 'recovery-code'}
+              onClick={() => runWithProof('recovery-code', async () => {
+                const result = await api.issueVaultRecoveryCode()
+                setIssuedRecoveryCode(result.recovery_code)
+              })}
+            >
+              {recoveryCode?.has ? 'Replace code' : 'Create a recovery code'}
+            </Button>
+            {/* Text, not a trash icon: each passkey row above already offers exactly this affordance, and
+                the same action in two visual languages reads as two different actions. Only offered when
+                there is one to remove — "Replace code" is the create control when there is not. */}
+            {recoveryCode?.has ? (
+              <Button
+                variant="ghost" small disabled={busy === 'discard-recovery-code'}
+                onClick={() => setConfirmingDiscard(true)}
+              >
+                Remove
+              </Button>
+            ) : null}
+          </Row>
+          {/* Generating a new one retires the old, which is the property someone regenerating after a
+              scare is relying on — so it is stated where the button is, not only in the reveal. */}
+          {recoveryCode?.has && !issuedRecoveryCode ? (
+            <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+              The code itself is not stored and cannot be shown again. Replacing it stops the old one working.
+            </p>
+          ) : null}
+          {issuedRecoveryCode ? (
+            <RecoveryCodeReveal code={issuedRecoveryCode} onDismiss={() => setIssuedRecoveryCode('')} />
+          ) : null}
+        </Section>
+
+        {/* Lifted to the top of the dialog whenever somebody is waiting, using grid `order` rather than a
+            second copy of the markup. The badge on the button that opens this dialog says "(1 waiting)",
+            so a request is the reason it was opened — and finding it below three other sections, off the
+            bottom of the screen, makes the user hunt for the thing they were just told about. It falls
+            back to its usual place when the queue is empty, where it reads as reference rather than as
+            something outstanding. */}
+        <Section
+          style={requests?.length ? { order: -1 } : undefined}
           title="Vault access"
           description="These people can open the vault. Anyone who sets a vault passphrase joins the list below it until someone who can already open the vault approves them. Approving shares the key that decrypts data-source credentials — it does not change what they can see in the ledger, which is shared already."
         >
@@ -218,13 +373,23 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           ) : requests.map(r => (
             <Row key={r.slot_id}>
               <span>{r.display_name}</span>
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {/* A newcomer enrolling and a member who lost their passphrase arrive in this queue looking
+                  identical, and they are not the same decision: the second hands back access that
+                  already existed, to whoever wrote the request — which is what someone at that person's
+                  keyboard would be counting on. The approver is the only one who can tell, so the row
+                  has to say which it is. */}
+              <span style={{ fontSize: 12, color: r.replaces_access ? 'var(--warning)' : 'var(--muted)' }}>
+                {r.replaces_access ? 'lost their passphrase · ' : ''}
                 asked {formatDate(String(r.requested_at).slice(0, 10))}
               </span>
               <Button
                 small style={{ marginLeft: 'auto' }}
                 disabled={busy === `approve-${r.slot_id}`}
-                onClick={() => run(`approve-${r.slot_id}`, () => api.approveVaultAccess(r.slot_id),
+                title={r.replaces_access
+                  ? `${r.display_name} already had access and could not open it. Approving restores it `
+                    + 'under a passphrase they chose — check with them that they asked.'
+                  : undefined}
+                onClick={() => runWithProof(`approve-${r.slot_id}`, () => api.approveVaultAccess(r.slot_id),
                   `${r.display_name} can now open the vault.`)}
               >
                 Approve
@@ -282,6 +447,39 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
             setConfirmingRotate(false)
           }}
           onCancel={() => setConfirmingRotate(false)}
+        />
+      ) : null}
+
+      {/* One dialog for both asks, because both end in the same call: presenting the secret again *is* an
+          unlock, and that is what the server records as proof. Only the wording differs, which is what
+          `mode` carries — 'confirm' for a vault that is open with a lapsed proof, 'unlock' for one that is
+          shut. On success the held action runs, so the user's click is honoured rather than needing a
+          second press at a surface they have already answered for. */}
+      {confirmingDiscard ? (
+        <AppConfirmDialog
+          title="Remove the recovery code?"
+          description="The code on file stops working and no replacement is issued. If the vault passphrase is then forgotten, the ways back in are a passkey, another member re-enrolling you, or rebuilding the vault and reconnecting every data source. A new code can be created here at any time."
+          confirmLabel={busy === 'discard-recovery-code' ? 'Removing…' : 'Remove code'}
+          confirmDisabled={busy === 'discard-recovery-code'}
+          cancelDisabled={busy === 'discard-recovery-code'}
+          onConfirm={async () => {
+            setConfirmingDiscard(false)
+            await runWithProof('discard-recovery-code', () => api.discardVaultRecoveryCode(),
+                               'Recovery code removed.')
+          }}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      ) : null}
+
+      {proofPending ? (
+        <VaultPassphraseDialog
+          mode={proofPending.mode}
+          onSubmit={async (passphrase) => {
+            const resp = await api.unlockVault(passphrase)
+            await finishProof(resp?.user)
+          }}
+          onUnlockedByPasskey={finishProof}
+          onClose={() => setProofPending(null)}
         />
       ) : null}
     </AppDialog>

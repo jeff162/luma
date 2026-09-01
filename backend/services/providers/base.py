@@ -6,7 +6,7 @@ The provider-adapter interface: the seam every data-source aggregator plugs into
 
 A connection is provider-agnostic — the vault wraps one opaque per-connection credential, the DB stores
 a `provider` discriminator, and the routers/sync path speak only the normalized dicts below. Each
-concrete adapter (Plaid first; Teller, SimpleFIN later) hides its SDK and secret *shape* behind these
+concrete adapter (Plaid and SimpleFIN today) hides its SDK and secret *shape* behind these
 four operations and normalizes to provider-neutral field names, so callers never branch on provider.
 
 Every operation takes `app_config` — the resolved app-level credential ({client_id, secret, env})
@@ -119,6 +119,13 @@ class ProviderAdapter(ABC):
     # the UI never branches on provider name.
     connect_spec: dict | None = None
 
+    # What one connect action actually adds, as a noun for the connect button ("+ Connect Institution").
+    # It differs by provider in kind, not just in wording: Plaid's widget authorizes ONE institution, so
+    # the button can name it, while a SimpleFIN setup token claims a bridge that may span several banks
+    # and no noun describes it — those adapters leave this None and the button reads "+ Connect".
+    # Deliberately not "Account": that word means a ledger account everywhere else in the app.
+    connect_noun: str | None = None
+
     # The provider's own cap on how far back history goes, when it publishes one (Plaid's ~24 months).
     # None means unbounded as far as the API is concerned — the adapter's own fetch decides where to stop.
     max_history_days: int | None = None
@@ -132,6 +139,27 @@ class ProviderAdapter(ABC):
     # which the disconnect confirmation has to say, because it is the difference between "this can no
     # longer read my bank" and "this still can, and I have one more thing to do".
     revokes_on_disconnect: bool = True
+
+    # Whether re-authorizing the same source comes back with the SAME `external_id`.
+    #
+    # True where the provider issues the handle (Plaid's `item_id`), so a re-link upserts onto the existing
+    # connection row and is a clean credential refresh. False where the handle is *derived from the
+    # credential* — SimpleFIN hashes the access URL, because the URL is the credential and so cannot also
+    # be the public handle — and a new credential therefore yields a new handle. A re-link there would
+    # insert a **second** connection row and strand the first, taking its per-account coverage, cursor and
+    # sync history with it. (The account mappings survive regardless: `record_provider_accounts` and sync
+    # both key on `account.external_account_id`, which is unique and durable.)
+    #
+    # The caller uses this to ask *which existing connection a re-link replaces* — and to ask it **before**
+    # the provider call, because a claim or exchange is single-use: there is no authorizing again to try a
+    # different answer, so the question cannot wait until the handle is known.
+    #
+    # **This is a claim about the app's own re-authorization path, not just about the provider.** Plaid's
+    # `item_id` is stable only across an *update-mode* Link session; a plain Link session mints a new Item
+    # and a new handle, so declaring True while offering no update-mode path would be false in exactly the
+    # case the flag exists for. A provider declaring True must implement `create_link_token`'s
+    # `access_token` argument, or an equivalent re-authorize-in-place step.
+    stable_external_id: bool = True
 
     # Whether this provider's $0 transactions are kept or refused. **Deliberately has no default**: the
     # answer turns on what a $0 row means coming from this particular provider, which does not generalize
@@ -147,8 +175,15 @@ class ProviderAdapter(ABC):
     @abstractmethod
     def connect(self, app_config: dict, payload: dict) -> dict: ...
 
-    def create_link_token(self, app_config: dict, user_id: str = "local-user") -> str:
-        """Link-style providers only — see the module docstring."""
+    def create_link_token(self, app_config: dict, user_id: str = "local-user",
+                          access_token: str | None = None) -> str:
+        """Link-style providers only — see the module docstring.
+
+        `access_token` asks for an **update-mode** token: re-authorize the Item this credential already
+        names, rather than authorizing a new one. That is what `stable_external_id = True` depends on —
+        without it, "reconnect" means "connect again", which mints a new handle and strands the old
+        connection. A provider offering no such mode must declare `stable_external_id = False`.
+        """
         raise NotImplementedError(f"{self.provider} has no Link-style connect flow")
 
     @abstractmethod

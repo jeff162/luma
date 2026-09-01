@@ -15,13 +15,14 @@
 // it is the point, so it lives in `lib/sensitiveFields.js` — a shared constant, and not a vault-specific
 // one, so a component module was the wrong home for it in both directions.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Input, AppDialog } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
 import { useVaultPasskeyUnlock } from '../lib/useVaultPasskeyUnlock.js'
+import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
 
@@ -98,8 +99,17 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Enter walks the fields and submits from the last one — the same rule the sign-in screen follows, and
+  // the reason these need refs at all: a sensitive field renders with no id or name (see
+  // `sensitiveFields.js`), so there is no selector that could find the next one.
+  const passphraseRef = useRef(null)
+  const confirmRef = useRef(null)
   const changing = mode === 'change'
   const requesting = mode === 'request'
+  // 'confirm' re-presents a secret for a vault that is already open, so a change to the unlock methods
+  // themselves can be authorized. Mechanically an unlock — that is what stamps the proof server-side —
+  // but it must not *say* "unlock", which would describe an action the vault does not need.
+  const confirming = mode === 'confirm'
   // Every one of these three chooses a NEW passphrase and is held to the floor.
   const setting = mode === 'set' || changing || requesting
   const session = useAppSession()
@@ -111,8 +121,16 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // advisory meter feel like the passphrase had been accepted.
   const blocked = busy || (setting && (!passphrase || !!shortfall))
 
-  // Offered only for 'unlock', and only where a usable passkey exists. The other modes choose a NEW
-  // passphrase, which a passkey cannot stand in for.
+  // Offered wherever a passkey can actually answer the question being asked, and only where a usable one
+  // exists. That is three of the modes, for two different reasons:
+  //
+  //   'unlock'  — the passkey opens the vault, which is the whole request.
+  //   'confirm' — the ceremony *is* the proof; unlocking again is how the server records it.
+  //   'change'  — the passkey stands in for the CURRENT passphrase, not the new one. This was the gap:
+  //               the button was gated on 'unlock' alone on the reasoning that "the other modes choose a
+  //               NEW passphrase, which a passkey cannot stand in for" — true of the new passphrase, but
+  //               it also blocked the passkey from proving the old one, so somebody who had forgotten
+  //               their passphrase but held a passkey had no way to set a new one at all.
   //
   // This is the fix for a gap that made the feature nearly unreachable: the ceremony existed and worked,
   // but was wired only to the vault strip on the Connections tab. Every gated action — disconnect, sync,
@@ -121,14 +139,28 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // had set up a passkey specifically to stop typing their passphrase was asked for it every time, and
   // the 423 path could not even be pre-empted by clicking the strip first, since it is invisible until
   // it fires.
-  const canUsePasskey = mode === 'unlock' && !!onUnlockedByPasskey
+  const canUsePasskey = (mode === 'unlock' || confirming || changing) && !!onUnlockedByPasskey
     && hasUsableVaultPasskey(session?.currentUser)
+
+  // In 'change' the passkey submits the whole operation — proof and replacement together — so it has to
+  // hold the new passphrase to the same floor and the same confirm-field check as the button beside it.
+  // In the other two it carries nothing.
+  const passkeyBlocked = changing && (!passphrase || !!shortfall || passphrase !== confirm)
 
   // A refusal leaves the dialog open on the passphrase, which is the fallback the user still has.
   const { busy: passkeyBusy, unlock: unlockByPasskey, label: passkeyLabel } = useVaultPasskeyUnlock({
     onUnlocked: onUnlockedByPasskey,
     onRefused: setError,
+    // 'change' runs a different ceremony: it ends by writing the new passphrase rather than by
+    // unlocking, so the new one has to travel with it.
+    ...(changing ? { getNewPassphrase: () => passphrase, label: 'Use a passkey' } : {}),
+    ...(confirming ? { label: 'Confirm with a passkey' } : {}),
   })
+
+  function onPasskey() {
+    if (changing && passphrase !== confirm) { setError('The passphrases do not match.'); return }
+    unlockByPasskey()
+  }
 
   async function submit() {
     if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
@@ -148,10 +180,13 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
     <AppDialog
       title={changing ? 'Change the vault passphrase'
         : requesting ? 'Request vault access'
-          : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
+          : confirming ? 'Confirm it’s you'
+            : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
       description={changing
-        ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no data source needs re-linking.'
-        : requesting
+        ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no data source needs re-linking. The current passphrase proves this is you — a passkey does the same, for anyone who has one.'
+        : confirming
+          ? 'Changing how this vault is opened needs the passphrase or a passkey, even though the vault is already open. Otherwise anyone who reached an unlocked screen could add their own way in.'
+          : requesting
           ? 'This workspace already has a credential vault. Choose the passphrase that will open it for you — it starts working once a member who can already open the vault approves the request.'
           : setting
             ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
@@ -168,7 +203,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
               in does not change depending on which surface asked. */}
           {canUsePasskey ? (
-            <Button small onClick={unlockByPasskey} disabled={busy || passkeyBusy}>
+            <Button small onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
               {passkeyLabel}
             </Button>
           ) : null}
@@ -177,7 +212,8 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
             {busy ? 'Working…'
               : changing ? 'Change passphrase'
                 : requesting ? 'Request access'
-                  : setting ? 'Set passphrase' : 'Unlock'}
+                  : confirming ? 'Confirm'
+                    : setting ? 'Set passphrase' : 'Unlock'}
           </Button>
         </>
       }
@@ -185,18 +221,29 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       <div style={{ display: 'grid', gap: 12 }}>
         {changing ? (
           <Input type="password" value={current} onChange={setCurrent}
-            placeholder="Current passphrase" autoFocus {...SENSITIVE_FIELD_PROPS} />
+            placeholder={canUsePasskey ? 'Current passphrase (or use a passkey)' : 'Current passphrase'}
+            autoFocus
+            onKeyDown={advanceOnEnter(passphraseRef)} {...SENSITIVE_FIELD_PROPS} />
         ) : null}
-        <Input type="password" value={passphrase} onChange={setPassphrase}
+        {/* Submits directly when unlocking, which is the single-field case and the whole interaction:
+            type the passphrase, press Enter. Every other mode is choosing a *new* passphrase and has a
+            confirm field, so Enter moves there instead — submitting from here would skip the check the
+            second field exists to make. */}
+        <Input ref={passphraseRef} type="password" value={passphrase} onChange={setPassphrase}
           placeholder={changing ? 'New passphrase' : 'Vault passphrase'} autoFocus={!changing}
+          onKeyDown={setting ? advanceOnEnter(confirmRef) : onEnter(() => { if (!blocked) submit() })}
           {...SENSITIVE_FIELD_PROPS} />
         {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
         {shortfall ? (
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{shortfall}</div>
         ) : null}
         {setting ? (
-          <Input type="password" value={confirm} onChange={setConfirm}
-            placeholder={changing ? 'Confirm new passphrase' : 'Confirm passphrase'} {...SENSITIVE_FIELD_PROPS} />
+          <Input ref={confirmRef} type="password" value={confirm} onChange={setConfirm}
+            placeholder={changing ? 'Confirm new passphrase' : 'Confirm passphrase'}
+            // Guarded on the same `blocked` the button is, so Enter can never submit something the
+            // button would refuse — a passphrase under the floor stays un-submittable either way.
+            onKeyDown={onEnter(() => { if (!blocked) submit() })}
+            {...SENSITIVE_FIELD_PROPS} />
         ) : null}
         {/* The consequence a passphrase change has that nothing else on screen would reveal: the same DEK
             is rewrapped, so stored ciphertext is untouched, but any credentials backup already written
@@ -228,7 +275,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
             {requesting
               ? 'Nobody else ever learns this passphrase — approval does not require it.'
-              : 'There is no recovery if this is lost — you would simply re-link your data sources.'}
+              : 'Nothing here can recover it for you — create a recovery code in Vault settings, or losing it means reconnecting every data source.'}
             {' '}Store it in a password manager; it must be at least {limits.minLength} characters using
             at least {limits.minDistinct} different ones.
           </p>

@@ -816,6 +816,13 @@ _VAULT_SLOT_DDL = """
         sealed_dek_prev      TEXT,
         wrapped_dek          TEXT,
         meets_production_min INTEGER NOT NULL DEFAULT 0,
+        -- Set on a pending slot written by someone who ALREADY had vault access and lost the secret
+        -- that opened it (the re-enrollment rung). The approval queue reads the same shape for a
+        -- newcomer enrolling and for a locked-out member coming back, and the two ask very different
+        -- things of the approver — the second replaces access that already existed, which is what
+        -- someone at the locked-out user's keyboard would exploit. Stored rather than derived because
+        -- writing the pending slot is what destroys the evidence it would be derived from.
+        replaces_access      INTEGER NOT NULL DEFAULT 0,
         created_at           TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -824,9 +831,16 @@ _VAULT_SLOT_DDL = """
 # One passphrase per user, any number of passkeys — a person may keep a laptop's platform
 # authenticator and a phone's, and both must open the same vault. This replaces the original
 # table-level UNIQUE(user_id, method), which allowed only one of each.
+#
+# One recovery code per user, for the same reason the code is single rather than a set: every slot is an
+# independent path to the same DEK, so a second one doubles the exposure to buy redundancy that keeping
+# two copies of one code already provides. Enforced here rather than left to the issuing code so a bug
+# that forgets to retire the outgoing slot fails loudly instead of quietly leaving two codes live.
 _VAULT_SLOT_INDEXES = """
     CREATE UNIQUE INDEX IF NOT EXISTS vault_slot_one_passphrase
         ON vault_slot(user_id) WHERE method = 'passphrase';
+    CREATE UNIQUE INDEX IF NOT EXISTS vault_slot_one_recovery
+        ON vault_slot(user_id) WHERE method = 'recovery';
     CREATE UNIQUE INDEX IF NOT EXISTS vault_slot_credential
         ON vault_slot(credential_id) WHERE credential_id IS NOT NULL;
 """
@@ -859,6 +873,11 @@ def _init_vault_slot_table(conn):
         )
         conn.execute("DROP TABLE vault_slot")
         conn.execute("ALTER TABLE vault_slot_rebuilt RENAME TO vault_slot")
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(vault_slot)").fetchall()}
+    # Purely additive, so it needs no rebuild: SQLite backfills the default into existing rows, and 0 is
+    # the right answer for every slot written before re-enrollment existed.
+    if "replaces_access" not in columns:
+        conn.execute("ALTER TABLE vault_slot ADD COLUMN replaces_access INTEGER NOT NULL DEFAULT 0")
     conn.executescript(_VAULT_SLOT_INDEXES)
 
 
@@ -965,6 +984,7 @@ def upsert_vault_slot(
     wrapped_private_key: str,
     sealed_dek: str | None,
     meets_production_min: bool,
+    replaces_access: bool = False,
 ) -> str:
     """Write a format-2 slot, replacing the row `slot_id` names if it already exists.
 
@@ -973,9 +993,13 @@ def upsert_vault_slot(
     saved over another would be unopenable."""
     with get_control_db() as conn:
         existing = conn.execute("SELECT id FROM vault_slot WHERE id = ?", (slot_id,)).fetchone() if slot_id else None
+        # `replaces_access` is stated here rather than left to the column default: the default only
+        # applies to an INSERT that omits the column, so the UPDATE arm below would otherwise carry a
+        # stale flag from whatever the row held before.
         values = (
             method, label, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p, credential_id, prf_salt,
             public_key, wrapped_private_key, sealed_dek, 1 if meets_production_min else 0,
+            1 if replaces_access else 0,
         )
         if existing:
             conn.execute(
@@ -986,7 +1010,7 @@ def upsert_vault_slot(
                     credential_id = ?, prf_salt = ?,
                     public_key = ?, wrapped_private_key = ?, sealed_dek = ?,
                     sealed_dek_prev = NULL, wrapped_dek = NULL,
-                    meets_production_min = ?, updated_at = datetime('now')
+                    meets_production_min = ?, replaces_access = ?, updated_at = datetime('now')
                 WHERE id = ?
                 """,
                 values + (existing["id"],),
@@ -998,8 +1022,8 @@ def upsert_vault_slot(
             INSERT INTO vault_slot
                 (id, user_id, method, label, format, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
                  credential_id, prf_salt, public_key, wrapped_private_key, sealed_dek,
-                 meets_production_min)
-            VALUES (?,?,?,?,2,?,?,?,?,?,?,?,?,?,?,?)
+                 meets_production_min, replaces_access)
+            VALUES (?,?,?,?,2,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (new_id, user_id) + values,
         )
@@ -1073,6 +1097,18 @@ def delete_vault_slots(user_id: str, method: str | None = None):
                 "DELETE FROM vault_slot WHERE user_id = ? AND method = ?",
                 (user_id, method),
             )
+
+
+def delete_all_vault_slots():
+    """Drop every slot in the workspace — the first step of a vault reset.
+
+    Workspace-wide rather than per-user because the DEK is workspace-wide: leaving any slot behind would
+    leave the old DEK reachable, and a reset whose whole purpose is that the old key stops opening
+    anything would have done nothing. Distinct from `delete_vault_slots`, which ends *one person's*
+    access to a vault that carries on existing.
+    """
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM vault_slot")
 
 
 def vault_slot_count() -> int:
@@ -1155,6 +1191,23 @@ def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
             "SELECT id, exported_at FROM credentials_export WHERE wrapped_dek_fingerprint = ? "
             "ORDER BY exported_at DESC, id DESC",
             (fingerprint,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def credentials_exports_any() -> list[dict]:
+    """Every recorded credentials export, newest first, whatever wrapping it carried.
+
+    The deliberate opposite of `credentials_exports_for_fingerprint`, and both rules are right for their
+    own caller. A passphrase *change* warns only about the backups it is about to strand, so naming ones
+    already stranded is noise. A vault *reset* is asking the opposite question — recovery restores a
+    backup with the passphrase it was made under, so an export from an era whose passphrase is still
+    remembered is precisely the file that rescues the workspace, and filtering to the current wrapping
+    would hide the only rung of the ladder that costs nothing.
+    """
+    with get_control_db() as conn:
+        rows = conn.execute(
+            "SELECT id, exported_at FROM credentials_export ORDER BY exported_at DESC, id DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 

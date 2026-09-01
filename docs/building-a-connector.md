@@ -20,6 +20,7 @@ all ones that shipped, and every one of them was silent.
 
 * [The adapter interface](#the-adapter-interface)
 * [Capability declarations](#capability-declarations)
+* [Where the connection handle comes from](#where-the-connection-handle-comes-from)
 * [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
 * [Zero-amount rows](#zero-amount-rows)
 * [Dates a source does not have](#dates-a-source-does-not-have)
@@ -52,14 +53,67 @@ otherwise learn by branching on `provider`:
 | --- | --- |
 | `requires_app_config` | Whether there is an app-level credential at all. `False` (SimpleFIN) stops "no app config" from reading as "setup unfinished". |
 | `connect_spec` | How the frontend collects the connect payload — `None` for a Link-style widget, otherwise a generic token form, so the UI never branches on provider name. |
+| `connect_noun` | What one connect action adds, as a noun for the connect button (Plaid: `"Institution"` → "+ Connect Institution"). `None` where a single connect covers a set no noun describes — a SimpleFIN token claims a bridge that may span several banks — and the button reads "+ Connect". Never `"Account"`: that means a ledger account everywhere else in the app. |
 | `max_history_days` | The provider's own cap on history depth, where it publishes one. |
 | `has_cursor` | Whether there is a change feed. `False` means every pull is a date range and a routine sync must choose a look-back window. |
 | `revokes_on_disconnect` | Whether `remove()` actually invalidates the credential upstream. `False` changes what the disconnect confirmation must tell the user. |
+| `stable_external_id` | Whether re-authorizing returns the **same** `external_id`. `False` means a re-link needs to be told which connection it replaces — see below. |
 | `routine_lookback_days` | How far a routine (non-backfill) sync reaches on a cursorless provider. |
 | `zero_amount_rows` | Whether $0 rows are kept or refused — see below. **No default.** |
 
 Most have a default. `zero_amount_rows` deliberately does not, because its answer does not generalize
 between providers and a wrong inherited guess is silent.
+
+## Where the connection handle comes from
+
+`connect` returns an `external_id`, and `(provider, external_id)` is the unique key a connection is
+upserted on. **Where that handle comes from decides what a re-link does**, and it is the trait most likely
+to be assumed rather than checked, because the Plaid answer is invisible until a second provider disagrees.
+
+| Source of the handle | `stable_external_id` | What a re-link does |
+| --- | --- | --- |
+| Issued by the provider **and re-authorizable in place** (Plaid's `item_id`, via Link update mode) | `True` (default) | Upserts onto the existing row — a clean credential refresh. Nothing to ask. |
+| Derived from the credential (SimpleFIN hashes the access URL) | `False` | Produces a **new** handle, so the upsert would insert a second row and strand the first. |
+
+**`stable_external_id` is a claim about the app's own re-authorization path, not only about the
+provider.** This is the trap it is easiest to fall into, and this repo fell into it: Plaid's `item_id` is
+stable across an *update-mode* Link session, but a plain Link session creates a **new Item** with a new
+`item_id` and new per-account ids. Declared `True` while the app only ever opened plain Link, the flag was
+false in exactly the case it exists for — every "reconnect" produced a second connection, stranded the
+first, and left it wearing a `reauth_required` badge that nothing could ever clear, because nothing would
+ever sync it again. A provider declaring `True` must therefore implement `create_link_token`'s
+`access_token` argument (or an equivalent re-authorize-in-place step); if re-authorizing can only mean
+"authorize again", the honest declaration is `False`.
+
+Note also what update mode does *not* do: it issues no new credential, and Plaid's guidance is not to
+exchange the public token its callback returns. So the repair path is not a connect — it confirms the
+Item answers and records that, which is why `POST /plaid/repair` re-fetches the accounts rather than
+trusting the client's success callback. `reauth_required` is retired by **proof** everywhere in this app;
+clearing it on a callback would put the badge back at the next sync.
+
+A credential-derived handle is not sloppiness: SimpleFIN's credential *is* a URL, and `external_id` is
+stored in the clear and used as the encryption AAD, so the credential cannot also be the public handle.
+Any provider whose secret is its identity lands in the same place.
+
+**What is actually stranded is narrower than it looks.** Account mappings survive a second row on their
+own — `record_provider_accounts` adopts on `account.external_account_id`, which is unique and durable, and
+sync resolves each row to a local account through the same column rather than through the connection. What
+is lost is everything keyed to `connection_id`: per-account **coverage** (`coverage_start_date`,
+`history_complete`, walk state), the cursor, and sync history. For a metered provider that means a full
+history re-walk, which is the expensive part.
+
+So a provider declaring `stable_external_id = False` gets the connect dialog's *"what is this
+connecting?"* question, and the answer travels as `adopt_connection_id`, which **re-points the surviving
+row** — swapping only `external_id` and `credential_enc` — rather than inserting and migrating. Nothing
+keyed to `connection_id` moves, which is why nothing keyed to it is lost.
+
+**The question is asked before the provider call, and that ordering is forced.** A claim or an exchange is
+single-use, so by the time the new handle is known the authorization is already spent and there is no
+second attempt to act on a different answer. Two consequences for anyone touching this path: the UI must
+collect the answer up front, and the server must **absorb** a stale answer rather than refuse it — a named
+connection that has since been disconnected, or a handle that turns out to belong to another row, falls
+through to the ordinary upsert and reports `adopted: false`. Refusing would be tidier and would cost the
+user their token.
 
 ## Transaction ids must be globally unique
 

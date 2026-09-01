@@ -248,6 +248,40 @@ export async function runVaultPasskeyUnlock() {
   }
 }
 
+// The same ceremony, ending in a passphrase rather than an unlock. Shares `unlockInFlight` with the
+// function above deliberately: the browser permits only one `navigator.credentials.get()` at a time, and
+// the two are reachable from adjacent controls in the same dialog.
+//
+// One call to the server, not prove-then-set, for the reason recovery is one call: a ceremony spent with
+// no passphrase written would leave the user having proved themselves and gained nothing.
+export async function runVaultPasskeySetPassphrase(newPassphrase) {
+  if (unlockInFlight) return { ok: false, reason: 'in_progress', message: '' }
+  unlockInFlight = true
+  try {
+    const params = await api.vaultPasskeyParams()
+    const result = await unlockWithPasskey(params)
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason: result.reason,
+        message: result.reason === 'cancelled'
+          ? ''
+          : (PASSKEY_UNAVAILABLE[result.reason] || PASSKEY_UNAVAILABLE.unsupported),
+      }
+    }
+    const resp = await api.setVaultPassphraseWithPasskey(
+      result.credentialId, result.prfOutput, newPassphrase,
+    )
+    return { ok: true, user: resp?.user || null }
+  } catch (e) {
+    // The passphrase floor arrives here as an ordinary error, and it is the one failure the caller can
+    // do something about — so it is surfaced rather than flattened into "the passkey did not work".
+    return { ok: false, reason: 'failed', message: e?.message || 'The passphrase was not changed.' }
+  } finally {
+    unlockInFlight = false
+  }
+}
+
 // Whether this user has a passkey that can actually open the vault. A `pending` slot is one awaiting
 // approval — registered, but not yet able to unlock anything — so offering it would produce a ceremony
 // that can only fail. Read from the session user, which both callers already hold.

@@ -974,7 +974,16 @@ export default function Rules() {
             </Button>
           ) : null}
 
-          {/* Sort toggle: alphabetical (A–Z sections) vs stalest-first by last-used date. */}
+          {/* Sort toggle: alphabetical (A–Z sections) vs stalest-first by last-used date.
+              One direction each, deliberately — clicking the selected segment again does NOT reverse it.
+              "Last used" ascends because that is the order the stale-rule sweep beside it works in, and
+              the question a descending list would answer ("which rules are actually doing the work") is
+              answered badly by this column and well by the per-rule match count: `last_effect_date` holds
+              the matched *transaction's* date, so a rule firing once a month on last week's charge
+              outranks one that matched hundreds of rows ending a week earlier. Reverse-on-reclick also
+              has no affordance on a segmented control, and would have to apply to A–Z for consistency,
+              where Z–A has no use at all. If this is ever wanted, give the segment a visible direction
+              caret rather than hiding the behaviour in a second click. */}
           <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
             {[['alpha', 'A–Z'], ['lastUsed', 'Last used']].map(([mode, label]) => (
               <button

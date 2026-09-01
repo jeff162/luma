@@ -18,8 +18,9 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { VaultPassphraseDialog } from '../components/VaultPassphraseDialog.jsx'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../components/VaultSettingsDialog.jsx'
+import { VaultRecoveryDialog } from '../components/VaultRecoveryDialog.jsx'
 import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../lib/useVaultPasskeyUnlock.js'
-import { providerSummaryLine } from '../lib/connectionSummary.js'
+import { connectionAccountsLabel, providerSummaryLine, relinkCandidates } from '../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
 import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
@@ -383,9 +384,9 @@ function controlStyle(extra = {}) {
 // The Connections tab: one card per supported aggregator, plus the vault affordance the cards depend on.
 // Provider *configuration* (the app credential) lives here, not in Settings; the app secret is vaulted,
 // so connecting/syncing needs the vault unlocked, and — on a networked bind — HTTPS. Only Plaid ships an
-// adapter today; the layout is provider-generic for Teller/SimpleFIN later.
+// adapter today; the layout is provider-generic for further providers later.
 
-const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN Bridge' }
+const PROVIDER_LABELS = { plaid: 'Plaid', simplefin: 'SimpleFIN Bridge' }
 
 function providerLabel(provider) {
   return PROVIDER_LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Provider')
@@ -704,8 +705,13 @@ const HISTORY_DEPTH_TITLE = "How far back this data source pulls on its first sy
 // The history depth is asked for HERE rather than on the provider's card, because for a provider with no
 // app-level credential the card does not exist until a connection does — so a setting living there could
 // not be reached at the one moment it applies, and every first connection silently took the default.
-function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose }) {
+function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose,
+  relinkCandidates = [], describeConnection }) {
   const [token, setToken] = useState('')
+  // '' = a new connection. Asked here, and answered *before* the token is submitted, because the
+  // authorization behind it is single-use: once the provider has issued a credential there is no second
+  // attempt to act on a different answer, so the question cannot wait until the new handle is known.
+  const [adopt, setAdopt] = useState('')
   // Held locally and handed to `onConnect`, rather than written straight to the shared preference: the
   // connect that follows must use exactly what is on screen, and reading it back from state the click
   // just scheduled is the kind of ordering question worth not having.
@@ -717,7 +723,7 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
     setConnecting(true)
     setError('')
     try {
-      await onConnect(token.trim(), days)
+      await onConnect(token.trim(), days, adopt || null)
     } catch (e) {
       // Staying open with the message is deliberate: these tokens are single-use, and the most common
       // failure is a token already claimed — which the user resolves by pasting a fresh one right here.
@@ -764,6 +770,44 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
             <a href={spec.help_url} target="_blank" rel="noreferrer noopener">{spec.help_url}</a>.
           </p>
         ) : null}
+        {/* Only for a provider that issues a fresh handle per authorization, and only once it has
+            something to replace. Everywhere else the provider's own handle answers this, and asking
+            would be a question with one possible answer. */}
+        {relinkCandidates.length > 0 ? (
+          <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            <span style={{ color: 'var(--muted)' }}>What is this connecting?</span>
+            <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+              {providerLabel(provider)} identifies a connection by its credential, so a new one looks like
+              a new connection. Say which this is: replacing keeps that connection’s accounts, settings and
+              the history it has already fetched, instead of starting a second one alongside it.
+            </p>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <input type="radio" name="relink-target" checked={adopt === ''}
+                onChange={() => setAdopt('')} style={{ marginTop: 3 }} />
+              <span>A new connection</span>
+            </label>
+            {relinkCandidates.map(c => {
+              const detail = describeConnection?.(c)
+              return (
+                <label key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <input type="radio" name="relink-target" checked={adopt === c.id}
+                    onChange={() => setAdopt(c.id)} style={{ marginTop: 3 }} />
+                  <span>
+                    Replaces {c.institution || 'an existing connection'}
+                    {c.reauth_required ? (
+                      <span style={{ color: 'var(--warning)' }}> — needs reconnecting</span>
+                    ) : null}
+                    {/* The institution is the same string for every connection of a provider that spans
+                        several banks, so the accounts are what actually tell two of them apart. */}
+                    {detail ? (
+                      <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>{detail}</span>
+                    ) : null}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        ) : null}
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Fetch history</span>
           <Select
@@ -780,8 +824,29 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
 }
 
 
-function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockPasskey,
-  passkeyBusy = false, passkeyLabel = VAULT_PASSKEY_LABEL, onLock, onSettings }) {
+// One line naming who is waiting to be let into the vault, for the strip that cannot offer an approve
+// control. It sits on the **locked** strip, where the button beside it — Unlock — is exactly the next
+// step: approving shares the key, so the key has to be in hand first. Named rather than counted, for the
+// reason the recovery dialog names members: "somebody is waiting" is not actionable, "Robin is" is.
+export function WaitingForAccess({ waiting }) {
+  if (!waiting.length) return null
+  // A missing name becomes a placeholder rather than being filtered out: dropping the entry would make
+  // one waiter read as none, and the verb below is agreed against the number of *people* waiting, not
+  // the number that happened to come back named. (The server falls back to the username, so this is a
+  // guard rather than an expected state.)
+  const names = waiting.map(r => r.display_name || 'Somebody')
+  const who = names.length === 1 ? names[0]
+    : names.length === 2 ? `${names[0]} and ${names[1]}`
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return (
+    <span style={{ flexBasis: '100%', color: 'var(--accent2)' }}>
+      {who} {waiting.length === 1 ? 'is' : 'are'} waiting for vault access. Unlock to approve.
+    </span>
+  )
+}
+
+function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockPasskey,
+  passkeyBusy = false, passkeyLabel = VAULT_PASSKEY_LABEL, onLock, onSettings, onRecover }) {
   const box = (bg, border) => ({
     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
@@ -840,6 +905,17 @@ function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockP
           style={vault.hasPasskey ? undefined : { marginLeft: 'auto' }}>
           Unlock with a passphrase
         </Button>
+        {/* Offered on the *locked* strip and nowhere else, because this is exactly where someone stands
+            when they cannot get in. Not on the unlocked strip: a user who can open the vault is looking
+            for Change passphrase, which already lives in Vault settings. Deliberately quiet — most of
+            what it opens is free, but the bottom of it is irreversible, and a prominent button beside
+            Unlock would be pressed by people who simply mistyped. */}
+        <Button small variant="ghost" onClick={onRecover} disabled={passkeyBusy}>
+          Can’t open it?
+        </Button>
+        {/* Below the buttons on its own row, not competing with them: the request is somebody else's
+            business to raise and this user's to get to, where the unlock above is what they came for. */}
+        <WaitingForAccess waiting={waiting} />
       </div>
     )
   }
@@ -850,7 +926,7 @@ function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockP
           and replacing the key both need the key in hand. The waiting count rides the button because
           this strip is the only place on the page a pending request would otherwise be visible. */}
       <Button variant="ghost" small onClick={onSettings} style={{ marginLeft: 'auto' }}>
-        {requestCount ? `Vault settings (${requestCount} waiting)` : 'Vault settings'}
+        {waiting.length ? `Vault settings (${waiting.length} waiting)` : 'Vault settings'}
       </Button>
       <Button variant="ghost" small onClick={onLock}>Lock</Button>
     </div>
@@ -895,9 +971,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
   const [changingPassphrase, setChangingPassphrase] = useState(false)
   const [vaultSettingsOpen, setVaultSettingsOpen] = useState(false)
-  // Only the count, and only to badge the settings button — the queue itself lives in that dialog. Held
-  // here because the strip renders whether or not the dialog has ever been opened.
-  const [accessRequestCount, setAccessRequestCount] = useState(0)
+  const [vaultRecoveryOpen, setVaultRecoveryOpen] = useState(false)
+  // Who is waiting, not just how many: the locked strip names them, because "somebody is waiting" is not
+  // something anyone can act on and "Robin is waiting" is. The queue itself still lives in the settings
+  // dialog. Held here because the strip renders whether or not that dialog has ever been opened.
+  const [waitingRequests, setWaitingRequests] = useState([])
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
@@ -1003,13 +1081,16 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       accessPending: !!u.vault_access_pending,
       hasPasskey: (u.vault_passkeys || []).some(pk => !pk.pending),
     })
-    // Only a member holding the key can approve, so only they are asked to look. Fetching it for anyone
-    // else would put a count on screen that clicking through could not act on.
-    if (u.vault_unlocked) {
+    // Asked of anyone who *could* approve — a member holding an unlock method — rather than only someone
+    // whose vault is open right now. Gating this on `vault_unlocked` hid the queue from the one person
+    // who needed telling: somebody who does not routinely unlock never learns there is anything to
+    // unlock *for*, so the requester waits on a signal nobody sends. A non-member still sees nothing,
+    // since there is no moment at which they could act on it.
+    if (u.vault_has_passphrase) {
       const pending = await api.vaultAccessRequests().catch(() => ({ requests: [] }))
-      setAccessRequestCount((pending.requests || []).filter(r => r.user_id !== u.id).length)
+      setWaitingRequests((pending.requests || []).filter(r => r.user_id !== u.id))
     } else {
-      setAccessRequestCount(0)
+      setWaitingRequests([])
     }
     setProviders(provResp.providers || [])
     // Roll each connection's sync period cards up to a suspect/card count for the review badge below.
@@ -1064,6 +1145,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // Accounts link a connection by account.connection_id == connection.id (6b-3). CSV/manual accounts and
   // disconnected ones have a NULL connection_id, so they naturally fall out of every connection group. The
   // authoritative connection list comes from the backend (p.connections).
+  // Provider accounts this connection offers that feed no local account — unmapped, or deliberately
+  // skipped. They are the half of "what is this connection pulling?" the local-account list cannot show,
+  // and the half a user cannot otherwise see without opening the mapping dialog: a skipped account is
+  // invisible everywhere else, so its absence reads as the bank not sharing it.
+  const unfedProviderAccounts = useCallback((connection) => (
+    (providerAccountsByConnection[connection.id] || []).filter(pa => !pa.mapped)
+  ), [providerAccountsByConnection])
+
   const accountsForConnectionId = useCallback((connectionId) => {
     return (accounts || []).filter(a => a.connection_id === connectionId)
   }, [accounts])
@@ -1110,7 +1199,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // before this ran — a change rewraps the DEK the session is holding rather than obtaining one.
   async function submitPassphraseChange({ current, next }) {
     const resp = await api.changeVaultPassphrase(current, next)
-    if (resp?.user) setCurrentUser?.(resp.user)
+    await completePassphraseChange(resp?.user)
+  }
+
+  // The tail both routes share. A passkey proves the current secret exactly as typing it does, and the
+  // outcome is identical — same DEK, same stranded-backup consequence — so the same notice is owed
+  // rather than a second one written for the other button.
+  async function completePassphraseChange(user) {
+    if (user) setCurrentUser?.(user)
     await refresh()
     setChangingPassphrase(false)
     setNotice({
@@ -1171,19 +1267,43 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     startPlaidLink()
   }
 
+  // Re-authorize a connection in place. Same gates as `connect` — this stores a refreshed credential just
+  // as a first connect does — but it opens Link in update mode against the Item this connection already
+  // holds, so nothing about the connection is replaced.
+  async function reconnect(connection) {
+    if (!(await ensureVault())) return
+    if (httpsBlocked) {
+      setNotice({
+        title: 'HTTPS required to connect',
+        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data source, so bank credentials never cross the network in cleartext.',
+      })
+      return
+    }
+    startPlaidLink(connection)
+  }
+
   // Finish a token-style connect: the same tail Link takes after its callback — refresh, then either the
   // mapping step (which owns the backfill from there) or a straight historical pull.
-  async function connectWithToken(provider, token, days) {
+  async function connectWithToken(provider, token, days, adoptConnectionId = null) {
     let result
     try {
-      result = await api.connectProvider(provider, { setup_token: token })
+      result = await api.connectProvider(provider, { setup_token: token }, adoptConnectionId)
     } catch (e) {
       // The vault can be dropped between opening this dialog and submitting it, so prompt and send the
       // same token again — a 423 never reached the provider, so a single-use setup token is still good.
       // Anything else (including a declined prompt) goes back to the dialog, which keeps the token on
       // screen and reports the reason.
       if (e.status !== 423 || !(await ensureVault({ force: true }))) throw e
-      result = await api.connectProvider(provider, { setup_token: token })
+      result = await api.connectProvider(provider, { setup_token: token }, adoptConnectionId)
+    }
+    // A replacement the server could not honour still connected — the authorization is spent either way —
+    // but it landed as a *second* connection rather than re-pointing the first, which is a different thing
+    // to be looking at. Said plainly rather than left to be discovered as an unexpected extra card.
+    if (adoptConnectionId && result && !result.adopted) {
+      setNotice({
+        title: 'Added as a new connection',
+        description: 'The connection this was meant to replace could not be matched, so it was added alongside it. The original can be disconnected from its card once its accounts have been checked.',
+      })
     }
     // Remember the depth chosen in the dialog as the default for next time, but go on using the value that
     // was actually on screen — the persisted copy is a convenience, not the source of truth for this pull.
@@ -1222,9 +1342,17 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
-  async function startPlaidLink() {
+  // `repairConnection` switches Link into **update mode**: it re-authorizes the Item that connection
+  // already holds rather than creating a new one. That is the difference between repairing a connection
+  // and replacing it — a plain session mints a new item_id and new per-account ids, so the credential
+  // lands on a second row and the original keeps a "reconnect needed" badge nothing can ever clear.
+  //
+  // The callback differs to match: update mode issues no new credential, and Plaid's guidance is not to
+  // exchange the public token it hands back, so the tail is a repair (prove the Item answers, refresh the
+  // shared-account list) rather than a connect.
+  async function startPlaidLink(repairConnection = null) {
     try {
-      const { link_token } = await api.getLinkToken()
+      const { link_token } = await api.getLinkToken(repairConnection?.id || null)
       await loadPlaidScript()  // loaded once and reused — not re-appended per attempt (would stack handlers)
       const handler = window.Plaid.create({
         token: link_token,
@@ -1234,6 +1362,18 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           if (exchangingRef.current) return
           exchangingRef.current = true
           try {
+            if (repairConnection) {
+              const repaired = await api.repairPlaidConnection(repairConnection.id)
+              setLinkInProgress(false)
+              plaidHandlerRef.current = null
+              await refresh()
+              // A repair can change *which* accounts the bank shares, so a newly-offered one arrives
+              // unmapped and needs the same step a fresh connect would send it to.
+              if (repaired.unmapped) await openAccountMap(repairConnection)
+              await onAccountsChanged?.()
+              await refresh()
+              return
+            }
             const result = await api.exchangeToken(public_token, metadata.institution?.name)
             // Link + OAuth are done and the token is now a durable connection — lift the modal block here,
             // BEFORE the (possibly minutes-long) historical backfill, so the app isn't frozen while history
@@ -1579,7 +1719,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       ) : null}
       <VaultStrip
         vault={vault}
-        requestCount={accessRequestCount}
+        waiting={waitingRequests}
         onSet={() => openVault('set')}
         onRequest={() => openVault('request')}
         onUnlock={() => openVault('unlock')}
@@ -1587,6 +1727,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         passkeyBusy={passkeyBusy}
         passkeyLabel={passkeyLabel}
         onSettings={() => setVaultSettingsOpen(true)}
+        onRecover={() => setVaultRecoveryOpen(true)}
         onLock={lockVault}
       />
 
@@ -1714,12 +1855,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                     credential would open a dialog with no fields in it. */}
                 {isAdmin && p.requires_app_config !== false
                   ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
-                {/* Named for the provider, not "account". What this adds is a *connection* to the data
-                    source; the accounts belong to that source and arrive with it — and "account" already
-                    means a ledger account everywhere else in the app, so using it here named the wrong
-                    thing twice over. */}
+                {/* Named for what one connect action adds, which the adapter declares (`connect_noun`)
+                    because it differs in kind: Plaid's widget authorizes one institution, while a
+                    SimpleFIN setup token claims a bridge that may span several banks and so has no noun
+                    to name — that button stays a bare "+ Connect". The provider's own name is not it: it
+                    already labels the card this button sits in. Never "account", which means a ledger
+                    account everywhere else in the app. */}
                 <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
-                  + Connect {providerLabel(p.provider)}
+                  {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
                 </Button>
                 {/* "Sync now" lives in the card header, not here — it is the routine action, so it has to
                     stay reachable while the card is collapsed. */}
@@ -1833,6 +1976,36 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           }}>
                             {c.last_sync_error || 'This data source no longer accepts this connection.'}
                             {' '}Syncing stays stopped until it is connected again.
+                            {/* Both ways out, side by side and where the problem is stated — this is one
+                                of the few things on a card that is actually asking to be acted on, and
+                                leaving the only remedies in the ⋯ menu made the notice a dead end.
+                                Disconnect is offered *as well as* reconnect because it is sometimes the
+                                only one available, and because even a successful fresh connect leaves
+                                this row behind to be cleaned up. */}
+                            <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              {/* Repair, not re-connect: it reopens the bank's own sign-in against the
+                                  connection that already exists, so the card keeps its accounts, mapping
+                                  and fetched history, where "+ Connect" would start a second connection
+                                  beside it. Hidden without a stored credential — there is no Item to
+                                  re-authorize, so the button could only ever fail. */}
+                              {p.provider === 'plaid' && c.has_credential !== false ? (
+                                <Button small disabled={connectDisabled} title={connectTitle}
+                                  onClick={() => reconnect(c)}>
+                                  Reconnect this bank
+                                </Button>
+                              ) : null}
+                              <Button variant="ghost" small onClick={() => setDisconnectTarget({
+                                provider: p.provider,
+                                external_id: c.external_id,
+                                institution: c.institution,
+                                // With nothing stored there is nothing to revoke *with*, so the
+                                // confirmation must not promise the access ends — see the dialog copy.
+                                revokes: p.revokes_on_disconnect !== false && c.has_credential !== false,
+                                hasCredential: c.has_credential !== false,
+                              })}>
+                                Disconnect
+                              </Button>
+                            </div>
                           </div>
                         ) : null}
                         <LastSyncSummary
@@ -1848,9 +2021,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             per-account outcome — and without a heading the two read as one confusing run
                             of names. These are the local accounts the connection feeds; those were the
                             provider's own accounts and what each contributed. */}
-                        {accts.length ? (
+                        {accts.length || unfedProviderAccounts(c).length ? (
                           <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>
-                            Connected accounts
+                            Accounts from this connection
                           </div>
                         ) : null}
                         {accts.length ? accts.map(a => (
@@ -1885,19 +2058,34 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                               </span>
                             ) : null}
                           </div>
-                        )) : (
-                          // Two different empty states wearing one message before: a connection whose
-                          // provider accounts were never pulled needs "Refresh accounts", while one
-                          // whose accounts are pulled but undecided needs the mapping step. Sending the
-                          // second case to Refresh is advice that cannot work — the accounts are already
-                          // here, they just have nowhere to go. Both name the menu they now live in,
-                          // since neither is a visible button any more.
+                        )) : null}
+                        {/* Named in the provider's own words, because that is what the user chose from at
+                            the bank and the local account may since have been renamed. Without these the
+                            list answers "what is Luma importing?" while looking like it answers "what did
+                            I share?" — and a skipped account, which appears nowhere else in the app, is
+                            silently missing from it. */}
+                        {unfedProviderAccounts(c).map(pa => (
+                          <div key={pa.external_account_id}
+                            style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
+                            <span>{pa.label}</span>
+                            <span style={{ fontSize: 11, fontStyle: 'italic' }}>
+                              {pa.mapping_mode === 'skip' ? 'not imported (skipped)' : 'not imported yet'}
+                            </span>
+                          </div>
+                        ))}
+                        {!accts.length && !unfedProviderAccounts(c).length ? (
+                          // One empty state now, not two. This used to also cover "accounts are here but
+                          // undecided", which needed the mapping step rather than a refresh — those rows
+                          // are listed above as *not imported yet*, so reaching this text means the
+                          // provider account list is genuinely empty and there is nothing to map.
                           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                            {unmappedByConnection[c.id] > 0
-                              ? `${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — map ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} in ⋯ → “Connection settings…”.`
+                            {c.has_credential === false
+                              // Refreshing needs a credential to fetch with, so for a connection whose
+                              // credential is gone the old advice was a step that could only fail.
+                              ? 'No accounts, and no stored credential to fetch them with — connect this data source again, then disconnect this connection.'
                               : 'No accounts imported yet — pull them in with ⋯ → “↻ Refresh accounts”.'}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     )
                   })}
@@ -1938,8 +2126,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         <TokenConnectDialog
           provider={connectTarget.provider}
           spec={connectTarget.connect_spec}
+          relinkCandidates={relinkCandidates(connectTarget)}
+          describeConnection={c => connectionAccountsLabel(
+            accountsForConnectionId(c.id).map(a => a.display_name || a.name),
+          )}
           historyDays={historyDays}
-          onConnect={(token, days) => connectWithToken(connectTarget.provider, token, days)}
+          onConnect={(token, days, adopt) => connectWithToken(connectTarget.provider, token, days, adopt)}
           onClose={() => setConnectTarget(null)}
         />
       ) : null}
@@ -1959,7 +2151,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           onUnlockedByPasskey={adoptPasskeyUnlock} onClose={() => closeVault(false)} />
       ) : null}
       {changingPassphrase ? (
+        // The passkey route is offered here too, which is what makes the panel usable by someone who has
+        // forgotten the passphrase but still holds a way in. It proves the *current* secret; the new one
+        // is typed in the dialog either way.
         <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}
+          onUnlockedByPasskey={completePassphraseChange}
           onClose={() => setChangingPassphrase(false)} />
       ) : null}
       {vaultSettingsOpen ? (
@@ -1972,6 +2168,17 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         />
       ) : null}
 
+      {vaultRecoveryOpen ? (
+        // Both outcomes change vault state the page reads — a recovery leaves it unlocked, a reset
+        // leaves it unconfigured — so both refresh through the same path the other vault dialogs use
+        // rather than each patching a flag locally.
+        <VaultRecoveryDialog
+          onRecovered={refresh}
+          onReset={refresh}
+          onClose={() => { setVaultRecoveryOpen(false); refresh() }}
+        />
+      ) : null}
+
       {disconnectTarget ? (
         <AppConfirmDialog
           title={`Disconnect ${disconnectTarget.institution || 'this bank'}?`}
@@ -1979,9 +2186,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           // be told to revoke, disconnecting really does end the access. Where it cannot, only Luma's copy
           // of the credential goes and the credential itself stays live — saying otherwise would leave
           // someone believing they had cut off access they still have.
-          description={disconnectTarget.revokes
-            ? 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
-            : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
+          // Three outcomes, not two, and the third is the one a user would otherwise be told wrongly.
+          // Without a stored credential nothing can be sent to the provider at all — so this promises
+          // only the local removal, and says the access may still be live, which for a provider that
+          // *can* revoke is the difference between finished and one step left.
+          description={!disconnectTarget.hasCredential
+            ? `This removes the connection from Luma. Existing accounts and their transactions are kept. There is no stored credential left for it, so nothing can be revoked from here — if ${providerLabel(disconnectTarget.provider)} still lists this connection, remove it there too.`
+            : disconnectTarget.revokes
+              ? 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
+              : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
           confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect'}
           confirmDisabled={disconnecting}
           cancelDisabled={disconnecting}
@@ -2041,7 +2254,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 provider: cardMenu.provider,
                 external_id: cardMenu.connection.external_id,
                 institution: cardMenu.connection.institution,
-                revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false,
+                revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false
+                  && cardMenu.connection.has_credential !== false,
+                hasCredential: cardMenu.connection.has_credential !== false,
               }),
             },
           ]}

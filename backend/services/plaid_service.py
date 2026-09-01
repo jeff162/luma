@@ -57,16 +57,30 @@ def _get_client(app_config: dict):
     return plaid_api.PlaidApi(plaid.ApiClient(configuration))
 
 
-def create_link_token(app_config: dict, user_id: str = "local-user") -> str:
-    client  = _get_client(app_config)
-    request = LinkTokenCreateRequest(
-        products=[Products("transactions")],
-        client_name=app_name(),
-        country_codes=[CountryCode("US")],
-        language="en",
-        user=LinkTokenCreateRequestUser(client_user_id=user_id),
-    )
-    response = client.link_token_create(request)
+def create_link_token(app_config: dict, user_id: str = "local-user", access_token: str | None = None) -> str:
+    """Mint the short-lived token Link opens with.
+
+    **`access_token` selects update mode**, which re-authorizes an *existing* Item rather than creating a
+    new one. The distinction is the whole difference between repairing a connection and replacing it: a
+    plain Link session mints a fresh Item with a fresh `item_id` and fresh per-account ids, so
+    reconnecting a bank that way strands the old connection and everything keyed to it. Update mode keeps
+    the Item, so the credential Luma already holds simply starts working again.
+
+    `products` is omitted in update mode — Plaid rejects the pair, because the Item's products were fixed
+    when it was created and this call is not creating one.
+    """
+    client = _get_client(app_config)
+    fields = {
+        "client_name": app_name(),
+        "country_codes": [CountryCode("US")],
+        "language": "en",
+        "user": LinkTokenCreateRequestUser(client_user_id=user_id),
+    }
+    if access_token:
+        fields["access_token"] = access_token
+    else:
+        fields["products"] = [Products("transactions")]
+    response = client.link_token_create(LinkTokenCreateRequest(**fields))
     return response.to_dict()["link_token"]
 
 

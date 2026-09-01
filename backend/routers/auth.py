@@ -19,6 +19,7 @@ from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
+    credentials_exports_any,
     credentials_exports_for_fingerprint,
     enable_auth_mode,
     disable_auth_mode,
@@ -61,6 +62,7 @@ from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_lo
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
 from backend.services import crypto_service
+from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
 
 
@@ -104,6 +106,36 @@ class VaultPassphraseRequest(BaseModel):
 class VaultChangePassphraseRequest(BaseModel):
     old_passphrase: str
     new_passphrase: str
+
+
+class VaultRecoverRequest(BaseModel):
+    # Both halves arrive together on purpose: recovery is one operation, so there is no window in which
+    # the code has been spent and the replacement passphrase has not yet been set. See
+    # `crypto_service.recover_with_code`.
+    code: str
+    new_passphrase: str
+
+
+class VaultPasskeyPassphraseRequest(BaseModel):
+    # The passkey counterpart of `VaultRecoverRequest`, and one request for the same reason: the proof
+    # and the replacement travel together, so no ceremony is ever spent with no passphrase set.
+    credential_id: str
+    prf_output: str
+    new_passphrase: str
+
+
+class VaultReenrolRequest(BaseModel):
+    new_passphrase: str
+
+
+class VaultResetRequest(BaseModel):
+    # 'lost' or 'compromised'. The two paths differ in what they can promise — only a compromised
+    # passphrase can still open the vault, and only an open vault can revoke anything — and in whether
+    # another member's working slot is a reason to refuse. The user is the only one who knows which.
+    reason: str
+    # The typed confirmation. Checked server-side as well as in the dialog because this is the one
+    # irreversible operation in the app and the endpoint is reachable without it.
+    confirm: str = ""
 
 
 class VaultPasskeyRegisterRequest(BaseModel):
@@ -227,6 +259,17 @@ def _session_payload(user: dict) -> dict:
         # who can act on it. Requires holding the DEK, not merely being an admin.
         "vault_can_grant": crypto_service.is_unlocked(user["id"]),
         "vault_passkeys": crypto_service.user_passkey_slots(user["id"]),
+        # How long a recently presented secret still authorizes changes to the unlock methods
+        # themselves; 0 when none. Served so a surface can ask for proof *before* the action instead of
+        # only after a refusal — seconds remaining rather than an expiry instant, so the browser needs
+        # no clock agreement with the server. Advisory only: the server decides, and a stale client copy
+        # costs one redundant prompt rather than admitting anything.
+        "vault_proof_seconds_remaining": crypto_service.proof_seconds_remaining(user["id"]),
+        # Whether a vault recovery code is outstanding, and when it was issued. Never the code itself —
+        # it exists in the clear only in the response that mints it. The date is the only honest thing
+        # to say about a secret shown once, and is enough to recognize a code still on file.
+        "vault_has_recovery_code": crypto_service.has_recovery_code(user["id"]),
+        "vault_recovery_code_issued_at": crypto_service.recovery_code_issued_at(user["id"]),
         # The floor the dialog gates its own submit button on. Served rather than duplicated in the
         # client because the two must agree exactly: a client holding its own copy either blocks a
         # passphrase the server would take or offers one it refuses, and both read as a broken vault.
@@ -773,6 +816,18 @@ def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:
     })
 
 
+def _proof_required_error(exc: Exception) -> HTTPException:
+    """The refusal that asks for a secret to be presented again.
+
+    Its own code rather than `423 vault_locked`: the vault is open, and an unlock dialog would have
+    nothing to do. The client answers this by proving — a passphrase or a passkey — and retrying.
+    """
+    return HTTPException(status_code=403, detail={
+        "code":    "proof_required",
+        "message": str(exc) or "Confirm your passphrase or passkey to change how this vault is opened",
+    })
+
+
 @router.post("/vault/set-passphrase")
 def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
     # Set (or replace) this user's vault passphrase. The first passphrase in the workspace mints the
@@ -845,6 +900,225 @@ def vault_lock(request: Request):
     return {"user": _session_payload(user)}
 
 
+# --- Recovery: the rung between "ask another member" and "destroy it" -----------------------------
+#
+# On a multi-user workspace a forgotten passphrase was already survivable — another member re-enrols the
+# stuck user and no credential moves. A single-user install had nothing between that and the destructive
+# reset below, which is the gap a recovery code closes.
+
+RESET_CONFIRM_PHRASE = "RESET VAULT"
+
+
+@router.post("/vault/recovery-code")
+def vault_issue_recovery_code(request: Request):
+    """Mint a recovery code, replacing any current one, and return it **once**.
+
+    The only response that ever carries the code in the clear: it is stretched into a KEK and stored as a
+    slot, never as anything the server can read back, so a user who loses it regenerates rather than
+    retrieves. Requires the vault unlocked, like enrollment and rotation, because the code has to carry
+    the DEK and only an unlocked member holds it.
+    """
+    user = _require_current_user(request)
+    try:
+        code = crypto_service.issue_recovery_code(user["id"])
+    except crypto_service.ProofRequired as exc:
+        raise _proof_required_error(exc)
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code":    "vault_locked",
+            "message": "Unlock the vault to issue a recovery code.",
+        })
+    return {"recovery_code": code, "user": _session_payload(user)}
+
+
+@router.post("/vault/recover")
+def vault_recover(body: VaultRecoverRequest, request: Request):
+    """Open the vault with a recovery code and set a new passphrase, in one step.
+
+    One request rather than unlock-then-change so there is no window in which the code has been consumed
+    and no replacement passphrase exists yet — the failure that would otherwise leave a user with neither.
+    The DEK is unchanged, so nothing is re-encrypted and **no connection needs re-linking**; a fresh code
+    comes back, so forgetting the replacement is not a return to the dead end.
+    """
+    user = _require_current_user(request)
+    try:
+        code = crypto_service.recover_with_code(user["id"], body.code, body.new_passphrase)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail={
+            "code":    "no_recovery_code",
+            "message": str(exc) or "No recovery code has been issued for this vault.",
+        })
+    # Before the ValueError arm it subclasses, exactly as in `set-passphrase` — reversed, the typed body
+    # carrying the two numbers the dialog gates on would never be sent.
+    except crypto_service.WeakPassphrase as exc:
+        raise _weak_passphrase_error(exc)
+    except ValueError:
+        # A wrong code is the only ValueError `_open_slot` raises, and it is deliberately not echoed back
+        # with its internal wording ("incorrect passphrase"), which would send the user looking for the
+        # wrong field.
+        raise HTTPException(status_code=400, detail={
+            "code":    "bad_recovery_code",
+            "message": "That recovery code was not recognized.",
+        })
+    return {"recovery_code": code, "user": _session_payload(user)}
+
+
+# --- The destructive reset ------------------------------------------------------------------------
+
+@router.post("/vault/passkey/set-passphrase")
+def vault_passkey_set_passphrase(body: VaultPasskeyPassphraseRequest, request: Request):
+    """Prove with a passkey and set a new passphrase, in one step.
+
+    The passkey sibling of `/vault/recover`, and the answer to a gap the ladder had: a passkey opened
+    the vault but could not replace the passphrase, so a passkey holder who had forgotten theirs had to
+    lock themselves out on purpose to reach a recovery code. It also serves a passkey-only member
+    setting a *first* passphrase, which `set-passphrase` no longer does.
+
+    The DEK is unchanged, so nothing is re-encrypted and **no connection needs re-linking**.
+    """
+    user = _require_current_user(request)
+    try:
+        owner_id = crypto_service.set_passphrase_with_passkey(
+            body.credential_id, body.prf_output, body.new_passphrase,
+        )
+    except crypto_service.VaultAccessPending as exc:
+        raise _access_pending_error(exc)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "That passkey is not registered")
+    # Before the ValueError arm it subclasses, exactly as in `set-passphrase`.
+    except crypto_service.WeakPassphrase as exc:
+        raise _weak_passphrase_error(exc)
+    except ValueError:
+        # A wrong PRF output is the only ValueError `_open_slot` raises here, and its internal wording
+        # ("incorrect passphrase") would send the user looking at the wrong thing entirely.
+        raise HTTPException(status_code=400, detail={
+            "code":    "bad_passkey",
+            "message": "That passkey did not open the vault.",
+        })
+    if owner_id != user["id"]:
+        # Same rule as the passkey unlock: the credential opened someone else's slot, and a signed-in
+        # user must not end up operating the vault as a different identity.
+        crypto_service.lock(owner_id)
+        raise HTTPException(status_code=403, detail="That passkey belongs to a different user")
+    return {"user": _session_payload(user)}
+
+
+@router.post("/vault/reenrol")
+def vault_reenrol(body: VaultReenrolRequest, request: Request):
+    """Ask to be let back in: replace an unopenable passphrase slot with a pending one.
+
+    The rung for a member whose access is intact but whose secret is gone. Nothing here can seal the
+    DEK — nothing here can reach it — so the new slot opens nothing until an unlocked member approves
+    it, at which point the DEK is unchanged and no data source is reconnected.
+    """
+    user = _require_current_user(request)
+    try:
+        crypto_service.request_reenrolment(user["id"], body.new_passphrase)
+    except crypto_service.VaultLocked as exc:
+        # Nobody else could ever grant it, so this would be a self-brick rather than a request.
+        raise HTTPException(status_code=409, detail={
+            "code":    "no_one_can_grant",
+            "message": str(exc),
+        })
+    except crypto_service.WeakPassphrase as exc:
+        raise _weak_passphrase_error(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
+
+
+@router.get("/vault/reset-preview")
+def vault_reset_preview(request: Request):
+    """Everything the reset dialog must say *before* the user commits, gathered in one call.
+
+    Assembled server-side because it is one decision: what it costs, and — first — the free alternatives
+    that mean it should not happen at all. A client stitching this together from four endpoints could
+    render the warning while still waiting on the rung that makes it unnecessary.
+    """
+    user = _require_current_user(request)
+    with get_db() as conn:
+        connections = conn.execute("SELECT COUNT(*) FROM connection").fetchone()[0]
+    return {
+        "connections": connections,
+        # The ladder's rungs, in the order the dialog must offer them. Each is a reason *not* to reset —
+        # a reason, not a bar: the reset proceeds if the user says none of them apply.
+        #
+        # Named rather than counted. "Somebody else can open this vault" is not something a user can act
+        # on; "frances can" is, and the whole content of this rung is who to go and ask.
+        "other_members_can_unlock": [
+            {"user_id": m["user_id"], "display_name": m["display_name"]}
+            for m in crypto_service.vault_members() if m["user_id"] != user["id"]
+        ],
+        # The caller's *own* other ways in, which are the rung above asking anyone else at all — and the
+        # one most easily forgotten, since somebody reaching this dialog is thinking about the passphrase.
+        "own_passkeys": [p for p in crypto_service.user_passkey_slots(user["id"]) if not p["pending"]],
+        "has_recovery_code": crypto_service.has_recovery_code(user["id"]),
+        # Unfiltered on purpose: a backup taken under a *previous* passphrase is precisely the one that
+        # still opens, which is the opposite of what the passphrase-change warning wants. See
+        # `control_database.credentials_exports_any`.
+        "credentials_backups": [{"exported_at": e["exported_at"]} for e in credentials_exports_any()],
+        "confirm_phrase": RESET_CONFIRM_PHRASE,
+    }
+
+
+@router.post("/vault/reset")
+def vault_reset(body: VaultResetRequest, request: Request):
+    """Destroy the vault and every credential sealed under it. Irreversible.
+
+    **Admin-gated**, unlike unlocking or granting: those need the DEK and are therefore self-limiting,
+    while this destroys shared workspace state and is exactly the control the model's "admin gates
+    settings, not data" rule is about. Transactions, accounts, mappings and coverage are untouched —
+    only the two encrypted columns are lost, and the connection rows that carry the expensive state
+    survive so a re-link lands back on them.
+
+    The compromise path revokes first, while the vault is still open, and reports per connection rather
+    than aborting: the credentials are being cleared regardless, so a provider that refuses leaves the
+    user with something to finish, not a reason to stop.
+
+    **Another member holding a slot does not block this.** It is a redirect the dialog leads with, by
+    name, and a consequence reported back (`also_locked_out`) — not a refusal. See the note above
+    `reset_vault` for why the block was removed.
+    """
+    user = _require_admin_or_local(request)
+    if body.confirm.strip().upper() != RESET_CONFIRM_PHRASE:
+        raise HTTPException(status_code=400, detail={
+            "code":    "confirmation_required",
+            "message": f"Type {RESET_CONFIRM_PHRASE} to confirm.",
+        })
+    if body.reason not in ("lost", "compromised"):
+        raise HTTPException(status_code=400, detail="Say whether the passphrase was lost or compromised")
+
+    revocations: list[dict] = []
+    if body.reason == "compromised":
+        # Refused rather than degraded to the lost path. This path exists *so that* the revocations can
+        # run, and running it locked would retire every credential without attempting the one thing the
+        # user came here for — while reporting success.
+        if not crypto_service.is_unlocked(user["id"]):
+            raise HTTPException(status_code=423, detail={
+                "code":    "vault_locked",
+                "message": "Unlock the vault first so each credential can be revoked at its provider "
+                           "before it is destroyed.",
+            })
+        revocations = revoke_all_credentials(user)
+
+    # Who else this is about to lock out, captured before the slots are deleted — afterwards there is no
+    # way to say whose access was destroyed, and it is the one consequence the caller cannot see coming
+    # from their own screen.
+    others = [m["display_name"] for m in crypto_service.vault_members() if m["user_id"] != user["id"]]
+    try:
+        result = crypto_service.reset_vault(user["id"], reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {
+        **result,
+        "revocations": revocations,
+        "unfinished": unfinished(revocations),
+        "also_locked_out": others,
+        "user": _session_payload(user),
+    }
+
+
 def _access_pending_error(exc: Exception) -> HTTPException:
     """A correct secret against a slot nobody has approved yet.
 
@@ -887,6 +1161,8 @@ def vault_approve_access(slot_id: str, request: Request):
     user = _require_current_user(request)
     try:
         granted = crypto_service.grant_access(user["id"], slot_id)
+    except crypto_service.ProofRequired as exc:
+        raise _proof_required_error(exc)
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code":    "vault_locked",
@@ -997,6 +1273,12 @@ def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
             user["id"], credential_id=body.credential_id, prf_output=body.prf_output,
             prf_salt=body.prf_salt, label=body.label,
         )
+    except crypto_service.ProofRequired as exc:
+        raise _proof_required_error(exc)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked", "message": str(exc) or "Unlock the vault first",
+        })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"passkey": result, "user": _session_payload(user)}
@@ -1027,6 +1309,26 @@ def vault_passkey_remove(slot_id: str, request: Request):
     user = _require_current_user(request)
     try:
         crypto_service.remove_slot(user["id"], slot_id)
+    except crypto_service.ProofRequired as exc:
+        raise _proof_required_error(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
+
+
+@router.delete("/vault/recovery-code")
+def vault_discard_recovery_code(request: Request):
+    """Delete the recovery code without minting a replacement.
+
+    The counterpart to the `POST` that issues one, which always *replaces* — so invalidating a code that
+    was written down could only be expressed as replace-and-forget, leaving `vault_has_recovery_code`
+    true and the recovery ladder offering a rung the user deliberately does not have.
+    """
+    user = _require_current_user(request)
+    try:
+        crypto_service.discard_recovery_code(user["id"])
+    except crypto_service.ProofRequired as exc:
+        raise _proof_required_error(exc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user": _session_payload(user)}

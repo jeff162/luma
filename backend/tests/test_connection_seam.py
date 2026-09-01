@@ -1,7 +1,7 @@
 """
 Provider-agnostic connection seam (phase 6a): the plaid_item -> connection cutover.
 
-Pins the three edges of the seam that must hold before Teller/SimpleFIN can plug in:
+Pins the three edges of the seam that must hold for a second provider to plug in:
   1. the migration backfill folds legacy plaid_item rows into provider='plaid' connections (idempotently);
   2. the adapter registry resolves a provider and normalizes its SDK dicts to provider-neutral keys;
   3. the credentials backup exports/restores connections (new shape) and still accepts the legacy

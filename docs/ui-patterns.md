@@ -197,6 +197,20 @@ When a page hosts several distinct management surfaces that don't need to be see
 
 **A page's content column is measured inside the padding, not on it.** `maxWidth` on the element that also carries the page padding yields a column `2 × padding` narrower than one measured on an inner element — so a centred header sits a padding's width in from a centred list of the same nominal width, which reads as a stray indent rather than as a bug. Put the padding on the outer element and the `maxWidth` on a child, everywhere on the page including a docked panel's header and body, and name the width once per page rather than repeating the number. The Recurring page had three different left margins stacked on each other for exactly this reason.
 
+**A header's action row wraps; it does not squeeze.** `PageHeader`'s action cluster is a flex row, and a
+flex row without `flexWrap` shrinks its children instead of moving them to a second line — so a page
+that accumulates a fourth or fifth control degrades silently at narrow widths rather than reflowing. Both
+the cluster and the outer row wrap, and the cluster keeps `marginLeft: auto` with `justifyContent:
+flex-end` so a wrapped line still sits hard right: dropped flush left it would sit directly under the
+`<h1>` and read as content belonging to the heading, which stops the title looking like a title. Note
+that every one of those properties is inert until the row actually overflows, which is what made the
+change safe to apply to a component every page uses. The related question — whether a control belongs in
+the header at all — is answered by what it *does*: the header carries things that act on the whole
+subject (run a pass, add one, open a review of findings), while a toolbar under it carries what shapes
+which rows are listed (search, filter, sort). A control that opens a report is a header action even
+though it changes nothing, and a control that takes a threshold parameter reads as a toolbar one even
+though it ends in an action.
+
 **Tabs or a segmented toggle?** Both switch the body of a page; the difference is what the options *are*. A **tab row** names several separate management surfaces that happen to live on one page (Accounts / Owners / Connections). The shared **`SegmentedToggle`** (`components/ui.jsx`) names peer *views of one subject* — the Dashboard's reporting frame and analysis mode, the Recurring page's Series / Needs attention / Upcoming. Where a view's contents are the reason to switch to it, put the count on the control as a `badge` (`badgeTone: 'warning'` where the number is what wants attention): a count only visible after switching cannot tell anyone to switch. Both follow the same persistence rule — session-scoped in `sessionStorage`, with a URL parameter winning over the stored value so a deep link from elsewhere (the Tasks page's `?signal=<kind>`) lands where it means to.
 
 **Split a page into views when two things are competing for one viewport, rather than rationing the space between them.** Findings about recurring series and the series list itself were stacked on one screen; the findings crowded the list and the drill-down panel out of the viewport entirely. Capping the findings' height made the page survivable, but the two were never usefully read together — the fix was to make them peer views.
@@ -571,6 +585,51 @@ with a fallback message when the clipboard is unavailable (a non-secure context 
 telling the user to select and copy manually — otherwise the failure is a button that silently does
 nothing. And drop the value from component state as soon as the dependent object is created.
 
+## Enter in a small explicit-submit form
+
+**Enter advances through the fields and submits from the last one.** The sign-in screen has always worked
+this way; the vault dialogs did not, so the app's most-typed secret — a 20-character vault passphrase —
+had to be followed by a reach for the mouse. `lib/formKeys.js` (`onEnter`, `advanceOnEnter`) is the shared
+version, so a fourth copy does not diverge again.
+
+Two rules travel with it:
+
+- **Gate Enter on the same condition as the button**, named once and used by both. A separately-written
+  condition is how Enter comes to accept what the button refuses — and for a vault passphrase that means
+  walking straight past the strength floor.
+- **A destructive confirmation takes no Enter handler.** Where a typed phrase exists to make an
+  irreversible action deliberate (the vault reset's `RESET VAULT`), firing it from the keyboard gives back
+  exactly what the confirmation was added to take away. The button is the only way through, and that
+  asymmetry is deliberate rather than an oversight to be tidied up later.
+
+Note the mechanical prerequisite: fields carrying `SENSITIVE_FIELD_PROPS`/`NO_AUTOFILL_PROPS` render with
+**no id or name** (see `shared-components.md`), so focus cannot be moved by querying for the next field —
+`Input` forwards a ref for exactly this.
+
+### Import history outlives the connection that produced it
+
+A sync card is the **provenance of transactions still in the ledger**, so it survives the connection being
+removed — `import_batch.connection_id` is `ON DELETE SET NULL`, keeping the history and dropping only the
+link. Two rules follow, both learned from getting them wrong:
+
+- **Group orphaned cards by the identity they still carry** (the filename prefix), never into one bucket.
+  Keyed together, a group takes its label from whichever card is newest and files every other source under
+  it — which put a SimpleFIN import beneath a bank's name.
+- **Say that the source is gone.** A disconnected group reads *"Disconnected · import history kept"*
+  rather than falling through to the generic connection subtitle, which made history look like a second
+  live connection sitting next to the real one.
+
+### A source label that is an opaque provider id
+
+A sync labels each card's source account from `connection_account`, and falls back to the provider's raw
+account id when no record exists for an account the row nonetheless resolved to (the two lookups disagree:
+`account.external_account_id` is durable and global, `connection_account` is per connection). **The stored
+value cannot be corrected retroactively** — it is written into each row's evidence and feeds duplicate
+matching — so the fix is presentational: the chip shows the account the rows landed in and keeps the id in
+its tooltip. The backend records an advisory when the fallback fires, which is log-only on purpose;
+`last_sync_warnings` is shown on the card and is reserved for things the user can act on, and Luma's own
+bookkeeping being inconsistent is not one of them.
+
 ## Confirmation and completion flows
 
 Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.
@@ -698,6 +757,15 @@ identifiable finding or a running count of work.
   an auto-detected series is re-minted with a new id on every scan. A new finding of the same kind is a
   new fingerprint and surfaces on its own, which is what makes this mechanism safe.
 
+- **A fingerprint that is *too* stable is the same bug from the other side.** It must carry not only the
+  finding's subject but what made the finding **actionable**, or "seen it" silently also covers a
+  materially different situation that subject falls into later. The rule-overlap check keys a nesting
+  pair on the two rule ids *plus* whether the narrow rule was redundant: acknowledged while that rule was
+  doing work of its own, the pair returns if a later edit makes it surplus, because there is now an offer
+  to delete it that nobody was ever asked about. The test to apply is not "is this the same subject" but
+  "would the user's answer still be the same" — an edit that changes nothing about the finding (a rename,
+  a tag) must not re-raise it, and one that changes what it says must.
+
 - **A running count is dismissed with a high-water mark that ratchets *down*.** A task like
   "uncategorized transactions" has no individually addressable items on the surface that raises it, so
   what is stored is the count at dismissal and the card returns when the count rises above it. **The
@@ -714,10 +782,23 @@ identifiable finding or a running count of work.
   dismissing is a legitimate answer, and let the task itself declare that — `dismiss_key` present means
   dismissible; the surface never infers it.
 
+  **Nondeterminism is a third reason, distinct from those two.** Where the app is reporting that it
+  cannot tell what it will do — two category rules whose amount ranges overlap with no principled winner
+  — acknowledging is not a legitimate answer, because the ledger goes on being categorized by an
+  arithmetic accident while the surface reports nothing outstanding. Those stay listed until the *model*
+  is corrected. This is why the same panel can have one section that offers dismissal and one that must
+  not: what separates them is whether the finding is information or an undecidable state, not how severe
+  it looks. As above, the backend declares it per finding (`dismissible`) and enforces the refusal where
+  findings are assembled, so no stored row can hide one and no surface can grow its own opinion.
+
 - **A dismissed item leaves a way back, in two places.** An immediate `UndoToast` for the press that was
   a mistake, and a durable collapsed list at the foot of the surface ("N dismissed") for the one noticed
   later. A card that vanishes with no trace is indistinguishable from work that was lost — the same
-  reason a removal from a recurring series is recoverable three ways.
+  reason a removal from a recurring series is recoverable three ways. **The toast half is what a
+  self-contained surface can drop**: where the dismissal happens inside a panel that also carries the
+  "N dismissed" reveal, the way back is already on screen and two clicks away, and it stays on screen
+  because the user has not navigated anywhere. A toast earns its place when the surface that raised the
+  item is one the user is passing through — a Tasks card dismissed on the way somewhere else.
 
 - **Nothing variable-length belongs in a pinned header.** A page whose header block is `flexShrink: 0`
   over a body that is `flex: 1; minHeight: 0` will let the header grow without limit and collapse the

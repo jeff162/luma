@@ -120,11 +120,27 @@ class VaultTests(unittest.TestCase):
             cs.unlock(self.bob, "not bob's passphrase")
         self.assertNotIsInstance(caught.exception, cs.VaultAccessPending)
 
-    def test_resetting_own_passphrase_preserves_the_dek(self):
+    def test_an_unlocked_session_cannot_replace_the_passphrase(self):
+        # **Deliberately the reverse of what this pinned until 2026-09-01**, when re-setting an own
+        # passphrase while unlocked was allowed and documented as "unlocked, so this re-wraps". That
+        # turned a session someone had merely walked up to into a durable, independent way in: the new
+        # passphrase kept working after lock and relock, and the owner's stopped. Replacing a working
+        # slot now needs a secret, not a DEK found in the cache.
         cs.set_passphrase(self.alice, "correct horse battery")
         dek_before = cs.require_dek(self.alice)
-        cs.set_passphrase(self.alice, "a different passphrase")  # unlocked, so this re-wraps
+        with self.assertRaises(ValueError):
+            cs.set_passphrase(self.alice, "a different passphrase")
+        # Nothing was written on the way to the refusal: the original still opens the same DEK.
         self.assertEqual(cs.require_dek(self.alice), dek_before)
+        cs.lock(self.alice)
+        self.assertEqual(cs.unlock(self.alice, "correct horse battery"), dek_before)
+
+    def test_a_proof_carrying_path_still_replaces_it(self):
+        # The other half: the refusal above must not be a dead end. `change_passphrase` carries the old
+        # passphrase as its proof and keeps the same DEK, so no credential is re-encrypted.
+        cs.set_passphrase(self.alice, "correct horse battery")
+        dek_before = cs.require_dek(self.alice)
+        cs.change_passphrase(self.alice, "correct horse battery", "a different passphrase")
         cs.lock(self.alice)
         self.assertEqual(cs.unlock(self.alice, "a different passphrase"), dek_before)
 

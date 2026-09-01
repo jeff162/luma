@@ -195,10 +195,16 @@ class VaultAccessEndpointTests(unittest.TestCase):
             r = client.post("/api/auth/vault/rotate")
             self.assertEqual(r.status_code, 423)
 
-    def test_the_pending_queue_surfaces_as_a_task_only_to_someone_who_can_act(self):
+    def test_the_pending_queue_surfaces_as_a_task_to_anyone_who_could_act(self):
         # A computed task, like the HTTPS one: no stored dismissal, and it disappears by the condition
-        # ceasing to hold. Scoped to a member holding the key, because an admin with a locked vault has
-        # no action available and a nag they cannot answer is worse than silence.
+        # ceasing to hold. Scoped to a **member**, which is not the same as a member whose vault happens
+        # to be open.
+        #
+        # **Deliberately the reverse of what this pinned until 2026-09-01**, when the task was hidden
+        # from a member with a locked vault on the reasoning that they had "no action available". They
+        # do — they unlock, then approve — and hiding it removed the only signal that would tell them to.
+        # Someone who does not routinely unlock the vault never learns there is anything to unlock for,
+        # so the person waiting waits indefinitely on a notification nobody sends.
         with api_client() as (client, _):
             owner = client.get("/api/auth/status").json()["user"]["id"]
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
@@ -206,19 +212,44 @@ class VaultAccessEndpointTests(unittest.TestCase):
             self._become(client, joiner)
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
 
-            # The person waiting is not told to approve themselves.
+            # The person waiting is not told to approve themselves. They hold a slot, but a pending one,
+            # so `user_has_slot` is false for them and the scoping still excludes them.
             self.assertNotIn("vault_access_requests", self._task_ids(client))
 
             self._become(client, owner)
             self.assertIn("vault_access_requests", self._task_ids(client))
+
             client.post("/api/auth/vault/lock")
-            self.assertNotIn("vault_access_requests", self._task_ids(client))
+            self.assertIn("vault_access_requests", self._task_ids(client),
+                          "a locked member can still approve — after unlocking, which is the point")
+            locked_task = next(t for t in client.get("/api/tasks").json()["tasks"]
+                               if t["id"] == "vault_access_requests")
+            self.assertIn("Unlock the vault first", locked_task["description"],
+                          "and the task has to name the step between them and approving")
 
             client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
+            open_task = next(t for t in client.get("/api/tasks").json()["tasks"]
+                             if t["id"] == "vault_access_requests")
+            self.assertNotIn("Unlock the vault first", open_task["description"],
+                             "and stops naming it once it no longer applies")
+
             slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
             client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
             self.assertNotIn("vault_access_requests", self._task_ids(client),
                              "the task must self-clear once the queue empties")
+
+    def test_a_non_member_is_never_nagged_about_the_queue(self):
+        # The scoping that survives the change above: someone with no way into the vault cannot approve
+        # at any point, so the task would be a nag with nothing behind it.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+
+            outsider = self._add_identity(client, "Outsider")
+            self._become(client, outsider)
+            self.assertNotIn("vault_access_requests", self._task_ids(client))
 
     def _task_ids(self, client) -> list[str]:
         return [t["id"] for t in client.get("/api/tasks").json()["tasks"]]
@@ -366,6 +397,223 @@ class VaultPasskeyEndpointTests(unittest.TestCase):
                             json={"credential_id": "c1", "prf_output": prf})
             self.assertEqual(r.status_code, 403)
             self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_unlocked"])
+
+
+class VaultRecoveryEndpointTests(unittest.TestCase):
+    """The recovery code and the destructive reset over HTTP — the wiring the service tests cannot see:
+    which status codes the dialogs key on, and that the code is returned exactly once."""
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    def test_recovery_code_is_returned_once_and_then_only_described(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post("/api/auth/vault/recovery-code")
+            self.assertEqual(r.status_code, 200, r.text)
+            code = r.json()["recovery_code"]
+            self.assertTrue(code)
+
+            # Every later description of the vault says a code exists and when it was issued, and never
+            # the code itself — it is stretched into a KEK, so the server genuinely cannot read it back.
+            user = client.get("/api/auth/status").json()["user"]
+            self.assertTrue(user["vault_has_recovery_code"])
+            self.assertIsNotNone(user["vault_recovery_code_issued_at"])
+            self.assertNotIn(code, client.get("/api/auth/status").text)
+
+    def test_issuing_a_code_requires_an_unlocked_vault(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/auth/vault/lock")
+            r = client.post("/api/auth/vault/recovery-code")
+            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
+
+    def test_recovery_sets_a_new_passphrase_and_reissues(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            code = client.post("/api/auth/vault/recovery-code").json()["recovery_code"]
+            client.post("/api/auth/vault/lock")
+
+            r = client.post("/api/auth/vault/recover",
+                            json={"code": code, "new_passphrase": "a brand new vault passphrase"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertNotEqual(r.json()["recovery_code"], code)
+            self.assertTrue(r.json()["user"]["vault_unlocked"])
+
+            client.post("/api/auth/vault/lock")
+            self.assertEqual(
+                client.post("/api/auth/vault/unlock",
+                            json={"passphrase": "a brand new vault passphrase"}).status_code, 200,
+            )
+
+    def test_a_wrong_code_is_reported_as_a_code_problem(self):
+        # Not as "incorrect passphrase", which is `_open_slot`'s internal wording and would send the user
+        # to the wrong field of the dialog.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/auth/vault/recovery-code")
+            r = client.post("/api/auth/vault/recover",
+                            json={"code": cs.generate_recovery_code(), "new_passphrase": "another long passphrase here"})
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.json()["detail"]["code"], "bad_recovery_code")
+
+    def test_a_weak_replacement_passphrase_reports_the_floor(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            code = client.post("/api/auth/vault/recovery-code").json()["recovery_code"]
+            r = client.post("/api/auth/vault/recover", json={"code": code, "new_passphrase": "short"})
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.json()["detail"]["code"], "weak_passphrase")
+            self.assertEqual(r.json()["detail"]["min_length"], cs.VAULT_PRODUCTION_MIN_LEN)
+            # The code survives a rejected attempt, which is what makes one code enough.
+            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_has_recovery_code"])
+
+    # --- reset ------------------------------------------------------------------------------------
+
+    def test_reset_preview_leads_with_the_free_alternatives(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/auth/vault/recovery-code")
+            preview = client.get("/api/auth/vault/reset-preview").json()
+            self.assertTrue(preview["has_recovery_code"])
+            self.assertEqual(preview["other_members_can_unlock"], [])
+            self.assertEqual(preview["own_passkeys"], [])
+            self.assertEqual(preview["connections"], 0)
+            self.assertIn("confirm_phrase", preview)
+
+    def test_reset_preview_names_the_member_to_go_and_ask(self):
+        # A count cannot be acted on; a name can, and that is the entire content of this rung. It also
+        # never names the caller, who is the one person asking precisely because they cannot get in.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            other = client.post("/api/auth/identities", json={"name": "Robin"}).json()["identity"]["id"]
+            client.post("/api/auth/select-identity", json={"user_id": other})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "robin's own long passphrase"})
+
+            preview = client.get("/api/auth/vault/reset-preview").json()
+            self.assertEqual([m["display_name"] for m in preview["other_members_can_unlock"]], ["Tester"])
+
+    def test_another_member_does_not_block_the_reset_but_is_named_in_the_result(self):
+        # Revised 2026-08-31: this used to be a 409. A slot row cannot prove the other person is
+        # reachable, the admin gate already settles who may do this, and the compromise path allowed the
+        # same destruction anyway — so the block only stopped users who reported their situation
+        # honestly. What replaces it is telling the caller whose access they are also ending.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            other = client.post("/api/auth/identities", json={"name": "Robin"}).json()["identity"]["id"]
+            client.post("/api/auth/select-identity", json={"user_id": other})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "robin's own long passphrase"})
+
+            # Back to the first identity, which holds the key, to approve Robin's enrollment.
+            first = [m for m in client.get("/api/auth/vault/members").json()["members"]][0]["user_id"]
+            client.post("/api/auth/select-identity", json={"user_id": first})
+            client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
+            slot = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            self.assertEqual(client.post(f"/api/auth/vault/access-requests/{slot}/approve").status_code, 200)
+
+            phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
+            r = client.post("/api/auth/vault/reset", json={"reason": "lost", "confirm": phrase})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["also_locked_out"], ["Robin"])
+            self.assertFalse(r.json()["user"]["vault_configured"])
+
+    def test_reset_requires_the_typed_confirmation(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post("/api/auth/vault/reset", json={"reason": "lost", "confirm": "yes"})
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.json()["detail"]["code"], "confirmation_required")
+            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_configured"])
+
+    def test_reset_clears_the_vault(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
+            r = client.post("/api/auth/vault/reset", json={"reason": "lost", "confirm": phrase})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["revocations"], [])
+            self.assertFalse(r.json()["user"]["vault_configured"])
+
+    def test_a_compromise_reset_refuses_while_locked(self):
+        # This path exists so the revocations can run, and they need the DEK. Degrading to the lost path
+        # would retire every credential while reporting success at the one thing it never attempted.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
+            client.post("/api/auth/vault/lock")
+            r = client.post("/api/auth/vault/reset", json={"reason": "compromised", "confirm": phrase})
+            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
+            self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_configured"])
+
+
+class VaultProofEndpointTests(unittest.TestCase):
+    """The wiring the service tests cannot see: the status code the client keys on, and the countdown
+    it uses to ask for proof *before* an action rather than after a refusal."""
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    @staticmethod
+    def _lapse_proof():
+        with cs._unlock_lock:
+            for user_id in list(cs._proved_at):
+                cs._proved_at[user_id] -= cs.PROOF_TTL_SECONDS + 1
+
+    def test_the_session_reports_the_remaining_proof_window(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            user = client.get("/api/auth/status").json()["user"]
+            self.assertGreater(user["vault_proof_seconds_remaining"], 0)
+            self.assertLessEqual(user["vault_proof_seconds_remaining"], cs.PROOF_TTL_SECONDS)
+
+            self._lapse_proof()
+            user = client.get("/api/auth/status").json()["user"]
+            self.assertEqual(user["vault_proof_seconds_remaining"], 0)
+            self.assertTrue(user["vault_unlocked"], "only the proof lapsed — the vault stays open")
+
+    def test_a_lapsed_proof_is_its_own_code_not_vault_locked(self):
+        # The distinction the client acts on: `vault_locked` sends it to an unlock dialog, which would
+        # have nothing to do here — the vault is open and what is missing is recency.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self._lapse_proof()
+            r = client.post("/api/auth/vault/recovery-code")
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertEqual(r.json()["detail"]["code"], "proof_required")
+
+    def test_proving_again_reopens_the_door(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            self._lapse_proof()
+            self.assertEqual(client.post("/api/auth/vault/recovery-code").status_code, 403)
+
+            r = client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(client.post("/api/auth/vault/recovery-code").status_code, 200)
+
+    def test_setting_a_passphrase_over_existing_access_is_refused(self):
+        # The API-level door the old `set-passphrase` left open: an unlocked session replacing the
+        # passphrase with no proof of the old one. Not reachable from the app's own UI, which is exactly
+        # why it needed closing at the endpoint rather than in the dialog.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post("/api/auth/vault/set-passphrase",
+                            json={"passphrase": "a-different-strong-passphrase"})
+            self.assertEqual(r.status_code, 400, r.text)
+            # The original still opens it.
+            client.post("/api/auth/vault/lock")
+            self.assertEqual(
+                client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE}).status_code,
+                200,
+            )
 
 
 if __name__ == "__main__":

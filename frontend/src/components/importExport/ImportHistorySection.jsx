@@ -261,7 +261,15 @@ export function ImportHistorySection({
                                 // Muted provenance cue on the group header: which data connection these
                                 // synced cards came from, so multiple same-institution connections (e.g.
                                 // two "Chase") are distinguishable. Mirrors the hover's Connection row.
-                                <span>{row.provider ? `${providerLabel(row.provider)} connection` : 'Data connection'}</span>
+                                //
+                                // A disconnected group says so outright rather than falling through to
+                                // the generic label, which read as an ordinary live connection sitting
+                                // beside the real one — two rows under the same institution name, one of
+                                // them history. Its cards are kept because they are the provenance of
+                                // transactions still in the ledger.
+                                <span>{row.disconnected
+                                  ? 'Disconnected · import history kept'
+                                  : row.provider ? `${providerLabel(row.provider)} connection` : 'Data connection'}</span>
                               ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
                                 <TransientTextInput
                                   value={sourceDescriptionDraft}

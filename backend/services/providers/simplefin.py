@@ -594,6 +594,9 @@ class SimpleFinAdapter(ProviderAdapter):
     requires_app_config = False
     has_cursor = False
     revokes_on_disconnect = False     # no revocation call exists; only the user, at the Bridge, can revoke
+    # The handle is derived from the credential (see `connect`), so a fresh access URL is a fresh handle:
+    # a re-link has to be told which connection it replaces, or it lands as a second one.
+    stable_external_id = False
     max_history_days = None           # the Bridge publishes no history cap; the walk finds the end itself
     routine_lookback_days = 30
     # Rejected: the Bridge publishes no change feed and no pending pointer, so nothing can ever revise a

@@ -1112,6 +1112,23 @@ which on a metered provider spends budget and may pause partway — accepted, be
 inferring from the backup's age whether a reset is needed, and a file's age says nothing about what the
 provider has reported since it was written.
 
+**A connection may hold no credential at all, and that is a state rather than a fault.** A vault reset
+clears `credential`/`credential_enc` on every connection and deliberately *keeps* the rows, because the
+account mappings, per-account coverage and sync history hanging off `connection_id` are the expensive part
+and are not lost with the credential — the row is what a re-link lands back on. So "no credential" means
+*this connection is waiting to be re-linked*, and `crypto_service.connection_has_credential` is how a
+caller asks without attempting a decrypt.
+
+The consequence is a rule for every path that reaches for one: `decrypt_connection_credential` raises
+`MissingCredential` rather than returning `""`. It previously returned the empty string, which is
+indistinguishable from a credential, so callers passed it to the provider — Plaid answers *"access_token
+must be a non-empty string"*, and because `disconnect` converts a failed revocation into a 502 that keeps
+the row, the connection that could not be revoked also could not be deleted. A reset therefore left husks
+with no way to clear them. Each caller now answers in its own terms: a **disconnect** skips the provider
+call and removes the row locally, reporting `revoked: false` (for a provider that normally *does* revoke,
+that is a real caveat — the access may still be live at the provider); **re-authorize** and
+**refresh-accounts** refuse with somewhere to go; a **sync** skips and flags `reauth_required`.
+
 **A restore adopts the backup's `instance_id`.** Because a restore is a full replacement — it wipes the target and reloads the backup wholesale — afterward the data *is* exactly the backup's system, so the DB takes on the backup's `instance_id` rather than keeping the target's old one. (Only the identity changes; `access_mode` is a property of the deployment, not stored in the DB.) This keeps identity meaning "which data lineage this is": without it, restoring a backup into a fresh DB and then restoring the *same* backup again would wrongly trip the "different system" guard, since the fresh DB would still carry its own throwaway id. The guard itself is unaffected — it compares the *incoming* backup against the *pre-restore* data to decide whether confirmation is needed; the adoption only sets the identity the DB carries once that data has been replaced. The `instance_id` also namespaces browser-local UI caches (remembered profile, account-UI state) per database, so adopting the backup's id keeps those caches aligned with the data lineage they describe.
 
 ### Preferences

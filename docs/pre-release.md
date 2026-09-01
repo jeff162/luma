@@ -265,25 +265,42 @@ backend, 17 frontend), but the diagram's placement, labelling and hit targets ar
 thing a green unit suite cannot see — the same class that produced four defects in an hour on feature 1.
 This one is worth a pass before screenshots.
 
-### 4. Vault recovery
+### 4. Vault recovery  ✅ *done 2026-08-31; second pass 2026-09-01*
 
 [`backlog/vault-passphrase-recovery.md`](backlog/vault-passphrase-recovery.md).
 
-Today a forgotten vault passphrase is an unhandled dead end with no endpoint and no UI. **Shipping that
-to strangers is the sharpest gap in this list**: the first public user who sets a passphrase and forgets
-it has no path at all, and the app does not even say so.
+A forgotten vault passphrase was an unhandled dead end with no endpoint and no UI — **the sharpest gap on
+this list**, since the first public user who sets a passphrase and forgets it had no path at all and the
+app did not even say so.
 
-Minimum: the **destructive reset**, with the two paths the file now distinguishes — lost passphrase
-versus compromise — including revocation on the way out driven by `revokes_on_disconnect`, and the
-refusal rule scoped so it only applies to the lost-passphrase path.
+Shipped: the **destructive reset** with both paths (lost versus compromise), revocation on the way out
+driven by `revokes_on_disconnect` and reported per connection, and the refusal scoped to the lost path.
+The *owed decision* on **vault recovery codes** was settled in favour of shipping them — one code per
+user, in one atomic recover-and-re-key request, which is what makes a single code as safe as a set. Also
+taken: the `VaultDecryptError` classification. `VaultRecoveryDialog` presents the whole ladder in order
+off the locked vault strip.
 
-*Owed decision:* whether **vault recovery codes** ship with it. They are prevention rather than cure,
-they are cheap (`vault_slot.method` already generalizes), and they would leave a single-user install a
-rung above "destroy it". Argument for including: reset is a bad first experience to hand a new user, and
-recovery codes mean most never reach it. Argument against: it is net-new surface on the release path.
+**Second pass 2026-09-01 — two defects in what shipped, and one wider finding, all now closed.** The ladder's *other member
+can help* rung never executed: it instructs the stuck user to set a new passphrase, which `set_passphrase`
+refuses for exactly that user because their slot still holds the DEK. And a passkey opens the vault but
+cannot set a new passphrase, so a passkey holder who forgets it must lock themselves out to reach the
+recovery code. Behind both: `set_passphrase`, `register_passkey_slot` and `issue_recovery_code` each mint
+a **durable** unlock method from a DEK merely found in the 8-hour unlock cache, turning transient access
+to an unlocked session into permanent independent access. Scope, decisions and rejected alternatives are
+in [`backlog/vault-passphrase-recovery.md`](backlog/vault-passphrase-recovery.md) under "Reopened
+2026-09-01". Not a regression from the 2026-08-31 work — the mint-from-cache behaviour predates it. Shipped
+as a five-minute proof window on all three doors, `POST /auth/vault/passkey/set-passphrase`, and a
+re-enrollment rung that submits from inside the recovery dialog and is marked as replacing existing access
+where the approver can see it.
 
-Also in this file and worth taking regardless, being small: `VaultDecryptError` is unclassified and
-reports as a generic sync failure instead of "reconnect needed".
+**Re-link adoption landed too, with a correction to what it is for.** The claim that a SimpleFIN re-link
+strands the account mappings was **wrong**: `record_provider_accounts` and sync both key on
+`account.external_account_id`, which is UNIQUE and durable, so mappings and routing survive on their own.
+What is actually lost is per-account **coverage** and the connection's cursor — a full history re-walk
+under the provider's rate budget, plus a duplicate card. Connect now asks *what is this connecting?* and
+**re-points the surviving row** rather than inserting a second one, driven by a new declared capability
+(`stable_external_id`) so a future provider inherits the behaviour by declaring the trait. The question is
+asked **before** the provider call because a claim is single-use — see `building-a-connector.md`.
 
 ### 5. Streaming backup — export *and* restore  ✅ *done 2026-08-23, less the documents phase*
 
@@ -350,6 +367,28 @@ already correct. Every category rollup and every category-scoped drill-down read
 so a regression here is a wrong total rather than a missing feature. That is what the backup omission
 guard, the summary-endpoint tests, and a before/after comparison over a real-data copy are for.
 
+## Landed alongside, off-plan
+
+Not one of the six, and not scoped here — recorded because it moved surfaces and versions that later
+steps in this plan depend on.
+
+**Rule overlap surfacing** ([`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md), shipped
+2026-08-27). *Check overlaps* on the Rules page reports rule pairs that compete for the same
+transactions: amount ranges overlapping with no deterministic winner (a warning, not dismissible, no
+delete — the answer is to refine the conditions), and nested merchant matchers (information, dismissible,
+with a delete on the surplus half where the pair files identically). It was picked up as parked backlog
+rather than under any feature above.
+
+Two things it moved that matter to the steps below:
+
+- **Schema version 45 and backup payload version 14**, both purely additive — a `rule_overlap_dismissal`
+  table and its backup section. Anything in the release notes that names a payload version needs the new
+  number, and the kit test now exercises a migration on top of everything else.
+- **The Rules page header changed** — a new control, *Re-run categorization* renamed to *Run
+  categorization* (the Help topics had always called it that), and `PageHeader`'s action row now wraps
+  instead of squeezing. That last one is shared by every page, though it is inert until a header actually
+  overflows. Relevant to **Screenshots**, which is the step that assumes surfaces have stopped moving.
+
 ## Release mechanics
 
 - **Test the Windows and Linux kits.** Only macOS has been exercised. Both are portable zips, so the
@@ -373,8 +412,8 @@ guard, the summary-endpoint tests, and a before/after comparison over a real-dat
    the envelope and the two document decisions that 1 builds on, so the order is a dependency rather than
    a preference. Nothing else waits on either.
 2. **The other three in any order** — they do not touch each other. Recurring anomalies (done) were the
-   cheapest and most visible; vault recovery is the one whose absence is a real hazard; attachments are
-   the one the README already promises.
+   cheapest and most visible; vault recovery (done, second pass 2026-09-01) was the one whose absence was
+   a real hazard; attachments are the one the README already promises.
 3. **Splits (6) can run alongside any of them** — it shares no surface with the other five. It should
    land before screenshots for the same reason cash-flow reporting does: a category drill-down looks
    different once a split renders in it.

@@ -86,13 +86,18 @@ def _https_setup_task(request: Request | None) -> dict | None:
 def _vault_access_task(request: Request | None) -> dict | None:
     """Someone is waiting to be let into the credential vault.
 
-    Shown only to a member who can actually approve it — that means holding the DEK, so an admin with a
-    locked vault sees nothing, because there is nothing they could do from here. Without this the
-    request is invisible: the person waiting has no way to reach the people who could grant it, and the
-    people who could have no reason to open the page where the queue lives.
+    Shown to anyone who **could** approve it — a member holding an unlock method — rather than only to
+    someone whose vault happens to be open right now. Gating on `is_unlocked` was the same mistake in two
+    places (here and the Connections strip): it treats "cannot approve this second" as "cannot approve",
+    and the person it hides the request from is exactly the one who needs telling. Someone who does not
+    routinely unlock the vault would otherwise never learn there is anything to unlock *for*, which
+    leaves the requester waiting on a signal that is never sent.
+
+    Still not shown to a non-member: they can do nothing about it at any point, so it would be a nag with
+    no action behind it.
     """
     user = getattr(request, "state", None) and getattr(request.state, "user", None)
-    if not user or not crypto_service.is_unlocked(user["id"]):
+    if not user or not crypto_service.user_has_slot(user["id"]):
         return None
     waiting = [r for r in crypto_service.pending_access_requests() if r["user_id"] != user["id"]]
     if not waiting:
@@ -102,7 +107,9 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "id":          "vault_access_requests",
         "title":       "Vault access requested",
         "description": f"{names} {'is' if len(waiting) == 1 else 'are'} waiting for access to the "
-                       "data-source credential vault. Approving lets them connect and sync data sources.",
+                       "data-source credential vault. Approving lets them connect and sync data sources."
+                       + ("" if crypto_service.is_unlocked(user["id"])
+                          else " Unlock the vault first — approving shares the key, so it has to be in hand."),
         "count":       len(waiting),
         "link":        "/accounts?tab=connections",
         "link_label":  "Review vault access",
