@@ -139,6 +139,52 @@ class CrossAccountTransferMatchTests(_WalletLedgerFixture):
         self.assertEqual([c["id"] for c in out], [near, far])
 
 
+class CandidateAccountLabelTests(_WalletLedgerFixture):
+    """What the report calls the account a candidate sits on.
+
+    Merging propagates the parent's display name onto every child, so inside a linked group the display
+    name names the *group*. A candidate on a sibling then carried the same account label as the row it
+    was offered as the duplicate of — and the whole point of a cross-account candidate is that it came
+    from somewhere else. These pin that the label separates group members.
+    """
+
+    def _merged_child(self, child_id, own_name, display_name, mask):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type,
+                                        mask, owner_id, parent_account_id)
+                   VALUES (?, ?, 'fixture', ?, ?, 'credit', ?, ?, 'card')""",
+                (child_id, f"p_{child_id}", own_name, display_name, mask, SHARED_OWNER_ID),
+            )
+
+    def test_a_candidate_on_a_merged_sibling_is_not_labeled_as_the_group(self):
+        # The reported shape: the twin arrived through a second provider onto a child account, which
+        # inherited the parent's display name on merge. Labeled by display name alone it read as the
+        # same account as the row it duplicated.
+        self._merged_child("card-child", "CREDIT CARD", "Rewards Card", "2741")
+        self._txn("card-child", -95.00, "2026-07-01", "Annual Membership Fee")
+        with self._use_db_path(), get_db() as conn:
+            out = find_ledger_payment_match(conn, "paypal", "2026-07-01", -95.00, "Annual Membership Fee")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["account_name"], "Rewards Card ···2741",
+                         "the mask is what separates a merged child from the group it was merged into")
+
+    def test_an_unmerged_account_keeps_its_plain_name(self):
+        # No mask, no suffix — the label must not grow noise for the ordinary case.
+        self._txn("card", -49.99, "2026-04-02", "PayPal Spotify")
+        with self._use_db_path(), get_db() as conn:
+            out = find_ledger_payment_match(conn, "paypal", "2026-04-01", -49.99, "Spotify")
+        self.assertEqual(out["account_name"], "Rewards Card")
+
+    def test_the_transfer_twin_is_labeled_the_same_way(self):
+        # Both callers read the one candidate query, so neither can drift into its own label form.
+        self._merged_child("bank-child", "CHECKING", "Everyday Checking", "3506")
+        self._txn("bank-child", -120.00, "2026-05-02", "PayPal Transfer")
+        with self._use_db_path(), get_db() as conn:
+            out = find_cross_account_transfer_candidates(conn, "paypal", "2026-05-01", 120.00)
+        self.assertEqual([c["account_name"] for c in out], ["Everyday Checking ···3506"])
+
+
 class LedgerPaymentMatchTests(_WalletLedgerFixture):
     """The same candidate query, read the other way round.
 

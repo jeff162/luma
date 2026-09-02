@@ -920,11 +920,18 @@ def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: i
     """
     low = (on_date - timedelta(days=window_days)).isoformat()
     high = (on_date + timedelta(days=window_days)).isoformat()
+    # `_account_label_sql`, not a bare display name: merging propagates the parent's display name onto
+    # every child (`_set_root_display_name`), so inside a linked group the display name identifies the
+    # *group*, not the member. A candidate on a sibling then renders with the same account label as the
+    # row it supposedly duplicates — erasing the one fact that explains the pair, that the twin arrived
+    # on a different underlying source. The mask is what separates them. Sharing the expression also
+    # keeps one report from carrying two label forms: every other account in it is named through
+    # `account_labels`, which skips a candidate that already carries an `account_name` of its own.
     return conn.execute(
-        """SELECT t.id, t.date, t.amount, t.account_id,
+        f"""SELECT t.id, t.date, t.amount, t.account_id,
                   COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
                   t.import_evidence_json, t.import_batch_id,
-                  COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
+                  {_account_label_sql('a')} AS account_name
            FROM   txn t JOIN account a ON a.id = t.account_id
            WHERE  ROUND(t.amount, 2) = ROUND(?, 2)
              AND  t.account_id <> ?
