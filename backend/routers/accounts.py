@@ -35,6 +35,10 @@ from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
     clear_account_pair_distinct_for_merge,
     forget_account_pair_distinct,
+    forget_suspect_pair_distinct,
+    list_suspect_pair_distinct,
+    maybe_rescan_for_detection_change,
+    reopen_suspect_pair,
     list_distinct_account_pairs,
     promote_in_group_suspects_to_confirmed,
     record_account_pair_distinct,
@@ -635,6 +639,56 @@ def assert_distinct_account_pair(body: DistinctPairRequest):
     if not result.get("recorded"):
         raise HTTPException(status_code=400, detail="Two different accounts are needed to assert a pair")
     return result
+
+
+@router.post("/duplicate-rescan")
+def rescan_duplicates_for_detection_change():
+    """App-load catch-up for a matcher that has since improved: re-scan every account once when this
+    database was last examined under older matching rules, then stamp the current version.
+
+    A no-op on every load but the first after a rule change, so it is safe to call unconditionally. Pairs
+    the user has already judged are skipped, so a bump surfaces what was never examined without re-asking
+    anything that was."""
+    with get_db() as conn:
+        return maybe_rescan_for_detection_change(conn)
+
+
+class ReopenPairsRequest(BaseModel):
+    pairs: list[list[str]]
+
+
+@router.get("/duplicate-pairs")
+def list_distinct_transaction_pairs():
+    """The pairs the user has judged "not the same charge", newest first — the row-level counterpart of
+    the distinct-account list, and inspectable for the same reason: it is a durable decision made in
+    passing that nothing else on screen reveals."""
+    with get_db() as conn:
+        return {"pairs": list_suspect_pair_distinct(conn)}
+
+
+@router.post("/duplicate-pairs/reopen")
+def reopen_distinct_transaction_pairs(body: ReopenPairsRequest):
+    """Undo one or more Keeps: forget each judgement and put its finding back.
+
+    Takes a list because a bulk Keep is one action to the user and its Undo has to be one too — undoing
+    N judgements as N requests would let a partial failure leave half the operation reversed with nothing
+    saying which half."""
+    results = []
+    with get_db() as conn:
+        for pair in body.pairs:
+            if len(pair) != 2:
+                raise HTTPException(status_code=400, detail="Each pair needs exactly two transaction ids")
+            results.append(reopen_suspect_pair(conn, pair[0], pair[1]))
+    return {"reopened": sum(1 for r in results if r.get("reopened")), "results": results}
+
+
+@router.delete("/duplicate-pairs/{txn_id_a}/{txn_id_b}")
+def forget_distinct_transaction_pair(txn_id_a: str, txn_id_b: str):
+    """Forget one "these two rows are not the same charge" judgement, so detection may raise the pair
+    again. The row-level counterpart of forgetting a distinct-account assertion, and the escape hatch for
+    a misclick — the judgement is otherwise permanent, which is the point of recording it."""
+    with get_db() as conn:
+        return forget_suspect_pair_distinct(conn, txn_id_a, txn_id_b)
 
 
 @router.delete("/distinct-pairs/{account_id_a}/{account_id_b}")

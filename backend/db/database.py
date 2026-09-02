@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 45
+CURRENT_VERSION = 48
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1246,6 +1246,77 @@ def _add_rule_overlap_dismissal(conn):
     )
 
 
+@migration(46)
+def _add_recurring_series_amount_mode(conn):
+    # Whether a series carries its amount as part of its identity — see the baseline CREATE. Every
+    # existing row takes 'variable', which is the behavior they were detected under (amount was never a
+    # matching gate before this), so nothing changes until a scan re-mints a group that amount splits.
+    #
+    # `PRAGMA table_info` on a table that does not exist returns no rows, which is indistinguishable
+    # from a table lacking the column — so the table itself is checked first. `ALTER TABLE` has no
+    # `IF NOT EXISTS` form, and this is its equivalent: the migration chain runs in full against the
+    # hand-built partial schemas the older migration tests stand up, which carry only the tables their
+    # own migration touches. On any real database the table is always present.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(recurring_series)").fetchall()}
+    if not cols:
+        return
+    if "amount_mode" not in cols:
+        conn.execute(
+            "ALTER TABLE recurring_series ADD COLUMN amount_mode TEXT NOT NULL DEFAULT 'variable'"
+        )
+    # The pinned expectation band — see the baseline CREATE for why it is not the derived band. Left
+    # NULL everywhere: nothing can have been pinned before there was a way to pin it.
+    for column in ("expected_min", "expected_max"):
+        if column not in cols:
+            conn.execute(f"ALTER TABLE recurring_series ADD COLUMN {column} REAL")
+
+    # Riding along: the vestigial partial unique index guarding `recurring_membership_override.state =
+    # 'pinned'`, the withdrawn feature that forced a row *into* a series it does not match. Nothing
+    # writes that state — the endpoint rejects it and `_load_overrides` filters on 'excluded' — so the
+    # index is inert and dropping it changes no behavior, which is exactly why it was queued for the
+    # next migration written for another reason rather than given a version bump of its own. The `state`
+    # column stays: 'excluded' still uses it.
+    conn.execute("DROP INDEX IF EXISTS idx_recurring_override_pin")
+
+
+@migration(47)
+def _add_suspect_pair_distinct(conn):
+    # Per-pair "not the same charge" judgements — see the baseline CREATE for why Keep needed one and
+    # what breaks without it. Created here as well because an existing database has never seen the table.
+    # **Nothing is backfilled and nothing can be**: Keep clears the pointer naming the pair, so a past
+    # judgement records only that the row was resolved, not what against. The consequence is deliberate
+    # and was chosen over guessing — the first version-gated re-scan re-raises historical Keeps once, and
+    # the user's answers are recorded properly from then on.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suspect_pair_distinct (
+            txn_id_low  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            txn_id_high TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            asserted_at TEXT NOT NULL,
+            PRIMARY KEY (txn_id_low, txn_id_high),
+            CHECK (txn_id_low < txn_id_high)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_suspect_pair_distinct_high ON suspect_pair_distinct(txn_id_high)"
+    )
+
+
+@migration(48)
+def _suspect_pair_distinct_remembers_the_flag(conn):
+    # What the flag was before Keep cleared it, so an Undo restores that finding rather than whatever a
+    # re-derivation would produce today — see the baseline CREATE. Nullable: rows written by v47 have no
+    # record of it, and a judgement with no remembered flag simply cannot be undone, which is the honest
+    # outcome rather than a guessed one.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(suspect_pair_distinct)").fetchall()}
+    if not cols:
+        return
+    for column in ("flagged_txn_id", "reason"):
+        if column not in cols:
+            conn.execute(f"ALTER TABLE suspect_pair_distinct ADD COLUMN {column} TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1952,6 +2023,27 @@ def init_db(db_path: str | None = None):
             -- Unaccounted·duplicate grouping (same account + amount, days apart — but genuinely
             -- distinct purchases). The grouping skips pairs present here, so the assertion sticks
             -- across refreshes. Same sorted-pair shape as account_pair_distinct above.
+            -- Transaction pairs the user judged "not the same charge" by resolving a soft-flag suspect
+            -- with Keep. Keep clears the flag on its row and records `suspect_resolved_at`, but neither
+            -- says *which* pair was judged — so a later re-scan could not tell "never examined" from
+            -- "examined and kept", and re-raised the finding while erasing the resolution stamp. That was
+            -- harmless while an account merge was the only thing that ever re-scanned; it stops being so
+            -- once a matcher change does. Same sorted-pair shape as the two tables around it.
+            -- `flagged_txn_id` and `reason` are what the flag *was*, kept so undoing the judgement can
+            -- put it back exactly rather than re-deriving it: a re-derivation could reach a different
+            -- tier (the rules may have moved since) and would restore a finding the user never saw.
+            CREATE TABLE IF NOT EXISTS suspect_pair_distinct (
+                txn_id_low     TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                txn_id_high    TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                flagged_txn_id TEXT,
+                reason         TEXT,
+                asserted_at    TEXT NOT NULL,
+                PRIMARY KEY (txn_id_low, txn_id_high),
+                CHECK (txn_id_low < txn_id_high)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_suspect_pair_distinct_high ON suspect_pair_distinct(txn_id_high);
+
             CREATE TABLE IF NOT EXISTS amazon_charge_distinct (
                 txn_id_low  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
                 txn_id_high TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
@@ -2144,6 +2236,18 @@ def init_db(db_path: str | None = None):
                 expected_amount   REAL,
                 amount_min        REAL,
                 amount_max        REAL,
+                -- 'variable' (default) or 'fixed'. Fixed means the series' price point is part of its
+                -- identity, so it matches only charges near its band — what keeps two same-payee,
+                -- same-category subscriptions at different prices from collapsing into one another.
+                -- Set by the detector where amount actually discriminates; see recurring_detection.py.
+                amount_mode       TEXT NOT NULL DEFAULT 'variable',
+                -- The user's pinned expectation band. NULL means "derive it" (the usual case), and the
+                -- derived band lives in amount_min/amount_max, which every scan rewrites from the rows
+                -- the series owns. They are separate columns precisely so a scan cannot erase a pin:
+                -- a derived band self-adjusts and needs no maintenance, a pinned one is a claim the user
+                -- made about what this series costs and only the user retracts it.
+                expected_min      REAL,
+                expected_max      REAL,
                 last_txn_date     TEXT,
                 next_due_date     TEXT,
                 occurrence_count  INTEGER NOT NULL DEFAULT 0,
@@ -2299,14 +2403,6 @@ def init_db(db_path: str | None = None):
         # list, and the indicator the ledger draws — and deliberately *not* unique, since a transaction
         # may carry several.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_document_txn ON document(txn_id)")
-        # Vestigial: guarded the withdrawn 'pinned' state (see the CREATE above), which nothing writes.
-        # Queued to be dropped alongside the next migration written for another reason — see
-        # docs/backlog/cleanup-pass.md; on its own it would be a version bump that changes nothing.
-        # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
-        # constrained — a row can be excluded from more than one candidate series.
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_recurring_override_pin ON recurring_membership_override(txn_id) WHERE state = 'pinned'"
-        )
         _create_recon_epoch_triggers(conn)
         _create_purchase_link_prune_trigger(conn)
         _create_document_search_index(conn)

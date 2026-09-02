@@ -83,15 +83,9 @@ for the in-place reconcile contract this complements.
 
 ## Schema leftovers to fold into the next migration
 
-Not worth a migration of their own; take them the next time one is written for another reason.
-
-- **`idx_recurring_override_pin`** — the partial unique index on
-  `recurring_membership_override(txn_id) WHERE state = 'pinned'`. It guarded the withdrawn pinning
-  feature (see `backlog/recurring-detection.md` — a series is defined by what recurs, so forcing a row
-  in misrepresents it). Nothing writes the state: the endpoint rejects it and `_load_overrides` filters
-  on `'excluded'`. The index is inert, and dropping it does not change behavior — which is exactly why
-  it should ride along rather than justify its own version bump. Drop the index; leave the `state`
-  column, since `'excluded'` still uses it.
+*(Empty — `idx_recurring_override_pin` rode along with migration 46 on 2026-09-01. Kept as a heading
+because the pattern recurs: an inert schema leftover is worth queueing rather than version-bumping for,
+and the queue only works if something is checked when the next migration is written.)*
 
 ## Press-scoped transient labels (from the 2026-08-19 flicker sweep)
 

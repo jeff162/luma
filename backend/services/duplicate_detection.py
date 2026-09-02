@@ -1279,7 +1279,9 @@ def _display_candidates(candidates: list[dict]) -> list[dict]:
 
     Display-only, and applied last: the verdict logic sees the complete list (see
     `_coverage_reject_verdict`), so nothing here can change which rows were rejected or why — only what
-    the report names as the thing a row duplicates.
+    the report names as the thing a row duplicates. Emptying the list entirely is a signal in its own
+    right, though — every explanation on offer was a coincidence — and the caller answers it by probing
+    the wider ledger for a nameable one.
     """
     # Whether any candidate for THIS row agrees textually. Computed over the whole list rather than per
     # candidate, since it is precisely the comparison between candidates that decides the wordless ones.
@@ -1344,7 +1346,10 @@ def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_acco
     That exception is why `_display_candidates` is applied **last**, to the reported list only. "No
     candidate" is load-bearing here — it is what sends a named row down the escape hatch — so trimming
     the list the check reads would turn rejections into imports. The text tiering decides what the
-    report *shows*; it must not decide what the ladder *does*."""
+    report *shows*; it must not decide what the ladder *does*.
+
+    The ledger probe then runs a **second** time when the tiering empties the reported list, purely to
+    name the match — see the comment on that branch."""
     candidates = _candidate_summary_rows_for_coverage(
         context, receiving_account_id, parsed_date, amount, scope_id, incoming_texts,
     )
@@ -1355,9 +1360,32 @@ def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_acco
         if payment_match is None:
             return None  # genuinely-new named payment → let it import
         candidates = [payment_match]
+    display = _display_candidates(candidates)
+    if not display and candidates and incoming_merchant and context.conn is not None:
+        # Everything the same-account lookup found was a coincidence the tiering discarded, so the row
+        # is about to report "covered, no specific match" — while the ledger probe above, the only step
+        # that looks at OTHER accounts, never ran, precisely because a candidate existed. That is the
+        # wrong way round: an unrelated charge sharing nothing but an amount should not outrank a
+        # corroborating charge that agrees on merchant AND amount, which is what the report wanted all
+        # along. Observed as a same-amount neighbour five days out standing in for the row's real twin,
+        # filed by a second source on a sibling account.
+        #
+        # Verdict-safe by construction: reaching here means `candidates` was non-empty, so the escape
+        # hatch above already declined to fire and the hard-reject is settled. Only `matched` changes,
+        # and only from "nothing" to "this row". The probe cannot run twice for one row either — the
+        # branch above runs it only on the empty list this one requires to be non-empty.
+        #
+        # Named rows only, which is also the whole reachable set: the tiering never empties a list for a
+        # nameless money-movement leg (nothing to compare is not disagreement), so its transfer twin
+        # from the same lookup is displayed as it always was.
+        payment_match = find_ledger_payment_match(
+            context.conn, receiving_account_id, parsed_date, amount, incoming_merchant,
+        )
+        if payment_match is not None:
+            display = [payment_match]
     return DedupeVerdict(
         hard_reject=True, passthrough=False,
-        matched=_coverage_matched(cov, _display_candidates(candidates)), reason=reason,
+        matched=_coverage_matched(cov, display), reason=reason,
     )
 
 
@@ -2150,6 +2178,100 @@ def list_distinct_account_pairs(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def record_suspect_pair_distinct(conn: sqlite3.Connection, txn_id_a: str, txn_id_b: str,
+                                 *, flagged_txn_id: str | None = None,
+                                 reason: str | None = None) -> None:
+    """Record "the user judged these two rows not the same charge".
+
+    The row-level counterpart of `account_pair_distinct`, and the thing Keep never had. Keep clears its
+    own row's flag and stamps `suspect_resolved_at`, but neither names the *pair* — so a re-scan cannot
+    tell a row it has never examined from one the user has already judged, and re-raises the finding while
+    clearing the stamp that was the only evidence of the decision. Deliberately **not** the account-level
+    assertion, which Keep used to write and stopped writing for good reason: this says nothing about the
+    accounts, only about these two rows."""
+    low, high = _sorted_pair(txn_id_a, txn_id_b)
+    if low == high:
+        return
+    conn.execute(
+        """INSERT OR IGNORE INTO suspect_pair_distinct
+               (txn_id_low, txn_id_high, flagged_txn_id, reason, asserted_at)
+           VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))""",
+        (low, high, flagged_txn_id, reason),
+    )
+
+
+def forget_suspect_pair_distinct(conn: sqlite3.Connection, txn_id_a: str, txn_id_b: str) -> dict:
+    """Undo one such judgement, so detection may raise the pair again. The escape hatch matters because
+    the assertion is otherwise permanent by design: a misclick is a different thing from a decision."""
+    low, high = _sorted_pair(txn_id_a, txn_id_b)
+    cursor = conn.execute(
+        "DELETE FROM suspect_pair_distinct WHERE txn_id_low = ? AND txn_id_high = ?", (low, high))
+    return {"deleted": cursor.rowcount or 0}
+
+
+def reopen_suspect_pair(conn: sqlite3.Connection, txn_id_a: str, txn_id_b: str) -> dict:
+    """Undo one Keep: forget the judgement **and** put the finding back.
+
+    Both halves or neither. Forgetting alone would leave the pair unflagged until some later scan
+    happened to re-raise it, so an Undo would appear to have done nothing — and the user would have no
+    way to tell that from a failure. The flag is restored from what was recorded at Keep rather than
+    re-derived, because the matching rules may have moved since and a re-derivation could restore a
+    different finding from the one being undone."""
+    low, high = _sorted_pair(txn_id_a, txn_id_b)
+    judged = conn.execute(
+        "SELECT flagged_txn_id, reason FROM suspect_pair_distinct WHERE txn_id_low = ? AND txn_id_high = ?",
+        (low, high),
+    ).fetchone()
+    if judged is None:
+        return {"reopened": False, "reason": "not_judged"}
+    flagged = judged["flagged_txn_id"]
+    matched = high if flagged == low else low
+    conn.execute("DELETE FROM suspect_pair_distinct WHERE txn_id_low = ? AND txn_id_high = ?", (low, high))
+    if not flagged:
+        # A v47-era judgement, recorded before the flag was remembered. The assertion is lifted so
+        # detection may raise the pair again, but this call cannot say what the finding looked like.
+        return {"reopened": False, "reason": "flag_not_recorded", "forgotten": True}
+    conn.execute(
+        """UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = ?,
+                          suspect_resolved_at = NULL
+           WHERE id = ?""",
+        (matched, judged["reason"], flagged),
+    )
+    return {"reopened": True, "txn_id": flagged, "matched_txn_id": matched}
+
+
+def list_suspect_pair_distinct(conn: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    """Every judged pair with enough of both rows to recognise it. For the management surface, which
+    exists for the same reason the distinct-account one does: this is a durable decision the user cannot
+    otherwise see, and one they can only have made in passing."""
+    rows = conn.execute(
+        """
+        SELECT p.txn_id_low, p.txn_id_high, p.flagged_txn_id, p.reason, p.asserted_at,
+               lo.date AS low_date,  lo.amount AS low_amount,
+               COALESCE(lo.display_name, lo.merchant_name, lo.raw_name) AS low_name,
+               la.display_name AS low_account,
+               hi.date AS high_date, hi.amount AS high_amount,
+               COALESCE(hi.display_name, hi.merchant_name, hi.raw_name) AS high_name,
+               ha.display_name AS high_account
+        FROM   suspect_pair_distinct p
+        JOIN   txn lo ON lo.id = p.txn_id_low
+        JOIN   txn hi ON hi.id = p.txn_id_high
+        LEFT   JOIN account la ON la.id = lo.account_id
+        LEFT   JOIN account ha ON ha.id = hi.account_id
+        ORDER  BY p.asserted_at DESC
+        LIMIT  ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_suspect_pair_distinct(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every judged pair, canonically sorted, for the in-Python scan to skip."""
+    return {(r["txn_id_low"], r["txn_id_high"])
+            for r in conn.execute("SELECT txn_id_low, txn_id_high FROM suspect_pair_distinct")}
+
+
 def forget_account_pair_distinct(conn: sqlite3.Connection,
                                   account_id_a: str, account_id_b: str) -> dict:
     """Remove a recorded distinct-account assertion. The next import touching both accounts
@@ -2412,6 +2534,15 @@ _CROSS_ACCOUNT_CANDIDATE_SQL = """
                 FROM   account_pair_distinct p
                 WHERE  p.account_id_low  = MIN(t1.account_id, t2.account_id)
                   AND  p.account_id_high = MAX(t1.account_id, t2.account_id)
+          )
+          -- And pairs the user has judged row-by-row. The account-level assertion above answers "are
+          -- these two accounts the same?"; this answers "are these two rows the same charge?", which is
+          -- a different question and the only one a Keep on a same-account pair ever settled.
+          AND  NOT EXISTS (
+                SELECT 1
+                FROM   suspect_pair_distinct sp
+                WHERE  sp.txn_id_low  = MIN(t1.id, t2.id)
+                  AND  sp.txn_id_high = MAX(t1.id, t2.id)
           )
         LEFT   JOIN import_batch b2 ON b2.id = t2.import_batch_id
         WHERE  t1.import_batch_id = ?
@@ -2902,6 +3033,9 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
                 (payload or {}).get("merchant_name"), (payload or {}).get("raw_name"),
                 (payload or {}).get("import_evidence"),
             ),
+            # Named rows only reach the ledger probe below; a nameless money-movement leg has no
+            # distinctive token to corroborate and never had one.
+            "merchant": (payload or {}).get("merchant_name"),
         })
 
     if not pending:
@@ -2931,6 +3065,11 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     # import time, when the fallback already ran on the same question with the same ±3 window. What
     # this refresh exists to add is the widened same-account and linked-group reach, neither of which
     # needs a connection — both read the indexes built just below.
+    #
+    # The ledger payment probe below is the one connection-dependent step this reasoning does NOT cover,
+    # and it is called directly rather than through the context for exactly that reason: it is gated on
+    # the *displayable* list at import time, so a coincidental same-amount neighbour occupying the
+    # candidate list is enough to mean it never ran on this row at all.
     context = DedupeContext(conn=None)
     for r in conn.execute(
         f"""SELECT t.id, t.account_id, t.date, t.authorized_date, t.raw_name, t.merchant_name,
@@ -2976,6 +3115,17 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         candidates = _display_candidates(_candidate_summary_rows_for_coverage(
             context, p["account_id"], p["parsed_date"], p["amount"], p["scope_id"], p["incoming_texts"],
         ))
+        if not candidates and p["merchant"]:
+            # Nothing on the account or in its group explains the row, so ask the wider ledger whether a
+            # corroborating charge exists — the same question `_coverage_reject_verdict` asks, on the
+            # entries where a coincidence in the candidate list stopped it being asked. Same-source
+            # entries need this most: their lookup never folds in the linked group, so a twin a second
+            # source filed under a sibling account is invisible to everything above.
+            payment_match = find_ledger_payment_match(
+                conn, p["account_id"], p["parsed_date"], p["amount"], p["merchant"],
+            )
+            if payment_match is not None:
+                candidates = [payment_match]
         if not candidates:
             continue
         matched = dict(p["matched"])
@@ -3445,7 +3595,8 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
     if action not in _SUSPECT_ACTIONS:
         return {"resolved": False, "reason": "invalid_action"}
     row = conn.execute(
-        "SELECT id, suspect_duplicate_of, suspect_resolved_at, trashed_at FROM txn WHERE id = ?",
+        "SELECT id, suspect_duplicate_of, suspect_duplicate_reason, suspect_resolved_at, trashed_at"
+        " FROM txn WHERE id = ?",
         (txn_id,),
     ).fetchone()
     if not row:
@@ -3555,6 +3706,16 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         # — where it names both accounts and the user answers it deliberately. See
         # `record_account_pair_distinct`. That leaves Keep meaning exactly what it says, identically for
         # a same-account and a cross-account pair, with bulk select doing the bulk.
+        #
+        # The pair is recorded *before* the pointer naming it is cleared — that ordering is the whole
+        # point, since afterwards nothing in the row says what it was judged against. Without it a
+        # re-scan re-raises the finding and overwrites `suspect_resolved_at`, destroying the only
+        # evidence the user ever decided.
+        if row["suspect_duplicate_of"]:
+            record_suspect_pair_distinct(
+                conn, txn_id, row["suspect_duplicate_of"],
+                flagged_txn_id=txn_id, reason=row["suspect_duplicate_reason"],
+            )
         conn.execute(
             """
             UPDATE txn
@@ -3565,8 +3726,73 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
             """,
             (txn_id,),
         )
-        return {"resolved": True, "action": "keep"}
+        # The pair travels back so the caller can offer an Undo without looking it up again — after this
+        # returns, the row no longer says what it was judged against.
+        return {"resolved": True, "action": "keep",
+                "pair": list(_sorted_pair(txn_id, row["suspect_duplicate_of"]))
+                        if row["suspect_duplicate_of"] else None}
     return {"resolved": False, "reason": "invalid_action"}
+
+
+# Bumped whenever a change to the matching rules could make detection reach a different verdict on rows
+# already in the ledger — a new tier, a tokenizer change, a threshold move, a widened pairing condition.
+# On app load a database stamped with an older value is re-scanned once (`maybe_rescan_for_detection_
+# change`), because the alternative is what happened in practice: the rules improved, nothing re-examined
+# what was already stored, and the pairs the improvement was written for stayed invisible forever.
+#
+# It is deliberately NOT the schema version. Nothing about these changes touches the schema, and tying
+# them together would either force a migration for a threshold tweak or silently skip a re-scan whenever
+# a migration happened to land first. Bump it in the same commit as the rule change, the way
+# CURRENT_VERSION is bumped with a schema change.
+DUPLICATE_DETECTION_VERSION = 1
+_DETECTION_VERSION_META_KEY = "duplicate_detection_version"
+
+# A pass only lets each row take one partner, so rows that lose a contest become available on the next
+# one and the scan converges rather than settling at once (measured on a real ledger: 70, then 5, then 3,
+# then 0). The cap is what keeps that a convergence and not a liveness question — no reachable state
+# loops forever, but a bound means a future change to the pairing rules cannot make one.
+_MAX_RESCAN_PASSES = 10
+
+
+def rescan_until_settled(conn: sqlite3.Connection, account_ids: Iterable[str]) -> dict:
+    """Run the existing-vs-existing scan to convergence, bounded. Returns the totals and whether it
+    settled on its own — a run that hits the cap is reporting that the pairing rules no longer converge,
+    which is worth seeing rather than swallowing."""
+    ids = list(account_ids)
+    total = 0
+    for completed in range(1, _MAX_RESCAN_PASSES + 1):
+        flagged = scan_scope_for_cross_account_duplicates(conn, ids)
+        total += flagged
+        if flagged == 0:
+            return {"flagged": total, "passes": completed, "settled": True}
+    return {"flagged": total, "passes": _MAX_RESCAN_PASSES, "settled": False}
+
+
+def maybe_rescan_for_detection_change(conn: sqlite3.Connection) -> dict:
+    """The app-load catch-up for a matcher that has since improved: re-scan once when the database was
+    last examined under older rules, then stamp the current version.
+
+    Mirrors `recurring_detection.maybe_auto_scan` — same place in the lifecycle, same db_meta watermark —
+    but gated on a *version* rather than an interval, because the trigger is a code change and not the
+    passage of time. Pairs the user has already judged are skipped by the scan itself
+    (`suspect_pair_distinct`), so a bump re-examines what was never looked at without re-asking anything
+    that was."""
+    row = conn.execute("SELECT value FROM db_meta WHERE key = ?",
+                       (_DETECTION_VERSION_META_KEY,)).fetchone()
+    try:
+        seen = int(row["value"]) if row and row["value"] is not None else 0
+    except (TypeError, ValueError):
+        seen = 0  # a malformed stamp reads as "never scanned" rather than crashing app load
+    if seen >= DUPLICATE_DETECTION_VERSION:
+        return {"skipped": True, "version": seen}
+    account_ids = [r["id"] for r in conn.execute("SELECT id FROM account WHERE trashed_at IS NULL")]
+    result = rescan_until_settled(conn, account_ids)
+    conn.execute(
+        "INSERT INTO db_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_DETECTION_VERSION_META_KEY, str(DUPLICATE_DETECTION_VERSION)),
+    )
+    return {"skipped": False, "from_version": seen, "version": DUPLICATE_DETECTION_VERSION, **result}
 
 
 def _same_origin(row_a, row_b) -> bool:
@@ -3636,6 +3862,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
     # source-text match (captured texts, precise ones deciding the tier — see `row_match_texts`) are
     # applied when pairing within a group below. Each row's match-text sets are precomputed once; a row
     # with no captured text can never match, so it is dropped here.
+    judged = load_suspect_pair_distinct(conn)
     row_texts: dict[str, RowMatchTexts] = {}
     groups: dict[float, list] = {}
     for r in rows:
@@ -3674,6 +3901,8 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                 a, b = members[i], members[j]
                 if _same_origin(a, b):
                     continue  # one source does not report a charge twice — a legitimate repeat
+                if _sorted_pair(a["id"], b["id"]) in judged:
+                    continue  # the user has already decided these two are not the same charge
                 dist = _date_distance_days(a["date"], b["date"])
                 if dist > window:
                     continue

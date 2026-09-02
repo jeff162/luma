@@ -47,6 +47,7 @@ import {
   useRestorablePanelGeometry,
 } from './detailShared.jsx'
 import { kindMeta, kindRank } from '../lib/duplicateKinds.js'
+import { UndoToast } from './CategoryTreePrimitives.jsx'
 import { summarizeBulkOutcome } from '../lib/bulkRequestOutcome.js'
 import { AccountIdentityPrompt } from './importExport/AccountIdentityPrompt.jsx'
 import { notifyAccountsChanged } from '../App.jsx'
@@ -194,6 +195,30 @@ export default function UnifiedDuplicatesDialog({
   const [sortState, setSortState] = useUserPreference(UNIFIED_DUPLICATES_SORT_PREF_KEY, DEFAULT_SORT_STATE)
   const [pendingBulk, setPendingBulk] = useState(false)
   const [actionError, setActionError] = useState('')
+  // Pairs a just-issued Keep can still take back. Keep is permanent by design — the judgement is what
+  // stops a later re-scan re-asking — so the moment of the decision is where the escape hatch belongs.
+  const [keptUndo, setKeptUndo] = useState(null)
+
+  // Collect the pairs out of the Keep responses. A Keep clears the pointer naming its partner, so the
+  // response is the only place the pair still exists by the time this runs.
+  function offerUndo(settled) {
+    const pairs = settled
+      .filter(r => r.status === 'fulfilled' && Array.isArray(r.value?.pair))
+      .map(r => r.value.pair)
+    setKeptUndo(pairs.length ? pairs : null)
+  }
+
+  async function undoKeeps() {
+    const pairs = keptUndo
+    setKeptUndo(null)
+    if (!pairs) return
+    try {
+      await api.reopenDuplicatePairs(pairs)
+      if (typeof onReload === 'function') await onReload()
+    } catch (err) {
+      setActionError(err?.message || 'Could not undo')
+    }
+  }
   // Pairs the user answered "Not now" to. Deliberately component state and not persisted: dismissing is
   // "leave me to it for now", not a durable preference, and the two real answers both remove the pair
   // from the server's list anyway. Re-asking on a later visit is fine — nothing was decided.
@@ -369,8 +394,12 @@ export default function UnifiedDuplicatesDialog({
         // N−1 that worked. `all` rejected on the first failure, which skipped both the reload and the
         // selection clear below — so a bulk action that mostly succeeded left the dialog and the page's
         // pill counts showing the state from before it, and reported the whole thing as failed.
-        const outcome = summarizeBulkOutcome(await Promise.allSettled(tasks))
+        const settled = await Promise.allSettled(tasks)
+        const outcome = summarizeBulkOutcome(settled)
         if (outcome.error) setActionError(outcome.error)
+        // A bulk Keep is one action to the user, so its Undo reverses all of it — the pairs are collected
+        // from the responses because after a Keep the rows no longer say what they were judged against.
+        if (action === 'keep') offerUndo(settled)
         // Only the rows that actually failed stay selected, so a retry re-sends exactly those rather than
         // re-issuing the ones that already succeeded.
         setSelectedIds(new Set(
@@ -394,7 +423,8 @@ export default function UnifiedDuplicatesDialog({
     setActionError('')
     setPendingBulk(true)
     try {
-      if (action === 'keep')              await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep')
+      if (action === 'keep')              offerUndo([{ status: 'fulfilled',
+        value: await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep') }])
       else if (action === 'reject')       await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject')
       else if (action === 'replace')      await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace')
       else if (action === 'restore')      await api.restoreRejectedDuplicate(entry.incoming.txn_id)
@@ -860,7 +890,7 @@ export default function UnifiedDuplicatesDialog({
               const a = actionsFor(entry)
               return (
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep the new row too and mark the two accounts as distinct. Clears every other flagged row between this account pair and stops future imports from re-flagging it.">Keep both</Button> : null}
+                  {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep both rows. Records the judgement for this pair only, so neither a later import nor a re-scan flags it again — undoable from the toast, and from the Dismissed filter afterwards.">Keep both</Button> : null}
                   {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
                   {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
                   {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
@@ -875,6 +905,15 @@ export default function UnifiedDuplicatesDialog({
           ]}
         />
       </div>
+
+      {keptUndo && (
+        <UndoToast
+          title={keptUndo.length === 1 ? 'Kept both' : `Kept both on ${keptUndo.length} pairs`}
+          description="They won't be flagged as duplicates again."
+          onUndo={undoKeeps}
+          onDismiss={() => setKeptUndo(null)}
+        />
+      )}
     </DetailPanelShell>
   )
 }

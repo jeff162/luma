@@ -648,6 +648,11 @@ export const api = {
   // App-load catch-up: the backend scans only if one is due (never scanned / stale), so this is a cheap
   // no-op when a recent import or sync already refreshed detection. Safe to call once per session.
   autoScanRecurring:  () => request('/recurring/auto-scan', { method: 'POST' }),
+  rescanDuplicates:   () => request('/accounts/duplicate-rescan', { method: 'POST' }),
+  forgetDuplicatePair: (a, b) => request(`/accounts/duplicate-pairs/${a}/${b}`, { method: 'DELETE' }),
+  getDismissedDuplicatePairs: () => request('/accounts/duplicate-pairs'),
+  reopenDuplicatePairs: (pairs) => request('/accounts/duplicate-pairs/reopen',
+    { method: 'POST', body: JSON.stringify({ pairs }) }),
   confirmRecurring:   (id) => request(`/recurring/${id}/confirm`, { method: 'POST' }),
   suppressRecurring:  (id) => request(`/recurring/${id}/suppress`, { method: 'POST' }),
   endRecurring:       (id) => request(`/recurring/${id}/end`, { method: 'POST' }),

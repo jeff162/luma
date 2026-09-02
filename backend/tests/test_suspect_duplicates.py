@@ -1001,7 +1001,13 @@ class SuspectDuplicateTests(unittest.TestCase):
                 mark_import_suspects(conn, batch)
                 result = resolve_suspect(conn, new_id, action="keep")
 
-        self.assertEqual(result, {"resolved": True, "action": "keep"})
+        self.assertEqual(result["resolved"], True)
+        self.assertEqual(result["action"], "keep")
+        # The pair comes back so a caller can offer an Undo: after this returns, the row no longer
+        # records what it was judged against. Canonically ordered, matching how it is stored.
+        self.assertIn(new_id, result["pair"])
+        self.assertEqual(result["pair"], sorted(result["pair"]))
+        self.assertEqual(len(result["pair"]), 2)
         link = self._suspect_link(new_id)
         self.assertIsNone(link["suspect_duplicate_of"])
         self.assertIsNone(link["suspect_duplicate_reason"])

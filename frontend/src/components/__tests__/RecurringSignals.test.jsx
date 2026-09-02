@@ -46,6 +46,7 @@ function renderSection(props = {}) {
   const handlers = {
     onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(),
     onOpenSeries: vi.fn(), onEditRule: vi.fn(), onWidenRange: vi.fn(), onShowDismissed: vi.fn(),
+    onAcceptPrice: vi.fn(),
   }
   const signals = props.signals || []
   const counts = props.counts || signals.reduce((acc, s) => ({ ...acc, [s.kind]: (acc[s.kind] || 0) + 1 }), {})
@@ -85,7 +86,39 @@ describe('RecurringSignals', () => {
 
     renderSection({ signals: [{ ...MISSED, presumed_ended: false, periods_missed: 1 }] })
     expect(screen.queryByText('Mark ended')).toBeNull()
-    expect(screen.getByText('Open series')).toBeTruthy()
+    // The way in is the arrow on the headline, not an action button — see the reachability tests below.
+    expect(screen.getByRole('button', { name: 'Open this series' })).toBeTruthy()
+  })
+
+  it('gives every finding a way to see what it is about', () => {
+    // Three of the five kinds could reach nothing before the arrow replaced the Open series button:
+    // *Newly detected* asked for a Confirm with no way to look, and a rule-range finding offered to
+    // widen a rule with no way to read the charge that would justify it.
+    const cases = [
+      [MISSED, 'Open this series'],
+      [PRICE, 'Open this series'],
+      [{ kind: 'new_series', key: 'n1', series_id: 's2', series_name: 'Streamly', first_seen: '2026-08-01',
+         occurrence_count: 3, expected_amount: 9.99, cadence: 'monthly' }, 'Open this series'],
+      [RANGE, 'Open this transaction'],
+    ]
+    for (const [signal, label] of cases) {
+      cleanup()
+      renderSection({ signals: [signal] })
+      expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    }
+  })
+
+  it('opens what the headline names, handing back the finding', async () => {
+    const { onOpenSeries } = renderSection({ signals: [RANGE] })
+    await userEvent.click(screen.getByRole('button', { name: 'Open this transaction' }))
+    expect(onOpenSeries).toHaveBeenCalledWith(RANGE)
+  })
+
+  it('shows no arrow when the finding names nothing that can be opened', () => {
+    // A rule-range finding on a rule with no series still heads its card with the charge; one with no
+    // transaction id at all has nothing to point at, and an arrow that did nothing would be worse.
+    renderSection({ signals: [{ ...RANGE, txn_id: undefined }] })
+    expect(screen.queryByRole('button', { name: /^Open this/ })).toBeNull()
   })
 
   it('reports a price change against the prior amount rather than a stored band', () => {
@@ -93,6 +126,27 @@ describe('RecurringSignals', () => {
     const row = screen.getByText('Streamly').closest('div').parentElement
     expect(within(row).getByText(/\$15\.99 → \$19\.99/)).toBeTruthy()
     expect(within(row).getByText(/up 25%/)).toBeTruthy()
+  })
+
+  it('offers to accept a new amount only where amount actually gates membership', async () => {
+    // On a gated series the charge is not matching, so there is something to repair.
+    const gated = { ...PRICE, amount_mode: 'fixed', band_min: 15.99, band_max: 15.99, band_pinned: true }
+    const { onAcceptPrice } = renderSection({ signals: [gated] })
+    await userEvent.click(screen.getByRole('button', { name: 'Accept new amount' }))
+    expect(onAcceptPrice).toHaveBeenCalledWith(gated)
+  })
+
+  it('offers no such action on an ungated series, where the band is read by nothing', () => {
+    // There, Dismiss is the accept: it records the amount as allowed, and a variable series' envelope
+    // is learned from exactly those dismissals.
+    renderSection({ signals: [{ ...PRICE, amount_mode: 'variable', band_min: 15.99, band_max: 15.99 }] })
+    expect(screen.queryByRole('button', { name: 'Accept new amount' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
+  })
+
+  it('offers no such action when the charge is already inside the band', () => {
+    renderSection({ signals: [{ ...PRICE, amount_mode: 'fixed', band_min: 12, band_max: 22 }] })
+    expect(screen.queryByRole('button', { name: 'Accept new amount' })).toBeNull()
   })
 
   it('names what a drifted rule range cost, and offers to widen it', async () => {

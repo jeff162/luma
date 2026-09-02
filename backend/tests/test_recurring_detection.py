@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.recurring import SeriesUpdate, update_series
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
     maybe_auto_scan,
@@ -188,6 +189,172 @@ class RecurringDetectionTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM txn WHERE recurring_series_id = ?", (first[0]["id"],)
                 ).fetchone()[0]
         self.assertEqual(linked, 12)
+
+    def _add_two_price_points(self, *, offset_days):
+        """Two fixed-price subscriptions from one biller, same category, at distinct price points.
+        `offset_days` shifts the second one's billing day relative to the first."""
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30, amount=-4.00)
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30,
+                         amount=-20.00, end=date.today() - timedelta(days=offset_days))
+
+    def test_two_price_points_on_the_same_billing_day_are_separate_series(self):
+        # One biller, one category, two fixed-price subscriptions. Amount is what tells them apart.
+        self._add_two_price_points(offset_days=0)
+        self._scan()
+        series = self._series()
+        self.assertEqual(len(series), 2)
+        self.assertEqual({round(s["expected_amount"], 2) for s in series}, {-4.00, -20.00})
+        for s in series:
+            self.assertEqual(s["occurrence_count"], 8)
+
+    def test_two_price_points_on_different_billing_days_are_separate_series(self):
+        # Same pair, billing a fortnight apart. The interleaved dates form a plausible biweekly rhythm
+        # over the whole set, which must not be preferred to the two real monthly series: doing so
+        # invents a cadence, an expected amount ($12) and a band ([-20,-4]) that describe nothing.
+        self._add_two_price_points(offset_days=15)
+        self._scan()
+        series = self._series()
+        self.assertEqual(len(series), 2)
+        self.assertEqual({s["cadence"] for s in series}, {"monthly"})
+        self.assertEqual({round(s["expected_amount"], 2) for s in series}, {-4.00, -20.00})
+
+    def test_confirming_one_price_point_does_not_orphan_the_other(self):
+        # Confirming a correctly-detected series must not destroy its sibling. The candidate-coverage
+        # check keys on (payee, category, account), which cannot tell two price points apart, so the
+        # unconfirmed sibling was suppressed as redundant and its charges left linked to nothing.
+        self._add_two_price_points(offset_days=0)
+        self._scan()
+        small = min(self._series(), key=lambda s: abs(s["expected_amount"]))
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE id = ?", (small["id"],))
+        self._scan()
+
+        series = self._series()
+        self.assertEqual(len(series), 2)
+        self.assertEqual({round(s["expected_amount"], 2) for s in series}, {-4.00, -20.00})
+        with self._use_db_path():
+            with get_db() as conn:
+                orphaned = conn.execute(
+                    "SELECT COUNT(*) FROM txn WHERE display_name = 'Harborline Digest'"
+                    " AND recurring_series_id IS NULL"
+                ).fetchone()[0]
+        self.assertEqual(orphaned, 0)
+
+    def test_price_hike_stays_in_its_series(self):
+        # An amount-gated series must not drop a charge that steps past its band — the gate needs a
+        # grace band, or a price rise evicts the charge from the very series that should report it.
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30, amount=-4.00)
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30, amount=-20.00)
+        self._scan()
+        small = min(self._series(), key=lambda s: abs(s["expected_amount"]))
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE id = ?", (small["id"],))
+                # The next month's charge arrives 10% higher.
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name,
+                                     display_name, raw_name, date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID, self.cats["Streaming"],
+                     -4.40, "Harborline Digest", "Harborline Digest", "Harborline Digest",
+                     (date.today() + timedelta(days=30)).isoformat()),
+                )
+        self._scan()
+        with self._use_db_path():
+            with get_db() as conn:
+                linked = conn.execute(
+                    "SELECT recurring_series_id FROM txn WHERE amount = -4.40"
+                ).fetchone()["recurring_series_id"]
+        self.assertEqual(linked, small["id"])
+
+    def test_pinned_band_separates_two_bills_a_percentage_cannot(self):
+        # A town billing water monthly and property tax quarterly, at sizes close enough that each sits
+        # inside the other's grace margin. The derived bands overlap, so only an explicit bound separates
+        # them — which is the whole reason the pinned band exists.
+        self._add_series(payee="Northgate Township", category="Water", count=8, period_days=30, amount=-100.0)
+        with self._use_db_path():
+            with get_db() as conn:
+                sid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO recurring_series (id, payee_key, display_name, category_id, cadence, "
+                    "period_days, expected_amount, amount_min, amount_max, amount_mode, expected_min, "
+                    "expected_max, occurrence_count, confidence, status, source, confirmed) "
+                    "VALUES (?, 'northgate township', 'Northgate Township', ?, 'monthly', 30, -100.0, "
+                    "-100.0, -100.0, 'fixed', -110.0, -90.0, 0, 1.0, 'active', 'manual', 1)",
+                    (sid, self.cats["Water"]),
+                )
+                # A charge just outside the pinned band, but well inside a 25% grace on the derived one.
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name,
+                                     display_name, raw_name, date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID, self.cats["Water"], -118.0,
+                     "Northgate Township", "Northgate Township", "Northgate Township",
+                     date.today().isoformat()),
+                )
+        self._scan()
+        with self._use_db_path():
+            with get_db() as conn:
+                claimed = conn.execute(
+                    "SELECT recurring_series_id FROM txn WHERE amount = -118.0"
+                ).fetchone()["recurring_series_id"]
+        self.assertNotEqual(claimed, sid)  # outside the pinned band — not this series' charge
+
+    def test_a_scan_never_rewrites_a_pinned_band(self):
+        # The derived band is the scan's to rewrite from the rows the series owns; the pinned one is the
+        # user's claim. Keeping them in separate columns is what makes that true, so pin it and check.
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30, amount=-4.00)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE recurring_series SET confirmed = 1, amount_mode = 'fixed', "
+                    "expected_min = -5.0, expected_max = -3.0 WHERE id = ?", (sid,)
+                )
+        self._scan()
+        with self._use_db_path():
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT amount_min, amount_max, expected_min, expected_max FROM recurring_series WHERE id = ?",
+                    (sid,),
+                ).fetchone()
+        self.assertEqual((row["expected_min"], row["expected_max"]), (-5.0, -3.0))  # pin intact
+        self.assertEqual((row["amount_min"], row["amount_max"]), (-4.0, -4.0))      # derived still derived
+
+    def test_editing_amount_matching_reassigns_membership_immediately(self):
+        # Turning the amount gate on must take effect now, not at the next scan: the card reports its
+        # members straight after the edit, so a deferred re-match reads as the edit having done nothing.
+        self._add_two_price_points(offset_days=0)
+        self._scan()
+        small = min(self._series(), key=lambda s: abs(s["expected_amount"]))
+        with self._use_db_path():
+            updated = update_series(small["id"], SeriesUpdate(
+                amount_mode="fixed", expected_min=-5.0, expected_max=-3.0))
+        self.assertEqual(updated["amount_mode"], "fixed")
+        self.assertEqual((updated["expected_min"], updated["expected_max"]), (-5.0, -3.0))
+        self.assertEqual(updated["occurrence_count"], 8)  # only the $4 charges
+
+        # Retracting the pin needs the explicit flag — a null bound means "unchanged" everywhere else.
+        with self._use_db_path():
+            reverted = update_series(small["id"], SeriesUpdate(clear_expected_band=True))
+        self.assertIsNone(reverted["expected_min"])
+        self.assertIsNone(reverted["expected_max"])
+        self.assertEqual(reverted["amount_mode"], "fixed")  # the gate itself is a separate decision
+
+    def test_a_pinned_band_needs_both_bounds(self):
+        self._add_series(payee="Harborline Digest", category="Streaming", count=8, period_days=30, amount=-4.00)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as caught:
+                update_series(sid, SeriesUpdate(expected_min=-5.0))
+        self.assertEqual(caught.exception.status_code, 400)
 
     def test_same_date_outlier_not_folded_into_series(self):
         # A quarterly series and an annual payment landing on the SAME date (tax day) must not merge: the

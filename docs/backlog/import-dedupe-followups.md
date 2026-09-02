@@ -47,6 +47,14 @@ restored" for confirmation).
 
 ## Duplicate-resolution history (review what you did, and undo it)
 
+> **Partly supplied since this was written (2026-09-01).** `suspect_pair_distinct` now records each Keep as
+> a durable, per-pair judgement naming both rows — so the "what did I decide" half has a real source of
+> truth for the Keep case, where previously only `suspect_resolved_at` survived and it named no pair. The
+> undo half exists as an endpoint (`DELETE /accounts/duplicate-pairs/{a}/{b}`) with no surface yet. What
+> remains for this item is the chronological *view* across all five outcomes and the batch undo; the
+> Keep row of that table is now readable rather than lost.
+
+
 **Context.** There is no chronological, reviewable record of the dedupe
 decisions a user made (Keep / Discard / Replace / Import-anyway / Restore).
 The *raw material* is already persisted, though: every action soft-deletes
@@ -100,6 +108,35 @@ token tier rather than by normalizing prefixes away. **If this is picked up agai
 about the 4-character prefix floor, not the leading token.**
 
 ---
+
+## A coverage reject can be *justified* by a coincidence, not by the twin
+
+**Status: deferred by scope decision (2026-09-01), not a defect.** Raised while fixing the report
+half of this, which shipped; this is the half deliberately left out.
+
+**Context.** A row inside a covered date range is hard-rejected by the coverage rule alone — it does
+not need to find a match. The one exception is the named-payment escape hatch: a named row with **no**
+same-account candidate consults the wider ledger, and imports when nothing corroborates it. That gate
+reads the *unfiltered* candidate list, so an unrelated same-amount charge a few days away is enough to
+count as a candidate and keep the escape hatch shut, even though the text tiering then discards it as
+the coincidence it is.
+
+Observed case: a row whose real twin sat on a sibling account under the same merged group, with a
+coincidental same-amount charge five days out on the receiving account. The rejection was **correct** —
+the row was a genuine duplicate — but the thing that produced it was the coincidence, not the twin.
+
+**What shipped instead.** The *report* now names the twin: when the text tiering empties the displayed
+list, the ledger payment probe runs a second time for display only, on both the import path
+(`_coverage_reject_verdict`) and the read path (`refresh_unexplained_coverage_candidates`). That
+removes the visible symptom — "covered, no specific match" over a row whose twin was one account-hop
+away — and changes no verdict.
+
+**Why the rest is deferred.** Making the *decision* rest on the twin rather than on whichever row
+happened to fill the slot means changing what the escape hatch reads, and that flips rows between
+rejected and imported. The scope of the reported issue was the report, not the ladder. Any future
+attempt needs to answer what a named row with only a coincidental candidate should do — the honest
+answer is probably "ask the ledger first, then decide", i.e. run the probe *before* the candidate test
+rather than after it — and to size how many rows change verdict before touching it.
 
 ## Original entry: revisit once a second provider feeds the same account
 

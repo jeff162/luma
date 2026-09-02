@@ -75,13 +75,21 @@ than by feature.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams.
-- [recurring-detection.md](recurring-detection.md) — **§§1–3 shipped; §4 deferred.** The recurring-series
-  subsystem is live (detect + list + curate) and three of the four follow-ups have since landed: automatic
-  + scoped detection (the per-import matching hook and the watermark-gated app-load catch-up), the
-  **anomaly/forecast signals** — upcoming / missed / new / price-change, derived on read with per-finding
-  dismissal (2026-08-27) — and "Mark as recurring" in the shared context menu (`markRecurringFromMenu`).
-  The ended/canceled lifecycle shipped alongside. What remains is §4: the identity half (`amount_mode`,
-  amount-gated fixed membership, the pinned expectation band).
+- [recurring-detection.md](recurring-detection.md) — **all four follow-ups shipped; two small items
+  remain.** The recurring-series subsystem is live (detect + list + curate) and every numbered follow-up
+  has landed: automatic + scoped detection (the per-import matching hook and the watermark-gated app-load
+  catch-up), the **anomaly/forecast signals** — upcoming / missed / new / price-change, derived on read
+  with per-finding dismissal (2026-08-27) — "Mark as recurring" in the shared context menu, and §4's
+  identity half (2026-09-01, schema v46): `amount_mode`, amount-gated membership with a grace band, and
+  the user-pinned expectation band. The ended/canceled lifecycle shipped alongside. §4 turned out to be
+  **two live defects rather than a missing feature** — confirming one of a biller's two subscriptions
+  orphaned the other, and two billing a fortnight apart merged into one bogus biweekly series — and the
+  file records both, plus the shapes not to re-impose. Promoting a price step landed with it as
+  **Accept new amount** on the price-change finding, which *extends* a gated series' band rather than
+  relocating it — a band moved onto the new price stops matching the series' own history. Still open:
+  the **pool-load optimization** (the payee filter is applied after a full pool load, so a scoped scan
+  costs what a full one does — now on the path of every category edit, with a revisit threshold of
+  roughly 50,000 rows).
 - [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** *Check overlaps*
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
@@ -186,7 +194,9 @@ than by feature.
   Plaid-parallel connection/sync track in the same file, and has landed.
 - [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
   deduped rows when a contributing import is undone, and a duplicate-resolution history view + batch
-  undo. Both convenience only — per-row restore already prevents loss.
+  undo. Both convenience only — per-row restore already prevents loss. Also holds two measured/scoped
+  deferrals: bank-side type prefixes, and letting a coverage reject rest on the actual twin rather than
+  on whichever same-amount row filled the candidate slot (the report half of that one shipped).
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.

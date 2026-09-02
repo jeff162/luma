@@ -153,11 +153,75 @@ makes immediate. The endpoint rejects the state and `_load_overrides` filters on
 survives only because dropping it would cost a migration for nothing. The lighter anchor-create dialog on
 `/recurring` stays for a series you don't want a rule for.
 
-## 4. Fixed vs. variable amount series + price-increase review (deferred — phase 2)
+## 4. Fixed vs. variable amount series + price-increase review — DONE
 
-**Partly overtaken by §2, and the remainder is smaller than written.** The *judgement* of fixed vs.
-variable is now made per read, from the tightness of a series' own prior amounts (CV ≤ 0.15), and drives
-which price-change threshold applies. What is still owed is the half that changes **identity**:
+**Shipped 2026-09-01** (schema v46: `recurring_series.amount_mode` plus the pinned
+`expected_min`/`expected_max`). The mechanism is in `data-model.md` → Recurring series; what stays here
+is what the work found that the design as written did not know.
+
+**Two live defects, not one missing feature.** The file framed this as "two fixed-price subscriptions
+can't be separated". Measured against the code, the auto detector separated them *already* — but only
+when both billed on the same day, and the separation did not survive contact with the user:
+
+- **Confirming one destroyed the other.** `_covered_by_owned` keys on `(payee, category, account)`,
+  which cannot tell two price points apart, so the unconfirmed sibling was suppressed as redundant and
+  its charges were left linked to nothing. The act of endorsing a correct detection deleted its
+  neighbour. Same collision in `_auto_first_seen`, where the two identities silently shared one
+  `created_at`. Fixed by making the price point the tuple's fourth component.
+- **Different billing days merged them outright.** `_detect_in_group` only fell back to amount
+  clustering when the whole set produced *no* rhythm — and a $4 and a $20 monthly charge a fortnight
+  apart interleave into a perfectly plausible **biweekly** series at $12 spanning `[-20, -4]`, a
+  cadence, an expected amount and a band describing nothing that happens. Fixed by reading the group
+  both ways and preferring the split when the whole-set reading is amount-incoherent, the split
+  explains at least as many charges, and each price point holds a rhythm of its own.
+
+**The promote-on-pin question answered itself.** An edit already marks a series user-owned
+(`update_series` sets `confirmed = 1`), and a user-owned series is never re-minted — so a pinned band
+needs no carry across the rebuild, unlike `created_at`. The identity tuple still needed the amount
+component, but for coverage rather than for carrying state.
+
+**Don't re-impose:**
+
+- *Gating every amount-tight series.* Only a series whose group resolved into more than one gets the
+  gate. A lone series has nothing to be confused with, and turning it on there would evict its own
+  charges the first time a price moved.
+- *Ordering a typed band before applying its sign.* The dialog takes magnitudes and the ledger stores a
+  direction; negating swaps which bound is the lower one, so ordering first sends an inverted band for
+  every expense series. Caught by a test, invisible on screen.
+- *Reusing `AmountCondition` for the pinned band.* The shared control carries per-bound comparators and
+  a debit/credit side; a series band is inclusive at both ends and its direction is already settled by
+  its own charges, so the shared contract is the wrong one rather than merely a heavier one.
+
+**The *tentative pending price* resolved into an action, not a review surface.** §2 had already
+established that the pending price is a derivation rather than stored state (one off-price charge is an
+anomaly, three at the new price are a step), so nothing needed storing — what was missing was a way to
+*promote* a step. The price-change finding now offers **Accept new amount** on a gated series.
+
+Three things it settled, all worth not re-deriving:
+
+- **Extend the band, never relocate it.** `_match_members` re-filters the whole pool every scan, so a
+  band moved onto the new price stops matching the series' own history — measured, an eight-charge
+  series dropped to **one**. Only the bound the charge falls outside moves.
+- **Accepting cannot mask the next change.** The concern recorded against widening on *dismissal*
+  (`_load_accepted_amounts`) does not transfer: that widens the **comparison set** a later charge is
+  judged against, while accepting moves the **membership gate**. `_price_change` takes its baseline from
+  the recent *occurrences*, never from the stored band, so the next step is measured the same either way.
+- **It must pin.** A derived band cannot learn a charge the gate is excluding — the charge can't become
+  a member, so the scan never sees it. Accepting writes `expected_min`/`expected_max`, which is what
+  breaks that deadlock.
+
+**Offered only where amount gates membership.** On an ungated series the band is read by nothing, so a
+button that moved it would be theatre; there, **Dismiss is the accept** — it records the amount as one
+the user has allowed, which is precisely what a variable series' envelope is learned from. Unlike a
+rule's *Widen to include* it opens the editor on a proposal rather than applying it: a rule bound has one
+right answer, a series band has two ends, and only the user knows whether a rise lifted every bill or
+added a single outlier. **The same holds downward** — a utility posting its cheapest month yet widens
+the floor.
+
+**Still not built:** nothing here. The remaining recurring items are the pool-load optimization (§1) and
+whatever a later pass wants from the tuning constants.
+
+### Original entry (the design as it stood)
 
 
 The follow-on the rule-backed work was scoped *out* of. Today amount is never part of series identity

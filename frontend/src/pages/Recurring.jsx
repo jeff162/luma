@@ -26,7 +26,8 @@ import {
 } from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
-import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
+import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog, priceChangeBand, signalTarget } from '../components/RecurringSignals.jsx'
+import RecurringAmountMatchDialog from '../components/RecurringAmountMatchDialog.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
@@ -345,6 +346,16 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
               {formatCurrency(series.amount_min)}–{formatCurrency(series.amount_max)}
             </div>
           ) : null}
+          {series.amount_mode === 'fixed' ? (
+            <div
+              title={series.expected_min != null
+                ? `Only charges near ${formatCurrency(series.expected_min)}–${formatCurrency(series.expected_max)} belong to this series`
+                : 'Only charges near this amount belong to this series'}
+              style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}
+            >
+              matched by amount{series.expected_min != null ? ' · set' : ''}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -376,6 +387,11 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
                 aria-label="Cadence"
               />
             </span>
+            {ruleBacked ? null : (
+              <CardActionButton onClick={() => onAction('amountMatch', series)}>
+                Amount{series.amount_mode === 'fixed' ? ' ✓' : ''}
+              </CardActionButton>
+            )}
             <span style={{ flex: 1 }} />
             {detected ? (
               <>
@@ -704,6 +720,8 @@ export default function Recurring() {
   const [excluded, setExcluded] = useState([])
   const [payeeDetail, setPayeeDetail] = useState(null)  // txn opened in the shared TransactionDetail panel
   const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
+  const [amountMatchSeries, setAmountMatchSeries] = useState(null)  // series whose amount matching is being edited
+  const [amountMatchSuggestion, setAmountMatchSuggestion] = useState(null)  // a band proposed by a price-change finding
   const [searchParams, setSearchParams] = useSearchParams()
   // Signals are derived server-side; the page holds only the last fetch and what the user is looking at.
   const [signalData, setSignalData] = useState(null)
@@ -715,11 +733,15 @@ export default function Recurring() {
   const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
   const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
 
-  // The drill-down serves two shapes through one paged list: a single series (recurring_series_id) or
-  // the all-series report (recurring_only — every row linked to any series). `openSeries._all` flags the
-  // synthetic marker the "View all recurring" button sets.
+  // The drill-down serves three shapes through one paged list: a single series (recurring_series_id),
+  // the all-series report (recurring_only — every row linked to any series), and an explicit set of rows
+  // (`ids`), which is how a rule-range finding shows the charge it is about. Each is flagged by a
+  // synthetic marker on `openSeries` rather than a separate panel, so every one of them lands in the
+  // same report with the same row editing — which is the point: the finding's arrow always opens a
+  // transaction report, whatever the finding is about.
   const membersLoadPage = useCallback((offset, limit, sort) => {
     const base = { limit, offset, sort_by: sort.key, sort_dir: sort.dir }
+    if (openSeries?._txnIds) return api.getTransactions({ ids: openSeries._txnIds.join(','), ...base })
     if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...base })
     // A suppressed series owns no rows (suppress nulls their recurring_series_id), so the membership
     // fetch would come back empty and the "N transactions" link would look broken. Fall back to the
@@ -750,7 +772,9 @@ export default function Recurring() {
   useEffect(() => {
     // The all-series report has no single series to fetch removals for — an 'excluded' override is
     // per-series, so the removed-rows section only applies to a single-series drill-down.
-    if (!openSeries || openSeries._all) { setExcluded([]); return undefined }
+    // Neither synthetic report has a series whose removals could be fetched — an 'excluded' override is
+    // per-series, so the removed-rows section only applies to a real single-series drill-down.
+    if (!openSeries || openSeries._all || openSeries._txnIds) { setExcluded([]); return undefined }
     let live = true
     api.getTransactions({ recurring_excluded_series_id: openSeries.id, limit: 0 })
       .then(resp => { if (live) setExcluded(resp.transactions || []) })
@@ -903,6 +927,9 @@ export default function Recurring() {
     else if (kind === 'end') updated = await api.endRecurring(s.id)
     else if (kind === 'restore') updated = await api.restoreRecurring(s.id)
     else if (kind === 'cadence') updated = await api.updateRecurring(s.id, { cadence: value })
+    // Opened from the card, so no proposal is in play — clear any left from a previous finding, or the
+    // dialog would open on a band proposed for a different charge.
+    else if (kind === 'amountMatch') { setAmountMatchSuggestion(null); setAmountMatchSeries(s); return }
     else if (kind === 'rename') updated = await api.updateRecurring(s.id, { display_name: value })
     else if (kind === 'delete') {
       await api.deleteRecurring(s.id)
@@ -945,9 +972,24 @@ export default function Recurring() {
   // worse in both directions: it took them away from the finding they were working through, and the
   // list's own filter can exclude the very series being opened (a Confirmed series while only Suggested
   // is selected), so the drill-down would describe a card that was nowhere on screen.
-  function openSignalSeries(signal) {
-    const series = seriesById(signal.series_id)
-    if (series) openReport(series)
+  // Opens whatever the finding's headline names — the series for most kinds, the offending transaction
+  // for the two rule-range ones (see `signalTarget`). A rule-range finding heads its card with the charge
+  // rather than a series, and that charge is the thing the user needs: "Widen to include" is only the
+  // right answer when the bound is too tight, and it takes reading the transaction to know that it isn't
+  // simply miscategorized.
+  function openSignalTarget(signal) {
+    const target = signalTarget(signal)
+    if (!target) return
+    if (target.type === 'series') {
+      const series = seriesById(target.id)
+      if (series) openReport(series)
+      return
+    }
+    // A rule-range finding is about one charge rather than a series, and it opens as a one-row report
+    // rather than an editor. Same panel, same row editing, same place on screen as every other finding's
+    // arrow — a second kind of surface for the same gesture would be the confusing outcome, and the
+    // report already reaches the editor for anyone who wants it.
+    openReport({ id: target.id, display_name: signal.txn_name || 'Transaction', _txnIds: [target.id] })
   }
 
   // Move the rule's limit out to this charge and re-apply it, which is the whole maintenance action the
@@ -963,6 +1005,35 @@ export default function Recurring() {
     await txnMutations.applyRule(signal.rule_id, { preserveManual: true })
     loadSignals()
     load()
+  }
+
+  // Refresh re-reads **everything the page can show**, not just the series list. It used to call `load()`
+  // alone, which meant that from the *Needs attention* or *Upcoming* view — where the series list is not
+  // even on screen — the button reloaded something invisible and left the findings and any open
+  // drill-down exactly as they were. That reads as "the edit I just made did not take": the findings are
+  // derived on read, so they were already correct on the server and only this page had not asked again.
+  const refreshAll = useCallback(() => {
+    load()
+    loadSignals()
+    setReportNonce(n => n + 1)  // an open drill-down re-fetches its rows too
+  }, [load, loadSignals])
+
+  // Accepting a price change is deliberately *not* the one-click apply its rule-range neighbour above
+  // is. A rule's bound has one right answer — take in this charge — while a series' band has two ends
+  // and the finding cannot tell which should move: a bill that rose because everything rose wants both
+  // carried up, one new outlier wants a single bound moved, and the same holds downward when a utility
+  // posts its cheapest month yet. So it opens the band editor on the proposal rather than writing it.
+  function acceptPriceChange(signal) {
+    const band = priceChangeBand(signal)
+    const series = seriesById(signal.series_id)
+    if (!band || !series) return
+    const direction = band.movedBound === 'high' ? 'above' : 'below'
+    setAmountMatchSeries(series)
+    setAmountMatchSuggestion({
+      low: band.low,
+      high: band.high,
+      note: `${formatCurrency(Math.abs(signal.amount))} on ${formatDate(signal.txn_date)} is ${direction} this series’ range, so it is not matching. The ${band.movedBound === 'high' ? 'upper' : 'lower'} end has been moved to take it in.`,
+    })
   }
 
   // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable — an inline arrow
@@ -1020,7 +1091,7 @@ export default function Recurring() {
             )}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Button variant="ghost" onClick={() => load()} title="Reload the list">Refresh</Button>
+              <Button variant="ghost" onClick={refreshAll} title="Reload everything on this page">Refresh</Button>
               <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
               <Button variant="primary" onClick={scan} disabled={scanning}>
                 {scanning ? 'Scanning…' : 'Scan for recurring'}
@@ -1105,9 +1176,10 @@ export default function Recurring() {
                   activeSeriesId={openSeries?.id || null}
                   onDismiss={dismissSignal}
                   onSeriesAction={signalSeriesAction}
-                  onOpenSeries={openSignalSeries}
+                  onOpenSeries={openSignalTarget}
                   onEditRule={(signal) => setRuleModal({ mode: 'edit', ruleId: signal.rule_id })}
                   onWidenRange={widenRuleRange}
+                  onAcceptPrice={acceptPriceChange}
                   onShowDismissed={showDismissedSignals}
                 />
               )
@@ -1188,6 +1260,21 @@ export default function Recurring() {
           onClose={() => setRuleModal(null)}
           // Editing the rule can change the series' membership/cadence/name, so reload the list.
           onSaved={() => { setRuleModal(null); load() }}
+        />
+      )}
+
+      {amountMatchSeries && (
+        <RecurringAmountMatchDialog
+          series={amountMatchSeries}
+          suggested={amountMatchSuggestion}
+          onClose={() => { setAmountMatchSeries(null); setAmountMatchSuggestion(null) }}
+          onSave={async (payload) => {
+            // The edit changes which rows the series owns, so the server re-runs membership and returns
+            // the series with its new count — patch it in rather than re-fetching the whole list.
+            const updated = await api.updateRecurring(amountMatchSeries.id, payload)
+            setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
+            loadSignals()  // a membership change can resolve or raise a finding about this series
+          }}
         />
       )}
 

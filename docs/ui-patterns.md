@@ -800,6 +800,47 @@ identifiable finding or a running count of work.
   because the user has not navigated anywhere. A toast earns its place when the surface that raised the
   item is one the user is passing through — a Tasks card dismissed on the way somewhere else.
 
+- **A detail panel that persists an edit must reconcile the row behind it — and the reconcile belongs in
+  the shared write path, not at each call site.** The panel re-seeds from the host's row when reopened, so
+  a host left holding the old value does not merely look stale: the edit saved, displayed correctly, and
+  came back wrong on the next open, which is indistinguishable from the write having been *rejected*. In
+  `TransactionDetail` the note and tag writes each carried their own copy of the reconcile call, with a
+  comment on each explaining why it was needed; the rename carried neither, and nothing in the shape of
+  the code said a caller owed one. Two comments explaining the same invariant at two call sites is the
+  signal that it belongs one level down.
+
+- **A page's Refresh reloads what the page is showing, not one of the things it can show.** The Recurring
+  page's Refresh called only its series-list loader, so from the *Needs attention* or *Upcoming* view it
+  re-fetched something not on screen and left the findings untouched — which reads as the edit having
+  failed, since findings are derived on read and were already correct on the server. A refresh control on
+  a page with several views reloads every source the active view draws from, including an open drill-down.
+
+- **A finding's headline opens a report of what it names.** Every recurring finding carries an arrow on
+  its headline that opens the same drill-down report on whatever the headline is about — the series'
+  members for most kinds, the single offending charge for the two rule-range ones — docked in place under
+  the findings. **One gesture opens one kind of surface**: the rule-range case first opened a transaction
+  *editor* instead, on the reasoning that the finding is about one row, and that was wrong — the same
+  arrow doing two different kinds of thing depending on the row it sits on is exactly the inconsistency
+  the single affordance was meant to remove, and the report reaches the editor anyway. The drill-down
+  already served two shapes through one paged list, so the third is a synthetic marker beside them rather
+  than a second panel. It replaced an *Open series* button
+  that only two of the five kinds ever had, which left *Newly detected* asking for a Confirm with no way
+  to look at the series, and a rule-range finding offering *Widen to include* with no way to read the
+  charge. That second one is the sharper case: widening is only right when the bound is too tight, and
+  telling that apart from a miscategorized charge needs the transaction — so the surface offered the
+  destructive reading and withheld the corrective one. **Two affordances for one action, present on some
+  rows and not others, is worse than either alone**; the arrow goes on the name because the name is what
+  it opens, which is the same rule as the row markers above.
+
+  **Where the durable half lives depends on the scope of the decision, not the surface that raised it.**
+  Keep on a flagged duplicate follows this pattern with the second half in **Settings** rather than at
+  the foot of the duplicate report, because the report is scoped to one import batch while the judgement
+  it records is global: a "N dismissed" reveal there could only ever show the subset that happened to
+  come from the batch being viewed, which is a worse answer than none. It sits beside *Distinct account
+  pairs*, whose reasoning it shares verbatim — a durable decision made in passing has to be inspectable
+  somewhere. The toast still earns its place: the user is passing through the report on the way to an
+  empty list.
+
 - **Nothing variable-length belongs in a pinned header.** A page whose header block is `flexShrink: 0`
   over a body that is `flex: 1; minHeight: 0` will let the header grow without limit and collapse the
   body to nothing. The Recurring page's findings section did exactly that: a busy ledger's findings

@@ -274,6 +274,49 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
 
         self.assertEqual(self._refresh(), 0)
 
+    # ---- the ledger probe, for entries the tiering leaves with nothing ----
+
+    def test_a_named_same_source_reject_is_explained_by_a_corroborating_charge_elsewhere(self):
+        # The reported case. A coincidental same-amount charge three days out fills the candidate list,
+        # the tiering discards it for sharing no wording, and the entry is left saying "no specific
+        # match" — while the real twin, filed by a second source under a sibling account with the same
+        # descriptor, was never looked at. This is NOT in tension with the sibling test above: that one
+        # pins which rows count as *scope* candidates for a rule whose claim covers one account. This is
+        # the separate, merchant-corroborated question the import path asks of the whole ledger, on the
+        # entries where a coincidence in the list stopped it being asked.
+        self._sibling_account()
+        self._existing("decoy", "2023-08-20", -4.28, "Riverside Hardware")
+        self._existing("sib-twin", "2023-08-17", -4.28, "Northgate Annual Fee", account="acct-sibling")
+        self._rejected(1, "2023-08-17", -4.28, name="Northgate Annual Fee")
+
+        self.assertEqual(self._refresh(), 1)
+        _, matched = self._stored(1)
+        self.assertEqual([c["id"] for c in matched["candidates"]], ["sib-twin"])
+        self.assertTrue(matched["candidates"][0]["cross_account"],
+                        "an off-account explanation has to read as one, not as a same-account match")
+
+    def test_an_explained_entry_never_reaches_the_probe(self):
+        # It costs a query per entry, so it runs only where the report would otherwise have nothing to
+        # say — the same bound that keeps this pass cheap enough to run on every report open.
+        self._existing("covering-1", "2023-08-20", -4.28, "Corner Doughnuts")
+        self._rejected(1, "2023-08-17", -4.28, name="Corner Doughnuts")
+
+        with mock.patch.object(duplicate_detection, "find_ledger_payment_match") as probe:
+            self.assertEqual(self._refresh(), 1)
+        probe.assert_not_called()
+
+    def test_an_unrelated_charge_of_the_same_amount_does_not_become_the_explanation(self):
+        # The probe corroborates on a distinctive merchant token, not on amount alone. Without that it
+        # would hand back exactly the coincidences the tiering exists to remove, one account over.
+        self._sibling_account()
+        self._existing("decoy", "2023-08-20", -4.28, "Riverside Hardware")
+        self._existing("sib-other", "2023-08-17", -4.28, "Lakeshore Cleaners", account="acct-sibling")
+        self._rejected(1, "2023-08-17", -4.28, name="Northgate Annual Fee")
+
+        self.assertEqual(self._refresh(), 0)
+        _, matched = self._stored(1)
+        self.assertEqual(matched["candidates"], [])
+
     # ---- the text tiering the import applies -----------------------------
 
     def test_it_does_not_hand_back_a_row_the_import_filtered_out(self):

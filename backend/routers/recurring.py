@@ -24,6 +24,8 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db
 from backend.services.recurring_detection import (
+    AMOUNT_MODE_FIXED,
+    AMOUNT_MODE_VARIABLE,
     CADENCES,
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
@@ -60,6 +62,11 @@ def _serialize(row: sqlite3.Row) -> dict:
         "expected_amount": row["expected_amount"],
         "amount_min": row["amount_min"],
         "amount_max": row["amount_max"],
+        # Whether amount is part of this series' identity, and the band the user pinned for it (null =
+        # derived from amount_min/amount_max). See recurring_detection.py.
+        "amount_mode": row["amount_mode"] if "amount_mode" in row.keys() else "variable",
+        "expected_min": row["expected_min"] if "expected_min" in row.keys() else None,
+        "expected_max": row["expected_max"] if "expected_max" in row.keys() else None,
         "last_txn_date": row["last_txn_date"],
         "next_due_date": row["next_due_date"],
         "occurrence_count": row["occurrence_count"],
@@ -261,6 +268,13 @@ class SeriesUpdate(BaseModel):
     cadence: Optional[str] = None
     category_id: Optional[str] = None
     expected_amount: Optional[float] = None
+    # Amount matching. `amount_mode` turns the gate on or off; the band is what it matches within, and
+    # `clear_expected_band` is how a pinned band is retracted back to the derived one — a null bound
+    # cannot say that on its own, since null is also "leave this field alone" for every other edit here.
+    amount_mode: Optional[str] = None
+    expected_min: Optional[float] = None
+    expected_max: Optional[float] = None
+    clear_expected_band: bool = False
 
 
 @router.patch("/{series_id}")
@@ -287,6 +301,24 @@ def update_series(series_id: str, body: SeriesUpdate):
         display_name = body.display_name if body.display_name is not None else existing["display_name"]
         expected_amount = body.expected_amount if body.expected_amount is not None else existing["expected_amount"]
 
+        amount_mode = existing["amount_mode"]
+        if body.amount_mode is not None:
+            if body.amount_mode not in (AMOUNT_MODE_FIXED, AMOUNT_MODE_VARIABLE):
+                raise HTTPException(status_code=400, detail=f"Unknown amount mode '{body.amount_mode}'")
+            amount_mode = body.amount_mode
+
+        # A pinned band is retracted explicitly, not by sending nulls: every other field here reads null
+        # as "unchanged", so the clear needs its own flag to mean something different.
+        if body.clear_expected_band:
+            expected_min = expected_max = None
+        else:
+            expected_min = body.expected_min if body.expected_min is not None else existing["expected_min"]
+            expected_max = body.expected_max if body.expected_max is not None else existing["expected_max"]
+        if expected_min is not None and expected_max is not None and expected_min > expected_max:
+            expected_min, expected_max = expected_max, expected_min
+        if (expected_min is None) != (expected_max is None):
+            raise HTTPException(status_code=400, detail="A pinned amount band needs both bounds, or neither")
+
         # Recompute the projected next date off the (possibly new) cadence and the last observed charge.
         next_due = existing["next_due_date"]
         last = existing["last_txn_date"]
@@ -300,11 +332,17 @@ def update_series(series_id: str, body: SeriesUpdate):
             """
             UPDATE recurring_series
             SET display_name = ?, cadence = ?, period_days = ?, category_id = ?, expected_amount = ?,
+                amount_mode = ?, expected_min = ?, expected_max = ?,
                 next_due_date = ?, confirmed = 1, status = 'active', updated_at = datetime('now')
             WHERE id = ?
             """,
-            (display_name, cadence, period_days, category_id, expected_amount, next_due, series_id),
+            (display_name, cadence, period_days, category_id, expected_amount,
+             amount_mode, expected_min, expected_max, next_due, series_id),
         )
+        # Amount matching decides which rows the series owns, so a change to it has to re-run membership
+        # rather than wait for the next scan — otherwise the card keeps reporting the old members and the
+        # edit reads as having done nothing.
+        link_series_members(conn, series_id)
         return _serialize(_fetch(conn, series_id))
 
 
@@ -354,9 +392,9 @@ def create_series(body: SeriesCreate):
             """
             INSERT INTO recurring_series
                 (id, payee_key, display_name, category_id, account_id, cadence, period_days,
-                 expected_amount, amount_min, amount_max, last_txn_date, next_due_date,
+                 expected_amount, amount_min, amount_max, amount_mode, last_txn_date, next_due_date,
                  occurrence_count, confidence, status, source, confirmed, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1.0, 'active', 'manual', 1, datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'variable', ?, ?, 1, 1.0, 'active', 'manual', 1, datetime('now'))
             """,
             (
                 series_id, payee_key, display_name, txn["category_id"], txn["effective_account_id"],

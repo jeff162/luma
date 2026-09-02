@@ -128,6 +128,50 @@ class RecurringSignalsTests(unittest.TestCase):
         self.assertEqual(signals[0]["amount"], 19.99)
         self.assertEqual(signals[0]["amount_kind"], "fixed")
 
+    def test_every_signal_names_the_series_it_is_about(self):
+        # The identification each signal carries is what its actions are built on: "Open series" looks the
+        # series up by `series_id` and silently does nothing when it is absent, which is exactly how this
+        # broke — a payload edit dropped the shared `_series_payload` spread instead of adding beside it,
+        # and the button went dead with no error anywhere. Asserted across kinds so the next edit to any
+        # one payload cannot lose it quietly.
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6 + [19.99])
+        self._scan()
+        signals = [s for s in self._signals()["signals"] if s["kind"] != "rule_range"]
+        self.assertTrue(signals, "precondition: something to check")
+        for signal in signals:
+            with self.subTest(kind=signal["kind"]):
+                self.assertIsNotNone(signal.get("series_id"), "the action needs a series to open")
+                self.assertIsNotNone(signal.get("series_name"))
+
+    def test_a_price_change_carries_the_gate_it_would_have_to_move(self):
+        # The finding offers to widen the series' matching range, so it has to say what that range is
+        # and whether it is the user's pin or the scan's derived one — a proposal against the derived
+        # band while a pin is in force would describe a bound nothing is reading.
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6 + [19.99])
+        self._scan()
+        series = self._series_row("Streamly")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE recurring_series SET confirmed = 1, amount_mode = 'fixed', "
+                    "expected_min = ?, expected_max = ? WHERE id = ?",
+                    (-17.0, -15.0, series["id"]),
+                )
+        signal = self._signals("price_change")[0]
+        self.assertEqual(signal["amount_mode"], "fixed")
+        self.assertTrue(signal["band_pinned"])
+        self.assertEqual((signal["band_min"], signal["band_max"]), (-17.0, -15.0))
+
+    def test_an_ungated_series_reports_its_derived_band(self):
+        # `amount_mode` and `amount_kind` answer different questions: a series can be judged fixed-price
+        # by its history while gating on nothing, and the action is offered only for the gate.
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6 + [19.99])
+        self._scan()
+        signal = self._signals("price_change")[0]
+        self.assertEqual(signal["amount_kind"], "fixed")     # the history is tight
+        self.assertEqual(signal["amount_mode"], "variable")  # but nothing gates on it
+        self.assertFalse(signal["band_pinned"])
+
     def test_price_step_stops_being_reported_once_it_settles(self):
         # Two consecutive charges at the new price: the change was news once and is now the norm.
         self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 5 + [19.99, 19.99])

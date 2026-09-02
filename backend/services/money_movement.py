@@ -38,6 +38,7 @@ import sqlite3
 from typing import Optional
 
 from backend.services import txn_links
+from backend.services.account_groups import effective_account_ids
 from backend.services.transfer_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
 
 LINK_KIND = "wallet_funding"
@@ -123,7 +124,9 @@ def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
 
 def profile_account_ids(conn: sqlite3.Connection, profile_id: str) -> list[str]:
     """Every account the data source's imports landed on. A single PayPal source can span accounts (files
-    carry no account column), so this can be several."""
+    carry no account column), so this can be several. These are the accounts as *stored*, which is what
+    retyping them needs; anything that goes on to **filter transactions** wants
+    `profile_effective_account_ids` instead."""
     rows = conn.execute(
         """SELECT DISTINCT t.account_id
            FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
@@ -180,6 +183,16 @@ def _ruled_keywords(conn: sqlite3.Connection, category_id: Optional[str]) -> set
     return {row["keyword"] for row in rows}
 
 
+def profile_effective_account_ids(conn: sqlite3.Connection, profile_id: str) -> list[str]:
+    """A data source's accounts as the transaction API's `account_ids` filter compares them: resolved to
+    their group roots. A merged account keeps its rows under the *child* id while every account-scoped
+    filter resolves the row side through `COALESCE(parent_account_id, id)`, so handing a raw child id to
+    one of those selects nothing and reports no error — see `docs/data-model.md` on the two sides of an
+    account comparison. Anything scoping a query to this source's rows uses this; `profile_account_ids`
+    stays for the cases where the account row itself is the subject."""
+    return sorted(set(effective_account_ids(conn, profile_account_ids(conn, profile_id)).values()))
+
+
 def _type_row_counts_for_accounts(conn: sqlite3.Connection, account_ids: list[str]) -> dict[str, dict]:
     """Per captured `Type`, the rows on the review's (data source's) accounts split by whether a
     money-movement rule can affect them: **affected** (`category_overridden = 0` — rule-eligible, what the
@@ -190,13 +203,7 @@ def _type_row_counts_for_accounts(conn: sqlite3.Connection, account_ids: list[st
     arrived via another import. The review's count is the affected count; the extras surface in the report."""
     if not account_ids:
         return {}
-    placeholders = ",".join("?" for _ in account_ids)
-    effective = [
-        r["eff"] for r in conn.execute(
-            f"SELECT DISTINCT COALESCE(parent_account_id, id) AS eff FROM account WHERE id IN ({placeholders})",
-            account_ids,
-        ).fetchall()
-    ]
+    effective = sorted(set(effective_account_ids(conn, account_ids).values()))
     if not effective:
         return {}
     eff_placeholders = ",".join("?" for _ in effective)

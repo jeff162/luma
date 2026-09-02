@@ -455,9 +455,14 @@ def export_transactions_csv(
     elif date_end:
         clauses.append("t.date <= ?"); params.append(date_end)
     if account_ids:
+        # Both sides resolved to the group root — see the transactions router's
+        # `_effective_account_membership`, whose shape this mirrors: an id that has since become a
+        # merged child resolves to nothing on the row side, so comparing it raw selects no rows and
+        # raises nothing. An export silently missing a third of the ledger is the failure that buys.
         ids = [i.strip() for i in account_ids.split(",") if i.strip()]
         clauses.append(
-            f"COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) IN ({','.join('?'*len(ids))})"
+            f"COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) "
+            f"IN (SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({','.join('?'*len(ids))}))"
         ); params.extend(ids)
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(",") if i.strip()]
@@ -477,7 +482,7 @@ def export_transactions_csv(
         ids = [i.strip() for i in exclude_account_ids.split(",") if i.strip()]
         clauses.append(
             f"COALESCE((COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) "
-            f"IN ({','.join('?'*len(ids))})), 0) = 0"
+            f"IN (SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({','.join('?'*len(ids))}))), 0) = 0"
         ); params.extend(ids)
     if exclude_owner_ids:
         ids = [i.strip() for i in exclude_owner_ids.split(",") if i.strip()]
@@ -663,6 +668,7 @@ BACKUP_SECTIONS = (
     # User's "these two charges are distinct" assertions from the Amazon reconciliation's
     # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
     ("amazon_charge_distinct", "amazon_charge_distinct", "SELECT * FROM amazon_charge_distinct ORDER BY rowid"),
+    ("suspect_pair_distinct", "suspect_pair_distinct", "SELECT * FROM suspect_pair_distinct ORDER BY rowid"),
     # User "Mark reviewed" acknowledgments on the reconciliation report's reverse-scan bucket, so a
     # restore keeps unaccounted charges the user already cleared out of the attention count.
     ("amazon_charge_reviewed", "amazon_charge_reviewed", "SELECT * FROM amazon_charge_reviewed ORDER BY rowid"),
@@ -1128,6 +1134,7 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM rule_tag")
     conn.execute("DELETE FROM account_pair_distinct")
     conn.execute("DELETE FROM amazon_charge_distinct")
+    conn.execute("DELETE FROM suspect_pair_distinct")
     conn.execute("DELETE FROM amazon_charge_reviewed")
     # Parked Amazon items (awaiting their orders file) have no FK to cascade them, so the wipe must clear
     # them explicitly — otherwise pre-restore parked rows would linger and wrongly auto-attach to restored
@@ -1390,6 +1397,8 @@ _RESTORE_REQUIRE = (
     ("account_pair_distinct", "account_id_high", "account"),
     ("amazon_charge_distinct", "txn_id_low", "txn"),
     ("amazon_charge_distinct", "txn_id_high", "txn"),
+    ("suspect_pair_distinct", "txn_id_low", "txn"),
+    ("suspect_pair_distinct", "txn_id_high", "txn"),
     ("amazon_charge_reviewed", "txn_id", "txn"),
     ("recurring_membership_override", "txn_id", "txn"),
     ("recurring_membership_override", "series_id", "recurring_series"),

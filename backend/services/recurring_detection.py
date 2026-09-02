@@ -18,10 +18,16 @@ them in `recurring_series`. Two operations, split by cost the way the online-cat
 
 Grouping key is **(payee, category, sign)**, not payee alone: one payee can host several series
 distinguished by category — a town billing property tax quarterly, excise annually, water monthly.
-Category is the strong discriminator when present; within a group, amount clustering is the fallback
-that separates same-category series (e.g. a fixed subscription hiding inside a noisy merchant, or two
-same-category bills at different amounts). Amount is a confidence booster and a forecast hint, never a
-matching gate — variable bills (utilities) still recur on schedule while their amount swings.
+Category is the strong discriminator when present; within a group, amount separates same-category series
+(a fixed subscription hiding inside a noisy merchant, or two same-category bills at different amounts).
+A group is read two ways — as one rhythm over the whole set, and as a rhythm inside each price point —
+and the split wins only when the whole-set reading is amount-incoherent, which is what stops two
+concurrent subscriptions being reported as one faster series at an average price neither one costs.
+
+Amount is a confidence booster and a forecast hint, and gates membership only for a series that says it
+does (`amount_mode='fixed'`) — variable bills (utilities) still recur on schedule while their amount
+swings, and gating those would evict their own charges. Every amount gate carries a grace band so a
+price rise stays in the series that should report it. See `docs/data-model.md` → Recurring series.
 """
 
 from __future__ import annotations
@@ -352,6 +358,10 @@ def _build_series(payee_key: str, category_id, sign: int, rows: list[dict], ref_
         "occurrence_count": len(occ),
         "confidence": confidence,
         "member_ids": [o["id"] for o in occ],
+        # Whether this series' own charges cluster at one price point. Carried on the candidate (rather
+        # than recomputed) because two consumers need it: choosing between the rhythm and amount-split
+        # readings of a group, and deciding whether the series' identity includes its amount.
+        "amount_tight": _amount_is_tight(occ),
     }
 
 
@@ -362,6 +372,20 @@ def _build_series(payee_key: str, category_id, sign: int, rows: list[dict], ref_
 # spurious "series" — the exact false positive that makes name-blocklist approaches tempting.
 _FALLBACK_AMOUNT_CV_MAX = 0.15
 
+# A series' `amount_mode`. `fixed` means amount is part of the series' identity: it matches only charges
+# near its band, which is what keeps two same-payee, same-category subscriptions at different price
+# points from collapsing into each other. `variable` is the default and the right answer for a bill whose
+# amount is the thing that moves.
+AMOUNT_MODE_FIXED = "fixed"
+AMOUNT_MODE_VARIABLE = "variable"
+
+# How far outside its observed band an amount-gated series still claims a charge. Every amount gate in
+# this subsystem needs one: without it a price rise stops matching the series that should report it, so
+# the charge falls out of its own series and the price-change signal never fires. Deliberately narrower
+# than the 1.4× neighbour jump `_cluster_by_amount` splits on, so the gate can never re-merge a pair the
+# detector separated on price.
+_AMOUNT_GATE_GRACE = 0.25
+
 
 def _amount_is_tight(rows: list[dict]) -> bool:
     amounts = [abs(r["amount"]) for r in rows]
@@ -371,11 +395,11 @@ def _amount_is_tight(rows: list[dict]) -> bool:
     return (statistics.pstdev(amounts) / mean_amt) <= _FALLBACK_AMOUNT_CV_MAX
 
 
-def _detect_in_group(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
-    # Claim series iteratively: build one, remove the charges it claimed (one per date), then retry on
-    # what's left. This lets same-date leftovers form their own series — e.g. the quarterly estimates
-    # claim their dates and the annual filings (dropped from those dates) can coalesce into an annual
-    # series of their own rather than contaminating the quarterly one.
+def _detect_by_rhythm(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
+    """Claim series iteratively from the whole set: build one, remove the charges it claimed (one per
+    date), then retry on what's left. This lets same-date leftovers form their own series — e.g. the
+    quarterly estimates claim their dates and the annual filings (dropped from those dates) coalesce
+    into an annual series of their own rather than contaminating the quarterly one."""
     results = []
     remaining = list(rows)
     while len(remaining) >= 2:
@@ -388,11 +412,13 @@ def _detect_in_group(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
         if len(next_remaining) == len(remaining):
             break  # safety: nothing claimed — avoid looping forever
         remaining = next_remaining
-    if results:
-        return results
-    # No whole-set rhythm at all — try amount clusters (only worthwhile if it actually splits) so a
-    # fixed-price series inside a noisy same-category payee can still surface. Each cluster must be
-    # amount-tight, or a coincidental subset of noise would masquerade as a series.
+    return results
+
+
+def _detect_by_amount_clusters(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
+    """The amount-split reading of a group: partition by price point, then look for a rhythm inside each
+    partition. Each cluster must be amount-tight, or a coincidental subset of noise would masquerade as
+    a series."""
     clusters = _cluster_by_amount(rows)
     if len(clusters) <= 1:
         return []
@@ -403,6 +429,43 @@ def _detect_in_group(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
         series = _build_series(payee_key, category_id, sign, cluster, ref_now)
         if series is not None:
             found.append(series)
+    return found
+
+
+def _prefer_amount_split(rhythm: list[dict], split: list[dict]) -> bool:
+    """Whether a group is better read as several price points than as one rhythm.
+
+    Two concurrent subscriptions from one biller interleave into a plausible faster cadence — a $4 and a
+    $20 monthly charge a fortnight apart read as one biweekly series at $12 whose band spans both, a
+    cadence and an expected amount that describe nothing that happens. Preferring the split needs all
+    three conditions, and the middle one is what keeps a variable bill intact: a utility's amounts drift
+    without a >40% neighbour jump, so it never splits into more than one cluster, and even when a single
+    outlier does split it off, the leftover cluster cannot form a series on its own."""
+    if len(split) <= len(rhythm):
+        return False
+    if all(s["amount_tight"] for s in rhythm):
+        return False  # the rhythm reading is already amount-coherent — nothing the split would fix
+    # Never trade coverage for tidiness: a split that explains fewer charges is a worse account of the
+    # group, not a better one.
+    return (sum(len(s["member_ids"]) for s in split)
+            >= sum(len(s["member_ids"]) for s in rhythm))
+
+
+def _detect_in_group(payee_key, category_id, sign, rows, ref_now) -> list[dict]:
+    rhythm = _detect_by_rhythm(payee_key, category_id, sign, rows, ref_now)
+    split = _detect_by_amount_clusters(payee_key, category_id, sign, rows, ref_now)
+    found = split if _prefer_amount_split(rhythm, split) else (rhythm or split)
+    return _assign_amount_modes(found)
+
+
+def _assign_amount_modes(found: list[dict]) -> list[dict]:
+    """Mark which of a group's series carry their amount as part of their identity. A series is `fixed`
+    only when amount is doing discriminating work — the group resolved into more than one series and
+    this one sits at a single price point. A lone series never needs the gate (nothing to be confused
+    with) and a loose one must not have it (its amounts are the thing that varies)."""
+    discriminating = len(found) > 1
+    for series in found:
+        series["amount_mode"] = AMOUNT_MODE_FIXED if (discriminating and series["amount_tight"]) else AMOUNT_MODE_VARIABLE
     return found
 
 
@@ -419,9 +482,16 @@ def detect_recurring_series(pool: list[dict], ref_now: date) -> list[dict]:
 
 def _match_members(pool: list[dict], series: sqlite3.Row) -> list[dict]:
     """Rows a user-owned series (manual/confirmed) should currently own: same payee, and same category/
-    account/sign where the series constrains them. Amount is intentionally not gated (variable bills)."""
+    account/sign where the series constrains them.
+
+    Amount gates membership **only** for a series that declares `amount_mode='fixed'` — one whose price
+    point is what distinguishes it from a sibling series on the same payee and category. For everything
+    else amount is a forecast hint and never a gate, because a variable bill recurs on schedule while
+    its amount swings. The gate carries a grace band so a price step does not evict a charge from the
+    series that should report it."""
     exp = series["expected_amount"]
     want_sign = None if exp is None else (1 if exp >= 0 else -1)
+    gate = _series_amount_gate(series)
     out = []
     for row in pool:
         if row["payee_key"] != series["payee_key"]:
@@ -431,6 +501,8 @@ def _match_members(pool: list[dict], series: sqlite3.Row) -> list[dict]:
         if series["scope_account_id"] is not None and row["account_id"] != series["scope_account_id"]:
             continue
         if want_sign is not None and row["sign"] != want_sign:
+            continue
+        if gate is not None and not (gate[0] <= row["amount"] <= gate[1]):
             continue
         out.append(row)
     return out
@@ -454,15 +526,16 @@ def _insert_series(conn: sqlite3.Connection, series: dict, *, source: str, confi
         """
         INSERT INTO recurring_series
             (id, payee_key, display_name, category_id, account_id, cadence, period_days,
-             expected_amount, amount_min, amount_max, last_txn_date, next_due_date,
+             expected_amount, amount_min, amount_max, amount_mode, last_txn_date, next_due_date,
              occurrence_count, confidence, status, source, confirmed, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
                 COALESCE(?, datetime('now')), datetime('now'))
         """,
         (
             series_id, series["payee_key"], series["display_name"], series["category_id"],
             series["account_id"], series["cadence"], series["period_days"],
             series["expected_amount"], series["amount_min"], series["amount_max"],
+            series.get("amount_mode", AMOUNT_MODE_VARIABLE),
             series["last_txn_date"], series["next_due_date"], series["occurrence_count"],
             series["confidence"], source, confirmed, created_at,
         ),
@@ -470,11 +543,61 @@ def _insert_series(conn: sqlite3.Connection, series: dict, *, source: str, confi
     return series_id
 
 
-def _auto_identity(payee_key, category_id, account_id) -> tuple:
+def _amount_gate_bounds(amount_min, amount_max):
+    """The band an amount-gated series claims within, widened by the grace margin. None when the series
+    has no observed band yet, which reads as "no gate" rather than "matches nothing"."""
+    if amount_min is None or amount_max is None:
+        return None
+    lo, hi = min(amount_min, amount_max), max(amount_min, amount_max)
+    margin = max(abs(lo), abs(hi)) * _AMOUNT_GATE_GRACE
+    return lo - margin, hi + margin
+
+
+def _series_amount_gate(series) -> tuple | None:
+    """The amount band a series matches within, or None when it does not gate on amount. Reading the
+    mode through a default keeps every legacy row (written before the column existed) variable.
+
+    A pinned band wins over the derived one, and is the only way to express a bound a percentage cannot
+    — separating a town's water bill from its property tax by size, where both are "about right" for each
+    other's grace margin. The derived band is rewritten by every scan from the rows the series owns; the
+    pinned one is the user's claim and is never rewritten."""
+    if _row_get(series, "amount_mode", AMOUNT_MODE_VARIABLE) != AMOUNT_MODE_FIXED:
+        return None
+    pinned_lo = _row_get(series, "expected_min")
+    pinned_hi = _row_get(series, "expected_max")
+    if pinned_lo is not None and pinned_hi is not None:
+        return _amount_gate_bounds(pinned_lo, pinned_hi)
+    return _amount_gate_bounds(series["amount_min"], series["amount_max"])
+
+
+def _row_get(row, key, default=None):
+    """`sqlite3.Row` has no `.get`, and a series reaches this module from several SELECTs."""
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
+def _amount_identity_key(series):
+    """The amount component of an auto series' identity — its price point, rounded, for a fixed series
+    and None for a variable one. Without it the two price points of one payee share an identity, which
+    silently collapses `_auto_first_seen` and makes `_covered_by_owned` suppress the sibling of any
+    series the user confirms."""
+    if _row_get(series, "amount_mode", AMOUNT_MODE_VARIABLE) != AMOUNT_MODE_FIXED:
+        return None
+    expected = series["expected_amount"]
+    return None if expected is None else round(expected, 2)
+
+
+def _auto_identity(payee_key, category_id, account_id, amount_key=None) -> tuple:
     """The identity an auto series keeps across rebuilds — the same tuple `_covered_by_owned` dedupes
     candidates by. An auto series' *id* cannot carry anything across a scan (each scan deletes and
-    re-inserts it), so anything that must outlive a rebuild is keyed by this instead."""
-    return (payee_key, category_id, account_id)
+    re-inserts it), so anything that must outlive a rebuild is keyed by this instead.
+
+    `amount_key` is the price point of an amount-gated series and None otherwise, so two fixed-price
+    subscriptions from one biller are two identities rather than one."""
+    return (payee_key, category_id, account_id, amount_key)
 
 
 def _series_occurrences(series: sqlite3.Row, members: list[dict]) -> list[dict]:
@@ -739,7 +862,8 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # to the last rebuild and "detected since you last looked" could never be answered — every daily
     # catch-up would re-announce the entire list.
     first_seen = {
-        _auto_identity(r["payee_key"], r["category_id"], r["scope_account_id"]): r["created_at"]
+        _auto_identity(r["payee_key"], r["category_id"], r["scope_account_id"],
+                       _amount_identity_key(r)): r["created_at"]
         for r in existing if r["id"] in set(auto_ids)
     }
 
@@ -765,12 +889,21 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # Auto candidates: skip any a user-owned series already covers — same payee+category whose account
     # scope overlaps (a NULL/account-agnostic series covers every account). This stops a redundant second
     # series (account-agnostic vs account-scoped) from being minted and fighting over the same rows.
+    #
+    # An amount-gated owned series covers only its own price point. Without that test, confirming one of
+    # a biller's two subscriptions suppressed the other as redundant, and its charges were left linked to
+    # nothing — the sibling was destroyed by the act of endorsing its neighbour.
     def _covered_by_owned(cand):
         for r in user_owned:
-            if (r["payee_key"] == cand["payee_key"] and r["category_id"] == cand["category_id"]
+            if not (r["payee_key"] == cand["payee_key"] and r["category_id"] == cand["category_id"]
                     and (r["scope_account_id"] == cand["account_id"]
                          or r["scope_account_id"] is None or cand["account_id"] is None)):
-                return True
+                continue
+            gate = _series_amount_gate(r)
+            if gate is not None and cand["expected_amount"] is not None:
+                if not (gate[0] <= cand["expected_amount"] <= gate[1]):
+                    continue  # a different price point on the same payee — its own series
+            return True
         return False
 
     inserted = 0
@@ -783,7 +916,8 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         cand["occurrence_count"] = len(member_ids)  # keep count == rows actually assigned
         series_id = _insert_series(
             conn, cand, source="auto", confirmed=0,
-            created_at=first_seen.get(_auto_identity(cand["payee_key"], cand["category_id"], cand["account_id"])),
+            created_at=first_seen.get(_auto_identity(
+                cand["payee_key"], cand["category_id"], cand["account_id"], _amount_identity_key(cand))),
         )
         _assign_membership(conn, series_id, member_ids)
         claimed.update(member_ids)

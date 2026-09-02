@@ -380,8 +380,42 @@ def _price_change(series, occurrences: list[dict], accepted: list[float] | None 
         "percent": round(abs(delta) / baseline * 100, 1),
         "direction": "increase" if delta > 0 else "decrease",
         "amount_kind": "fixed" if tight else "variable",
+        # The gate, so the finding can offer to move it. Carried only on this signal (rather than on
+        # every one via `_series_payload`) because it is the only one that proposes a band edit.
+        #
+        # `amount_kind` above and `amount_mode` here are different questions and both are wanted: the
+        # first is how tight this series' *history* is, which picks the threshold the step was judged
+        # against; the second is whether amount gates *membership*, which is what decides whether the
+        # charge can join at all. A series can be judged fixed-price and gate on nothing.
+        "amount_mode": _row_get(series, "amount_mode", "variable"),
+        **_gate_band_payload(series),
         **_series_payload(series),
     }
+
+
+def _gate_band_payload(series) -> dict:
+    """The band a gated series matches within, and whether it is the user's or the scan's. The pinned
+    band wins where set, mirroring `recurring_detection._series_amount_gate` — a finding that proposed
+    an edit to the derived band while a pin was in force would describe a bound nothing is reading."""
+    pinned_lo = _row_get(series, "expected_min")
+    pinned_hi = _row_get(series, "expected_max")
+    pinned = pinned_lo is not None and pinned_hi is not None
+    lo = pinned_lo if pinned else series["amount_min"]
+    hi = pinned_hi if pinned else series["amount_max"]
+    return {
+        "band_min": round(lo, 2) if lo is not None else None,
+        "band_max": round(hi, 2) if hi is not None else None,
+        "band_pinned": pinned,
+    }
+
+
+def _row_get(row, key, default=None):
+    """`sqlite3.Row` has no `.get`, and these payloads are built from several SELECTs."""
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
 
 
 def _load_ranged_rules(conn: sqlite3.Connection) -> list[dict]:

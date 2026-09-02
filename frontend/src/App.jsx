@@ -1353,6 +1353,10 @@ export default function App() {
     if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
     recurringAutoScanScopeRef.current = preferenceSubjectId
     api.autoScanRecurring().catch(() => { })
+    // Same shape, different trigger: re-examine stored rows once when the duplicate matcher's rules have
+    // changed since this database was last scanned. Version-gated rather than time-gated, so it is a
+    // no-op on every load but the first after a rule change.
+    api.rescanDuplicates().catch(() => { })
   }, [authEnabled, currentUser, activeLocalProfile, preferenceSubjectId])
 
   useEffect(() => {

@@ -20,6 +20,7 @@ from backend.services.duplicate_detection import (
     DedupeVerdict,
     duplicate_amount_key as _duplicate_amount_key,
     evaluate_duplicate,
+    row_match_texts,
 )
 
 
@@ -177,6 +178,86 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         verdict = self._eval_covered_payment(None, "")
         self.assertTrue(verdict.hard_reject)
         self.assertEqual(verdict.matched["candidate_count"], 0)
+
+    # ---- naming the match when every same-account candidate is a coincidence ----
+    # The candidate lookup finds rows by amount and date alone, so an unrelated same-amount charge can
+    # occupy the list on its own. The tiering then discards it for having no text in common, and the row
+    # reports "no specific match" — while the ledger probe, the only step that looks at other accounts,
+    # never ran at all, because a candidate existed. These pin the second, display-side probe that fixes
+    # that, and pin that it stays display-side.
+
+    def _decoy_ctx(self):
+        """The reported shape: one unrelated charge of the same amount, five days out, sharing no text
+        with the incoming row — enough to fill the candidate list, not enough to survive the tiering."""
+        ctx = self._coverage_ctx()
+        ctx.existing_rows_by_account_amount = {
+            "ACCT-1": {_duplicate_amount_key("2025-10-10", -10.00): [{
+                "id": "COINCIDENCE", "date": "2025-10-10", "amount": -10.00, "account_id": "ACCT-1",
+                "merchant_name": "Northgate Parks & Recreation", "import_batch_id": "BATCH-A",
+                "source_texts": row_match_texts(
+                    "Northgate Parks & Recreation", "NORTHGATE PARKS AND RECREATION", None),
+            }]},
+        }
+        return ctx
+
+    # The twin as a second source filed it: a sibling account, the same signed amount, the same day.
+    _TWIN = {"id": "TWIN", "date": "2025-10-15", "merchant_name": "Annual Membership Fee",
+             "amount": -10.00, "account_id": "ACCT-SIBLING", "account_name": "Harborline Rewards 2741",
+             "cross_account": True, "payment_match": True}
+
+    def _eval_named_row(self, payment_match, ctx=None, merchant="Annual Membership Fee"):
+        with mock.patch.object(duplicate_detection, "find_cross_account_transfer_candidates",
+                               return_value=[]), \
+             mock.patch.object(duplicate_detection, "find_ledger_payment_match",
+                               return_value=payment_match) as probe:
+            verdict = evaluate_duplicate(
+                context=ctx if ctx is not None else self._decoy_ctx(),
+                receiving_account_id="ACCT-1", csv_value="PayPal", content_hash="unique-hash",
+                parsed_date="2025-10-15", amount=-10.00, scope_id="ACCT-1",
+                txn_payload={"merchant_name": merchant, "raw_name": merchant.upper()},
+            )
+        return verdict, probe
+
+    def test_a_coincidental_candidate_no_longer_buries_the_real_match(self):
+        # The whole point: the report names the corroborating charge instead of reading NO SPECIFIC
+        # MATCH, and the coincidence that was standing in its place is gone from the list.
+        verdict, probe = self._eval_named_row(self._TWIN)
+        self.assertTrue(verdict.hard_reject)
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["TWIN"])
+        self.assertEqual(verdict.matched["candidate_count"], 1)
+        self.assertEqual(probe.call_count, 1, "one probe per row — the empty-list branch did not also run")
+
+    def test_the_display_probe_never_turns_a_rejection_into_an_import(self):
+        # Nothing corroborates, so the row keeps exactly the verdict it had before this branch existed.
+        # The escape hatch that DOES let a named row import is the empty-candidate one, and a coincidence
+        # in the list means it already declined to fire — this branch must not reopen that decision.
+        verdict, _ = self._eval_named_row(None)
+        self.assertTrue(verdict.hard_reject)
+        self.assertFalse(verdict.passthrough)
+        self.assertEqual(verdict.matched["candidates"], [])
+
+    def test_a_candidate_worth_showing_leaves_the_ledger_unprobed(self):
+        # A displayable same-account match is the better explanation and the cheaper one; the probe is
+        # for the case where the report would otherwise have nothing to say.
+        ctx = self._coverage_ctx()
+        ctx.existing_rows_by_account_amount = {
+            "ACCT-1": {_duplicate_amount_key("2025-10-15", -10.00): [{
+                "id": "SAME-DAY", "date": "2025-10-15", "amount": -10.00, "account_id": "ACCT-1",
+                "merchant_name": "Annual Membership Fee",
+                "source_texts": row_match_texts("Annual Membership Fee", "ANNUAL MEMBERSHIP FEE", None),
+            }]},
+        }
+        verdict, probe = self._eval_named_row(self._TWIN, ctx=ctx)
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["SAME-DAY"])
+        self.assertEqual(probe.call_count, 0)
+
+    def test_a_nameless_leg_keeps_its_candidate_and_never_reaches_the_probe(self):
+        # Why the branch can be gated on a merchant name without losing cases: with no text on the
+        # incoming side there is no disagreement to hide a candidate for, so the tiering never empties
+        # the list of a money-movement leg in the first place.
+        verdict, probe = self._eval_named_row(self._TWIN, merchant="")
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["COINCIDENCE"])
+        self.assertEqual(probe.call_count, 0)
 
     def test_coverage_in_scope_skipped_when_receiving_account_is_brand_new(self):
         # Phase 1 invariant: a brand-new sibling account in a linked group must NOT inherit

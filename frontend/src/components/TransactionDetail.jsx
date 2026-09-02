@@ -213,11 +213,20 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     ))
   }
 
+  // Panel state and the host's row, always together. Everything routed through here has already been
+  // written to the database, so a host left holding the old value is displaying something untrue — and
+  // the panel re-seeds from that row when it is reopened, which turns the staleness into an apparent
+  // *rejection*: the rename saved, showed correctly, and came back wrong on the next open.
+  //
+  // The reconcile lives here rather than at each call site because that is what it took to lose one.
+  // Notes and tags each carried their own copy of it with a comment explaining why; the rename did not,
+  // and nothing in the shape of the code said a caller owed one.
   function patchDetailTxn(patch) {
     setDetailTxn(prev => ({ ...prev, ...patch }))
     setMonthTxns(prev => prev.map(row => (
       row.id === detailTxn.id ? { ...row, ...patch } : row
     )))
+    onReconcile?.(detailTxn.id, patch)
   }
 
   // The split editor is opened from the category field and reconciles back into the panel's own row, so
@@ -295,21 +304,16 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     onReconcile?.(txn.id, patch)
   }, [onReconcile, txn.id])
 
-  // Persistence for the shared NoteEditor: write through, patch the panel's own copy, and
-  // reconcile the host's row so the saved note shows behind the panel (otherwise the note
-  // persists to the DB but the page keeps reading its stale copy and shows no note marker).
+  // Persistence for the shared NoteEditor: write through, then patch — which reconciles the host's row
+  // as well, so the saved note shows behind the panel.
   async function handleSaveNote(nextNotes) {
     await api.updateNotes(detailTxn.id, nextNotes)
     patchDetailTxn({ notes: nextNotes })
-    onReconcile?.(detailTxn.id, { notes: nextNotes })
   }
 
   async function handleToggleTag(tag, present) {
     const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
     patchDetailTxn({ tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
-    // Reconcile the host's row too, otherwise the tag persists to the DB but the surface behind the
-    // panel keeps reading its stale copy and shows no tag marker.
-    onReconcile?.(detailTxn.id, { tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
   }
 
   // Reserve the full 7-row list height for the wider (year/all-time) ranges, whose lists scroll at

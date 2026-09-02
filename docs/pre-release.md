@@ -133,9 +133,10 @@ versions: an auto series is re-minted with a new id on every scan, so a stored f
 a day and stale on the next edit. The only durable state is the user's dismissals. Fixed on the way:
 `recurring_series.created_at` now means *first detected* rather than *last rebuilt*.
 
-**Still not in scope:** §4's identity half (`amount_mode`, amount-gated fixed membership, the pinned
-expectation band). §2 settled its design — the rule owns the matching gate, the series owns the
-expectation band, and every amount gate needs a grace band — and the backlog file carries it.
+**§4's identity half was out of scope here and has since been taken anyway** (2026-09-01, on the user's
+call that the release is not imminent) — `amount_mode`, amount-gated membership and the pinned
+expectation band. §2 had settled its design; what the build found was that §4 was covering **two live
+defects** rather than a missing feature. See *Recurring series amount identity* under *Landed alongside*.
 
 **First real-app pass, 2026-08-27 — one defect, invisible to the suite by construction, and a structural
 change behind it.** The findings section rendered into the Recurring page's pinned header (`flexShrink: 0`
@@ -371,6 +372,20 @@ guard, the summary-endpoint tests, and a before/after comparison over a real-dat
 
 Not one of the six, and not scoped here — recorded because it moved surfaces and versions that later
 steps in this plan depend on.
+
+**Recurring series amount identity** ([`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+§4, shipped 2026-09-01). Amount becomes part of a series' identity where it is the only thing telling two
+series apart. It was picked up as backlog rather than under any feature above, and it closed two defects
+that were live in shipped code: confirming one of a biller's two subscriptions **orphaned the other** (the
+candidate-coverage check could not tell two price points apart), and two subscriptions billing a fortnight
+apart **merged into one bogus biweekly series** at an average price neither one costs. Both are recorded
+in the backlog file with the shapes not to re-impose.
+
+One thing it moved that matters below: **schema version 46** — three additive columns on
+`recurring_series` (`amount_mode`, `expected_min`, `expected_max`), no backup payload change, since the
+restore intersects a payload's keys with the live table's columns in both directions. It also changes
+what the Recurring page shows (a card can now say it is matched by amount, and carries an *Amount*
+control), which is relevant to **Screenshots**.
 
 **Rule overlap surfacing** ([`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md), shipped
 2026-08-27). *Check overlaps* on the Rules page reports rule pairs that compete for the same

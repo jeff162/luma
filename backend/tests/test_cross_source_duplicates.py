@@ -42,9 +42,14 @@ from backend.services.duplicate_detection import (
     TEXT_DUPLICATE_MATCH_FLOOR,
     build_dedupe_context,
     classify_source_text_relation,
+    DUPLICATE_DETECTION_VERSION,
     classify_text_match,
     evaluate_duplicate,
+    forget_suspect_pair_distinct,
     mark_import_suspects,
+    maybe_rescan_for_detection_change,
+    reopen_suspect_pair,
+    rescan_until_settled,
     promote_in_group_suspects_to_confirmed,
     resolve_suspect,
     row_match_texts,
@@ -425,6 +430,157 @@ class SameAccountResolutionTests(_LedgerTestCase):
                 self.assertEqual(pairs, 0)
                 self.assertIsNone(self._suspect("b1")["suspect_duplicate_of"],
                                   "the one row asked about is still cleared")
+
+
+class DismissalSurvivesARescanTests(_LedgerTestCase):
+    """A Keep must outlive a re-scan.
+
+    Keep clears its row's pointer and stamps `suspect_resolved_at`, and neither says which *pair* was
+    judged. That was harmless while an account merge was the only thing that ever re-scanned; a
+    version-gated re-scan makes it destructive, because the finding comes back and the re-flag overwrites
+    the stamp that was the only evidence a decision was ever made.
+    """
+
+    def _flag_and_keep(self):
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        with self._db() as conn:
+            self.assertEqual(scan_scope_for_cross_account_duplicates(conn, [ACCOUNT]), 1)
+            flagged = "b1" if self._suspect_in(conn, "b1")["suspect_duplicate_of"] else "a1"
+            resolve_suspect(conn, flagged, action="keep")
+        return flagged
+
+    def _suspect_in(self, conn, txn_id):
+        return conn.execute("SELECT * FROM txn WHERE id = ?", (txn_id,)).fetchone()
+
+    def test_a_kept_pair_is_not_raised_again(self):
+        kept = self._flag_and_keep()
+        with self._db() as conn:
+            self.assertEqual(scan_scope_for_cross_account_duplicates(conn, [ACCOUNT]), 0)
+            row = self._suspect_in(conn, kept)
+        self.assertIsNone(row["suspect_duplicate_of"])
+        self.assertIsNotNone(row["suspect_resolved_at"], "the record of the decision survives")
+
+    def test_the_judgement_names_the_pair_it_judged(self):
+        # Recorded before the pointer is cleared — afterwards nothing in the row says what it was against.
+        self._flag_and_keep()
+        with self._db() as conn:
+            pairs = conn.execute("SELECT txn_id_low, txn_id_high FROM suspect_pair_distinct").fetchall()
+        self.assertEqual([tuple(p) for p in pairs], [("a1", "b1")])
+
+    def test_the_import_time_sweep_honours_it_too(self):
+        # Both consumers must skip the pair, or a later import re-raises what the re-scan now leaves alone.
+        self._flag_and_keep()
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET suspect_duplicate_of = NULL, suspect_duplicate_reason = NULL"
+                         " WHERE id IN ('a1','b1')")
+            self.assertEqual(mark_import_suspects(conn, "card-b"), 0)
+
+    def test_forgetting_the_judgement_lets_the_pair_return(self):
+        # The escape hatch: permanent against the system re-asking is not the same as permanent against
+        # a misclick.
+        self._flag_and_keep()
+        with self._db() as conn:
+            self.assertEqual(forget_suspect_pair_distinct(conn, "a1", "b1"), {"deleted": 1})
+            conn.execute("UPDATE txn SET suspect_resolved_at = NULL WHERE id IN ('a1','b1')")
+            self.assertEqual(scan_scope_for_cross_account_duplicates(conn, [ACCOUNT]), 1)
+
+
+class ReopenAKeepTests(_LedgerTestCase):
+    """Undo on a Keep. It has to put the finding back, not merely lift the judgement — an Undo that left
+    the pair unflagged until some later scan would look like it had done nothing, and the user could not
+    tell that from a failure."""
+
+    def _keep(self):
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        with self._db() as conn:
+            conn.execute("UPDATE txn SET suspect_duplicate_of='a1', suspect_duplicate_reason='cross_account_weak'"
+                         " WHERE id='b1'")
+            return resolve_suspect(conn, "b1", action="keep")
+
+    def test_keep_hands_back_the_pair_it_just_stopped_naming(self):
+        result = self._keep()
+        self.assertEqual(result["pair"], ["a1", "b1"])
+
+    def test_undo_restores_the_finding_exactly_as_it_was(self):
+        self._keep()
+        with self._db() as conn:
+            self.assertEqual(reopen_suspect_pair(conn, "a1", "b1")["reopened"], True)
+            row = conn.execute("SELECT * FROM txn WHERE id='b1'").fetchone()
+            judged = conn.execute("SELECT COUNT(*) n FROM suspect_pair_distinct").fetchone()["n"]
+        self.assertEqual(row["suspect_duplicate_of"], "a1")
+        self.assertEqual(row["suspect_duplicate_reason"], "cross_account_weak",
+                         "the tier is restored from what was recorded, not re-derived under today's rules")
+        self.assertIsNone(row["suspect_resolved_at"])
+        self.assertEqual(judged, 0, "the judgement is lifted too, or the flag would be skipped next scan")
+
+    def test_undoing_a_judgement_that_was_never_recorded_says_so_rather_than_guessing(self):
+        # A v47-era row: the assertion is lifted, but nothing can say what the finding looked like.
+        self._keep()
+        with self._db() as conn:
+            conn.execute("UPDATE suspect_pair_distinct SET flagged_txn_id = NULL, reason = NULL")
+            result = reopen_suspect_pair(conn, "a1", "b1")
+            row = conn.execute("SELECT suspect_duplicate_of FROM txn WHERE id='b1'").fetchone()
+        self.assertFalse(result["reopened"])
+        self.assertTrue(result["forgotten"])
+        self.assertIsNone(row["suspect_duplicate_of"])
+
+    def test_undo_on_an_unjudged_pair_is_reported_not_silently_ignored(self):
+        self._keep()
+        with self._db() as conn:
+            self.assertEqual(reopen_suspect_pair(conn, "a1", "b1")["reopened"], True)
+            self.assertEqual(reopen_suspect_pair(conn, "a1", "b1")["reason"], "not_judged")
+
+
+class VersionGatedRescanTests(_LedgerTestCase):
+    """The app-load catch-up that re-examines stored rows after the matching rules change."""
+
+    def _two_sources(self):
+        self._sync_card("card-a", "conn-a")
+        self._sync_card("card-b", "conn-b")
+        self._row("a1", "card-a", label=LABEL_A, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+        self._row("b1", "card-b", label=LABEL_B, date=INSIDE_WINDOW, amount=-25.0, text="Corner Market")
+
+    def test_an_unstamped_database_is_scanned_once_and_then_left_alone(self):
+        self._two_sources()
+        with self._db() as conn:
+            first = maybe_rescan_for_detection_change(conn)
+        self.assertFalse(first["skipped"])
+        self.assertEqual(first["flagged"], 1)
+        self.assertTrue(first["settled"])
+        with self._db() as conn:
+            self.assertTrue(maybe_rescan_for_detection_change(conn)["skipped"])
+
+    def test_a_bump_re_examines_what_was_never_looked_at(self):
+        self._two_sources()
+        with self._db() as conn:
+            conn.execute("INSERT INTO db_meta (key, value) VALUES ('duplicate_detection_version', ?)"
+                         " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (str(DUPLICATE_DETECTION_VERSION - 1),))
+            result = maybe_rescan_for_detection_change(conn)
+        self.assertFalse(result["skipped"])
+        self.assertEqual(result["flagged"], 1)
+
+    def test_a_malformed_stamp_reads_as_never_scanned_rather_than_crashing_app_load(self):
+        self._two_sources()
+        with self._db() as conn:
+            conn.execute("INSERT INTO db_meta (key, value) VALUES ('duplicate_detection_version','yes')")
+            self.assertFalse(maybe_rescan_for_detection_change(conn)["skipped"])
+
+    def test_the_convergence_loop_is_bounded(self):
+        # It converges by exhausting pairs, but the cap is what makes that a guarantee rather than an
+        # observation — a future change to the pairing rules cannot turn app load into a hang.
+        self._two_sources()
+        with self._db() as conn:
+            result = rescan_until_settled(conn, [ACCOUNT])
+        self.assertTrue(result["settled"])
+        self.assertLessEqual(result["passes"], 10)
+        self.assertGreaterEqual(result["passes"], 2, "a settled run needs the pass that found nothing")
 
 
 class WeakTierTests(unittest.TestCase):

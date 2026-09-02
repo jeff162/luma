@@ -22,10 +22,18 @@
  * between findings and the series they refer to was the mistake; capping the findings only rationed it.
  * Each view now owns the scrolling body.
  *
- * "Open series" opens the drill-down **in place**, docked under the findings. Switching to the series
- * list for it was tried and was worse both ways: it took the user out of the list of findings they were
- * working through, and the series list's own filter can exclude the series being opened, leaving the
- * drill-down describing a card that is nowhere on screen.
+ * A finding's headline carries an arrow that **opens a transaction report for what the headline names** —
+ * the series' members for most kinds, the offending charge for the two rule-range ones, and always the
+ * same report rather than an editor for one of them: one gesture doing two different kinds of thing is
+ * the confusing outcome, and the report reaches the editor anyway. It replaced an "Open series" button that
+ * only two of the five kinds ever had, which left *Newly detected* asking the user to Confirm a series
+ * with no way to look at it, and a rule-range finding offering to widen a rule with no way to see the
+ * charge that would justify it. The arrow is on the name because the name is what it opens.
+ *
+ * Either target opens **in place**, docked under the findings. Switching to the series list was tried and
+ * was worse both ways: it took the user out of the list of findings they were working through, and the
+ * series list's own filter can exclude the series being opened, leaving the drill-down describing a card
+ * that is nowhere on screen.
  *
  * Upcoming is a peer view rather than a tab inside the findings, and carries no dismissal or badge: it
  * is a budgeting view someone may want to consult, not a thing that is wrong. Filing it under "needs
@@ -115,6 +123,20 @@ function headline(signal) {
   return signal.series_name
 }
 
+// What the headline names, and therefore what the arrow beside it reports on. The two rule-range kinds
+// head their card with the *transaction* that fell outside the range; every other kind heads it with the
+// series. One rule, two scopes, one surface — both open the same drill-down report.
+//
+// Reachability is the point rather than convenience: three of the five kinds could reach nothing at all
+// before this, including *Newly detected*, which asks the user to Confirm a series without offering any
+// way to look at it. See `ui-patterns.md` on markers opening what they stand for.
+export function signalTarget(signal) {
+  if (signal.kind === 'rule_range' || signal.kind === 'rule_range_edge') {
+    return signal.txn_id ? { type: 'transaction', id: signal.txn_id } : null
+  }
+  return signal.series_id ? { type: 'series', id: signal.series_id } : null
+}
+
 function subject(signal) {
   // The second line of identification: which rule, or which category/account the series sits on.
   if (signal.kind === 'rule_range' || signal.kind === 'rule_range_edge') {
@@ -126,16 +148,48 @@ function subject(signal) {
   return [signal.category_name, signal.account_name].filter(Boolean).join(' · ')
 }
 
-function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange }) {
+// The band a price-change finding proposes: the series' current one **extended** to take in the charge,
+// never relocated onto it. Membership is re-derived from the whole ledger on every scan, so a band moved
+// onto the new amount stops matching the series' own history — measured, it drops an eight-charge series
+// to one. Only the end the charge falls outside moves; the other is the user's to change.
+export function priceChangeBand(signal) {
+  if (signal.band_min == null || signal.band_max == null || signal.amount == null) return null
+  // Magnitudes throughout: the stored bounds are signed, so for an expense series `band_min` is the
+  // *larger* number to a reader and comparing them as stored inverts every test below.
+  const bandLow = Math.min(Math.abs(signal.band_min), Math.abs(signal.band_max))
+  const bandHigh = Math.max(Math.abs(signal.band_min), Math.abs(signal.band_max))
+  const charge = Math.abs(signal.amount)
+  if (charge >= bandLow && charge <= bandHigh) return null  // already inside — nothing to widen
+  return charge > bandHigh
+    ? { low: bandLow, high: charge, movedBound: 'high' }
+    : { low: charge, high: bandHigh, movedBound: 'low' }
+}
+
+function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange, onAcceptPrice }) {
   const tone = SIGNAL_KINDS[signal.kind]?.tone || 'var(--accent2)'
+  const target = signalTarget(signal)
   const actions = []
   if (signal.kind === 'missed') {
     if (signal.presumed_ended) {
       actions.push(<SignalAction key="end" onClick={() => onSeriesAction('end', signal)} title="Keep the history, stop forecasting it">Mark ended</SignalAction>)
     }
-    actions.push(<SignalAction key="open" onClick={() => onOpenSeries(signal)}>Open series</SignalAction>)
   } else if (signal.kind === 'price_change') {
-    actions.push(<SignalAction key="open" onClick={() => onOpenSeries(signal)}>Open series</SignalAction>)
+    // Offered only where amount actually gates membership. On an ungated series the band is read by
+    // nothing, so a button that moved it would be theatre — there, Dismiss is the accept: it records
+    // the amount as one the user has allowed, and a variable series' envelope is learned from exactly
+    // those (see `_load_accepted_amounts`).
+    if (signal.amount_mode === 'fixed' && priceChangeBand(signal)) {
+      actions.push(
+        <SignalAction
+          key="accept"
+          variant="primary"
+          onClick={() => onAcceptPrice(signal)}
+          title="Widen this series' matching range to take in the new amount"
+        >
+          Accept new amount
+        </SignalAction>,
+      )
+    }
   } else if (signal.kind === 'new_series') {
     actions.push(<SignalAction key="confirm" variant="primary" onClick={() => onSeriesAction('confirm', signal)}>Confirm</SignalAction>)
     actions.push(<SignalAction key="suppress" onClick={() => onSeriesAction('suppress', signal)}>Not recurring</SignalAction>)
@@ -171,7 +225,25 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
     }}>
       <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: `color-mix(in srgb, ${tone} 65%, transparent)`, flexShrink: 0 }} />
       <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>{headline(signal)}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>
+          {headline(signal)}
+          {target ? (
+            <button
+              onClick={() => onOpenSeries(signal)}
+              aria-label={target.type === 'series' ? 'Open this series' : 'Open this transaction'}
+              title={target.type === 'series'
+                ? 'Show this series’ transactions'
+                : 'Show this transaction'}
+              style={{
+                background: 'none', border: 'none', padding: '0 0 0 5px', cursor: 'pointer',
+                color: 'var(--accent2)', fontSize: 12.5, fontWeight: 700, lineHeight: 1,
+                textDecoration: active ? 'underline' : 'none',
+              }}
+            >
+              ↗
+            </button>
+          ) : null}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{describe(signal)}</div>
         {subject(signal) ? (
           <div style={{ fontSize: 11.5, color: 'var(--muted)', opacity: 0.8, marginTop: 2 }}>{subject(signal)}</div>
@@ -219,7 +291,7 @@ function TabButton({ label, count, on, onClick, tone }) {
  */
 export function RecurringSignalsView({
   signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
-  onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange, onShowDismissed,
+  onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange, onAcceptPrice, onShowDismissed,
 }) {
   const anomalies = (signals || []).filter(s => s.kind !== 'upcoming')
   const activeKinds = ANOMALY_KIND_ORDER.filter(k => (counts?.[k] || 0) > 0)
@@ -261,6 +333,7 @@ export function RecurringSignalsView({
               onOpenSeries={onOpenSeries}
               onEditRule={onEditRule}
               onWidenRange={onWidenRange}
+              onAcceptPrice={onAcceptPrice}
             />
           ))}
         </div>

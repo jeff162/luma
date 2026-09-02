@@ -283,6 +283,39 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._category_of("Account Hold for Open Authorization")[0], "Money movement")
         self.assertEqual(self._category_of("General Withdrawal")[0], "Money movement")
 
+    async def test_a_merged_paypal_account_reports_the_ids_the_filter_matches_on(self):
+        # A merged PayPal account stores its rows under the CHILD id, while every account-scoped filter the
+        # transaction API exposes resolves through COALESCE(parent, id). Handing the raw child id to that
+        # filter matches nothing and raises no error, so the per-Type drill-down came back empty under a
+        # non-zero count — the count resolves to the effective account, the report did not. The endpoint
+        # owes ids the filter can actually match, which for a merged account is the parent's.
+        await self._import()
+        parent_id = self._insert_account("Wallets")
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (parent_id, self.account_id))
+            profile_id = conn.execute(
+                "SELECT id FROM csv_import_profile WHERE source_kind = ?", ("source:paypal",)).fetchone()["id"]
+        # The endpoint opens its own connection, so the merge has to be committed before it reads.
+        with self._use_db_path():
+            data = get_profile_money_movement_types(profile_id)
+        self.assertEqual(data["account_ids"], [parent_id],
+                         "the child id the rows are stored under is not what the filter compares against")
+
+        # The assertion that actually matters: those ids, through the real filter, select the real rows.
+        from backend.routers.transactions import _build_transaction_filter
+        clauses, params = _build_transaction_filter(
+            account_ids=",".join(data["account_ids"]),
+            import_evidence_type="Account Hold for Open Authorization",
+        )
+        with self._use_db_path(), get_db() as conn:
+            found = conn.execute(
+                f"""SELECT COUNT(*) n FROM txn t JOIN account a ON a.id = t.account_id
+                    LEFT JOIN account p ON p.id = a.parent_account_id
+                    WHERE {" AND ".join(clauses)}""",
+                params,
+            ).fetchone()["n"]
+        self.assertEqual(found, 1, "the report must find the row the review counted")
+
     async def test_user_selected_paypal_source_is_adopted_as_system(self):
         # A hand-created source (untagged) selected for a PayPal import is adopted — tagged source:paypal —
         # so it gets the same treatment as an auto-created one, and no second source is created.

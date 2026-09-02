@@ -100,6 +100,7 @@ TABLE_TO_SECTION = {
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
     "amazon_charge_distinct": "amazon_charge_distinct",
+    "suspect_pair_distinct": "suspect_pair_distinct",
     "amazon_charge_reviewed": "amazon_charge_reviewed",
     "amazon_pending_item": "amazon_pending_items",
     "ui_preference": "ui_preferences",
@@ -204,6 +205,9 @@ class BackupFixtureTestCase(unittest.TestCase):
                 )
                 t_low, t_high = sorted([txn, txn2])
                 conn.execute("INSERT INTO amazon_charge_distinct (txn_id_low, txn_id_high, asserted_at) VALUES (?, ?, '2026-04-16')", (t_low, t_high))
+                # A "these two rows are not the same charge" judgement, so the round trip covers
+                # suspect_pair_distinct (references txn twice, like the row above).
+                conn.execute("INSERT INTO suspect_pair_distinct (txn_id_low, txn_id_high, asserted_at) VALUES (?, ?, '2026-04-16')", (t_low, t_high))
                 # A reconciliation reverse-scan "Mark reviewed" acknowledgment, so the round trip covers
                 # amazon_charge_reviewed (references txn).
                 conn.execute("INSERT INTO amazon_charge_reviewed (txn_id, reviewed_at) VALUES (?, '2026-04-16')", (txn2,))

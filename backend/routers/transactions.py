@@ -294,9 +294,21 @@ def _negate_membership(expr: str) -> str:
     return f"COALESCE(({expr}), 0) = 0"
 
 
+# Both sides of an account comparison have to resolve the same way. The row side already does
+# (`EFFECTIVE_ACCOUNT_ID_SQL`), and the *given* ids are resolved here too rather than compared raw,
+# because a caller can hold an id that has since become a merged child — nothing resolves to a child
+# any more, so a raw child id matches no row at all and reports no error. Resolving both sides makes
+# a child id mean "the group it belongs to", which is the only reading anyone ever wants; "exactly
+# this underlying account" is what `source_account_ids` is for. Done in SQL, not by resolving the ids
+# in Python first, so the filter builder stays a pure function with no connection of its own.
+# See docs/data-model.md → "A stored account id is a reference into a mutable graph".
 def _effective_account_membership(ids: list[str]) -> tuple[str, list]:
     placeholders = ','.join('?' * len(ids))
-    return f"{EFFECTIVE_ACCOUNT_ID_SQL} IN ({placeholders})", list(ids)
+    return (
+        f"{EFFECTIVE_ACCOUNT_ID_SQL} IN "
+        f"(SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))",
+        list(ids),
+    )
 
 
 def _append_effective_account_filter(
@@ -310,8 +322,10 @@ def _append_effective_account_filter(
             clauses.append(expr)
             params.extend(expr_params)
     elif account_id and isinstance(account_id, str):
-        clauses.append(f"{EFFECTIVE_ACCOUNT_ID_SQL} = ?")
-        params.append(account_id)
+        # Single-id form of the same comparison, resolved on both sides for the same reason.
+        expr, expr_params = _effective_account_membership([account_id])
+        clauses.append(expr)
+        params.extend(expr_params)
     if exclude_account_ids and isinstance(exclude_account_ids, str):
         ids = [i.strip() for i in exclude_account_ids.split(',') if i.strip()]
         if ids:

@@ -64,8 +64,8 @@ def _ensure_recurring_series(conn, rule_id: str, cadence: str | None) -> str:
         conn.execute(
             """INSERT INTO recurring_series
                  (id, payee_key, display_name, category_id, account_id, cadence, period_days,
-                  occurrence_count, confidence, status, source, rule_id, confirmed, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1.0, 'active', 'rule', ?, 1, datetime('now'))""",
+                  amount_mode, occurrence_count, confidence, status, source, rule_id, confirmed, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'variable', 0, 1.0, 'active', 'rule', ?, 1, datetime('now'))""",
             (series_id, _normalize_payee(display_name) or display_name.lower(), display_name,
              rule["category_id"] if rule else None, rule["account_id"] if rule else None,
              cadence, period_days, rule_id),

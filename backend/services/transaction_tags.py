@@ -71,6 +71,24 @@ _EFFECTIVE_TAG_UNION_SQL = f"""
     WHERE atag.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
 """
 
+# ^ NOTE, because this comparison is the exception and copying it would be a bug elsewhere.
+#
+# `atag.account_id` — the *stored* side — is compared RAW against the resolved row side. Almost
+# everywhere else that is the classic merged-account defect: nothing resolves to a merged child, so a
+# raw child id matches no row, selects nothing, and reports no error. The correct shape is to resolve
+# both sides (`_effective_account_membership` in the transactions router, `effective_account_ids` in
+# `account_groups`), and a new account comparison should follow that one, not this one.
+#
+# Here the asymmetry IS the feature. A child account's own tags are meant to go **dormant** for as long
+# as it is merged — the parent's tags govern the whole group — and to come back by themselves on detach.
+# Leaving the stored side unresolved is precisely what produces that: the child's `account_tag` rows
+# stop matching while `parent_account_id` is set, and start matching again the moment it is cleared,
+# with nothing written or deleted either way. Resolving this side would silently reactivate every
+# dormant tag and make detach unable to restore the prior state.
+#
+# Specified in docs/data-model.md → account-level (account_tag); the promote-on-merge prompt on the
+# Accounts page exists because tags going dormant is easy to miss.
+
 # A tag counts for a row only if not hidden on it (`manual_state = -1`). `eff.tag_id` refers to the
 # union alias above.
 _TAG_NOT_BLOCKED_SQL = (

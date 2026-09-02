@@ -117,6 +117,7 @@ from backend.services.money_movement import (
     ensure_paypal_account_type,
     batch_account_ids,
     profile_account_ids,
+    profile_effective_account_ids,
 )
 
 router = APIRouter()
@@ -3716,8 +3717,11 @@ def get_profile_money_movement_types(profile_id: str):
             "name": profile["name"],
             "proposals": money_movement_type_proposals_for_profile(conn, profile_id),
             # The source's accounts — so a per-Type drill-down report can scope its transaction fetch to
-            # exactly the rows the count reflects (same scope as _type_row_counts_for_accounts).
-            "account_ids": profile_account_ids(conn, profile_id),
+            # exactly the rows the count reflects (same scope as _type_row_counts_for_accounts). Group
+            # roots, not stored ids: a merged PayPal account keeps its rows under the child id, and the
+            # `account_ids` filter compares against the resolved row side, so the raw id matched nothing
+            # and the report came back empty under a non-zero count.
+            "account_ids": profile_effective_account_ids(conn, profile_id),
         }
 
 
