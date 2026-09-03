@@ -156,8 +156,16 @@ database diagnostics and what a structural check does not cover · restore as a 
 
 ### C. Scale, limits & behavior at volume *(new)*
 
+**[Written 2026-09-02 as [`scale-and-limits.md`](scale-and-limits.md).]** The survey's premise was half
+stale by the time it was picked up: database concurrency, provider request budgets, the backup streaming
+design, the `limit` contract and the windowing *rules* had all found homes already. What genuinely had
+none — and still does not, distributed — is the **register**: which caps exist on purpose, what each
+costs, and what would have to be observed before revisiting one. So C was written as that register plus
+the volume question that spans the three bounds, and it names what it does *not* own in a table at the
+top, the same boundary discipline A and B use.
+
 The unifying question — *what breaks at volume, what did we cap, and what did we deliberately accept*
-— has no home today. It spans UI, API and DB, which is why it fell between the existing docs.
+— had no home. It spans UI, API and DB, which is why it fell between the existing docs.
 
 Topics: render windowing (content-independent column geometry; no row-id helpers that scan; no
 `content-visibility` on a windowed row; the one list left unwindowed and its four obstacles) · fetch
@@ -227,7 +235,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `security-and-deployment-model.md` | ✅ Ingested 2026-09-02 | **A** (all), **B** (topology, transport) · **residual stub kept**: build-phase technical detail still awaiting relocation to architecture |
 | ~~`pre-auth-security-ui.md`~~ | ✅ Ingested 2026-09-02, deleted | **A** (identity/perimeter surfaces) |
 | ~~`optional-env-and-layered-config.md`~~ | ✅ Ingested 2026-09-02, deleted | **B** (config layers, env core), **A** (`.env` provider retirement); mechanism was already in architecture |
-| `list-virtualization.md` | Ingest | **C** (windowing rules, the unwindowed case and its obstacles) |
+| ~~`list-virtualization.md`~~ | ✅ Ingested 2026-09-02, deleted | **C** (the unwindowed case, its four obstacles, and the measurement method). The windowing *rules* were already in ui-patterns — cited from `ImportRuleSuggestionReview.jsx`, repointed |
 | `i18n-display-formatting.md` | Split | data-model (one ledger currency; why currency is not `ui_preference` and a date format is), ui-patterns (formatting) · *open:* number/date half |
 | `account-type-as-rule-criterion.md` | Split | data-model (account type as rule scope, precedence, matcher identity) · *open:* filtering/search, the query grammar |
 | `deployment-topologies.md` | ✅ Split 2026-09-02 (300 → 57) | **B** (nearly all), **A** (passkeys make the host name load-bearing), releasing (macOS/build detail) · *file keeps:* Shape A, Shape B step 3's remainder |
@@ -240,9 +248,9 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `paypal-money-movement-recognition.md` | Split | data-model (rules) · *open:* fold into the generic suggester |
 | `recurring-detection.md` | Split | data-model (recurring series, scoped scan) · *open:* anomaly/forecast, fixed-vs-variable |
 | `import-input-formats.md` | Split | building-a-connector (the three seam gaps, published request budgets, trust the server over the guide) · *open:* XLSX, OFX file import |
-| `import-history-windowing.md` | Split | **C** (retention), ui-patterns (import history) · *open:* archive UX |
+| `import-history-windowing.md` | ✅ Split 2026-09-02 (52 → 36) | **C** (retention, and why the reconcile pass stays capped) · *file keeps:* the archive UX, unstarted |
 | `tag-report-exclude-warning.md` | Split | ui-patterns (report conflict notes) · *open:* include narrowing |
-| `transaction-list-limits.md` | Ingest | **C** (limits, accepted tradeoffs), data-model (the `limit` contract) |
+| ~~`transaction-list-limits.md`~~ | ✅ Ingested 2026-09-02, deleted | **C** (the accepted caps, as a table of cost + revisit condition). The `limit` contract was already in data-model |
 | `refactor-audits.md` | Split | **D** (audit method, rule of three, divergence risk) · *recurring process, file stays* |
 | `cleanup-pass.md` | Split | ui-patterns (tooltip migration, press-scoped labels), **D** (console cleanliness, dead code) |
 | `import-dedupe-followups.md` | Survey | data-model (dedupe tiers, the re-measurement method) |
@@ -274,7 +282,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
    material was in `ui-patterns.md` before this step began; what the step actually delivered was the
    *reporting-semantics* half into `data-model.md`, plus one rejection (`cash flow is a frame, not a
    fourth mode`) that `Dashboard.jsx` cited and no topic doc held.
-5. **C — Scale & limits.**
+5. ~~**C — Scale & limits.**~~ **Done 2026-09-02** — [`scale-and-limits.md`](scale-and-limits.md).
 6. **E — Mechanism index.** Small; cheap once splits and multi-payment are ingested.
 7. **D — Testing**, into CONTRIBUTING.
 8. **Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.
@@ -302,6 +310,9 @@ file that no longer exists, so the entry records the path rather than a project 
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
 | `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
+| `docs/backlog/list-virtualization.md` | 2026-09-02 | **C** (`scale-and-limits.md`) — the unwindowed list and its four obstacles, the measurement method, the rejected hand-rolled windower and document-scroller mode | **No** — deleted. The windowing rules were already in `ui-patterns.md`; `ImportRuleSuggestionReview.jsx` repointed to C |
+| `docs/backlog/transaction-list-limits.md` | 2026-09-02 | **C** — the accepted caps as a table (cost, and the condition for revisiting each) | **No** — deleted. The `limit` contract was already in `data-model.md` |
+| `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |
 | `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
 | `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
 

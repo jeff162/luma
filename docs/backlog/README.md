@@ -183,18 +183,14 @@ than by feature.
   `lib/reportFilterConflicts.js`) — the exclude is honored, not suppressed, and the note just explains the
   subset. The parallel **include** case stays parked for a larger tag-report pass rather than a one-off; the
   behavior is already correct without it.
-- [transaction-list-limits.md](transaction-list-limits.md) — **surveyed, mostly resolved (2026-07-27).**
-  Every scoped transaction list now paginates with server-side sort (the `limit: 1000`/`500`/`200` caps
-  that silently truncated rendered lists are gone), plus a `limit=0` no-limit opt-in and a dev-mode
-  truncation warning. This file records the caps that **remain on purpose** (the 36/60-month detail-drawer
-  trend windows; "All time" means recent history there) and the few **deferred fix candidates**
-  (money-movement Type preview `1000`, trash list `200`).
-- [import-history-windowing.md](import-history-windowing.md) — **lossy cap fixed; archive UX deferred
-  (2026-07-30).** The import history's silent global `LIMIT 50` (older cards — and whole crowded-out
-  sources — vanished with no indication) is gone: `list_batches` now returns the full completed history.
-  Deferred: the actual windowing — a per-source recent window with a reachable **"Older imports"** archive
-  grouped by year (marketplace cards too), a *reachable* re-bound on the fetch, and an explicit
-  batch-history deletion strategy (purge records, not the imported transactions).
+- [import-history-windowing.md](import-history-windowing.md) — **reduced 2026-09-02; the archive UX
+  has not started.** The retention story — the silent global `LIMIT 50` that hid older imports and let
+  one active source crowd out another, why the display query is now unbounded, and why the writing
+  reconcile pass on the same endpoint stays capped — is in
+  [`../scale-and-limits.md`](../scale-and-limits.md). What stays: the per-source recency window with an
+  "Older imports" archive grouped by year, the fetch re-bound it unblocks (**and only in that order** —
+  paging before the archive recreates the lossy cap), and a deletion strategy that purges history
+  records rather than transactions.
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
@@ -331,13 +327,17 @@ reintroducing X". Nothing here is pending.
   permanent independent access — now a five-minute proof window on every door that mints one, plus a passkey
   route to a new passphrase and the re-enrollment rung that had never executed. One test is still owed:
   reset → set → restore a credentials backup taken under the old passphrase.
-- [list-virtualization.md](list-virtualization.md) — **effectively complete (2026-07-19); kept for its
-  notes.** `MatchReport`, `TransactionListTable`, the Transactions ledger and the Rules list all window
-  through the shared `WindowedRows`. The durable rules live in `ui-patterns.md` (windowing needs a
-  content-independent column geometry; sort/selection stay driven from the full list; no scanning
-  row-id helpers; no `content-visibility` on a windowed row). What this file still holds is the record
-  of the one list left unwindowed **on purpose** — `ImportRuleSuggestionReview` — and the four
-  obstacles a future attempt would have to clear.
+- ~~list-virtualization.md~~ — **disposed 2026-09-02, file deleted.** The windowing rules had already
+  been folded into [`../ui-patterns.md`](../ui-patterns.md); what it still held — the one list left
+  unwindowed on purpose and its four obstacles, plus the measurement method (re-baseline on a production
+  build; attribute before optimizing) — is in [`../scale-and-limits.md`](../scale-and-limits.md).
+  `ImportRuleSuggestionReview.jsx` cites it there now.
+- ~~transaction-list-limits.md~~ — **disposed 2026-09-02, file deleted.** The `limit` contract was
+  already in `data-model.md`; the caps that remain **on purpose** — the 36/60-month drawer trend windows
+  and the "All time" label that over-promises because of them, the trend-length server caps, the
+  money-movement preview undercount and the trash list — are now a table in
+  [`../scale-and-limits.md`](../scale-and-limits.md) with what each costs and what would have to be
+  observed before revisiting it.
 - [security-and-deployment-model.md](security-and-deployment-model.md) — **disposed 2026-09-02 into
   [`../security-model.md`](../security-model.md); a residual stub remains.** The design record — the
   threat model, the identity perimeter, secret custody, enrollment/revocation/rotation, the transport

@@ -73,6 +73,9 @@ branch state from the injected snapshot.
 - `docs/operations.md` — running an instance: the three topologies and what each binds to, where the
   data lives & the env core, restore as a destructive operation, diagnosing (building is
   `docs/releasing.md`)
+- `docs/scale-and-limits.md` — what breaks at volume: the caps that exist on purpose & what each
+  costs, the one list left unwindowed, import-history retention, why bulk operations must not
+  accumulate
 - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer):
   capability declarations & the traits that turned out to be Plaid-specific
 - `docs/ui-patterns.md` — shared UI behavior & interaction models

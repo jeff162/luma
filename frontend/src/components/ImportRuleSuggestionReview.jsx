@@ -9,8 +9,9 @@
  * its own rows back out of the DOM for scroll restoration, and its cards change height in place as
  * their primary interaction. The structural blocker is the second one — windowing presupposes a real
  * scroll viewport, so giving this page one is a prerequisite decision about its scroll model, not a
- * detail. `docs/backlog/list-virtualization.md` records all four obstacles and how each would have to
- * be handled; read it before starting, because the payoff here is the weakest of any list in the app.
+ * detail. `docs/scale-and-limits.md` -> "Render windowing: the one list left unwindowed" records all
+ * four obstacles and how each would have to be handled; read it before starting, because the payoff
+ * here is the weakest of any list in the app.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'

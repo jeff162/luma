@@ -128,6 +128,8 @@ When working on the codebase:
 
   - `docs/operations.md` — running an instance: the topologies and what each binds to, where data lives and the irreducible environment core, restore as a destructive operation, and diagnosing. Building the artifacts is `docs/releasing.md`; the mechanism is `architecture.md`
 
+  - `docs/scale-and-limits.md` — what breaks at volume and what was capped on purpose: fetch limits and the accepted tradeoffs, render windowing and the one list left out of it, import-history retention, and why a bulk operation must never accumulate a whole dataset
+
   - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer): the capability declarations, and the checklist of traits that turned out to be one provider's rather than universal
 
   - `docs/ui-patterns.md` — shared UI behavior and interaction models

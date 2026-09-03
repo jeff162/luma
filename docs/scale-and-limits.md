@@ -1,0 +1,228 @@
+# Scale, limits and behavior at volume
+
+What breaks as a ledger grows, what is deliberately capped, and which limits were accepted rather than
+fixed. A personal ledger accumulates for years — hundreds of thousands of rows is an ordinary end
+state, not a stress case — so "it works on my data" is never the question. The question is what the
+cost is *proportional to*.
+
+**This document is the register, not the mechanism.** Each bound is implemented somewhere that owns its
+own design, and those places are not repeated here:
+
+| Bound | Owned by |
+| --- | --- |
+| Database concurrency, and why a write transaction contains only its own work | `architecture.md` → *Database concurrency* |
+| Provider request budgets, pacing and pausing | `building-a-connector.md` → *Request budgets and pausing* |
+| Backup/restore streaming, the NDJSON layout, the incremental cipher | `data-model.md` → *Backups* |
+| The list `limit` contract | `data-model.md` → *Categories* |
+| Windowing rules a list must not break | `ui-patterns.md` |
+
+What has no other home is the part below: **which caps exist on purpose, what each costs, and under
+what condition it should be revisited.** That question is unfindable when its answers are distributed,
+which is why it is collected.
+
+---
+
+## Three independent bounds, and the rule they share
+
+A dataset can overwhelm the app in three separate places, and fixing one does nothing for the others:
+
+- **The fetch** — how many rows leave the database. Bounded by pagination with server-side sort.
+- **The DOM** — how many rows become real nodes. Bounded by render windowing.
+- **Working memory** — how much a bulk operation holds at once. Bounded by streaming.
+
+They are genuinely independent: a paginated list can still mount every loaded row, and a windowed list
+can still be fed by an unbounded fetch. What connects them is one rule.
+
+> **Nothing may accumulate a whole dataset** — not as a SQL result, not as DOM nodes, not as a Python
+> list. Every one of the three defects below was an accumulation that looked bounded because the data
+> was small when it was written.
+
+## Fetch limits, and the caps that remain on purpose
+
+**The 200-row default page is a safety rail, and it stays.** `txn` has no inherent size bound, so an
+unbounded *default* would be the worse failure — a memory and render blowup rather than a bounded page
+whose `total` tells the caller the real size. Unbounded is only ever the explicit `limit=0` opt-in, and
+only for scopes the caller already knows are small.
+
+**The standing audit is a runtime warning, not a review.** A `getTransactions` call that omits `limit`
+and receives a truncated page warns in development. That is deliberately the whole audit: a silent
+truncation regression is caught while it is being written rather than found later by inspection, so no
+periodic sweep is owed.
+
+**Accepted caps.** Each of these truncates something on purpose. They are listed with what the user
+actually loses and what would have to be observed before revisiting:
+
+| Cap | What it costs | Revisit when |
+| --- | --- | --- |
+| Detail-drawer trend windows — **36 months** (category), **60 months** (account) | The drawer's **"All time"** range derives its window from the charted span, so on a scope older than 3 or 5 years "All time" means "the last 36 or 60 months", and the footer count and total reflect only that window. **The label over-promises.** The transaction *list* is not truncated — it pages the fetched window. | Somebody actually reads "All time" as lifetime and is misled. The fix is true-lifetime aggregates at the cost of a full-history scan — a design decision, not a bug fix. |
+| Trend-length server caps — **120 months** (monthly-trend), **240 months** (monthly-by-group) | Mostly theoretical: the rolling clause applies only to a *no-scope* trend request, and the Dashboard's own "all time" passes an explicit ancient start date, bypassing it. Only the generic no-date, no-account trend is bounded. | A trend view longer than ten years with no scope is ever surfaced. |
+| Money-movement Type preview — **1000 rows** | A source with more than 1000 transactions of one type shows a **preview undercount**. Informational only — the panel does not perform the recategorization — and it passes an explicit limit, so the dev warning correctly exempts it. | It needs one account with 1000+ transactions of a single type. Fix path: paginate, or compute the affected/not-affected split server-side. |
+| Trashed-transaction list — **200 rows** | A larger trash is not visible all at once. Still recoverable; trash is transient. | Low stakes throughout. Fix path: paginate, or "load more". |
+
+**Server-side sort is not optional on a paginated list.** A client-side sort cannot reach rows past the
+fetch cursor, so reversing the sort on a long list silently sorts the wrong subset. Every scoped list
+therefore folds `sort_by`/`sort_dir` into each page.
+
+## Render windowing: the one list left unwindowed
+
+Every long list renders through the shared windowing component **except
+`ImportRuleSuggestionReview`**, which is excluded deliberately. It is the hard case with the weakest
+payoff, and the exclusion is recorded because the absence otherwise reads as an oversight.
+
+Four obstacles stand in the way, and none is a blocker alone — together they make it a restructure
+rather than a drop-in:
+
+- **The list is grouped and heterogeneous.** Top-level items are any of four shapes and range from
+  ~80px to 1500px+. A virtualizer tolerates variable heights, but variance this extreme wrecks the
+  total-size estimate and reintroduces exactly the scroll jitter windowing exists to prevent.
+  *Handling:* window at the **merchant-group** granularity — the stable top-level unit — with a
+  per-item size estimate derived from each group's member count rather than one global constant. Bulk
+  mode is already flat and could be windowed independently first.
+- **It does not own a scroll container; it scrolls with the page.** Every windowed surface so far has a
+  dedicated bounded viewport with a sticky header inside it. **This is the structural blocker**: the
+  honest prerequisite is giving the page a real bounded scroll region, which changes its scroll model
+  and its sticky-panel arithmetic and deserves its own decision. A document-scroller mode in the shared
+  component is the alternative and was deliberately not built — new surface area for one consumer.
+- **It reads its own rows out of the DOM.** Bulk-anchor scroll restoration finds a card by query
+  selector; after windowing the target is usually not mounted. *Handling:* scroll by index against the
+  data, not by DOM query — and audit the whole file for other row-reading measurements first, because
+  there is likely more than one.
+- **Cards mutate height in place**, and that is the *primary* interaction here rather than a rare event.
+  Re-measurement copes, but each in-place growth can shift scroll position mid-edit. *Handling:* make
+  sure the expand animation does not fight the observer, and either accept the nudge or pin the edited
+  card as the scroll anchor.
+
+**If it ever does get slow, reach for memoization first.** Memoizing the card render so a single edit
+stops re-rendering every card is the same class of win as the two fixes that actually resolved the
+original slowness, and is far less risky than fighting the grouping, the page-level scroll and the
+DOM-reading scroll restoration at once.
+
+## Import history: retention
+
+**The lossy global cap is gone.** The completed-history query returned the newest 50 rows overall,
+which was a *silent* window: older imports vanished from the interface with no indication, while their
+records and transactions stayed in the database. Worse, because the cap was global, an actively-fed
+source could push another source's cards out of the window entirely — so that source displayed "0
+imported files" while its history was intact underneath. The display query is now unbounded.
+Cardinality is one row per imported *file*, not per transaction, which is what makes that tolerable in
+the interim.
+
+**The best-effort reconcile pass on the same endpoint stays capped to a recent window**, and that
+asymmetry is deliberate: it *writes* on every load, so running it over all history would rewrite every
+batch on each call and worsen lock contention.
+
+**Re-bounding the fetch is blocked on the archive existing first**, and the order matters. Paging that
+hides rows with no way to reach them would simply recreate the lossy cap under a new name. The archive
+UX is deferred — see *Open*.
+
+## Bulk operations must not accumulate
+
+Export and restore were both written to assemble the whole payload in memory, and both scaled with the
+ledger before documents existed to make it acute. The measurement is worth keeping because it is
+counter-intuitive:
+
+| Stage | Peak, on a ~18,500-transaction ledger producing a 4.9 MB artifact |
+| --- | --- |
+| baseline | 80 MB |
+| payload assembled as a Python structure | 251 MB |
+| serialized to JSON | 315 MB |
+| zipped | 354 MB |
+
+**The dominant term is the Python structure — larger than the JSON string and the zip combined.** That
+is why "stream the export to a temp file", the obvious reading of the defect, recovers only about a
+third of the cost. **Bounded memory requires that rows never accumulate as lists at all**, in either
+direction. Pretty-printing was worth dropping but was ~9% of the serialized size, not the problem.
+
+The figures are transient allocation during the operation, not resting footprint. What they cost is an
+operation that dies on a small machine — and fixing only the export would have been half an answer,
+since **a ledger that can be backed up and not restored has no backup.**
+
+## Measuring performance
+
+**Re-baseline on a production build with the DevTools Components panel closed.** A development build
+amplifies render cost enough to change conclusions — in the trace that started the windowing work the
+DevTools hook was ~55% of busy time. The underlying per-node cost was real, but its size in that trace
+was not.
+
+**Attribute before optimizing.** The same trace's "closing the report is slow" turned out not to be
+unmount cost at all (~160 ms) but two full re-renders of the entire row list, triggered by a drag-handle
+state flag living in consumer scope so that every consumer re-rendered on a plain header click. The
+windowing was still needed — for initial mount and to make sort, filter and select-all proportional to
+the visible rows — but it would not have fixed the symptom that prompted it.
+
+**A virtualizer under a unit runner needs geometry stubbed.** jsdom performs no layout, so a windowed
+list renders nothing until the scroll element and rows report sizes. The existing harness stubs the
+observer and the size properties keyed off each row's index — keyed, specifically, so that a row never
+reports the *viewport's* height, which would make one row appear to fill the screen and silently defeat
+every assertion.
+
+---
+
+## Considered and rejected
+
+- **An unbounded default page size.** The default is the safety rail; unbounded is the opt-in. A list
+  endpoint with no bound fails worse than one whose `total` reports the real size.
+- **A periodic audit for silent truncation.** The development-time warning on a truncated page *is* the
+  audit, and it fires while the offending call is being written rather than months later.
+- **`content-visibility: auto` on a windowed row.** Redundant — windowing already keeps unmounted rows
+  out of layout — and actively harmful, because the intrinsic-size placeholder feeds the virtualizer a
+  wrong height. Do not reintroduce it.
+- **A hand-rolled windowing hook.** The hard part is scroll anchoring — correcting the viewport when a
+  row above it measures taller than its estimate — plus a measurement cache that survives unmount. The
+  chosen library was already a dependency and already proven on the first surface.
+- **A document-scroller mode in the shared windowing component**, to accommodate the one list that
+  scrolls with the page. New surface area for a single consumer; the honest fix is to give that page a
+  bounded viewport.
+- **Windowing the last list at all, for now.** It is realistically dozens to low hundreds of top-level
+  groups — the surface least likely to stall — against four obstacles, one of them structural.
+- **Chunked commits during a restore.** No memory argument (an open SQLite write transaction spills to
+  the WAL, which is disk), and it forfeits the all-or-nothing property that makes a failed restore leave
+  the target untouched. Also in `operations.md`.
+- **Date-windowed backups as a basis for incremental backup.** There is no change tracking: `txn` has no
+  `updated_at`, so a "past year" backup slices by *transaction date*, not by when a row changed. A 2019
+  charge recategorized this morning is absent from it, so full-plus-incremental restores the stale
+  categorization — and an additive incremental cannot express a deletion at all. Date-windowed is a
+  useful *slice* for export or sharing and is not disaster recovery.
+- **Dependency-based query-cache invalidation**, replacing the hand-wired refresh map. Parked rather
+  than rejected, but recorded here because it looks like an obvious win: the existing write seam already
+  removed the real pain (a caller forgetting to announce a mutation is now impossible, enforced by lint),
+  and what remains is only the cost of hand-maintaining a small set. Swapping it in is a real
+  architectural shift — a new dependency and every data-loading screen migrated onto it.
+
+## Obstacles
+
+- **True incremental backup needs `updated_at` on every table plus delete tombstones**, with every write
+  site maintaining them — a schema change with a permanent maintenance burden. The decomposition that
+  avoids it: the **ledger** is mutable anywhere in history but small once zipped, so it is always sent
+  in full; **documents** are immutable once written but grow forever, so only they need a delta, and
+  "which files does the target lack" is answerable by id alone with no change tracking. Both
+  prerequisites — id-addressed members and a digest per document — already exist.
+- **Restoring a chain is unsolved even so.** The compatibility guard's checks would have to apply across
+  files, and restore is wipe-and-rebuild with **no merge mode** — "restore on top" today means restoring
+  into a non-empty database, which still replaces it.
+- **Re-bounding a list before its archive exists recreates the lossy cap.** This is the general shape,
+  not just the import-history case: a bound is only safe once what falls outside it is reachable.
+- **A windowed list cannot be fed by anything that reads rows from the DOM.** Only mounted rows exist,
+  so any selection, copy, or scroll-restoration path built on DOM queries breaks silently — it keeps
+  working on short lists.
+- **Sharing one column-preference key across different column sets silently merges them**, because
+  unknown keys are dropped and defaults appended. Each windowed report needs its own key; one dialog
+  keys per tab for the same reason.
+- **A `'loaded'` select-all strategy assumes every row is in memory**, which windowing breaks. Verify it
+  wherever it is still used.
+
+## Open
+
+- **The import-history archive UX** — a per-source recent window with a reachable "Older imports"
+  disclosure grouped by year, the re-bound on the fetch that it unblocks, and an explicit
+  batch-history deletion strategy that purges records rather than the transactions they describe.
+  → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
+- **Whether the document delta is worth building**, now that both its prerequisites exist. The ledger
+  half needs nothing; the open part is restoring a chain.
+  → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
+- **Dependency-based cache invalidation**, if transaction-derived views ever proliferate enough that the
+  hand-maintained refresh set hurts. → [`backlog/query-cache-invalidation.md`](backlog/query-cache-invalidation.md)
+- **A structural database check does not answer whether the data is *coherent*** — a cursor ahead of a
+  restored ledger, a coverage claim disagreeing with its rows, a mapping pointing at a merged account all
+  read as `ok`. What a semantic checker should assert is unstarted design.
+  → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)
