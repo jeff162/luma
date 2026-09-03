@@ -46,6 +46,7 @@ from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
     categorize_transaction,
     load_categorization_rules,
+    source_match_text_from_json,
     load_rule_tags_by_id,
     preview_recategorize_count,
     recategorize_all,
@@ -934,6 +935,12 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         # Rules are stable across a sync; load once for the per-transaction matcher below.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
+        # A sync captures the same evidence shape an import does (`capture_fields`), so a
+        # `match_source_text` rule has to see it here too — otherwise such a rule reaches synced rows only
+        # on a later recategorize pass, and the same rule behaves differently by how the row arrived. The
+        # parse is gated on a source-text rule actually existing, matching `recategorize_all`, so a ledger
+        # with none pays nothing.
+        needs_source_text = any(rule["match_source_text"] for rule in rules)
 
         def _account_for(external_account_id):
             return conn.execute(
@@ -1215,6 +1222,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             result = categorize_transaction(
                 t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
                 owner_id=acc["owner_id"], account_id=acc["id"], rules=rules, rule_tags_by_id=rule_tags_by_id,
+                source_text=source_match_text_from_json(evidence_json) if needs_source_text else None,
             )
             cat_id       = result["category_id"] if isinstance(result, dict) else result
             rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []

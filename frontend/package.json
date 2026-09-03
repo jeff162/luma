@@ -18,9 +18,10 @@
     "ui:test:debug": "playwright test --config=playwright.config.js --debug",
     "ui:test:file": "playwright test --config=playwright.config.js",
     "ui:codegen": "node scripts/runPlaywrightCodegen.js",
-    "lint": "npm run lint:frontend && npm run lint:backend",
+    "lint": "npm run lint:frontend && npm run lint:backend && npm run lint:timestamps",
     "lint:frontend": "eslint . && node scripts/check-comments.js",
     "lint:backend": "node ../scripts/run_backend_comment_check.js",
+    "lint:timestamps": "node ../scripts/check-backend-timestamps.js",
     "postinstall": "bash ../scripts/install-hooks.sh || sh ../scripts/install-hooks.sh"
   },
   "dependencies": {

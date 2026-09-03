@@ -105,7 +105,7 @@ export function extractAccountMask(value) {
 
 // Account-type words that are too generic to anchor a suggestion on their own. They're kept in
 // the stem (so "eastern checking" doesn't collapse to "eastern" and match "eastern savings"),
-// but a subset match whose overlapping tokens are ALL generic ("Savings (...7304)" ⊂ "xyz
+// but a subset match whose overlapping tokens are ALL generic ("Savings (...4455)" ⊂ "xyz
 // savings") is rejected — there's no real signal beyond the account category.
 const GENERIC_ACCOUNT_TOKENS = new Set([
   'checking', 'savings', 'cash', 'account', 'card',

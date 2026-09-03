@@ -2,7 +2,7 @@
 // The core invariant (collaboration-notes "Import / Export"): suggest only when there's exactly one
 // strong match, otherwise leave it to the user — never silently guess. These pin the judgment-heavy
 // parts: the masked-suffix stem normalizer, the single-vs-ambiguous match rule, the generic-token
-// guard that stops "Savings (...7304)" matching every savings account, and the snapshot builder that
+// guard that stops "Savings (...4455)" matching every savings account, and the snapshot builder that
 // flattens the mapping UI into the persisted account_map / skip_accounts / account_new payload.
 
 import { describe, it, expect } from 'vitest'
@@ -33,7 +33,7 @@ describe('normalizeAccountMatchStem', () => {
     expect(normalizeAccountMatchStem('Riverstone Summit Cash ···5093')).toBe('riverstone summit cash')
     expect(normalizeAccountMatchStem('CREDIT CARD ···4103')).toBe('credit card')
     expect(normalizeAccountMatchStem('Checking•••1111')).toBe('checking')
-    expect(normalizeAccountMatchStem('Savings …7304')).toBe('savings')
+    expect(normalizeAccountMatchStem('Savings …4455')).toBe('savings')
   })
 
   it('leaves a number that is part of the name alone', () => {
@@ -73,7 +73,7 @@ describe('findAccountMatchCandidates', () => {
     // An exact match is a mapping to be MADE, not a resemblance to rule out; and the generic-token
     // guard has to hold for the list too, or every savings account becomes something to assert about.
     expect(findAccountMatchCandidates([acc('Checking')], 'Checking')).toEqual([])
-    expect(findAccountMatchCandidates([acc('Acme Savings')], 'Savings (...7304)')).toEqual([])
+    expect(findAccountMatchCandidates([acc('Acme Savings')], 'Savings (...4455)')).toEqual([])
     expect(findAccountMatchCandidates([acc('Eastern Checking')], '')).toEqual([])
   })
 
@@ -94,7 +94,7 @@ describe('extractAccountMask', () => {
     expect(extractAccountMask('Visa ****5678')).toBe('5678')
     expect(extractAccountMask('Rewards Card x1234')).toBe('1234')
     expect(extractAccountMask('Riverstone Summit Cash ···5093')).toBe('5093')
-    expect(extractAccountMask('Savings …7304')).toBe('7304')
+    expect(extractAccountMask('Savings …4455')).toBe('4455')
   })
 
   it('finds no mask where the digits are part of the name', () => {
@@ -185,10 +185,10 @@ describe('findLikelyAccountMatch', () => {
   })
 
   it('refuses to match on a generic account-type token alone', () => {
-    // "Savings (...7304)" stems to just the generic word "savings"; surfacing every savings
+    // "Savings (...4455)" stems to just the generic word "savings"; surfacing every savings
     // account on that signal is exactly what the generic-token guard prevents.
     const accounts = [acc('Eastern Savings'), acc('Western Savings')]
-    expect(findLikelyAccountMatch(accounts, 'Savings (...7304)')).toBeNull()
+    expect(findLikelyAccountMatch(accounts, 'Savings (...4455)')).toBeNull()
   })
 
   it('declines when a non-generic subset is ambiguous across accounts', () => {
