@@ -184,6 +184,13 @@ strictness posture (enable, measure, triage, then gate) · what a unit runner st
 
 ### E. Mechanism index *(new — a lookup table, not prose)*
 
+**[Written 2026-09-02 as [`mechanism-index.md`](mechanism-index.md).]** The survey was right that one
+had been hand-rolled inside a project file — `multi-payment-purchases.md` carried a section headed
+*"The three neighbours it is not"*, which is exactly this table for one row of it. What the two ingested
+files still held beyond that was already in `data-model.md`, so E's real content is the **pairwise
+disambiguation** no single section can carry, because each section describes itself rather than its
+neighbours.
+
 Built like [`shared-components.md`](shared-components.md), which is the same idea for UI and which
 `CLAUDE.md` already tells everyone to consult before building an element. There is no domain-model
 equivalent, which is why one was hand-rolled inside a project file.
@@ -242,8 +249,8 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `backup-restore-scope-and-secrets.md` | Split | data-model (Backups), **A** (secrets custody, risk model, slot policy), **B** (restore semantics, identity reconciliation), **C** (streaming, memory) · *open:* sectioned artifact, `backup_recipient`, incremental chain |
 | `dashboard-reporting.md` | ✅ Split 2026-09-02 (374 → 95) | ui-patterns (charts — **already there**; only the frame-vs-fourth-mode rejection was added), data-model (reporting semantics, cash-flow exclusion and its three rejected alternatives) · *file keeps:* `cash_date`, Compare, trend bucketing, Trends-tab audit |
 | `transaction-attachments.md` | Split | data-model (documents), ui-patterns, **B** (documents phase of restore) · *open:* tiers 2–3 |
-| `transaction-splits.md` | Ingest | data-model, ui-patterns, **E** |
-| `multi-payment-purchases.md` | Ingest | data-model, ui-patterns, **E** |
+| ~~`transaction-splits.md`~~ | ✅ Ingested 2026-09-02, deleted | **E** (the forks: per-item rows, the reversed one-part-per-category rule, mixed-sign, rules-never-author), data-model (pre-fill refusal edges). Mechanism and invariants were already there; `services/txn_splits.py` repointed |
+| ~~`multi-payment-purchases.md`~~ | ✅ Ingested 2026-09-02, deleted | **E** (its own *three neighbours it is not* table, generalized), data-model (the four reasoned exclusions) |
 | `paypal-amazon-enrichment.md` | Split | data-model (enrichment, evidence capture, `txn_link`), building-a-connector · *open:* AZAD ingestion, column-centric mapping |
 | `paypal-money-movement-recognition.md` | Split | data-model (rules) · *open:* fold into the generic suggester |
 | `recurring-detection.md` | Split | data-model (recurring series, scoped scan) · *open:* anomaly/forecast, fixed-vs-variable |
@@ -283,7 +290,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
    *reporting-semantics* half into `data-model.md`, plus one rejection (`cash flow is a frame, not a
    fourth mode`) that `Dashboard.jsx` cited and no topic doc held.
 5. ~~**C — Scale & limits.**~~ **Done 2026-09-02** — [`scale-and-limits.md`](scale-and-limits.md).
-6. **E — Mechanism index.** Small; cheap once splits and multi-payment are ingested.
+6. ~~**E — Mechanism index.**~~ **Done 2026-09-02** — [`mechanism-index.md`](mechanism-index.md).
 7. **D — Testing**, into CONTRIBUTING.
 8. **Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.
 
@@ -310,6 +317,8 @@ file that no longer exists, so the entry records the path rather than a project 
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
 | `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
+| `docs/backlog/transaction-splits.md` | 2026-09-02 | **E** (`mechanism-index.md`) — the forks and non-goals; data-model — the pre-fill refusal edges | **No** — deleted. Mechanism, invariants and UI behaviour were already in `data-model.md` / `ui-patterns.md`; `services/txn_splits.py` repointed to both |
+| `docs/backlog/multi-payment-purchases.md` | 2026-09-02 | **E** — its hand-rolled *three neighbours* table, generalized into the index; data-model — the four reasoned exclusions | **No** — deleted |
 | `docs/backlog/list-virtualization.md` | 2026-09-02 | **C** (`scale-and-limits.md`) — the unwindowed list and its four obstacles, the measurement method, the rejected hand-rolled windower and document-scroller mode | **No** — deleted. The windowing rules were already in `ui-patterns.md`; `ImportRuleSuggestionReview.jsx` repointed to C |
 | `docs/backlog/transaction-list-limits.md` | 2026-09-02 | **C** — the accepted caps as a table (cost, and the condition for revisiting each) | **No** — deleted. The `limit` contract was already in `data-model.md` |
 | `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |

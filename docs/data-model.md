@@ -1396,7 +1396,24 @@ The list feed carries a split row's allocations inline (`split_parts`, plus `spl
 
 **Tags resolve per part without any special handling.** A row's effective tags are already the union of its direct `txn_tag` rows (keyed on the transaction id) and the tags inherited from its category. Under expansion a direct tag therefore applies to the whole transaction and every part, while an inherited tag follows each part's own category — which is the semantic worth wanting, and is what the existing SQL already meant. One consequence to expect: in the tag-signature report a split transaction can contribute to two signature buckets, each with its part's amount.
 
-Which paths may and may not overwrite a split is covered under *Categories* → "How an existing transaction's category can change". Depth, the rejected alternatives, and the measurements behind the seam's shape are in [`backlog/transaction-splits.md`](backlog/transaction-splits.md).
+**Pre-fill has refusal edges, and they are not guesses.** Where a split is seeded from an imported
+order's captured item detail, an item with **no list price** is excluded from the proportional weighting
+and lands as a **zero part for the user to fill** rather than being dropped or estimated; and pre-fill is
+**refused outright** when net cash is zero (a fully gift-carded or points order) or when the list prices
+sum to zero, since there is nothing to apportion against.
+
+**The seam is a left join rather than a union of the split and non-split branches, and that is measured
+rather than stylistic.** The obvious formulation — select the unsplit rows, `UNION ALL` the split ones
+joined to their parts — reads `txn` twice. Measured on a real-scale ledger of ~18.5k rows **with no
+splits in it at all**, that cost about **80%** on top of *every* summary query (23.6 ms → 42.9 ms), and
+driving the second branch from `txn_split` instead barely moved it (41.9 ms). The left join measures
+**~6%** (23.6 ms → 25.0 ms). A feature nobody has used yet should be close to free on every report in
+the app, and this is the difference between that and a standing tax on all of them. **Do not "optimize"
+it back into a union.**
+
+Which paths may and may not overwrite a split is covered under *Categories* → "How an existing
+transaction's category can change"; the alternatives that were rejected, and the neighbouring mechanisms
+a split is not, are in [`mechanism-index.md`](mechanism-index.md).
 
 ## Attached documents
 
@@ -1517,8 +1534,26 @@ with nothing feature-specific in the payload. One side effect worth knowing: wri
 That is over-invalidation of the harmless kind the cache already documents — it forces one recompute on
 the next read — and is not worth complicating the trigger to avoid.
 
-Depth, the surfaces, and what was deliberately left out are in
-[`backlog/multi-payment-purchases.md`](backlog/multi-payment-purchases.md).
+**Four things were deliberately not built.** Each is re-proposable, so each carries its reason:
+
+- **Automatic suggestion.** The plausible signals — same payee, two-to-four payments within a few
+  months, amounts summing to a round figure — are weak on their own, and this repo's precedent for the
+  shape is *advisory only, never guessed at*. The genuinely strong signal is the invoice, and
+  `document.text` plus full-text search already exist to search one; what is missing is extraction, so a
+  photographed invoice yields nothing to match on. **A re-open condition, not pending work** — revisit
+  if OCR lands ([`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → tier 2).
+- **A document attached to the purchase rather than to one payment.** The invoice that revealed the
+  problem covers both payments and can currently hang off only one of them, arbitrarily. `document` keys
+  on `txn_id`; letting it key on a link as well is a real change to that table's contract.
+- **A Tasks entry for an unaccounted purchase.** Exactly the "needs attention" shape, but a purchase
+  legitimately part-paid for months would nag the whole time — the same objection recorded against
+  nagging an open receivable. Age-gate it if it is ever added.
+- **A purchases list page.** Purchases are reached from their payments; a browse surface is worth
+  building only once there are enough of them to browse, which is a question about use rather than
+  design.
+
+How this differs from the mechanisms it is most often confused with — splits, recurring series and
+reimbursements — is in [`mechanism-index.md`](mechanism-index.md).
 
 ## Reimbursable expenses
 

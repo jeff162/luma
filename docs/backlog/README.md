@@ -158,7 +158,7 @@ than by feature.
   the **repayment**. That asymmetry is what keeps mixed-sign splits from looking like a prerequisite;
   they are not one, and the file records why. Pairing is **optional and late** — needed only to settle,
   and served by `txn_link` (`kind='reimbursement'`) rather than a new table. Downstream of
-  [transaction-splits.md](transaction-splits.md), **which has since shipped** — so the dependency is met
+  transaction splits, **which have since shipped** — so the dependency is met
   and this can start. The receivable lives under a **seeded top-level `Reimbursable` group** carrying a
   `system_key` — which is load-bearing, since the empty-category sweep skips only system rows and an
   empty receivable category is its *healthy* state. The feature keys on the **group**, not one blessed
@@ -283,34 +283,19 @@ Shipped work whose durable rules now live in the main docs. These files are kept
 carry something the main docs should not — a rejected design, an obstacle list, a "read this before
 reintroducing X". Nothing here is pending.
 
-- [transaction-splits.md](transaction-splits.md) — **complete 2026-08-24; kept for its rejected shapes.**
-  A single transaction's amount split across several categories, as a **general** feature on any
-  transaction: the `txn_split` allocation table (one ledger row, N category/amount parts) with every
-  summary and category-scoped list reading through the "effective category rows" expansion seam. The
-  mechanism is in `data-model.md` → Transaction splits (plus the split-source rollup rule and the
-  feature-owned `split` category source). What this file still holds is the forks: the per-item-rows model
-  abandoned twice and why reviving it is wrong, the **two-parts-in-one-category** rule that was imposed and
-  then reversed (*don't re-impose it* — the fix is `COUNT(DISTINCT t.id)`, not a constraint on what the user
-  may record), and the three settled non-goals — **rules never author splits**, mixed-sign allocations are a
-  coherent later relaxation deliberately outside v1, and the marketplace pre-fill's refusal edges. Nothing
-  is pending: the dependency runs one way only, and splits waits on nothing. Both of its downstream
-  consumers — [reimbursable-expenses.md](reimbursable-expenses.md) and
-  [transaction-attachments.md](transaction-attachments.md) phase 4, which would feed a second pre-fill
-  source into a seam that already works — are that file's work, not this one's.
-- [multi-payment-purchases.md](multi-payment-purchases.md) — **complete 2026-08-24; kept for the
-  neighbours it is not.** Grouping several transactions that are one purchase — a deposit and a final
-  payment, an instalment plan — on the existing `txn_link` primitive with **no schema change**. It is the
-  cheapest possible client of that primitive: pure association, mutating nothing, which is what makes it
-  incapable of breaking a total (the other two clients recategorize a leg and must stash the prior in
-  `metadata_json` to reverse it). The mechanism is in `data-model.md` → Multi-payment purchases and
-  `architecture.md`; the row marker's behavior — including the *third* time this repo withheld a capability
-  because another route existed, and the third time that was wrong — is in `ui-patterns.md`. What this file
-  still holds is the three adjacent features it is deliberately **not**, and four reasoned exclusions:
-  automatic suggestion, a document attached to the purchase rather than to one payment, an age-gated Tasks
-  entry for an unaccounted purchase, and a purchases list page. Suggestion has a named precondition —
-  it needs OCR ([transaction-attachments.md](transaction-attachments.md) → tier 2) before an invoice yields
-  anything to match on, the weaker signals having been judged not worth acting on. That is a **re-open
-  condition, not pending work**: if OCR ever lands, reopen this or file a fresh item then.
+- ~~transaction-splits.md~~ — **disposed 2026-09-02, file deleted.** The mechanism and every invariant
+  were already in `data-model.md` → *Transaction splits*, and the row/editor behaviour in
+  `ui-patterns.md`. Its forks now live in [`../mechanism-index.md`](../mechanism-index.md): the
+  per-item-rows model abandoned twice, the **two-parts-in-one-category** rule imposed and then reversed
+  (*don't re-impose it* — the fix is counting `DISTINCT` transactions, not constraining what the user
+  may record), rules never authoring a split, and mixed-sign parts as a coherent later relaxation that
+  is **not** a prerequisite for reimbursements. The pre-fill refusal edges went to `data-model.md`.
+  `services/txn_splits.py` cites both.
+- ~~multi-payment-purchases.md~~ — **disposed 2026-09-02, file deleted.** Its "three neighbours it is
+  not" table was the hand-rolled version of [`../mechanism-index.md`](../mechanism-index.md), which is
+  now the real one; the four reasoned exclusions (automatic suggestion with its OCR re-open condition, a
+  document on the link rather than a payment, an age-gated Tasks entry, a purchases list page) went to
+  `data-model.md` → *Multi-payment purchases*.
 - [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **complete 2026-09-01; kept for its
   rejected shapes and one owed test.** The recovery ladder is built: a **vault recovery code** (a third
   `vault_slot.method`, one per user, recovered and re-keyed in a single atomic request), the destructive

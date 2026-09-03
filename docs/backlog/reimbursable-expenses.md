@@ -98,7 +98,7 @@ obvious:
 **This is why no mixed-sign allocation is needed, and the rule must not be reached for here.** Settling
 *everything* on the expense looks like the uniform choice and is the trap: a surplus larger than the
 user's own portion drives that expense's real-category part negative, which
-[`transaction-splits.md`](transaction-splits.md) refuses by design (`validate_parts` — every part shares
+[`../data-model.md`](../data-model.md) → *Transaction splits* refuses by design (`validate_parts` — every part shares
 the transaction's sign), and which would otherwise argue for relaxing that rule as a prerequisite here.
 It is not a prerequisite. Sending the surplus to the repayment instead is legal at *any* magnitude,
 because every component of an inbound repayment points the same way. Mixed-sign splits remain a coherent
@@ -148,7 +148,7 @@ implementation for the screen, not a new pattern to invent.
 
 ## Built on splits
 
-"All or part of an expense" is exactly what [`transaction-splits.md`](transaction-splits.md) provides —
+"All or part of an expense" is exactly what [`../data-model.md`](../data-model.md) → *Transaction splits* provides —
 one ledger row, N category/amount parts. A wholly reimbursable expense needs only recategorization, but
 the motivating case is partial (one ticket mine, three for friends), which is why this was downstream of
 splits and could not start before them. **Splits shipped 2026-08-24, so that dependency is met.**
@@ -183,7 +183,7 @@ edit, so part ids do not survive an ordinary re-split. A part is how the *user* 
 picker shows "Dana's ticket $250" — and the amount is what is stored, with the label kept as display
 provenance that no arithmetic reads.
 
-The lesson generalizes, and it is the same one `transaction-splits.md` records about its own
+The lesson generalizes, and it is the same one `../mechanism-index.md` records about splits' own
 two-parts-in-one-category rule: **before constraining what the user may record, ask whether the
 difficulty is in the domain or in the queries.** Here it was in the queries — a per-transaction sum —
 and the constraint quietly made the feature unable to model the case it was designed around.
@@ -344,7 +344,7 @@ also survives the user renaming the group, which a name lookup does not.
 
 ## Cross-refs
 
-- [`transaction-splits.md`](transaction-splits.md) — the allocation mechanism this depends on
+- [`../data-model.md`](../data-model.md) → *Transaction splits* — the allocation mechanism this depends on
 - [`dashboard-reporting.md`](dashboard-reporting.md) — `cash_date`, the adjacent timing question
 - [`../data-model.md`](../data-model.md) — `txn_link` as a general primitive; signed-net reporting;
   `exclude_from_totals`

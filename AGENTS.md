@@ -134,6 +134,8 @@ When working on the codebase:
 
   - `docs/ui-patterns.md` — shared UI behavior and interaction models
 
+  - `docs/mechanism-index.md` — the "which mechanism is this?" domain lookup; consult **before recording a relationship between transactions**, or building anything that groups, divides, offsets or hides money. Several of these look alike and are not interchangeable; the wrong one fails quietly rather than loudly
+
   - `docs/shared-components.md` — the "what shared component do I use for X?" index; consult **before building any UI element** (reuse is the default; a new one-off requires explicit justification)
 
 - Document the **why** (the design decision and the constraints it's responding to) and the **how at a high level** (the shape of the solution, the contracts it depends on, the alternatives that were rejected and the reason). Do **not** narrate the change itself — phrases like "we now do X", "added Y", "changed Z to W" belong in commit messages and PR descriptions, not in `docs/`. A reader picking up the file a year from now should see the system as it is, not as a sequence of edits.

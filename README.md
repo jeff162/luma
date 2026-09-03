@@ -208,6 +208,7 @@ their own runtime.)
 - **[docs/operations.md](docs/operations.md)** — running an instance: topologies, configuration, restore, and diagnosing
 - **[docs/scale-and-limits.md](docs/scale-and-limits.md)** — what breaks at volume, what is capped on purpose, and why
 - **[docs/ui-patterns.md](docs/ui-patterns.md)** — interaction patterns and shared UI behavior
+- **[docs/mechanism-index.md](docs/mechanism-index.md)** — which mechanism is which: splits, purchases, recurring series, reimbursements
 - **[docs/shared-components.md](docs/shared-components.md)** — which shared component to use for what
 - **[docs/building-a-connector.md](docs/building-a-connector.md)** — adding a data source
 - **[docs/releasing.md](docs/releasing.md)** — building the downloadable artifacts and cutting a release

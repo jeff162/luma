@@ -29,7 +29,9 @@ and the one path that overwrites even a manual edit — a full-force rule apply 
 count instead. The reason splits diverge from enrichment there is that an enrichment row's prior is
 recoverable from its link metadata, while a split is hand-built work with no other record.
 
-See ``docs/backlog/transaction-splits.md`` for the decisions and the alternatives that were rejected.
+See ``docs/data-model.md`` -> "Transaction splits" for the invariants, and
+``docs/mechanism-index.md`` for the alternatives that were rejected and the neighbouring mechanisms
+a split is not.
 """
 
 from __future__ import annotations

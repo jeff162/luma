@@ -304,7 +304,7 @@ withhold the capability.
 that was added — it is what the plain foreign key already gives, and the unique index is what would have
 had to be *added* to prevent it. There was no reason to: a repair arrives as an estimate and then a final
 invoice, and a two-page bill arrives as two photographs. This is the same trap the split-parts
-one-per-category rule fell into (see [`transaction-splits.md`](transaction-splits.md)) — a constraint on
+one-per-category rule fell into (see [`../mechanism-index.md`](../mechanism-index.md)) — a constraint on
 what the user may record, justified by nothing but the shape the implementer expected.
 
 **Documents follow the transaction through the trash.** Trash hides the row and its documents together;
@@ -338,7 +338,7 @@ whole ledger, sweeps unconditionally.
 - **Phase 3 — itemization.** The tier-3 adapter with its approval screen, designed jointly with the
   online categorizer.
 - **Phase 4 — feed the splits.** An approved itemization is exactly the pre-fill
-  [`transaction-splits.md`](transaction-splits.md) wants, the same way Amazon orders pre-fill from list
+  [`../data-model.md`](../data-model.md) → *Transaction splits* wants, the same way Amazon orders pre-fill from list
   prices. Deliberately last: splits are independently useful, and coupling them to extraction early
   would hold a working feature hostage to an optional one.
 
@@ -361,6 +361,6 @@ What is still open:
 
 - [`online-categorizer.md`](online-categorizer.md) — the shared opt-in/LLM/approval subsystem
 - [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — blocks decision 1
-- [`transaction-splits.md`](transaction-splits.md) — the phase-4 consumer
+- [`../data-model.md`](../data-model.md) → *Transaction splits* — the phase-4 consumer
 - [`../building-a-connector.md`](../building-a-connector.md) — the adapter/capability pattern to copy
 - [`../operations.md`](../operations.md) — where a filesystem store would live

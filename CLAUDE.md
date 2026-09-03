@@ -79,6 +79,9 @@ branch state from the injected snapshot.
 - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer):
   capability declarations & the traits that turned out to be Plaid-specific
 - `docs/ui-patterns.md` — shared UI behavior & interaction models
+- `docs/mechanism-index.md` — the "which mechanism is this?" domain lookup; **consult before recording
+  a relationship between transactions** (splits vs multi-payment vs recurring vs reimbursable vs
+  `txn_link` vs `exclude_from_totals`) — picking wrong puts bad data in the ledger quietly
 - `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
   building any UI element** (reuse is the default; a one-off needs justification)
 

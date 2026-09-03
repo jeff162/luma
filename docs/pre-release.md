@@ -350,8 +350,9 @@ the digest at ingest.
 
 ### 6. Transaction splits  ✅ *built; exercised in the running app 2026-08-24*
 
-[`backlog/transaction-splits.md`](backlog/transaction-splits.md) — the whole file; its decisions were
-settled 2026-08-23 and it is no longer a parked design.
+The mechanism is in [`data-model.md`](data-model.md) → *Transaction splits*; the rejected shapes and
+the neighbouring mechanisms it is not are in [`mechanism-index.md`](mechanism-index.md). Its decisions
+were settled 2026-08-23 and the project file was disposed of 2026-09-02.
 
 Allocating one transaction's amount across several categories: the `txn_split` table, the
 effective-category-rows expansion seam that every summary and category-scoped list reads through, the
@@ -448,4 +449,5 @@ substitution — every summary and list query is already phrased against one ali
 replaces `FROM txn t` and leaves every facet helper, sentinel, and exclusion guard untouched. What moved
 the decision is that splits is the terminal dependency of two other initiatives (reimbursable expenses
 outright, attachments at phase 4), so deferring it defers them as well. Scope and the settled decisions
-are in [`backlog/transaction-splits.md`](backlog/transaction-splits.md).
+are in [`data-model.md`](data-model.md) → *Transaction splits* and
+[`mechanism-index.md`](mechanism-index.md).
