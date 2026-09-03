@@ -18,7 +18,11 @@ This document focuses on data semantics and invariants. For how these are expose
 
 - [Rules](#rules)
 
+- [Recurring series](#recurring-series)
+
 - [Import batches and profiles](#import-batches-and-profiles)
+
+- [Transaction links and Amazon order import](#transaction-links-and-amazon-order-import)
 
 - [Backups](#backups)
 
@@ -31,6 +35,10 @@ This document focuses on data semantics and invariants. For how these are expose
 - [Attached documents](#attached-documents)
 
 - [Multi-payment purchases](#multi-payment-purchases)
+
+- [Reimbursable expenses](#reimbursable-expenses)
+
+- [Open](#open)
 
 ## Core hierarchy
 
@@ -1733,3 +1741,49 @@ step whichever of its reimbursements is settled first.
 
 Depth, the settled forks, and what was deliberately left out are in
 [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md).
+
+## Open
+
+Decisions still owed on this document's subjects, each naming the live backlog item that will settle it.
+Rejections and obstacles are **not** here — they sit inline beside the thing they are about, which is
+this doc's convention and the more findable one. See `AGENTS.md` → *Where rejections, obstacles and owed
+decisions go*.
+
+- **Number and date display formatting**, and the free-text parse bucket behind it. The ledger-currency
+  half shipped; what remains is cosmetic except for the quick-filter date/amount ambiguity, which is the
+  only correctness risk in it. → [`backlog/i18n-display-formatting.md`](backlog/i18n-display-formatting.md)
+- **Account type as a filtering and search axis.** It exists as a rule scope; generalizing it to
+  structured filters — and to an `accttype:` / `acctname:` free-text grammar, the harder half — has not
+  been done. → [`backlog/account-type-as-rule-criterion.md`](backlog/account-type-as-rule-criterion.md)
+- **The wider backups artifact**: a sectioned file, whether `backup_recipient` rides along, and an
+  incremental chain. The credentials half is settled.
+  → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)
+- **`cash_date` — a second date for cash-basis timing.** Deferred with its attribution method worked
+  out; what decides whether it is worth building is the drill-through question, since an attributed node
+  lists purchases dated outside the displayed period.
+  → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)
+- **Attachment tiers 2 and 3** — OCR, and itemized lines from a document. Tier 2 is also the named
+  precondition for automatic multi-payment suggestion.
+  → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
+- **Marketplace enrichment remainder**: AZAD ingestion ergonomics, enrich re-derive from stored raw
+  values, and the column-centric mapping rework.
+  → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)
+- **Folding money-movement recognition into the generic rule-suggestion engine**, and migrating those
+  rules from account-id to account-type scope once that axis exists.
+  → [`backlog/paypal-money-movement-recognition.md`](backlog/paypal-money-movement-recognition.md)
+- **The recurring pool-load optimization.** The payee filter is applied after a full pool load, so a
+  scoped scan costs what a full one does — now on the path of every category edit. Revisit threshold is
+  roughly 50,000 rows. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+- **Dedupe follow-ups**, including the prefix-stripping item whose precondition is now met — the open
+  question there is the 4-character prefix floor.
+  → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
+- **The Tasks signal for reimbursements** — the one piece of that feature still owed.
+  → [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md)
+- **An online merchant categorizer**, terminating in the existing rule store ("the rule is the cache").
+  Parked design. → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
+- **`clean_name` / merchant-rename: keep or drop.** Dormant code awaiting a decision rather than a
+  design. → [`backlog/merchant-rename-fate.md`](backlog/merchant-rename-fate.md)
+- **The invariants a semantic checker would assert.** A structural database check answers "is the file
+  corrupt" and never "is the data coherent"; which invariants are worth asserting, and whether any can be
+  repaired rather than only reported, is unstarted design.
+  → [`backlog/database-diagnostics.md`](backlog/database-diagnostics.md)

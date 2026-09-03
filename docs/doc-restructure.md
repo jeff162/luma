@@ -81,14 +81,26 @@ those read as `architecture.md` material. Roughly twenty verifications, where a 
 only record of something like *migration v18 folds `plaid_item` rows in carrying the ciphertext
 verbatim*.
 
-**7. Every topic ends with the same three sections.** This is what lets a project file die, and it is
-the structural change the taxonomy depends on. No current doc has anywhere to put:
+**7. Every topic ends with the same three sections** — *amended 2026-09-02, see below.* This is what
+lets a project file die, and it is the structural change the taxonomy depends on. No current doc has
+anywhere to put:
 
 - **Considered and rejected** — with the reason, so it is not re-proposed.
 - **Obstacles** — what a second attempt hits.
 - **Open** — decisions owed, naming the live backlog items that will feed this topic.
 
 Code comments cite `docs/<topic>.md#considered-and-rejected`, never a project filename.
+
+**Amended: the rule is for *topic* docs, not for multi-topic reference docs.** Writing A and B showed
+the distinction. A topic doc answers one question and its tail reads as one subject's record. The older
+docs — `data-model.md`, `ui-patterns.md`, `architecture.md` — collect many questions, and they already
+place a rejection **inline beside the thing it is about**, 36 times in `data-model.md` and 13 in
+`ui-patterns.md`. That is the more findable arrangement for them, not an absence: someone reading about
+splits meets the rejected split shapes there, whereas one `#considered-and-rejected` anchor would serve
+twenty unrelated subjects. So those three docs keep rejections and obstacles inline and carry **only an
+`## Open` section** — the one kind of fact with no natural inline home, and the link rule 8 depends on
+to keep a pending project reachable. Their code citations name a section rather than a tail anchor. The
+rule as amended is stated in [`../AGENTS.md`](../AGENTS.md).
 
 **8. Pending projects are surveyed but not ingested.** A pending file stays a project file. Its topic
 is recorded in the routing table below so the slot exists, and the topic's *Open* section names it.
@@ -267,6 +279,12 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 7. **D — Testing**, into CONTRIBUTING.
 8. **Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.
 
+*Done out of order, 2026-09-02:* the rule-7 amendment and the `## Open` sections on `data-model.md`,
+`ui-patterns.md` and `architecture.md`. It was pulled ahead of step 5 because most of the remaining
+routing rows land in those three docs, and leaving the rule unsettled would have meant filing each
+ingested rejection by guess and re-filing it later. Their Contents lists were stale as well (six
+sections missing between them) and were regenerated from the headings.
+
 ## Ledger
 
 Replaces *Completed (kept for the record)*. A row per disposed project, so "disposed" is
@@ -321,10 +339,11 @@ Found while doing A; they apply to every remaining category.
   Before ingesting a topic, check the target doc for it: what looks like homeless material is often a
   *duplicate*, and the disposal is then deletion rather than authorship. What is genuinely homeless
   tends to be the half that never had an obvious home — here, reporting semantics.
-- **Existing docs have no tail sections yet.** `data-model.md` and `ui-patterns.md` predate rule 7, so a
-  rejection ingested into them goes inline, in the idiom each doc already uses, rather than into a
-  *Considered and rejected* section that does not exist. Whether to retrofit tails onto the older docs
-  is a step-8 question — doing it piecemeal mid-ingest would leave them half-structured.
+- ~~**Existing docs have no tail sections yet.**~~ **Settled 2026-09-02, ahead of step 5** — see the
+  amendment under rule 7. The older docs were never missing a structure; they already place rejections
+  inline beside their subject, which is better for a doc covering twenty subjects. They now carry an
+  `## Open` section each, populated from every backlog item that still owes them a decision, so the 22
+  remaining routing rows have a defined destination before the next ingest rather than after it.
 - **Deleting a file means finding every mention of it, not just the code ones.** `pre-auth-security-ui.md`
   was referenced from three other markdown files. Grep the whole tree, and expect the backlog index and a
   sibling project file to be among the hits.

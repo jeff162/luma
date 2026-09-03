@@ -142,9 +142,15 @@ When working on the codebase:
 
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
 
-### Every topic doc ends with the same three sections
+### Where rejections, obstacles and owed decisions go
 
-A reference doc describes the system as it is, which leaves three kinds of fact with nowhere to live — and they are exactly the facts that stop someone rebuilding a mistake. So a topic doc ends with:
+A reference doc describes the system as it is, which leaves three kinds of fact with nowhere to live — and they are exactly the facts that stop someone rebuilding a mistake. Where they go depends on which of two shapes the doc is.
+
+**A topic doc answers one question** (`security-model.md`, `operations.md`, `building-a-connector.md`). It ends with all three sections below.
+
+**A multi-topic reference doc collects many** (`data-model.md`, `ui-patterns.md`, `architecture.md`). There, a **rejection or an obstacle stays inline, beside the subject it is about** — which is the convention these docs already use and the more findable one, since someone reading about splits meets the rejected split shapes there rather than in a list of twenty unrelated verdicts at the end. Such a doc carries **only an `## Open` section**, because a decision still owed is the one kind with no natural inline home, and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*), not by a tail anchor.
+
+The three sections, in a topic doc:
 
 - **`## Considered and rejected`** — shapes that were tried, designed, or seriously proposed and turned down, each **with the reason**, so the verdict is re-derivable rather than merely recorded. The filter is *could a reader plausibly re-propose this?* — not *was it interesting?* A rejected alternative belongs here; an argument that the chosen design was correct does not, because nothing follows from it once the work has landed.
 - **`## Obstacles`** — what a second attempt actually hits: a constraint that makes the obvious approach fail, an ordering that cannot be violated, a seam with no atomicity. These apply whether or not the work is planned, which is why they are separated from *Open*.
@@ -153,7 +159,7 @@ A reference doc describes the system as it is, which leaves three kinds of fact 
 Two rules make these load-bearing rather than decorative:
 
 - **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
-- **Code comments cite `docs/<topic>.md#considered-and-rejected`, never a project filename.** Backlog filenames are transient by construction and links to them decay; topic anchors are stable. When a project file is disposed of, repoint its code citations in the same change.
+- **Code comments cite a stable doc location, never a project filename.** `docs/<topic>.md#considered-and-rejected` for a topic doc; `docs/<doc>.md` → *Section name* for a multi-topic one. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
 
 ## For Claude / harness-based agents
 

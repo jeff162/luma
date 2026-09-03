@@ -18,13 +18,21 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Row editing](#row-editing)
 
+- [Transaction rows](#transaction-rows)
+
 - [Pills and expanding selectors](#pills-and-expanding-selectors)
 
 - [Empty states](#empty-states)
 
 - [Drop zones and file inputs](#drop-zones-and-file-inputs)
 
+- [Enter in a small explicit-submit form](#enter-in-a-small-explicit-submit-form)
+
 - [Confirmation and completion flows](#confirmation-and-completion-flows)
+
+- [First-run onboarding](#first-run-onboarding)
+
+- [Help and contextual explainers](#help-and-contextual-explainers)
 
 - [Dismissing what the app is nagging about](#dismissing-what-the-app-is-nagging-about)
 
@@ -39,6 +47,8 @@ This document defines UI behavior and interaction patterns. For underlying data 
 - [Charts and overlays](#charts-and-overlays)
 
 - [When to document a new pattern](#when-to-document-a-new-pattern)
+
+- [Open](#open)
 
 ## Product intent
 
@@ -1392,3 +1402,36 @@ Add to this document when:
 - repeated review comments or UI tweaks point to a missing convention
 
 Do not add one-off exceptions unless they are likely to become reusable.
+
+## Open
+
+Decisions still owed on this document's subjects, each naming the live backlog item that will settle it.
+Rejections and obstacles are **not** here — they sit inline beside the pattern they are about, which is
+this doc's convention and the more findable one. See `AGENTS.md` → *Where rejections, obstacles and owed
+decisions go*.
+
+- **Import-history archive UX.** The lossy cap is gone and the full completed history is returned; what
+  is deferred is the windowing itself — a per-source recent window with a reachable "Older imports"
+  archive grouped by year, a reachable re-bound on the fetch, and a batch-history deletion strategy that
+  purges records rather than the transactions they describe.
+  → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
+- **The include case of the report filter-conflict note.** The exclude case shipped; the parallel
+  include case is parked for a larger tag-report pass rather than a one-off, and the behavior is already
+  correct without it. → [`backlog/tag-report-exclude-warning.md`](backlog/tag-report-exclude-warning.md)
+- **Saved tag reports** — four dashboard tag-report affordances, deferred together.
+  → [`backlog/saved-tag-reports.md`](backlog/saved-tag-reports.md)
+- **A button/design-system audit.** Unstarted.
+  → [`backlog/button-consolidation.md`](backlog/button-consolidation.md)
+- **Search on the Help topic list.** Parked, not started.
+  → [`backlog/help-topic-search.md`](backlog/help-topic-search.md)
+- **The tooltip migration remainder and press-scoped labels**, batched with other small cleanups.
+  → [`backlog/cleanup-pass.md`](backlog/cleanup-pass.md)
+- **Whether the grain picker should be the sole control on the single-period trend chart.** Two
+  bucketing models exist today, chosen by whether an explicit date range is in force, and the difference
+  was never recorded as intended behavior — it is a side effect of the trend being deliberately
+  independent of the Dashboard default. → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)
+- **A Trends-tab semantics audit**, gated on that tab gaining a tag-report selector: its per-month and
+  per-year totals sum across all series and can double-count depending on the series mix.
+  → [`backlog/dashboard-reporting.md`](backlog/dashboard-reporting.md)
+- **The UI half of attachment tiers 2 and 3.**
+  → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
