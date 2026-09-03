@@ -93,8 +93,9 @@ logic — the reason that pass was treated as blocking rather than as a formalit
 
 ### 2. Recurring anomaly signals  ✅ *built 2026-08-27*
 
-[`backlog/recurring-detection.md`](backlog/recurring-detection.md) → *§2*, plus two additions taken
-deliberately (see below).
+Scoped as the *anomaly / forecast signals* half of the recurring backlog, plus two additions taken
+deliberately (see below). That half has since shipped and folded into
+[`data-model.md`](data-model.md) → *Recurring series*, so the backlog file no longer carries it.
 
 Detection, listing and curation were already live; this is the payoff for substrate that existed. The
 four signals — **upcoming**, **missed**, **new series detected**, **price change** — plus a fifth,
@@ -120,8 +121,8 @@ minimum rather than a limit:
   ("members newer than the dismissal") would have meant a new column on the largest table and every
   insert site updated; the ratchet gets the same behavior for none of that.
 
-**What the design as written could not have done**, both recorded in the backlog file as
-don't-re-impose:
+**What the design as written could not have done** — both stated here, and carried in
+[`data-model.md`](data-model.md) → *Recurring series* as the durable record:
 
 - **"A charge outside the established `amount_min`/`amount_max` band" is not implementable.** That band
   is rewritten from exactly the rows the series owns, so a hiked charge is inside it by the time anything
@@ -134,10 +135,11 @@ versions: an auto series is re-minted with a new id on every scan, so a stored f
 a day and stale on the next edit. The only durable state is the user's dismissals. Fixed on the way:
 `recurring_series.created_at` now means *first detected* rather than *last rebuilt*.
 
-**§4's identity half was out of scope here and has since been taken anyway** (2026-09-01, on the user's
-call that the release is not imminent) — `amount_mode`, amount-gated membership and the pinned
-expectation band. §2 had settled its design; what the build found was that §4 was covering **two live
-defects** rather than a missing feature. See *Recurring series amount identity* under *Landed alongside*.
+**The amount-identity half was out of scope here and has since been taken anyway** (2026-09-01, on the
+user's call that the release is not imminent) — `amount_mode`, amount-gated membership and the pinned
+expectation band. The signals work had settled its design; what the build found was that it was covering
+**two live defects** rather than a missing feature. See *Recurring series amount identity* under
+*Landed alongside*.
 
 **First real-app pass, 2026-08-27 — one defect, invisible to the suite by construction, and a structural
 change behind it.** The findings section rendered into the Recurring page's pinned header (`flexShrink: 0`
@@ -205,7 +207,8 @@ slicing the pies use, now shared from `lib/longTailSlices.js`); the Trends form 
 net line and the usual average reference line; drill-through from every node into the existing
 group → categories → transactions drill; and a `dashboard-cash-flow` Help topic.
 
-Two things turned out differently from the design as written, both recorded in the backlog file:
+Two things turned out differently from the design as written, both now in
+[`data-model.md`](data-model.md) → *Reporting assumptions* → *Cash flow*:
 
 - **The Sankey needed no new endpoint** — `/summary/by-category` already returns the node set, so the
   single-period diagram is a re-projection of a call the dashboard already makes.
@@ -228,7 +231,8 @@ Labels now fold onto one line where two will not fit, and the shared slicing gai
 the cash-flow sides pass at 1%. The third was the Trends chart drawing the wrong thing entirely: the
 diverging bars were missing `stackOffset="sign"`, so money out was stacked down from the top of the
 money-in bar rather than from zero, putting the net on screen twice and money out not at all — with
-correct tooltips the whole time. All three are recorded in the backlog file as don't-re-impose.
+correct tooltips the whole time. All three are in [`ui-patterns.md`](ui-patterns.md) → *Charts and
+overlays* as don't-re-impose.
 
 **Second real-app pass, 2026-08-25** — three more, all on the *shared* single-period trend chart rather
 than on anything cash-flow specific: one outlier period owning the whole Y axis (no chart in the app set
@@ -239,7 +243,8 @@ layout effect that re-centres the selected bucket, and a bounded date history in
 "← Back to …" control that names its destination. That history records **chart pins only** — an explicit
 FilterBar pick resets it rather than becoming a step, so the control never offers to step back over a
 period the user chose themselves. The clamping is applied to the single-period trend
-chart only so far; the other charts are noted in the backlog file. Two follow-ons from the same pass:
+chart only so far; the other charts are noted in [`ui-patterns.md`](ui-patterns.md) → *Charts and
+overlays*. Two follow-ons from the same pass:
 that chart's value axis was pulled out of the horizontal scroll so it stays readable at any pan
 position, and the average pill moved into that column, where it steps aside from any tick label it
 would otherwise bury.
@@ -250,7 +255,8 @@ that measures its own box after the fact, so a re-bucket painted at the previous
 one behavioural: the re-centring rule targets the *selected* bucket, and the grain selector only appears
 when nothing is selected, so every grain change fell through to "scroll to the newest bucket". Both
 charts are now handed explicit sizes, and the month under the middle of the viewport is carried across a
-re-cut. Details and the don't-re-impose notes are in the backlog file.
+re-cut. Details and the don't-re-impose notes are in [`ui-patterns.md`](ui-patterns.md) → *Charts and
+overlays*.
 
 **Fourth real-app pass, 2026-08-25 — one data-correctness bug, found by using the ledger rather than the
 dashboard.** "Needs review" + select-all + Mark reviewed reported 18,278 rows changed against a filter
@@ -376,13 +382,13 @@ guard, the summary-endpoint tests, and a before/after comparison over a real-dat
 Not one of the six, and not scoped here — recorded because it moved surfaces and versions that later
 steps in this plan depend on.
 
-**Recurring series amount identity** ([`backlog/recurring-detection.md`](backlog/recurring-detection.md)
-§4, shipped 2026-09-01). Amount becomes part of a series' identity where it is the only thing telling two
+**Recurring series amount identity** (shipped 2026-09-01; the durable record is
+[`data-model.md`](data-model.md) → *Recurring series*). Amount becomes part of a series' identity where it is the only thing telling two
 series apart. It was picked up as backlog rather than under any feature above, and it closed two defects
 that were live in shipped code: confirming one of a biller's two subscriptions **orphaned the other** (the
 candidate-coverage check could not tell two price points apart), and two subscriptions billing a fortnight
-apart **merged into one bogus biweekly series** at an average price neither one costs. Both are recorded
-in the backlog file with the shapes not to re-impose.
+apart **merged into one bogus biweekly series** at an average price neither one costs. Both defects, and
+the shapes not to re-impose, are in [`data-model.md`](data-model.md) → *Recurring series*.
 
 One thing it moved that matters below: **schema version 46** — three additive columns on
 `recurring_series` (`amount_mode`, `expected_min`, `expected_max`), no backup payload change, since the

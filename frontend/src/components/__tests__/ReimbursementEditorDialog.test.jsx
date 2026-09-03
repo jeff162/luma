@@ -166,7 +166,10 @@ describe('completing one that was repaid in full', () => {
 
   it('reads as finished with nothing moved once it is complete', async () => {
     open(record({ owed: 375, repaid: -375, residual: 0, completed: true, completion: { txn_id: null, residual: 0 } }))
-    expect(await screen.findByText(/nothing needed to move/)).toBeTruthy()
+    // The completed note's two branches differ only in their copy, so the copy is the assertion: this
+    // is the one test that distinguishes "nothing moved" from a residual having been moved out. A
+    // wording change here is therefore expected to fail this test rather than slip past it.
+    expect(await screen.findByText(/Repaid in full/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /Reopen/ })).toBeTruthy()
   })
 })

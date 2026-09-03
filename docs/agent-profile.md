@@ -392,6 +392,19 @@ shown on the connection card and is reserved for what the *user* can act on.
   first or invoke the checkers directly with the paths (`node scripts/check-backend-timestamps.js <files>`),
   which is what the hook does anyway.
 
+- **`npm run lint` does not cover the backend timestamp guard, and nothing else sweeps for it either.**
+  Despite the name, `scripts/check-backend-timestamps.js` is a Python lint rather than anything about file
+  times: it forbids `datetime.utcnow()` (deprecated in 3.12+, and never exemptable) and a bare
+  `datetime.now()` (which returns **local** time, silently corrupting a value that is UTC by convention),
+  requiring stored timestamps to route through `utcnow_iso()` in `backend/time_utils.py`. A value that
+  genuinely is local time takes `# local-time: <reason>` on the same line, and the reason is mandatory —
+  an exemption that can be applied without stating why is a rubber stamp. What makes this a footgun is
+  **coverage, not the rule**: `npm run lint` is eslint plus the two comment checks and does not include it;
+  `backend/tests/test_timestamp_guard.py` exercises the guard's own logic against fixtures rather than
+  scanning the tree; and the only thing that runs it over real source is the pre-commit hook, on *staged*
+  files. A violation therefore survives a green `npm run lint` and a green test suite. After editing any
+  `backend/*.py`, run it directly with the paths.
+
 - **An assertion that cannot fail is worse than no assertion.** Before trusting a new check, ask what it
   would take for it to go red. The concrete case: the shared `Button` never sets the DOM `disabled`
   attribute (it dims and drops the handler), so `expect(btn.disabled).toBe(true)` passes against every

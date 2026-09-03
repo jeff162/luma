@@ -128,7 +128,8 @@ Shapes that recur but haven't crossed the bar to commonize — either still too 
 control, or too divergent to unify without a leaky abstraction. They are **not** in the tables above
 (nothing to reach for yet). The point of listing them: **when a new instance of one of these shows up,
 surface it to the user** — one more copy may be the tipping point where extracting a shared control
-becomes worthwhile. Deeper analysis + the audit process live in `backlog/refactor-audits.md`.
+becomes worthwhile. The audit *method* is in `../CONTRIBUTING.md` → *Auditing for duplication*;
+`backlog/refactor-audits.md` carries the standing candidate list it works from.
 
 | Pattern | Where it recurs | Why not commonized yet | Surface to the user when… |
 | --- | --- | --- | --- |
