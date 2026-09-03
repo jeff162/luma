@@ -210,6 +210,19 @@ every assertion.
   keys per tab for the same reason.
 - **A `'loaded'` select-all strategy assumes every row is in memory**, which windowing breaks. Verify it
   wherever it is still used.
+- **The browser is the last hop that still holds a whole backup, and documents are what make it matter.**
+  Both server directions stream, but `downloadUrl` (`lib/api.js`) fetches the artifact into a Blob before
+  saving, so the client holds all of it. That is irrelevant for a ledger-only backup — 4.9 MB at ~18,500
+  transactions, roughly 50 MB extrapolated to 200k — and binds only once documents dominate the size.
+  Browsers page large blobs to disk, so the curve is sluggish before it is fatal; a tab dying while saving
+  a backup is *broken* rather than merely slow. **The blob is deliberate and "just navigate instead" is
+  not the fix**: a plain navigation hands the response to the browser, so an error status renders as raw
+  JSON with the app gone from under it, which is why the fetch-and-save exists at all. The way out is to
+  *preflight* what the endpoint can fail on (no enabled recipients being the main one) and then navigate,
+  letting the browser stream to disk with its own progress UI — or to pipe the body through the File
+  System Access API, which is better and Chromium-only. Until one of those lands, the `Content-Length`
+  the export sends buys nothing visible: saving a finished blob gives the browser no download to draw a
+  progress bar for.
 
 ## Open
 

@@ -1,101 +1,43 @@
-# Account type as a selection criterion (rules, filtering, search) + PayPal as an account type
+# Account type as a filtering and search axis
 
-**Status: parts 1–2 IMPLEMENTED (2026-07-21, migration v13); part 3 (filtering/search) deferred.**
-Came out of the PayPal money-movement work: the money-movement rules were scoped to a specific PayPal
-**account id** (one rule per PayPal account). The cleaner primitive — scope by **account *type*** so **one**
-rule covers all accounts of that type — now exists: `category_rule.account_type` matches the row's
-effective account type, PayPal is a first-class `type`, and the money-movement rules are migrated onto
-`account_type='paypal'`. Contrary to the original "punts on existing data" note, migration v13 **does**
-backfill: it marks accounts that already received PayPal imports as `type='paypal'` and consolidates the
-per-account money-movement rules onto one type-scoped rule per `Type`. The living contracts are in
-`data-model.md` (Accounts → `type`; Rules → account-type scope, precedence, matcher identity) and
-`architecture.md` (Rules and categorization → Scope by account type).
+**Parts 1–2 shipped 2026-07-21 (migration v13); part 3 has not started.** The account-*type* axis
+itself exists and is durable behavior: PayPal is a first-class `account.type`, `category_rule.account_type`
+matches a row's *effective* account type, precedence runs account_id > account_type > global, and the
+type joins the one-rule-per-matcher identity. That model — including why the axis is the account's type
+rather than the batch's `source_kind` — is in [`../data-model.md`](../data-model.md) → *Accounts* and
+*Rules*, with the mechanism in `architecture.md` → *Rules and categorization*. The money-movement rules
+were migrated onto it and now collapse to one `account_type='paypal'` rule per `Type`.
 
-**What shipped (parts 1–2):**
+This file keeps only part 3: letting the **transaction filters and search** scope by account type.
 
-- PayPal as an account type (`accountTypes.js`), auto-assigned to a new account on a recognized PayPal
-  import, and typed at money-movement approval (existing generic accounts) — a deliberately-set type is
-  never clobbered.
-- `account_type` rule criterion threaded through the matcher (`rule_matches_row` + `categorize_transaction`,
-  and every feeding SELECT), the rule loader/precedence (account_id > account_type > global), the matcher
-  identity (`create_rule_core`/`update_rule`), and the RuleForm scope picker.
-- Money-movement rules migrated to `account_type='paypal'` (via the shared `create_rule_core`), plus the
-  v13 data migration.
+## The two halves, and why they are not one task
 
-**Still deferred — part 3 (filtering/search by account type):** structured transaction filters/search that
-scope by account type, and the free-text `accttype:`/`acctname:` query grammar. See the Scope section
-below; nothing here was built.
+**Structured filters are the safe half.** A chip or dropdown that scopes the transaction list by account
+type is unambiguous, mirrors the rule editor's scope picker, and can ship on its own. Nothing here was
+built.
 
-**Original framing (for context):** A cleaner long-term primitive is to scope by **account *type*** ("this
-is a PayPal / Amazon wallet") so **one** rule covers all accounts of that type.
+**Free-text search is the hard half, and it is a design pass rather than a feature.** A bare `amazon`
+typed into search collides across three facets at once — account *type*, account *name*, and merchant
+text — and there is no reading of the bare term that is right in every case. Scoping by type in free text
+therefore argues for a metadata-tag query grammar (`accttype:amazon`, `acctname:amazon`, …), which is a
+real UX investment: reserved delimiters, discoverability, and an error model for a malformed term. Don't
+fold it in casually alongside the structured filters.
 
-## Why account type, not `source_kind`
+## The constraint any grammar has to respect
 
-Both could express "restrict to PayPal", but account type is the better axis:
+If a multi-term merchant grammar is ever built (something like `:foo: :bar:` for "contains foo AND bar"),
+it must **compile into the representation the rule matcher already uses** — `category_rule.match_expr`
+(`{op:"and", clauses:[{type:"contains", text}]}`) — and evaluate through the shared
+`merchant_matcher_matches` predicate, rather than growing a second matcher beside it. The rule side
+(AND-only, contains-only, ≤3 clauses) was deliberately shaped to leave that room. Two matchers that are
+meant to agree and are written twice will diverge, and the divergence shows up as a rule that previews
+differently from how it fires.
 
-- **Intrinsic, not provenance.** An account *is* a PayPal wallet; `source_kind` is an incidental fact
-  about which importer produced a *batch* (one join away on `import_batch`, only two thin values today —
-  `marketplace:amazon`, `source:paypal`, else NULL).
-- **Retroactive by nature.** A type on the account applies to every transaction on it, regardless of how
-  or when it was imported. (`source_kind` only exists on batches stamped after that feature — a real gap.)
-- **One rule covers all accounts of the type** — dissolves the per-account-rule duplication.
+## Open
 
-The account table already has a `type`/`subtype` column, and Amazon accounts already carry a marketplace
-kind, so this axis is partially modeled — it's an extension, not a new invention.
-
-## Scope
-
-1. **Add PayPal as an account type.** Designate PayPal accounts a first-class type (as Amazon's
-   marketplace kind already is). Decide the taxonomy: is "PayPal" a `type`, a `subtype`, or a `kind`
-   alongside the existing marketplace kind? Auto-assign it when a PayPal Activity file is imported into a
-   new account (the sniff already exists — `sniff_paypal_activity`), and allow the user to set/clear it on
-   the Accounts page.
-2. **Account type as a rule criterion.** A rule gains an optional account-*type* scope (alongside the
-   existing account-*id* scope). `rule_matches_row` already scopes by `account_id`; add a parallel
-   `account_type` clause (the row already carries its account, so join/resolve the type). Thread through
-   the rule model, the matcher, `recategorize_all`, and the rule editor UI (a structured picker — **no**
-   free-text ambiguity, unlike search below). Money-movement rules then migrate from per-account-id to a
-   single account-type scope (a small, clean change once this lands).
-3. **Account type in filtering / search.** Let the transaction filters and search scope by account type.
-   **Structured filters** (a chip / dropdown) are unambiguous and the safe first step. **Free-text search
-   is the hard part** — bare "amazon" collides across account *type*, account *name*, and merchant text.
-   If free-text scoping is wanted, that argues for a **metadata-tag query grammar** (`accttype:amazon`,
-   `acctname:amazon`, …) — a real UX investment worth its own design pass; don't fold it in casually. The
-   structured-filter path can ship without it.
-
-## Reuse / where it lives
-
-- Account type/kind — the existing `account.type`/`subtype` + the marketplace-kind precedent
-  (`ACCOUNT_TYPES`, `architecture.md` → "Marketplace accounts — the extension pattern").
-- Rule matching — `services/categorizer.rule_matches_row` (already has the `account_id` clause to mirror),
-  `recategorize_all`, the rule model in `routers/rules.py`, and `RuleForm.jsx`.
-- The money-movement rules (`services/money_movement.create_money_movement_rules`) are the first consumer
-  ready to migrate from account-id to account-type scope.
-
-## First consumer detail — the PayPal money-movement rules (as shipped)
-
-The single system PayPal data source has `account_id` NULL — one source spans accounts (provenance, not
-content, as data sources should). But the money-movement **rules underneath are still per-account**
-(`account_id`-scoped), which is why the source-level review has to gather *all* the source's accounts
-(`profile_account_ids`) and create/delete a rule per account per `Type`. When account-*type* scoping lands,
-those **collapse to one rule per `Type`** (scoped to the PayPal account type), and the review no longer has
-to enumerate accounts — the review + apply just target the type. That migration is the concrete first win
-of this item.
-
-Interim note (until this lands): `create_money_movement_rules` writes into `category_rule` directly rather
-than through `rules.create_rule`'s reconciliation, so it carries its own guards — it refuses an empty
-account set (which would fork a *global* rule) and skips a `Type` whose (keyword, account, source-text)
-matcher already exists (idempotent for ours, and it won't fork past a user rule pointing elsewhere). The
-account-type migration should fold these rules onto the shared `create_rule` path so the one-matcher
-reconciliation is inherited rather than re-implemented.
-
-## Open questions
-
-- PayPal as `type` vs `subtype` vs a new `kind` dimension (and how it coexists with marketplace).
-- Whether to denormalize account type onto the transaction for cheap matching/search, vs join at read.
-- Free-text search: structured filter only, or commit to the `accttype:`/`acctname:` tag grammar. If a
-  multi-term merchant search grammar (e.g. `:foo: :bar:` for "contains foo AND bar", reserving delimiters)
-  is ever built, it should compile into the **same** representation the rule matcher now uses —
-  `category_rule.match_expr` (`{op:"and", clauses:[{type:"contains", text}]}`) — and reuse the shared
-  `merchant_matcher_matches` predicate, rather than inventing a parallel matcher. The rule side (shipped
-  2026-07-24, AND-only / contains-only, ≤3 clauses) deliberately kept that shape forward-compatible.
+- **Structured filter only, or commit to the `accttype:` / `acctname:` grammar.** The structured path can
+  ship without ever answering this; committing to the grammar is what needs deciding before either is
+  built, since a structured-only chip set is not a stepping stone to it.
+- **Denormalize account type onto the transaction, or join at read.** Rule matching joins today and the
+  cost is invisible; a search facet is a different access pattern and may not be. Measure before
+  denormalizing — a copied type is a second thing to keep correct when an account is re-typed or merged.

@@ -72,7 +72,9 @@ def _summarize_tail_lines(all_lines: list[str], count: int = 20) -> tuple[list[s
 @router.post("/preview")
 async def preview_csv(file: UploadFile = File(...)):
     """
-    Parse the uploaded CSV and return:
+    Parse the uploaded CSV and return (this is the second copy of the parse seam -- the first is in
+    `core.py::run_import_core`, and preview must read the same rows the import will; see
+    docs/building-a-connector.md -> Adding a file importer):
     - raw_lines: first 20 raw text lines (for the file preview panel)
     - header_row_index: which line index the header was detected on
     - headers: list of column names

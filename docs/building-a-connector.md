@@ -11,8 +11,23 @@ all ones that shipped, and every one of them was silent.
 
 > Scope note: "connector" here means any **data source** that produces transactions — a provider
 > connection (a `ProviderAdapter`) *or* a file importer. The two do not share a base class, so some
-> declarations live on the adapter class and some in a registry; see
-> [Zero-amount rows](#zero-amount-rows). Where a rule applies only to connections, it says so.
+> declarations live on the adapter class and some in a registry (`services/source_capabilities.py`).
+
+**Which half of this document is yours.** Most of the hard-won material below came from building
+provider adapters, so the connection sections are the longer ones — but the rules that survived turned
+out to be about *sources*, not about connections, and a file importer hits several of them unchanged.
+
+| Section | Connection | File importer |
+| --- | --- | --- |
+| The adapter interface · Capability declarations · Where the connection handle comes from | ✅ | — |
+| Adding a file importer | — | ✅ |
+| Transaction ids must be globally unique | ✅ | — (a file carries no identity between imports; dedupe keys on content) |
+| Zero-amount rows | ✅ | ✅ |
+| Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) |
+| Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) |
+| The published guide is not the contract · Request budgets · Pages and commits | ✅ | — |
+| Coverage claims | ✅ | ✅ (an import writes `import_batch_account`; the over-claim rule is the same) |
+| Reporting what was refused | ✅ | ✅ |
 
 ---
 
@@ -21,13 +36,17 @@ all ones that shipped, and every one of them was silent.
 * [The adapter interface](#the-adapter-interface)
 * [Capability declarations](#capability-declarations)
 * [Where the connection handle comes from](#where-the-connection-handle-comes-from)
+* [Adding a file importer](#adding-a-file-importer)
 * [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
 * [Zero-amount rows](#zero-amount-rows)
 * [Dates a source does not have](#dates-a-source-does-not-have)
 * [Currency](#currency)
+* [The published guide is not the contract](#the-published-guide-is-not-the-contract)
 * [Request budgets and pausing](#request-budgets-and-pausing)
+* [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
 * [Coverage claims](#coverage-claims)
 * [Reporting what was refused](#reporting-what-was-refused)
+* [Open](#open)
 
 ---
 
@@ -114,6 +133,69 @@ collect the answer up front, and the server must **absorb** a stale answer rathe
 connection that has since been disconnected, or a handle that turns out to belong to another row, falls
 through to the ordinary upsert and reports `adopted: false`. Refusing would be tidier and would cost the
 user their token.
+
+## Adding a file importer
+
+A file importer has no class and no handle to manage. What it has instead is a **parse seam**, and
+nearly everything that goes wrong when adding a format goes wrong at that seam or in what it hands
+downstream.
+
+**The seam.** A format-specific front end produces `(headers: list, rows: list[dict])`, and everything
+after it is format-agnostic — account resolution, `ColumnMap`, amount and date parsing, duplicate
+detection, categorization, the batch/undo contract, the imported-category workspace. None of that
+learns what the file was. For CSV the front end is
+`bytes → decode → _detect_header_row_index → csv.DictReader`.
+
+**The seam is real but it is not yet a function, which is the first thing to know before adding a
+second format.** The parse is inlined and **duplicated**: `preview.py::preview_csv` and
+`core.py::run_import_core` each call `_detect_header_row_index(text)` and then build their own
+`csv.DictReader`. Preview and run therefore agree by construction today and would agree only by
+discipline once a second format exists — and a preview that reads different rows than the import is
+worse than no preview at all, because it is trusted. Extract the seam behind a format dispatch *before*
+adding a format, not alongside it (the unbuilt work is tracked in
+[`backlog/import-input-formats.md`](backlog/import-input-formats.md)).
+
+**Four CSV assumptions are buried in that front end**, and a non-text container breaks all four. They
+are worth naming because none of them announces itself — each fails as wrong data rather than as an
+error:
+
+* **`make_import_file_hash(text: str)` hashes text.** That hash drives re-import continuity and profile
+  matching, so a format with no `text` needs a content hash defined over its bytes or its parsed cells —
+  and it must be stable across a re-export of the same data, or every re-import looks like a new file.
+* **`_detect_header_row_index(text)` scans lines**, because exports routinely carry preamble rows above
+  the real header. Any tabular container needs the same detection over *cell* rows.
+* **Downstream parsers expect strings.** A spreadsheet hands back floats and datetimes, so the amount
+  and date parsers — which exist to interpret *human* text — receive values they never see from a CSV.
+  Normalize at the boundary rather than teaching each parser a second input type.
+* **The raw-text preview panel has no analog** for a binary container, and that needs an answer rather
+  than an omission.
+
+**Source recognition is a header-only sniff.** `sniff_paypal_activity(headers)` tests whether a marker
+set is a subset of the file's cleaned header keys — no row inspection, because the header is the stable
+part of an export across years. Cleaning matters: `_clean_header_key` strips a leading UTF-8 BOM, which
+real exports carry and which otherwise makes the first column of a recognized file unrecognizable.
+
+**Recognition buys two things, and the second is the one to design for.** A recognized file is stamped
+with a `source_kind` on its profile, and it gets **forced evidence capture**: `_forced_evidence_headers`
+keeps named columns regardless of what the user mapped or ticked. That override exists because those
+columns drive behavior the user cannot be expected to anticipate — PayPal's `Type` is what the
+money-movement rules read — and a column the user did not think to keep is not recoverable later without
+a re-import.
+
+**Capturing a field obliges you to classify it, and misclassifying is silent.** Every captured evidence
+field is `descriptive` (free text that *names* the charge) or `categorical` (a small repeated vocabulary,
+or a structured datum that describes a row without naming it). Only descriptive fields feed duplicate
+text matching. A categorical value admitted as descriptive turns the strong text test back into the weak
+one, and two unrelated rows sharing a type or a date match byte-identically at the tier that
+auto-confirms on merge. CSV import infers the role from a column's cardinality across the whole file;
+anything that cannot measure a file must stamp the role deliberately. See
+[`data-model.md`](data-model.md) → *Import batches and profiles*.
+
+**Where a file importer's declarations go.** With no class to hold a class attribute, a non-adapter
+source registers by name in `services/source_capabilities.py` and every consumer reads through one
+accessor. [Zero-amount rows](#zero-amount-rows) is the worked example, and it has **no default** for the
+same reason there: the answer does not generalize between sources, so a source nobody has thought about
+must fail loudly rather than inherit another's.
 
 ## Transaction ids must be globally unique
 
@@ -206,6 +288,28 @@ must **drop** accounts denominated in anything else, reporting them so the user 
 with silently wrong arithmetic. An account whose rows were discarded must also be kept out of coverage —
 claiming a range for an account whose transactions were thrown away produces the over-claim that makes
 duplicate detection reject genuine rows later.
+
+## The published guide is not the contract
+
+**Where a live call and the provider's documentation disagree, the call is right.** Two of SimpleFIN's
+load-bearing facts appear nowhere in its developer guide, and both were invisible to a suite that mocks
+the HTTP layer:
+
+* **The usable history window was narrower than the documented one.** The guide states 90 days; a 90-day
+  request comes back with a deprecation notice warning that it "may be capped" later, while the width the
+  server actually recommends is 45. A declaration like `max_history_days` is a claim about the *server*,
+  so it is worth one real call to fill in — a value copied from a guide is a guess wearing a constant's
+  clothing, and it fails as silently missing history rather than as an error.
+* **The transport in front of a provider is part of the provider.** The Bridge sits behind a CDN that
+  refuses unnamed HTTP clients: urllib's default user agent draws a bare `403 error code: 1010` with
+  nothing in the body naming the cause. The same layer is what answers a burst with `429 error code:
+  1015` (see below), so a CDN in the path is worth establishing early — it adds failure modes that belong
+  to neither the protocol nor the app.
+
+The general form is that an adapter's **transport** is a subject in its own right, not an implementation
+detail of the mapping. `CONTRIBUTING.md` → *What is tested, what isn't, and why* draws the testing
+consequence: a window cap, a sign convention, a pacing rule and a budget are all properties of what was
+*sent*, so at least one test has to inspect the wire rather than the normalized return value.
 
 ## Request budgets and pausing
 
@@ -357,3 +461,17 @@ rejects. The alternative is CSV's rule — delete the batch when nothing was imp
 would keep the card list clean at the price of making the refusals invisible and of having rejects and
 duplicates behave differently on the same card. **This is expected to be revisited once the effect is
 visible in practice; it is not settled.**
+
+## Open
+
+Decisions owed on this topic, each naming the live backlog item that will feed it.
+
+- **New *file* ingestion formats: XLSX, then the OFX/QFX/QBO family.** Both are gated on the same
+  prerequisite — extracting the parse seam so preview and run share one format dispatch instead of
+  duplicating the CSV parse. XLSX reuses the whole downstream unchanged; the OFX family additionally
+  needs a mapping-free import path and a `FITID` rung in duplicate detection.
+  → [`backlog/import-input-formats.md`](backlog/import-input-formats.md)
+- **OFX Direct Connect as a provider adapter** — a pull with no aggregator in the middle. Researched and
+  parked on institution coverage, and it is the standing counter-example to the read-only/revocable
+  conditioning: an OFX credential *is* the bank login. See `security-model.md` for that rule.
+  → [`backlog/ofx-direct-connect.md`](backlog/ofx-direct-connect.md)

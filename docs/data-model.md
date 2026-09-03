@@ -350,7 +350,12 @@ They can include:
   broader; part of the matcher identity. Precedence is **account_id > account_type > global** (a rule
   pinned to one account is more specific than one covering a whole type). This is the primitive the PayPal
   money-movement rules are scoped by — one `account_type='paypal'` rule per `Type` instead of one per
-  (Type, account). See `docs/backlog/account-type-as-rule-criterion.md`.
+  (Type, account). The axis is deliberately the account's **type** and not the batch's `source_kind`,
+  which could express "restrict to PayPal" equally well: a type is intrinsic to the account and so
+  applies retroactively to every row on it, whereas `source_kind` is provenance stamped on an
+  `import_batch` — one join away, and only present on batches imported after that field existed — so a
+  `source_kind`-scoped rule would silently miss a wallet's older history. Generalizing the same axis to
+  filtering and search is not built; see Open.
 
 - category assignment
 
@@ -534,6 +539,14 @@ Key invariants:
   or two same-category bills at different price points), and a fallback cluster must be **amount-tight**
   (low amount CV) so a coincidental subset of noise can't masquerade as a series.
 
+  **The group is read both ways, and a plausible rhythm over the whole set is not sufficient.** Treating
+  amount clustering as a fallback used only when the whole set produces *no* rhythm is the intuitive
+  design and it merges real series: a $4 and a $20 monthly charge billing a fortnight apart interleave
+  into a perfectly plausible **biweekly** series at $12 spanning `[-20, -4]` — a cadence, an expected
+  amount and a band describing nothing that ever happens. So both readings are computed, and the split
+  is preferred when the whole-set reading is **amount-incoherent**, the split explains at least as many
+  charges, and each price point holds a rhythm of its own.
+
 - **The "payee" is the user-facing name, resolved `display_name`-first** (matching the ledger's
   `getTxnMerchantLabel`), then normalized (lower-case, punctuation→spaces, trailing store-number and
   domain-ending tokens like `.org`/`.com` dropped). Because rule `clean_name`s and user renames land in
@@ -602,13 +615,21 @@ Key invariants:
   rather than applying it — a rule bound has one right answer, while a series band has two ends and only
   the user knows whether a rise lifted every bill (carry both up) or added one outlier (move one).
 
+  **Apply the sign before ordering the bounds, never after.** The band editor takes magnitudes while the
+  ledger stores a direction, and negating swaps which of the two is the lower bound — so ordering first
+  sends an inverted band for every expense series. It fails silently and looks correct on screen, which
+  is why it is pinned by a test rather than left to review.
+
 - **A series holds at most one charge per occurrence date.** When several charges share a date, only
   the one whose amount is closest to the series' typical amount is a member; the rest are dropped from
   it (never summed into the occurrence). This is what keeps an annual tax filing that lands on the same
   day as a quarterly estimate from being folded into the quarterly series and inflating its amount.
   Detection claims series iteratively — a series takes one charge per date, then leftover same-date
   charges are re-examined and can coalesce into their own series (e.g. the annuals form an annual
-  series) rather than contaminating the first. The same one-per-date selection governs membership when a
+  series) rather than contaminating the first. This is also why there is **no duplicated-charge signal**
+  on a series: the case a reader has in mind is already handled here, silently and without a finding,
+  and a genuine double charge is a duplicate — import dedupe's question, not recurrence's. The same
+  one-per-date selection governs membership when a
   confirmed/manual series is re-matched on a later scan, so the outlier can't creep back in.
 
 - **`source`/`confirmed`/`status` record curation and gate the idempotent rescan.** A scan
@@ -884,7 +905,7 @@ A change to these text rules re-tiers **future** flags only. Both sweeps skip ro
     - **Past `_SCOPED_SYNC_ROW_CAP` (250) the list is dropped whole, never truncated.** A partial list is a report that misstates its own extent. The fallback is the card itself, which at that size is the better report anyway: the only pull that exceeds the cap is a first backfill, and a backfill already lands on one dedicated "Initial import" card that isolates it exactly. The cap is a judgement about the *report* — past a few hundred rows nobody is categorizing them one at a time — not a limit of the query.
     - **The ids are never published.** `list_connections` projects the summary through `_projected_sync_summary` and sends `scoped_rows` (a count) instead. `GET /api/providers` is **polled** for the duration of every sync, so the ids would ride every poll, for every connection, whether or not anyone opened the report. The report is served by connection id instead: `sync_connection_id` on the transactions filter expands the list in SQL (`json_each` over the stored summary), which also keeps it out of a query string that would otherwise carry ~10KB of uuids on every page and every sort, and puts it in the **shared** filter builder so the list feed and the bulk endpoint resolve the identical set.
     - **Every missing case collapses to zero rows, not to the unfiltered set.** No summary, a summary written before this existed, a dropped list, an unknown connection id — a scope that silently widened to the whole card would misreport the pull, which is the one thing the report exists to get right. The row set is also **replaced every pull**, which is what makes it "the last sync" and not an audit trail; the rows themselves remain on their card.
-    
+
     `removed` rows are deliberately outside the scope: they are trashed, so a report cannot show them and offering to categorize a row that has left the ledger would be nonsense. And this list is **not** copied to `connection_sync_log` — a 500-row ring buffer would retain the ids 500 times over for a report only the newest pull can serve, and a user-facing report may not rest on something `DELETE /sync/diagnostics` erases (the same rule that moved the outcome word here).
 
   - **It is deliberately not behind `LUMA_DEVELOPER_OPTIONS`** (it was until 2026-08-08, *including writes* — so enabling the flag after trouble produced an empty table and the user had to reproduce the failure to learn anything, which is backwards for the one case the log exists for). That flag gates **destructive dev reset tools** and stays env-only for the reasons in `docs/operations.md` -> "Considered and rejected"; this log is read-only, is the only in-app answer to "why did this connection import nothing?", and is what a user attaches to a help request. It inherited the gate by having been added as a neighbouring Settings card, not by needing one.
@@ -895,7 +916,7 @@ A change to these text rules re-tiers **future** flags only. Both sweeps skip ro
 
 - **`connection_account.history_complete` is a different claim from `coverage_start_date`, and only it may stop a search.** Coverage says how far back data has been fetched; it cannot distinguish "the account's history ran out" from "we stopped at the depth asked for" or "we ran out of request budget". Only the first means there is nothing older, and only it may prevent a later, deeper request from looking again — so it is stored separately rather than inferred. `history_empty_streak` is the per-account form of the two-empty-windows stop that concludes it (one empty window is a quiet period; two is the end of history), persisted so a walk that pauses resumes counting rather than starting the streak over. Both are per account because a connection's accounts do not advance together: one added on the provider's side later starts with no history while its siblings are years deep. *(Added in migration **v28**; existing rows take `history_complete = 0` — "we have not established that this account's history has ended" — which costs one extra window on the next deep pull, where the opposite guess would leave history that is never fetched again.)*
 
-- **the ledger holds one currency at a time, and which one is a user setting.** The constraint is *one*, not *USD*: `txn.amount` is a bare number with no denomination stored beside it, so two denominations saved together are indistinguishable and both join every total, budget and report. There is nothing to convert *from* and no rate source to convert *with*, so face-value import of a second currency is the one option that silently corrupts arithmetic. The value lives in `import_workflow_state` under `ledger_currency` (tenant-wide shared state, not `ui_preference` — everyone reads the same numbers, and a per-user copy would be orphaned by a restore into another profile), is read through `services/ledger_currency.py`, and reaches provider adapters as the `ledger_currency` argument to `fetch_transactions_sync` — the same "the caller owns the database, so it owns the facts in it" rule that governs `account_targets`. The frontend's counterpart is `MONEY_DISPLAY_CONFIG.currencySymbol`, applied at boot from the same setting and derived via `Intl` rather than a hand-kept table.
+- **the ledger holds one currency at a time, and which one is a user setting.** The constraint is *one*, not *USD*: `txn.amount` is a bare number with no denomination stored beside it, so two denominations saved together are indistinguishable and both join every total, budget and report. There is nothing to convert *from* and no rate source to convert *with*, so face-value import of a second currency is the one option that silently corrupts arithmetic. The value lives in `import_workflow_state` under `ledger_currency` (tenant-wide shared state, not `ui_preference` — everyone reads the same numbers, and a per-user copy would be orphaned by a restore into another profile), is read through `services/ledger_currency.py`, and reaches provider adapters as the `ledger_currency` argument to `fetch_transactions_sync` — the same "the caller owns the database, so it owns the facts in it" rule that governs `account_targets`. The frontend's counterpart is `MONEY_DISPLAY_CONFIG.currencySymbol`, applied at boot from the same setting and derived via `Intl` rather than a hand-kept table. **A date-format setting is the opposite case and belongs in `ui_preference`** — two people can legitimately prefer different date orders while reading the same ledger, where they cannot prefer different currencies for the same numbers. Do not "make them consistent": they sit on opposite sides of the dividing line below because the questions differ, and the date half is not built (see Open).
   - **The question is "does this match the ledger", never "is this dollars".** A consistently-AUD ledger is entirely correct; only *mixing* breaks. An earlier version compared against a hardcoded `"USD"`, which would have discarded every transaction belonging to a non-US user whose data was never wrong — so **nothing outside `ledger_currency.py` may compare against `DEFAULT_LEDGER_CURRENCY`**, or the setting becomes decorative and the bug returns.
   - **Changing it converts nothing** — no amount is rescaled or rewritten, so the change is instant and perfectly reversible. That is also what makes it dangerous: it silently relabels every historical figure. `PUT /api/currency` therefore answers **409** (`currency_change_needs_confirmation`, carrying from/to and the row count) when the ledger already holds transactions and the caller has not confirmed; an empty ledger changes in one click, since there is nothing to relabel and that is the first-run case.
   - **Multi-currency is a separate, much larger change** and this is not a down payment on it: holding two at once needs a per-row currency column, a rate source with historical rates, and a decision about what a total spanning currencies means.
@@ -1455,7 +1476,7 @@ The noun is deliberate. **"Attachment" was already taken** — it means a *tag* 
 
 **The index is maintained by triggers, which is a correctness requirement rather than a style choice.** A `document` row is most often removed by `ON DELETE CASCADE` when its transaction is purged, and a restore rebuilds the whole table by streaming rows in — neither is a place application code could hook even if every endpoint remembered to. An index that missed those would keep returning transactions that no longer exist. The same property means the restore needs no search awareness at all: rows land, the index follows. It is derived state and is deliberately **not** backed up; it is rebuilt from `document.text` whenever it is created.
 
-The decisions, the tiering of extraction, and the alternatives rejected along the way are in [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md).
+The extraction tiers above tier 1 — local OCR, a BYOK line-item extractor, and the splits hand-off they feed — are unbuilt; see [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md).
 
 ## Multi-payment purchases
 
@@ -1803,8 +1824,9 @@ decisions go*.
 - **Marketplace enrichment remainder**: AZAD ingestion ergonomics, enrich re-derive from stored raw
   values, and the column-centric mapping rework.
   → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)
-- **Folding money-movement recognition into the generic rule-suggestion engine**, and migrating those
-  rules from account-id to account-type scope once that axis exists.
+- **Folding money-movement recognition into the generic rule-suggestion engine**, so a captured
+  categorical field clusters candidates the way a merchant name already does. The account-type scoping
+  this once waited on shipped with migration v13.
   → [`backlog/paypal-money-movement-recognition.md`](backlog/paypal-money-movement-recognition.md)
 - **The recurring pool-load optimization.** The payee filter is applied after a full pool load, so a
   scoped scan costs what a full one does — now on the path of every category edit. Revisit threshold is

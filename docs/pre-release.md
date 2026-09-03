@@ -38,7 +38,8 @@ those files stays deferred.
 
 ### 1. Receipts and invoices — attachment phase 1  ✅ *built 2026-08-24*
 
-[`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) → *Phase 1*.
+[`backlog/transaction-attachments.md`](backlog/transaction-attachments.md) — phase 1, since folded into
+`data-model.md` → *Attached documents*; the file now holds only the unbuilt tiers.
 
 The ingestion seam (file drop, clipboard paste), storage, a viewer, an attachment indicator on the
 transaction, and **tier-1 PDF text extraction** so an attached invoice is searchable. The backup half is
@@ -268,7 +269,8 @@ This one is worth a pass before screenshots.
 
 ### 4. Vault recovery  ✅ *done 2026-08-31; second pass 2026-09-01*
 
-[`backlog/vault-passphrase-recovery.md`](backlog/vault-passphrase-recovery.md).
+The settled record is [`security-model.md`](security-model.md) → *Recovery and compromise response* and
+*Authorizing a change to how the vault opens*, with the rejected shapes in its tail sections.
 
 A forgotten vault passphrase was an unhandled dead end with no endpoint and no UI — **the sharpest gap on
 this list**, since the first public user who sets a passphrase and forgets it had no path at all and the
@@ -288,8 +290,8 @@ cannot set a new passphrase, so a passkey holder who forgets it must lock themse
 recovery code. Behind both: `set_passphrase`, `register_passkey_slot` and `issue_recovery_code` each mint
 a **durable** unlock method from a DEK merely found in the 8-hour unlock cache, turning transient access
 to an unlocked session into permanent independent access. Scope, decisions and rejected alternatives are
-in [`backlog/vault-passphrase-recovery.md`](backlog/vault-passphrase-recovery.md) under "Reopened
-2026-09-01". Not a regression from the 2026-08-31 work — the mint-from-cache behaviour predates it. Shipped
+in [`security-model.md`](security-model.md) → *Authorizing a change to how the vault opens* and
+*Considered and rejected*. Not a regression from the 2026-08-31 work — the mint-from-cache behaviour predates it. Shipped
 as a five-minute proof window on all three doors, `POST /auth/vault/passkey/set-passphrase`, and a
 re-enrollment rung that submits from inside the recovery dialog and is marked as replacing existing access
 where the approver can see it.
@@ -305,8 +307,8 @@ asked **before** the provider call because a claim is single-use — see `buildi
 
 ### 5. Streaming backup — export *and* restore  ✅ *done 2026-08-23, less the documents phase*
 
-[`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md) → *Streaming
-both directions, and the envelope that makes it possible*, which carries the settled design.
+The settled design is in `data-model.md` → *Backups* (the envelope) and `scale-and-limits.md` →
+*Bulk operations must not accumulate* (the measurement that shaped it).
 
 The export assembles the whole payload as a Python structure, serializes it to one JSON string, zips that
 into a `BytesIO` and returns it as a single yield; restore is the same defect mirrored — read whole,

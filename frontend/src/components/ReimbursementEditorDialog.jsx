@@ -478,7 +478,7 @@ function CompletedNote({ reimbursement, onReopen }) {
       <div style={{ fontSize: 12.5 }}>
         {moved
           ? `${formatTransactionAmount(completion.residual)} was moved out of the Reimbursable group.`
-          : 'Repaid in full, so nothing needed to move.'}
+          : 'Repaid in full.'}
       </div>
       <div>
         {/* Not styled as danger: reopening restores the transaction's allocations exactly, from the

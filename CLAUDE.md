@@ -85,9 +85,13 @@ branch state from the injected snapshot.
 - `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
   building any UI element** (reuse is the default; a one-off needs justification)
 
-**What is being worked on right now** is a different kind of document from the reference docs above, and
-lives in `docs/pre-release.md` — the committed, blocking plan for making the repository public, with the
-scope boundaries for each item (several name only *part* of their backlog file) and the decisions still
-owed. Read it before picking up work, and prefer it over `docs/backlog/` for what to do next: the
-backlog is parked work, this is not. **It is self-deleting** — it says to remove it once the release
-ships, so its absence means that happened, not that it was lost.
+**What is being worked on right now** is a different kind of document from the reference docs above,
+and lives in `docs/pre-release.md` — the committed, blocking plan for making the repository public, with
+the scope boundary for each item (several name only *part* of their backlog file) and the decisions still
+owed. Read it before picking up work, and prefer it over `docs/backlog/` for what to do next: the backlog
+is parked work, this is not. **It is self-deleting** — it says to remove it once the release ships, so its
+absence means that happened, not that it was lost.
+
+**When a shipped backlog item is disposed of**, the ritual is stated in `docs/backlog/README.md`: fold the
+durable half into the topic doc that owns the question, repoint the code citations off the project
+filename, and record the path in that file's *Ledger*.

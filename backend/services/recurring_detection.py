@@ -676,7 +676,7 @@ def _load_overrides(conn: sqlite3.Connection) -> dict:
     only happens to share a payee and category (a late fee on a tax payment) is not part of it, and
     forcing it in misrepresents the series and every total derived from it. The endpoint now rejects the
     state, so no row can carry it; a legacy row would simply never match this filter. See
-    `docs/backlog/recurring-detection.md`.
+    `docs/data-model.md` -> Recurring series.
     """
     excludes: dict = defaultdict(set)
     for r in conn.execute(

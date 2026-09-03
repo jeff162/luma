@@ -84,21 +84,15 @@ scale — rather than by feature.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams.
-- [recurring-detection.md](recurring-detection.md) — **all four follow-ups shipped; two small items
-  remain.** The recurring-series subsystem is live (detect + list + curate) and every numbered follow-up
-  has landed: automatic + scoped detection (the per-import matching hook and the watermark-gated app-load
-  catch-up), the **anomaly/forecast signals** — upcoming / missed / new / price-change, derived on read
-  with per-finding dismissal (2026-08-27) — "Mark as recurring" in the shared context menu, and §4's
-  identity half (2026-09-01, schema v46): `amount_mode`, amount-gated membership with a grace band, and
-  the user-pinned expectation band. The ended/canceled lifecycle shipped alongside. §4 turned out to be
-  **two live defects rather than a missing feature** — confirming one of a biller's two subscriptions
-  orphaned the other, and two billing a fortnight apart merged into one bogus biweekly series — and the
-  file records both, plus the shapes not to re-impose. Promoting a price step landed with it as
-  **Accept new amount** on the price-change finding, which *extends* a gated series' band rather than
-  relocating it — a band moved onto the new price stops matching the series' own history. Still open:
-  the **pool-load optimization** (the payee filter is applied after a full pool load, so a scoped scan
-  costs what a full one does — now on the path of every category edit, with a revisit threshold of
-  roughly 50,000 rows).
+- [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
+  optimization, the only item left.** The subsystem is live end to end — detection and curation, the
+  rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount
+  identity with the user-pinned expectation band (2026-09-01, schema v46) — and all of it, including
+  every rejected shape, is in [`../data-model.md`](../data-model.md) → *Recurring series*. What stays:
+  the payee filter is applied *after* a full pool load, so a scoped scan costs what a full one does
+  (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
+  on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
+  `txn`; the revisit threshold is roughly 50,000 rows.
 - [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** *Check overlaps*
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
@@ -109,35 +103,30 @@ scale — rather than by feature.
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
-- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **parts 1–2 implemented
-  (2026-07-21, migration v13); part 3 deferred.** The account *type* axis exists — PayPal is an account
-  type and rules match and rank on `account_type` — so what remains is the filtering/search half.
-  Generalize "restrict to PayPal/Amazon" from per-account-id scoping to **account *type***
-  as a first-class axis for rules (and filtering/search): add PayPal as an account type, add an
-  account-type rule criterion (parallel to the existing account-id one), and structured account-type
-  filters — with a `accttype:`/`acctname:` tag grammar flagged as the harder free-text-search piece.
-  Money-movement rules are the first consumer ready to migrate. Punts on existing data.
+- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **reduced 2026-09-03 to
+  part 3, which has not started.** The account-*type* axis itself shipped (2026-07-21, migration v13):
+  PayPal is a first-class account type, rules match and rank on `account_type`, and the money-movement
+  rules collapsed onto it — all in [`../data-model.md`](../data-model.md) → *Accounts* / *Rules*,
+  including why the axis is the account's type and not the batch's `source_kind`. What stays is
+  **filtering and search** by account type: structured filters (the safe half, shippable alone) and the
+  `accttype:`/`acctname:` free-text grammar (a design pass, not a feature), which must compile into the
+  rule matcher's own `match_expr` rather than fork a second matcher.
 - [paypal-money-movement-recognition.md](paypal-money-movement-recognition.md) — **shipped; deferred
   remainder only.** PayPal source recognition, force-captured `Type`/`Item Title`, and the user-approved,
-  account-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are folded into
-  the main docs. What remains: fold the dedicated review into the generic rule-suggestion engine (cluster by
-  `Type`), and migrate the rules from account-id to account-type scope once that axis exists.
-- [transaction-attachments.md](transaction-attachments.md) — **phase 1 built and exercised in the running
-  app 2026-08-24; phases 2–4 deferred.** Attach a receipt or invoice to a transaction through **one
-  format-agnostic ingestion seam**, and where possible make its text searchable. Phase 1 shipped: the
-  `document` table and the on-disk store under `DATA_DIR/documents/`, the backup half (a `documents`
-  section plus each file as a zip member) with `restore_state` and the resumable documents phase, the
-  attach/list/serve/detach endpoints, **tier-1 PDF text extraction** and the FTS5 index, plus the shared
-  `DropZone`, `DocumentsPanel`, the ledger paperclip and `DocumentViewerDialog`; Help topic written. The
-  storage decision that once blocked this is settled. **The ingestion seam ended up wider than the file
-  first described**, all of it from real use: pasted text, the `text/html` flavour that keeps an emailed
-  receipt's table intact, and a saved `.eml` — and two calls were **reversed** under real use and are
-  recorded as don't-re-impose. Still deferred: OCR (tier 2), structured line-item extraction (tier 3, an
-  opt-in BYOK adapter with per-result approval), and the splits hand-off (phase 4). Records why local
-  document-ML and template-based tooling are both out, and that **email means copy/paste — never a
-  mailbox**. Key finding that still holds: tier 3 is the *same subsystem* as
-  [online-categorizer.md](online-categorizer.md) (opt-in external call, structured output,
-  approve-before-apply) and the two should be designed together.
+  account-type-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are
+  folded into the main docs; the code citations were repointed at them 2026-09-03. What remains: fold the
+  dedicated review into the generic rule-suggestion engine (cluster by `Type`), which today clusters by
+  merchant name only — so nameless money-movement rows never cluster at all.
+- [transaction-attachments.md](transaction-attachments.md) — **reduced 2026-09-03 to the unbuilt
+  extraction tiers.** Phase 1 shipped 2026-08-24 — the `document` table and on-disk store, the
+  format-agnostic ingestion seam (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text
+  and the FTS5 index, the backup and resumable-restore halves, the shared UI — and all of it is in
+  [`../data-model.md`](../data-model.md) → *Attached documents*. What stays: tier 1b (embedded
+  e-invoices, a file probe), tier 2 (local OCR, whose obstacle is packaging a system binary, not code),
+  tier 3 (a BYOK extractor that is **the same subsystem** as
+  [online-categorizer.md](online-categorizer.md) and should be designed with it), phase 4 (an approved
+  itemization pre-filling a split), the **sizing assumption** and the signal that would falsify it, and
+  the space-reclamation view — plus why originals are never sunset on a timer.
 - [reimbursable-expenses.md](reimbursable-expenses.md) — **built 2026-09-02: service, API, detail
   panel, ledger marker, the outstanding report (a two-column board with drag-to-pair) and the Help
   topic. Still owed: the Tasks signal.** Reworked repeatedly under real use — rows to *portions*, one
@@ -182,12 +171,13 @@ scale — rather than by feature.
   `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
   use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
   that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
-- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **exclude case shipped 2026-07-28; the
-  include case still parked.** The inline note on the Dashboard report when a filter chip references a slice
-  the active report is built from shipped for **exclude** chips (`FilterConflictNote` in `ui.jsx`, driven by
-  `lib/reportFilterConflicts.js`) — the exclude is honored, not suppressed, and the note just explains the
-  subset. The parallel **include** case stays parked for a larger tag-report pass rather than a one-off; the
-  behavior is already correct without it.
+- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **reduced 2026-09-03 to the parked
+  include case.** The exclude note shipped 2026-07-28 and its behavior — `FilterConflictNote`, the
+  like-for-like and view/totals-aware boundaries, and both symmetric tag-report cases — is in
+  [`../ui-patterns.md`](../ui-patterns.md) → *General principles*. What stays: whether an **include** chip
+  on a group/category report deserves the same note. It is deliberately not flagged today (a transaction
+  has one category, so an include is ordinary focusing) and the behavior is correct without it; it is held
+  for a larger tag-report pass rather than a one-off.
 - [import-history-windowing.md](import-history-windowing.md) — **reduced 2026-09-02; the archive UX
   has not started.** The retention story — the silent global `LIMIT 50` that hid older imports and let
   one active source crowd out another, why the display query is now unbounded, and why the writing
@@ -219,10 +209,12 @@ scale — rather than by feature.
   **Compare** (left open deliberately), the **trend-bucketing** question — whether the grain picker
   should be the sole control — and the **Trends-tab double-count audit**, gated on that tab gaining a
   tag-report selector and unrelated to cash flow despite sharing the file.
-- [import-input-formats.md](import-input-formats.md) — **SimpleFIN shipped 2026-08-07; the file formats
-  deferred, ranked.** New *file* ingestion formats behind a shared **parse-seam extraction**: XLSX (Tier 1,
-  reuses everything) and OFX/QFX/QBO (Tier 2, mapping-free + FITID dedupe). SimpleFIN was the separate
-  Plaid-parallel connection/sync track in the same file, and has landed.
+- [import-input-formats.md](import-input-formats.md) — **reduced 2026-09-03 to the two file formats,
+  unstarted.** Both sit behind a shared **parse-seam extraction** (the CSV parse is duplicated between
+  preview and run): XLSX first, reusing the entire downstream unchanged, then OFX/QFX/QBO, which needs a
+  mapping-free flow plus a `FITID` rung in dedupe. SimpleFIN — the Plaid-parallel connection track that
+  shared this file — shipped 2026-08-07 and everything it taught is in
+  [`../building-a-connector.md`](../building-a-connector.md).
 - [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
   deduped rows when a contributing import is undone, and a duplicate-resolution history view + batch
   undo. Both convenience only — per-row restore already prevents loss. Also holds two measured/scoped
@@ -231,19 +223,18 @@ scale — rather than by feature.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **credentials backup landed
-  2026-08-10; streaming both directions landed 2026-08-23; the scope/UX half is what remains.** The payload
-  version-10 envelope (`meta.json` + `sections/<name>.ndjson` + `documents/<id>`), streaming export and
-  restore, the incremental cipher, referential repair as SQL and the CSV export all shipped — and
-  `restore_state` plus the resumable documents phase landed with
-  [transaction-attachments.md](transaction-attachments.md) on 2026-08-24. Fixed on the way: a data restore
-  left every connection's `transactions_cursor` ahead of the ledger it had just rolled back. What remains is
-  the scope/UX half. Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
-  secrets** backup — the control DB (identities, perimeter, `vault_slot`) **plus** the data DB's vaulted
-  tokens, which phase 3 made cryptographically coupled (ciphertext in data DB, keys in control DB). Adds a
-  sectioned **back up all**, moves recipient management onto the Backup page, and a **restore flow that asks
-  how to reconcile identities** (always preserves the current admin → no self-lockout, no silent perimeter
-  overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh.
+- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **reduced 2026-09-03 to
+  the scope/UX half, unstarted.** The secrets half is done and documented elsewhere: the v12 envelope,
+  streaming both directions, the incremental cipher, referential repair, `restore_state` and the
+  resumable documents phase are in [`../data-model.md`](../data-model.md) → *Backups*, restore semantics
+  in [`../operations.md`](../operations.md), the memory profile in
+  [`../scale-and-limits.md`](../scale-and-limits.md), custody in
+  [`../security-model.md`](../security-model.md). What stays: an **accounts & secrets** backup and a
+  sectioned *back up all* (one artifact, because the token ciphertext and the key that opens it live in
+  different databases — split them and the file restores but cannot sync), the **restore-time identity
+  reconciliation** flow, `backup_recipient` inclusion, whether the file carries every member's vault
+  slot, and restoring an incremental chain (the document delta is the tractable half; a date-windowed
+  backup is a slice, not disaster recovery).
 - [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
   unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
   and every other rejected alternative — is in [`../operations.md`](../operations.md), with building in
@@ -252,11 +243,14 @@ scale — rather than by feature.
   install sequence — plus the mDNS name and the one empirical unknown (whether a `.local` name is accepted
   as a WebAuthn RP id); and **Shape B step 3's remainder**, which is only what CI structurally cannot
   reach and needs a Mac in front of somebody — the Dock lifecycle, Gatekeeper, and the log-file redirect.
-- [i18n-display-formatting.md](i18n-display-formatting.md) — **currency half shipped (2026-08-08); the
-  date/number half deferred.** Tier-1 **formatting**, not translation. The ledger-currency setting and
-  its display path landed (`lib/moneyDisplay.js`, `services/ledger_currency.py`); what remains is the
-  number/date display bucket (cosmetic) and the free-text-parse bucket (the quick-filter date/amount
-  ambiguity — the only correctness risk).
+- [i18n-display-formatting.md](i18n-display-formatting.md) — **reduced 2026-09-03 to the number/date
+  half, unstarted.** Tier-1 **formatting**, not translation. The ledger-currency setting shipped
+  2026-08-08 and its model is in [`../data-model.md`](../data-model.md) — including why currency is
+  tenant-wide while a date format is per-user `ui_preference`. What stays: **Bucket A** (the `en-US`
+  formatter, a date-format preference, and the ~9 raw ISO renders the central helpers never reach —
+  cosmetic) and **Bucket B**, the only correctness risk: the quick filter parses dates MDY-first and
+  amounts with fixed separator roles, and CSV amount parsing carries the same hazard, where `1.234,56`
+  silently imports as `1.234`.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
@@ -265,8 +259,10 @@ scale — rather than by feature.
   config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
-  post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for
-  `Settings.jsx`, which has none of any kind. Also records the E2E harness that *is* available
+  post-rebrand migration), rule-suggestion owner-scope stability, a component-test harness for
+  `Settings.jsx`, which has none of any kind, and — added 2026-09-03 — restoring a credentials backup
+  across a vault reset, the recovery ladder's first real rung and the only one nothing exercises end to
+  end. Also records the E2E harness that *is* available
   (`npm run ui:test` against its own throwaway stack).
 - [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
   ever checks that the databases are intact — no health surface, and notably no check of the *target*
@@ -278,9 +274,7 @@ scale — rather than by feature.
   layout, SimpleFIN's 90-day window becoming a silent cap, whether timestamps should ever be relative,
   the stalled-request gap a blanket request timeout was rejected for, and what checking a tag on a
   transaction should *mean* — the open question being whether a hand-checked tag survives a later
-  recategorization, with a concrete hole in bulk `add_tags` to look at first. Its *Finish the backlog
-  prose pass* entry is superseded by [`../doc-restructure.md`](../doc-restructure.md) and should be removed
-  from there when the first disposal lands.
+  recategorization, with a concrete hole in bulk `add_tags` to look at first.
 
 ## Ledger
 
@@ -306,6 +300,29 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |
 | `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
 | `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
+| `docs/backlog/tag-report-exclude-warning.md` | 2026-09-03 (partial) | ui-patterns — nothing new: the shipped note was already folded in as the work landed, so the disposal was deletion of the second copy rather than authorship | **Yes**, 44 → 22 — include narrowing on group/category reports is unstarted. `lib/reportFilterConflicts.js` repointed to `ui-patterns.md` |
+| `docs/backlog/account-type-as-rule-criterion.md` | 2026-09-03 (partial) | data-model — the account-type scope, precedence and matcher identity were already there; this added the **`source_kind` rejection** (provenance on a batch is not retroactive to an account's older rows) | **Yes**, 101 → 43 — part 3, filtering and search by account type, is unstarted. `services/money_movement.py` repointed |
+| `docs/backlog/i18n-display-formatting.md` | 2026-09-03 (partial) | data-model — the one-currency rule was already there; this added the **date-format counter-example**, the case where `ui_preference` *is* right. ui-patterns — name a settings section for what it contains, not what it will grow into | **Yes**, 161 → 75 — the number/date half is unstarted, and Bucket B is the only correctness risk in it |
+| `docs/backlog/import-input-formats.md` | 2026-09-03 (partial) | building-a-connector — the seam gaps and request budgets were already there in more depth; this added **The published guide is not the contract** (a documented history window and a CDN that refuses unnamed clients), plus the `## Open` section the doc lacked | **Yes**, 112 → 71 — XLSX and the OFX family are unstarted, both gated on extracting the parse seam |
+| `docs/backlog/cleanup-pass.md` | 2026-09-03 (partial) | **D** — console cleanliness as signal preservation (2026-09-02); ui-patterns — the shared `Tooltip`'s accessibility debt, and why a **press**-driven label follows a different rule from a **load**-driven one | **Yes**, 107 → 100 — the tooltip migration, dead-code sweep, per-panel Refresh seam and schema leftovers are all unstarted |
+| `docs/backlog/recurring-detection.md` | 2026-09-03 (partial) | data-model — most was already there; this added the **both-readings** detector rule (a plausible whole-set rhythm is not sufficient — two price points a fortnight apart interleave into a bogus biweekly), **apply the sign before ordering a typed band**, and why there is deliberately **no duplicated-charge signal**. ui-patterns — reusing a shared control means reusing its *contract* | **Yes**, 257 → 44 — the pool-load optimization is the only item left. `services/recurring_detection.py` repointed |
+| `docs/backlog/transaction-attachments.md` | 2026-09-03 (partial) | data-model / ui-patterns / **B** — phase 1 was already folded in as it landed; this relocated the **client-side backup blob** (the browser is the last hop still holding a whole artifact) to **C** → *Obstacles* | **Yes**, 366 → 149 — tiers 1b/2/3, phase 4, the sizing assumption and space reclamation are unstarted. `services/documents.py` repointed |
+| `docs/backlog/backup-restore-scope-and-secrets.md` | 2026-09-03 (partial) | data-model / **A** / **B** / **C** — all already ingested; this added to **B** why a restore's outcome depends on the database it never touches, and that turning sign-in off is a flag flip rather than a reinstall | **Yes**, 505 → 101 — the sectioned artifact, restore-time identity reconciliation, `backup_recipient`, member slots and the incremental chain are unstarted |
+| `docs/backlog/vault-passphrase-recovery.md` | 2026-09-03 | **A** (`security-model.md`) — the recovery ladder, reset as compromise response, the mint-a-method gate and both reversals (the two narrower rules that each miss a case; the other-member refusal that became a redirect). The one owed test moved to `test-coverage-gaps.md` | **No** — deleted, 674 lines. The A-slice was ingested 2026-09-02 but the file was never reduced; on re-reading, nothing survived the diff except that test, and the running test checklist is its natural owner |
+
+
+### Checked, and found to owe nothing
+
+Not disposals, and recorded separately so the table above keeps meaning one thing. Both files were
+worked on **2026-09-03** and turned out to need no ingest at all: the durable half had been folded into
+the topic docs as the work landed, exactly as the same-change rule intends. What each still owed was its
+**code citations** — and that is the finding worth keeping, because in both cases the citations had
+already begun to decay, naming sections their own file no longer had.
+
+| Path | What it owed | State |
+| --- | --- | --- |
+| `docs/backlog/paypal-money-movement-recognition.md` | Two citations (`services/money_movement.py`, `routers/import_export/core.py`), repointed to `data-model.md`. Also carried a **stale deferred item** — migrating the rules from account-id to account-type scope, which shipped in migration v13 on 2026-07-21 — removed on 2026-09-03 along with the copy of it in `data-model.md` → *Open* | Kept, 28 lines — the fold into the generic rule suggester is unstarted |
+| `docs/backlog/paypal-amazon-enrichment.md` | **Seven** citations (`lib/api.js`, `routers/import_export/amazon.py`, `services/txn_links.py`, `import_enrichment.py`, `amazon_funding.py`, `amazon_import.py`, `db/database.py`), every one naming a section the file no longer had, repointed to `data-model.md` / `architecture.md` / `mechanism-index.md` | Kept, 64 lines — AZAD ingestion, manual un-suppress, enrich re-derive and the column-centric rework are unstarted |
 
 ## Related (already tracked elsewhere)
 

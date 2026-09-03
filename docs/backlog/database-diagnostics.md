@@ -36,8 +36,8 @@ They verify *SQLite's* structures, not the app's invariants. Everything in `data
 data mean something is invisible to them. A database can be structurally perfect and still hold:
 
 - a connection whose `transactions_cursor` sits ahead of a restored ledger, so those rows are never
-  re-fetched (a known, documented case — see
-  [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md));
+  re-fetched — a real defect that was found and fixed, and the worked example of an inconsistency the
+  pragmas call `ok` (see [`../operations.md`](../operations.md) → restore);
 - a coverage claim (`import_batch_account`, `connection_account.coverage_*`) disagreeing with the rows it
   claims to cover;
 - a mapping pointing at an account that has since been merged into a group;
@@ -79,6 +79,6 @@ structural check.
 
 ## Cross-refs
 
-- [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — the cursor-ahead-of-
-  ledger case, the worked example of an inconsistency no structural check can see.
+- [`../operations.md`](../operations.md) → restore — the cursor-ahead-of-ledger case, the worked example
+  of an inconsistency no structural check can see.
 - `docs/data-model.md` — the invariants an invariant checker would assert.

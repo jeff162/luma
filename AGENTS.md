@@ -165,6 +165,17 @@ Two rules make these load-bearing rather than decorative:
 - **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
 - **Code comments cite a stable doc location, never a project filename.** `docs/<topic>.md#considered-and-rejected` for a topic doc; `docs/<doc>.md` → *Section name* for a multi-topic one. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
 
+## Work in progress
+
+`docs/pre-release.md` is a committed plan sitting outside `docs/backlog/` — what has to land before the
+repository is made public. It deletes itself when that work is done, so an absence means it finished.
+Read it before picking up work, and prefer it over `docs/backlog/` for what to do next: the backlog is
+parked work, that is not.
+
+When a backlog item ships, retire its file rather than keeping it: fold the durable half into the topic
+doc that owns the question, repoint the code citations off the project filename, and record the path in
+`docs/backlog/README.md` → *Ledger*, which states the ritual in full.
+
 ## For Claude / harness-based agents
 
 If you are running with a `CLAUDE.md` (e.g. Claude Code) and haven't read it yet, read it now. It adds a Claude/harness-specific layer on top of this file — the persistent-memory workflow, a consolidated read-first routing index for the `docs/`, and tool conventions. Both files carry the "if you haven't already" guard so this cross-reference can't loop.

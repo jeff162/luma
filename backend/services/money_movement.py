@@ -44,7 +44,7 @@ from backend.services.excluded_categories import TRANSFERS_GROUP, ensure_exclude
 LINK_KIND = "wallet_funding"
 MONEY_MOVEMENT_CATEGORY = "Money movement"
 # Money-movement rules are scoped by account *type* — one rule per Type covers every PayPal account,
-# rather than one rule per (Type, account). See docs/backlog/account-type-as-rule-criterion.md.
+# rather than one rule per (Type, account). See docs/data-model.md -> Rules (account-type scope).
 PAYPAL_ACCOUNT_TYPE = "paypal"
 
 # The seed vocabulary of PayPal money-movement `Type` values (casefolded). Corroborating only — an
@@ -98,8 +98,8 @@ def _leg_type(evidence_json: Optional[str]) -> Optional[str]:
 # --- Type-based money-movement categorization (user-approved rules) --------------------------------
 # Lexical fragments that mark a PayPal `Type` as money movement, robust to PayPal renaming an exact
 # string (a future "eCheck Deposit" still matches "deposit"). Used only to *pre-flag* proposals for the
-# user's review — the user decides which types actually become rules. See
-# docs/backlog/paypal-money-movement-recognition.md.
+# user's review — the user decides which types actually become rules. See docs/data-model.md ->
+# "PayPal source recognition + `Type`-based money-movement categorization".
 _MONEY_MOVEMENT_TYPE_FRAGMENTS = ("deposit", "withdrawal", "currency conversion", "hold")
 
 

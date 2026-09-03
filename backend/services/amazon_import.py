@@ -13,7 +13,7 @@ The AZAD extension (``philipmulcahy/azad``) exports two related CSVs that join o
     ``category``, ``ASIN``.
 
 This module is the **source-pluggable parsing layer** for the Amazon feature (see
-``docs/backlog/paypal-amazon-enrichment.md``). It splits cleanly into:
+``docs/architecture.md`` → "Amazon order import contract"). It splits cleanly into:
 
   * a thin ``bytes/text → rows`` front-end (:func:`read_export`, which sniffs whether a file is the
     orders or the items export by its header), and

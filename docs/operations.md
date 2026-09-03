@@ -169,6 +169,19 @@ current admin is preserved and the backup's accounts merged in, rather than the 
 silently overwritten. Restoring requires admin in the first place — it is a destructive act somebody
 has to be able to authorize.
 
+**A restore covers one of the two databases, so its outcome depends on state it never touched.** The
+regular backup is the *data* database; identities, the sign-in perimeter and the vault slots live in the
+control database and are neither read nor written by it. The separation is deliberate — a data backup
+shared between people or machines must not carry or overwrite a machine's security posture — but it
+means restoring the same file **over an existing install** and **onto fresh databases** give different
+end states: over an existing install the control DB survives, so sign-in protection stays exactly as it
+was; onto fresh databases there is no control DB, so the instance comes up at first-run with sign-in
+off. Nothing on the restore surface says so, which is the rough edge rather than the separation. The
+concrete confusion it produces is a restore of a pre-perimeter backup that leaves sign-in still on —
+**and the fix there is a flag flip, not a reinstall**: disabling sign-in protection is an admin-gated
+setting (`disable_auth_mode()`), so deleting both databases to reach it is a far heavier workaround than
+the situation needs.
+
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.
 

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-The Amazon funding-source → account map (see ``docs/backlog/paypal-amazon-enrichment.md`` →
-"funding-source → account mapping").
+The Amazon funding-source → account map (see ``docs/data-model.md`` → "Transaction links and Amazon
+order import", and ``docs/architecture.md`` → "Amazon order import contract").
 
 An Amazon order's ``payments`` field names the payment instrument (a card ``last-4`` + a network label,
 e.g. "Fablecard ···4455"). Real imported ledgers rarely carry card masks, so keying the charge

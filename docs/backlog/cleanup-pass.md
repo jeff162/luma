@@ -39,8 +39,9 @@ stragglers:
   their distinct trigger/tone).
 
 Migration is mechanical (`title="x"` → wrap with `<Tooltip content="x">`), in batches, highest-visibility
-first. **Keep accessibility parity:** add an `aria-label` / `aria-describedby` so it matches native
-`title` (screen reader + touch). Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`), and
+first — and each batch owes the accessibility parity the shared `Tooltip` does not give for free (see
+[`../ui-patterns.md`](../ui-patterns.md) → *General principles*), which is what keeps it from being a
+find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`), and
 remember `NoteCell` (`title={txn.notes}` / "Add note") is **dead code** — handle it in the dead-code
 sweep below, not here. Native `title` is also a *legitimate* choice where its viewport-escaping edge
 behavior matters (see `ui-patterns.md`) — this migration is about consistency, not eradication.
@@ -89,19 +90,11 @@ and the queue only works if something is checked when the next migration is writ
 
 ## Press-scoped transient labels (from the 2026-08-19 flicker sweep)
 
-A sweep for flicker converted the busy indicators driven by a **load** (`useBusyIndicator`) and the
-spinners that **replaced content on reload** (`{loading && rows.length === 0 ? <Spinner/> : rows}`) — see
-`ui-patterns.md`. What it deliberately left is the ~61 labels driven by a **press**: `Saving…`,
-`Deleting…`, `Emptying…`, `Applying…`, `Importing…` on the button the user just clicked.
-
-They are a different judgement, and it does not generalize. Suppressing the label for 150 ms means a fast
-save shows *nothing at all*, which is right where the result is visible (the row vanishes, the dialog
-closes) and wrong where the button just sits there — the user presses again. So each site needs the
-question "does anything else on screen change when this succeeds?", which is why it wasn't swept.
+**Unstarted, and deliberately not sweepable.** The 2026-08-19 sweep converted the busy indicators driven
+by a **load** and the spinners that replaced content on reload; it left the ~61 labels driven by a
+**press** (`Saving…`, `Deleting…`, `Applying…`, `Importing…`). Why they are a different judgement — and
+the one question each site has to answer — is in [`../ui-patterns.md`](../ui-patterns.md) → *General
+principles*. What is left here is the pass itself: visit each site, answer the question, and convert only
+the ones where something else on screen already reports success.
 
 Find them with `grep -rn "? '[A-Z][a-z]*…'" frontend/src --include=*.jsx`.
-
-Also left as deliberate swaps: the Dashboard's group→category drill spinners. Drilling loads *different*
-content, so there is no stale content worth keeping — the previous level's rows under the new level's
-heading would be wrong, not merely old.
-

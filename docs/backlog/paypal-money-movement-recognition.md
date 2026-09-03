@@ -1,20 +1,28 @@
-# PayPal money-movement recognition — deferred generalization
+# PayPal money-movement recognition — the deferred generalization
 
-**The feature shipped (2026-07-20).** PayPal source recognition, force-capture of `Type` + `Item Title`,
-and the user-approved `Type` → *Money movement* rules (with the source-scoped, bidirectional review) are
-all live and documented as durable behavior — see `data-model.md` → wallet funding-leg suppression
-("PayPal source recognition + `Type`-based money-movement categorization") and `ui-patterns.md` →
-"PayPal money-movement review". This file keeps only what was **not** built.
+**The feature shipped (2026-07-20), and so did the follow-on this file used to track.** PayPal source
+recognition, force-capture of `Type` + `Item Title`, and the user-approved, bidirectional `Type` →
+*Money movement* rules are live and documented as durable behavior — see
+[`../data-model.md`](../data-model.md) → *"PayPal source recognition + `Type`-based money-movement
+categorization"* and [`../ui-patterns.md`](../ui-patterns.md) → *"PayPal money-movement review"*.
 
-## Deferred
+The rules are **account-type-scoped**, not per-account: migration v13 (2026-07-21) added
+`category_rule.account_type`, consolidated the per-account rules onto one `account_type='paypal'` rule
+per `Type`, and `create_money_movement_rules` has since routed through the shared `create_rule_core`.
+This file previously listed that migration as deferred, which stopped being true the day it landed.
 
-- **Fold the review into the generic rule-suggestion engine (cluster by `Type`).** The shipped review is
-  a dedicated, PayPal-specific surface — the deliberate low-risk first cut. `_generate_rule_suggestions`
-  today clusters candidates by *merchant name* only, so money-movement rows (whose names vary or are
-  nameless/"PayPal") never cluster. Teaching it to also cluster by a captured **categorical** evidence
-  field (`Type`) for recognized sources would fold money-movement into the normal rule-suggestion review —
-  more general, and the eventual home. This is the only piece of the original design left undone.
-- **Migrate the created rules from account-id to account-type scope.** The rules are scoped per PayPal
-  `account_id` today (one auto-built rule per account, nothing to maintain). Account-*type* scoping — one
-  rule across all PayPal accounts — is the cleaner long-term axis and is tracked in
-  `account-type-as-rule-criterion.md`; migrate once that lands.
+## Deferred — one item
+
+**Fold the review into the generic rule-suggestion engine, clustering by `Type`.** The shipped review is
+a dedicated, PayPal-specific surface — the deliberate low-risk first cut, and the only piece of the
+original design left undone.
+
+`_generate_rule_suggestions` clusters candidates by **merchant name** only, so money-movement rows never
+cluster at all: their names vary, or are absent, or are just "PayPal". Teaching it to also cluster by a
+captured **categorical** evidence field (`Type`) on a recognized source would fold money movement into
+the ordinary rule-suggestion review, which is more general and is the eventual home.
+
+The evidence-role machinery this needs already exists — `import_evidence.py` stamps each captured field
+`descriptive` or `categorical`, and `Type` is exactly the categorical case (see
+[`../data-model.md`](../data-model.md) → *Import batches and profiles*). What is missing is the
+clustering key, not the data.

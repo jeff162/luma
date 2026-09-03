@@ -505,7 +505,8 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
 - **An mDNS service name.** Env-only, alongside the ports. Not merely convenience: with HTTPS it is what
   makes passkeys reachable on a LAN at all. The open part is the default name when two installations share
   a network. → [`operations.md`](operations.md) → *Open*
-- **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one.
-  → `backlog/vault-passphrase-recovery.md`
+- **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
+  which is the ladder's first real rung and the only one nothing exercises end to end.
+  → `backlog/test-coverage-gaps.md`
 - **In-app Help topics** (`data-and-backups`, `account-security`) predate the tempered read-only framing
   and should be reconciled against it next time they are touched.

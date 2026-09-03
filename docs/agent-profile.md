@@ -336,6 +336,13 @@ shown on the connection card and is reserved for what the *user* can act on.
   migration, the row source a query selects from, a resolver, an invariant several subsystems read. The
   frontend's vitest suite is cheap enough (~10s) to run whole after any UI change.
 
+  **A change that cannot alter behavior gets no suite at all.** A documentation edit, or a source edit
+  confined to a comment or docstring, is verified by the checks that can actually observe it: a
+  link/anchor check over the docs, `npm run lint` (which carries the comment-quality checks for both
+  halves of the repo), and a syntax check on any touched source file. Running pytest against a diff of
+  eleven comment lines re-proves code the edit could not reach — the same waste this bullet already
+  names, in the case where it is total rather than partial.
+
 - Test by value, not by reflex. Invest in recurrence-prone bugs, invariants, contracts, and
   cross-component behavior; do not assume every local fix needs a dedicated test.
 

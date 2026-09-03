@@ -141,12 +141,3 @@ That is the concrete hole to look at first if this is picked up.
 data side is cheap. That would let the picker say "added here · also from Coffee Shops" and offer the
 two intents as separate actions ("remove my copy, keep the inherited one" vs "hide here"), and would
 let bulk add record a force-on without the ambiguity.
-
-## ~~Finish the backlog prose pass~~ — superseded 2026-09-02
-
-Replaced by [`../doc-restructure.md`](../doc-restructure.md), which does the same work at a larger
-grain: rather than trimming each completed project file to its rejected shapes and obstacles, it
-rewrites what they hold into topic-organized reference docs and retires the files. The prose-pass
-criterion survives inside it as rules 2, 3 and 5; the "skipped chunk" it left — the build-phase
-entries whose technical facts belong in `architecture.md` — is carried as an open decision there and
-in [`security-and-deployment-model.md`](security-and-deployment-model.md).

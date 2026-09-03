@@ -146,7 +146,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Behavior:** rules are ordered automatically by specificity; rules can assign categories, scope amount rules to debits or credits, rename merchants, and add transaction tags; manually overridden transaction categories are preserved, while per-transaction tag edits override only that row's rule-derived tag presence
 
-- **Scope by account type:** besides a single owner/account, a rule can scope by account **type** (`category_rule.account_type`, e.g. `paypal`/`amazon`) — matching every account of that type via the row's *effective* account type (`COALESCE(parent.type, account.type)`, threaded into every SELECT that feeds `rule_matches_row`/`categorize_transaction`). Precedence is account_id > account_type > global, and account_type joins the one-rule-per-matcher identity. This is the primitive the PayPal money-movement rules use (one `account_type='paypal'` rule per `Type`, created via the shared `create_rule_core`); see `data-model.md` → Accounts/Rules and `docs/backlog/account-type-as-rule-criterion.md`
+- **Scope by account type:** besides a single owner/account, a rule can scope by account **type** (`category_rule.account_type`, e.g. `paypal`/`amazon`) — matching every account of that type via the row's *effective* account type (`COALESCE(parent.type, account.type)`, threaded into every SELECT that feeds `rule_matches_row`/`categorize_transaction`). Precedence is account_id > account_type > global, and account_type joins the one-rule-per-matcher identity. This is the primitive the PayPal money-movement rules use (one `account_type='paypal'` rule per `Type`, created via the shared `create_rule_core`); see `data-model.md` → Accounts/Rules. Generalizing the same axis to filtering and search is unbuilt — see `data-model.md` → Open
 
 - **Applying a match (shared, per action):** every path that runs rules — CSV import, Plaid sync, and `recategorize_all` (plus its preview count) — matches once via `categorize_transaction`, then applies the result through shared apply points rather than re-deriving it each place: tags via `sync_rule_tags_for_transaction`, and the scalar actions (the merchant rename today, a rule-set note tomorrow) via `rule_scalar_effects`. Category *source* policy stays site-specific (import has mapping/file-label fallbacks; recategorize preserves a `cleared` marker). Keeping each action in one place is what stops sites drifting — the CSV import path had silently dropped the rename before this was centralized — and makes a new scalar rule action a one-place change. `recategorize_all` is also **retain-by-default** — it sets/changes a category or rule-tag but never strips one, so deleting or narrowing a rule doesn't silently un-categorize its history; clearing a no-match row (**reconcile**) is an opt-in `txn_ids`-scoped pass invoked only by the rule delete/edit "re-evaluate this rule's transactions" control and the money-movement "remove a type" path (see `data-model.md` → "How an existing transaction's category can change")
 
@@ -1130,5 +1130,12 @@ owed decisions go*.
   → [`backlog/import-rule-suggestion-review-extraction.md`](backlog/import-rule-suggestion-review-extraction.md)
 - **Where the build-phase technical record lands.** Migration numbers, AAD schemes, endpoint names and
   payload-format versions still sit in a residual backlog file rather than here; relocating each needs
-  checking against what this document already says.
+  checking against what this document already says — roughly twenty verifications, where a wrong call
+  deletes the only record of something like *migration v18 folds `plaid_item` rows in carrying the
+  ciphertext verbatim*. It wants its own pass rather than the tail end of another. Note that several code
+  comments cite that file **by phase number** (`db/database.py` migrations v18/v20,
+  `providers/config.py`, `routers/providers.py`), so the pass has to repoint them rather than only move
+  the prose — and a citation naming a phase number rather than a model claim is still correct against the
+  residual stub, so it should be left alone rather than force-fitted to a topic doc. This is the last
+  thing keeping that file alive.
   → [`backlog/security-and-deployment-model.md`](backlog/security-and-deployment-model.md)

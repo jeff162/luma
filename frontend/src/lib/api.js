@@ -859,7 +859,8 @@ export const api = {
   },
   // Amazon funding-source → account map: which system account each Amazon payment instrument (card
   // last-4 + network) charges, so the importer can match + exclude the card charge. Global by default,
-  // with an optional per-Amazon-account override (see docs/backlog/paypal-amazon-enrichment.md).
+  // with an optional per-Amazon-account override (see docs/data-model.md -> Transaction links and
+  // Amazon order import).
   getAmazonReconciliation:    (batchId) => request(`/import-export/amazon/reconciliation/${batchId}`),
   getAmazonImportDetail:      (batchId) => request(`/import-export/amazon/import-detail/${batchId}`),
   linkAmazonCharge:           (body) => request('/import-export/amazon/link-charge', { method: 'POST', body: JSON.stringify(body) }),

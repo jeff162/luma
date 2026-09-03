@@ -497,7 +497,8 @@ def _classify_evidence_column_role(values: list[str]) -> str:
 # PayPal Activity CSV recognition. The export header is stable and distinctive across years — no
 # bank/card/Amazon CSV carries this combination — so a header-only sniff identifies it. A recognized
 # PayPal file force-captures `Type`/`Item Title` (see `_forced_evidence_headers`) and is stamped
-# `source_kind = 'source:paypal'`. See docs/backlog/paypal-money-movement-recognition.md.
+# `source_kind = 'source:paypal'`. See docs/data-model.md -> "PayPal source recognition +
+# `Type`-based money-movement categorization".
 _PAYPAL_HEADER_MARKERS = frozenset({"timezone", "type", "status", "currency", "receipt id", "transaction id"})
 PAYPAL_SOURCE_KIND = "source:paypal"
 # Fields always worth keeping from a PayPal export regardless of what the user mapped/checked: `Type`
@@ -2783,6 +2784,11 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     summary. The /run endpoint is a thin wrapper around this. A caller may pass its own `conn` to run
     inside an existing transaction (the demo loader does, so its owners/accounts/profiles are visible to
     the import and everything commits together); when omitted, the core opens and commits its own."""
+    # The parse seam: everything from here to `headers`/`rows` is CSV-specific, and everything after it
+    # is format-agnostic. It is inlined here and again in `preview.py::preview_csv`, so the two agree by
+    # construction today and would agree only by discipline once a second format exists -- see
+    # docs/building-a-connector.md -> Adding a file importer, which also names the four CSV assumptions
+    # buried in it.
     file_content_hash = make_import_file_hash(text)
     all_lines = text.splitlines()
 

@@ -2326,8 +2326,8 @@ def init_db(db_path: str | None = None):
             );
             CREATE INDEX IF NOT EXISTS idx_txn_link_member_txn ON txn_link_member(txn_id);
 
-            -- Amazon funding-source → account map (see docs/backlog/paypal-amazon-enrichment.md →
-            -- "funding-source → account mapping"). Keys an Amazon payment instrument (a card last-4 +
+            -- Amazon funding-source → account map (see docs/data-model.md → "Transaction links and
+            -- Amazon order import"). Keys an Amazon payment instrument (a card last-4 +
             -- network label) to the system account it charges, so the Amazon importer can constrain its
             -- card-charge search to that account. Three states: a row with funding_account_id set = mapped;
             -- a row with funding_account_id NULL = "untracked" (an explicit "this card isn't an account I

@@ -44,9 +44,9 @@ are separate tiers with real costs (a system binary; a per-call API key) and are
 `text_source` records which tier produced what is stored, so a document extracted by a weaker tier
 stays identifiable when a better one arrives.
 
-See `docs/backlog/transaction-attachments.md` for the decisions and the alternatives rejected along the
-way — in particular why originals are never sunset on a timer, and why the per-file cap is generous
-rather than rationing.
+See `docs/data-model.md` -> Attached documents for the invariants and the reasoning behind each -- the
+write order, the digest, why ingest is lossy for photographs and lossless for PDFs, and why the per-file
+cap is generous rather than rationing.
 """
 
 from __future__ import annotations

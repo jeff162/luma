@@ -3,7 +3,7 @@
 
 """
 The Amazon order engine: turn a parsed :class:`AmazonOrder` into ledger state (orders-only model, see
-``docs/backlog/paypal-amazon-enrichment.md`` → "Amazon — orders-only model"). Given one parsed order and
+``docs/data-model.md`` → "Transaction links and Amazon order import"). Given one parsed order and
 a chosen Amazon account, it:
 
   * creates **one spending transaction per order** in the Amazon account (amount = net cash

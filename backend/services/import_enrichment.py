@@ -9,7 +9,7 @@ descriptive detail the stored row lacks (a memo, a counterparty, an item title).
 **novel** part of that detail into the existing row's `import_evidence_json` — the source-record surface
 the transaction-detail Origin hover already renders and `match_source_text` rules already read.
 
-Three properties keep it safe and general (see `docs/backlog/paypal-amazon-enrichment.md`):
+Three properties keep it safe and general (see `docs/data-model.md` → Import batches and profiles):
 
   * **Additive, never destructive.** It only ever *appends* descriptive fields to `extra_text_fields`;
     it does not overwrite anything, and it deliberately touches no user-facing/editable field
