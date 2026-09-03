@@ -67,6 +67,9 @@ branch state from the injected snapshot.
   verification)
 - `docs/architecture.md` — structure, data flow, cross-subsystem contracts
 - `docs/data-model.md` — field semantics & invariants (what each field may and may not mean)
+- `docs/security-model.md` — what is defended and what deliberately is not; the read-only/revocable
+  conditioning a new provider can break, secret custody, transport per topology, recovery &
+  compromise response (the *mechanism* stays in `architecture.md`)
 - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer):
   capability declarations & the traits that turned out to be Plaid-specific
 - `docs/ui-patterns.md` — shared UI behavior & interaction models

@@ -684,7 +684,7 @@ def _account_connection_columns(conn):
 def _add_import_batch_connection_id(conn):
     # A data-source sync now records its rows on a per-(connection, calendar-month) import_batch card
     # (source_kind='connection_sync'), so synced rows carry an import_batch_id and gain a duplicate-review
-    # home like any imported file (see docs/backlog/sync-import-records-and-dedupe.md). connection_id links
+    # home like any imported file (record-first, then detection). connection_id links
     # the period card back to the connection that produced it; it is the indexed key sync uses to resolve
     # "the current period's card for this connection". NULL for ordinary CSV/marketplace batches. Fresh
     # installs get the column + index from the import_batch baseline CREATE TABLE; existing databases here.

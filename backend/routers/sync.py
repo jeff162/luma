@@ -71,7 +71,7 @@ router = APIRouter()
 
 # import_batch.source_kind marker for a data-source sync's period card. A sync groups its rows into one
 # card per (connection, calendar month), so synced rows get an import_batch_id and a duplicate-review home
-# like any imported file (see docs/backlog/sync-import-records-and-dedupe.md — record-first, then detection).
+# like any imported file: record-first, then detection.
 SYNC_SOURCE_KIND = "connection_sync"
 
 # The fetch-depth (`days_requested`) used when a caller asks for "all available history" and the provider

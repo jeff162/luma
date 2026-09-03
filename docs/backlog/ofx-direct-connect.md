@@ -62,21 +62,22 @@ time rather than trusting anything recorded here.
 
 ## The threat-model consequence — read this first
 
-[`security-and-deployment-model.md`](security-and-deployment-model.md) conditions its entire custody
-design on the per-connection credential being **read-only and revocable**, and states in terms that the
-section "must be revisited" if that stops holding. An OFX Direct Connect credential breaks both halves:
+[`../security-model.md`](../security-model.md) conditions the whole custody design on the
+per-connection credential being **read-only and revocable in-app**, and states the rule for a provider
+that fails either clause. OFX Direct Connect fails **both**, which is what makes it the worked example
+that section names:
 
 - **It is the bank login.** Not a scoped read-only token — the same username and password that grants
   full web banking. Some institutions issue a separate Direct Connect PIN; many do not.
-- **It cannot be revoked from inside the app.** There is no analog to the provider item-remove call that
-  the disconnect flow relies on. Disconnecting would delete a local copy only; actually killing the
+- **It cannot be revoked from inside the app.** There is no analog to the provider item-remove call the
+  disconnect flow relies on. Disconnecting would delete a local copy only; actually killing the
   credential means changing the password at the institution.
 
-That inverts the model's tempered framing — that a leaked token means ongoing *read* access, revocable
-in-app — and it is the single most important thing to settle before writing any code. Two direct
-consequences if built: the disconnect confirmation must say what disconnect does and does not do, and
-the Production-strength vault gate should apply unconditionally, since there is no sandbox mode and the
-credential is never anything less than live bank access.
+Failing the read-only clause is the one the model says **reopens the section** rather than merely adding
+a disclosure obligation, so that is the thing to settle before writing any code. Two consequences follow
+directly if it is built: the disconnect confirmation must say what disconnect does and does not do, and
+the passphrase floor applies unconditionally, since there is no sandbox mode and the credential is never
+anything less than live bank access.
 
 ## What would remain adapter-side
 
@@ -119,5 +120,5 @@ neutral contract in `backend/services/providers/base.py`. Notes, not a spec:
   generalizations OFX would also need; its Tier-2 entry covers OFX/QFX/QBO **file** import, which is a
   separate, much cheaper track with no credential custody at all (`ofxtools` is a parser candidate there
   too).
-- [`security-and-deployment-model.md`](security-and-deployment-model.md) — the read-only/revocable
-  conditioning this would break.
+- [`../security-model.md`](../security-model.md) — the read-only/revocable conditioning this would
+  break.

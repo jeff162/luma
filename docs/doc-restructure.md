@@ -7,16 +7,18 @@ lives outside `docs/backlog/` alongside [`pre-release.md`](pre-release.md).
 **Delete this file when the last completed project has been disposed.** It is a plan with an expiry
 date. Anything in it worth keeping belongs in the topic docs it describes.
 
-**Parked as of 2026-08-26; nothing here has started.** The survey and the routing table below are
-complete and the file is ready to pick up cold. It waits on [`pre-release.md`](pre-release.md)
-features **2** (recurring anomaly signals) and **4** (vault recovery), which are being done first —
-other pre-release work may land alongside them. Feature 4 is the only real overlap: it is the settled
-design for this plan's *recovery and compromise response* topic in category A, so writing A after it
-lands means writing that half once instead of twice.
+**Resumed 2026-09-02.** The gate this was parked behind — [`pre-release.md`](pre-release.md) features
+**2** (recurring anomaly signals, 2026-08-27) and **4** (vault recovery, 2026-08-31 / 2026-09-01) —
+is met, and feature 4 landing first did what it was meant to: the *recovery and compromise response*
+half of category A was written once rather than twice.
+
+**Steps 1 and 2 of the order below are done.** The tail-section shape is settled and recorded in
+[`../AGENTS.md`](../AGENTS.md) → *Every topic doc ends with the same three sections*; category **A** is
+[`security-model.md`](security-model.md). See the ledger for what that disposed.
 
 The predecessor entry — *Finish the backlog prose pass* in
-[`backlog/misc-followups.md`](backlog/misc-followups.md) — is superseded by this file and should be
-removed from there when the first disposal lands.
+[`backlog/misc-followups.md`](backlog/misc-followups.md) — is superseded by this file and was struck
+there with the first disposal.
 
 ---
 
@@ -31,10 +33,11 @@ at that size is a second reference doc that no read-first rule points anyone at.
 The current policy keeps a completed file alive when it still holds a rejected shape or an obstacle,
 and makes it reachable by a link from the main doc. Two things are wrong with that:
 
-- **Links to project files decay, and one already has.** `backend/routers/sync.py:74` and
-  `backend/db/database.py:687` both cite `docs/backlog/sync-import-records-and-dedupe.md`, which does
-  not exist. Three backlog files have been deleted across history. Topic docs are stable; project
-  filenames are transient by construction.
+- **Links to project files decay, and one already had.** `backend/routers/sync.py` and
+  `backend/db/database.py` both cited `docs/backlog/sync-import-records-and-dedupe.md`, which does not
+  exist — the dead pointers were dropped with the first disposal, the rule they named kept inline.
+  Three backlog files have been deleted across history. Topic docs are stable; project filenames are
+  transient by construction.
 - **A project file is organized around a project, and topics cross them.**
   [`backlog/ofx-direct-connect.md`](backlog/ofx-direct-connect.md) contains a section headed *"The
   threat-model consequence — read this first"* — a security rule, filed under a parked protocol nobody
@@ -102,9 +105,11 @@ entry — is a mechanical question and is decided per topic when it is written, 
 
 ### A. Security model *(new)*
 
-There is **no threat model in the main docs at all**; it exists only in a backlog file.
-[`architecture.md:388-499`](architecture.md) carries a good 110-line summary of the settled shape, but
-the assumptions it rests on are not in the reference layer.
+**[Written 2026-09-02 as [`security-model.md`](security-model.md).]** There was no threat model in the
+main docs at all; it existed only in a backlog file. `architecture.md` → *Identity, access & deployment
+model* and *Token vault & transport security* carry a thorough summary of the settled shape, but the
+assumptions it rests on were not in the reference layer. (Cite these by heading — the line numbers this
+survey originally used have all moved.)
 
 This is the **maintainer** record, not a public-facing document — `README.md` §Security and
 `SECURITY.md` are the public surfaces and already exist. Three surfaces now describe security, so A
@@ -172,8 +177,9 @@ observations from the survey:
 - **`architecture.md`'s "Major subsystems" is doing two jobs.** It holds feature subsystems
   (transactions, rules, tags, recurring, import, detail panels) that correctly answer *where does this
   live* — and cross-cutting topics filed there for lack of anywhere else: Configuration layers,
-  Identity/access, Token vault/transport, Database concurrency, Storage layers. Those five run from
-  line 316 to 931. They move to A, B and C.
+  Identity/access, Token vault/transport, Database concurrency, Storage layers. Those five are roughly
+  half the file. They move to A, B and C — though A deliberately left the *mechanism* halves of
+  Identity/access and Token vault where they are, taking only the assumptions beneath them.
 - **`ui-patterns.md` mixes element-level and system-level topics**, and *"Import-specific patterns"*
   (94 lines) is a feature-named section inside a question-organized doc. Reorganized by question:
   product intent and the polish bar · page and region structure · disclosure and navigation · editing
@@ -195,8 +201,8 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 
 | File | Disposition | Topics |
 | --- | --- | --- |
-| `security-and-deployment-model.md` | Ingest | **A** (all), **B** (topology, transport), architecture (build-phase technical detail — relocate, do not delete) |
-| `pre-auth-security-ui.md` | Ingest | **A** (identity/perimeter surfaces) |
+| `security-and-deployment-model.md` | ✅ Ingested 2026-09-02 | **A** (all), **B** (topology, transport) · **residual stub kept**: build-phase technical detail still awaiting relocation to architecture |
+| ~~`pre-auth-security-ui.md`~~ | ✅ Ingested 2026-09-02, deleted | **A** (identity/perimeter surfaces) |
 | `optional-env-and-layered-config.md` | Ingest | **B** (config layers, env core), **A** (session-secret bootstrap, `.env` provider retirement) |
 | `list-virtualization.md` | Ingest | **C** (windowing rules, the unwindowed case and its obstacles) |
 | `i18n-display-formatting.md` | Split | data-model (one ledger currency; why currency is not `ui_preference` and a date format is), ui-patterns (formatting) · *open:* number/date half |
@@ -217,9 +223,9 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `refactor-audits.md` | Split | **D** (audit method, rule of three, divergence risk) · *recurring process, file stays* |
 | `cleanup-pass.md` | Split | ui-patterns (tooltip migration, press-scoped labels), **D** (console cleanliness, dead code) |
 | `import-dedupe-followups.md` | Survey | data-model (dedupe tiers, the re-measurement method) |
-| `ofx-direct-connect.md` | Survey | **A** (the threat-model consequence — relocate now, it is orphaned), building-a-connector |
+| `ofx-direct-connect.md` | Survey · **A-slice relocated 2026-09-02** | **A** (the threat-model consequence — the *rule* moved, the OFX-specific facts stayed and now point at it), building-a-connector |
 | `database-diagnostics.md` | Survey | **B** (diagnostics), data-model (the invariants a checker would assert) |
-| `vault-passphrase-recovery.md` | Survey | **A** (recovery, reset as compromise response) |
+| `vault-passphrase-recovery.md` | Split · **A-slice ingested 2026-09-02** | **A** (recovery, reset as compromise response — done; it completed 2026-09-01, so rule 8 no longer applied) · *file kept* for its two reversals and one owed test |
 | `reimbursable-expenses.md` | Survey | data-model, **E** |
 | `test-coverage-gaps.md` | Survey | **D** |
 | `lint-and-tooling.md` | Survey | **D** |
@@ -230,14 +236,15 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `button-consolidation.md` | Survey | ui-patterns (design system) |
 | `saved-tag-reports.md` | Survey | ui-patterns (reporting) |
 | `help-topic-search.md` | Survey | ui-patterns (help) |
-| `misc-followups.md` | Split | scattered; the *backlog prose pass* entry is superseded by this file |
+| `misc-followups.md` | Split · **prose-pass entry struck 2026-09-02** | scattered; the *backlog prose pass* entry is superseded by this file |
 | `README.md` | Rewrite last | the policy above replaces its keep-and-link rule |
 
 ## Order
 
-1. **Settle the tail-section shape** (rule 7) by writing it once, in whichever topic goes first.
-2. **A — Security model.** Largest, most tangled, and the one where *one project, several topics* is
-   least arguable. Also the doc a public repository wants.
+1. ~~**Settle the tail-section shape** (rule 7) by writing it once, in whichever topic goes first.~~
+   **Done 2026-09-02** — settled in A and written up in [`../AGENTS.md`](../AGENTS.md) under
+   *Documentation Consistency*, so it binds every future topic rather than living only as an example.
+2. ~~**A — Security model.**~~ **Done 2026-09-02** — [`security-model.md`](security-model.md).
 3. **B — Deployment & operations.** Mostly a merge of three files already written to a high standard.
 4. **ui-patterns charts topic.** Largest single body of homeless material outside A and B.
 5. **C — Scale & limits.**
@@ -259,15 +266,34 @@ file that no longer exists, so the entry records the path rather than a project 
 
 | Path | Disposed | Fed | File kept? |
 | --- | --- | --- | --- |
-| *(none yet)* | | | |
+| `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
+| `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
 
 ## Open decisions
 
-Both of these are expected to fall out of writing the sections they belong to, rather than needing an
-answer first.
+Expected to fall out of writing the sections they belong to, rather than needing an answer first.
 
-- **Where the `security-and-deployment-model.md` build phases land.** Relocation to `architecture.md`
-  is the likely answer, but each of ~20 facts needs checking against what `architecture.md` already
-  says. Its own pass, not the tail end of another.
+- **Where the `security-and-deployment-model.md` build phases land.** Still open after A. Relocation to
+  `architecture.md` is the likely answer, but each of ~20 facts needs checking against what
+  `architecture.md` already says. Its own pass, not the tail end of another — and it is now the *only*
+  thing keeping that file alive. Note that several code comments cite it **by phase number**
+  (`database.py` migrations v18/v20, `providers/config.py`, `routers/providers.py`), so the pass has to
+  repoint them rather than merely move the prose.
 - **Whether B splits into two topics** (packaging/distribution versus running/diagnosing). Decide when
   writing it; the audiences overlap but the questions may not.
+
+## Costs the survey did not price
+
+Found while doing A; they apply to every remaining category.
+
+- **Ingesting a file drags its code citations with it.** Roughly two dozen `docs/backlog/...` references
+  live in backend and frontend source. Rule 7 says a comment cites a topic anchor, so each *Ingest* row
+  carries a repointing task the routing table does not name. A also showed the softer case: a citation
+  that names a **phase number** rather than a model claim is still correct against a residual stub, and
+  should be left alone rather than force-fitted to a topic doc.
+- **Some "Survey" rows have gone stale in the right direction.** Rule 8 keeps a *pending* file whole,
+  but two of the surveyed files completed after 2026-08-26. Re-check a row's status before honoring its
+  disposition — `vault-passphrase-recovery.md` moved from Survey to Split on those grounds.
+- **Deleting a file means finding every mention of it, not just the code ones.** `pre-auth-security-ui.md`
+  was referenced from three other markdown files. Grep the whole tree, and expect the backlog index and a
+  sibling project file to be among the hits.

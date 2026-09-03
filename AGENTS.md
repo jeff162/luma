@@ -35,6 +35,8 @@ For workflow changes that touch generated state, persisted review state, imports
 
 Before working on shared UI behavior — whether changing it, investigating it, debugging it, or designing against it — read `docs/ui-patterns.md` first. The docs are the authoritative high-level map; treat the code as the implementation to verify against, not the source of truth for intent.
 
+Before working on anything that touches provider credentials, the login perimeter, transport, or backups — including adding a data source — read `docs/security-model.md` first. It carries the assumptions the design rests on and the conditions under which one has to be reopened; `architecture.md` carries only the mechanism, which is not enough to tell whether a change is safe.
+
 Before working on shared systems, persistence, or invariants — same rule — read `docs/architecture.md` and `docs/data-model.md` first. "I'm only investigating" or "I'm only answering a question" is not an exemption: investigations shape later design, and rediscovering the model from code wastes time and tends to miss the *why*.
 
 ## Core Rules
@@ -122,6 +124,8 @@ When working on the codebase:
 
   - `docs/data-model.md` — data semantics, invariants, what each field means and what it is *not* allowed to mean
 
+  - `docs/security-model.md` — the assumptions the security design rests on: what is defended and what deliberately is not, the conditions under which a decision has to be reopened, transport per topology, and secrets in backup. The mechanism as built stays in `architecture.md`
+
   - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer): the capability declarations, and the checklist of traits that turned out to be one provider's rather than universal
 
   - `docs/ui-patterns.md` — shared UI behavior and interaction models
@@ -135,6 +139,19 @@ When working on the codebase:
 - Skip doc updates for trivial or localized changes that don't move the high-level model (bug fixes confined to one function, renames, dependency bumps, etc.).
 
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
+
+### Every topic doc ends with the same three sections
+
+A reference doc describes the system as it is, which leaves three kinds of fact with nowhere to live — and they are exactly the facts that stop someone rebuilding a mistake. So a topic doc ends with:
+
+- **`## Considered and rejected`** — shapes that were tried, designed, or seriously proposed and turned down, each **with the reason**, so the verdict is re-derivable rather than merely recorded. The filter is *could a reader plausibly re-propose this?* — not *was it interesting?* A rejected alternative belongs here; an argument that the chosen design was correct does not, because nothing follows from it once the work has landed.
+- **`## Obstacles`** — what a second attempt actually hits: a constraint that makes the obvious approach fail, an ordering that cannot be violated, a seam with no atomicity. These apply whether or not the work is planned, which is why they are separated from *Open*.
+- **`## Open`** — decisions still owed, each naming the **live backlog item** that will feed this topic when it is picked up. This is the link from the stable doc to the transient one: a pending project stays a project file, and its slot here is what keeps it reachable.
+
+Two rules make these load-bearing rather than decorative:
+
+- **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
+- **Code comments cite `docs/<topic>.md#considered-and-rejected`, never a project filename.** Backlog filenames are transient by construction and links to them decay; topic anchors are stable. When a project file is disposed of, repoint its code citations in the same change.
 
 ## For Claude / harness-based agents
 

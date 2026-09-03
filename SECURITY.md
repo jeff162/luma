@@ -110,8 +110,9 @@ Stated plainly, because it determines what is worth reporting and what a user sh
 ## Further reading
 
 - `README.md` → *Security* — the same model in user-facing terms.
-- `docs/backlog/security-and-deployment-model.md` — the full design: the multi-wrap envelope
-  encryption, keypair-based key slots, the enrollment and rotation ceremonies, and the
-  transport-security policy per deployment topology.
-- `docs/architecture.md` and `docs/data-model.md` — where the security model meets the rest of the
-  system.
+- `docs/security-model.md` — the maintainer record: the assumptions this policy is downstream of, what
+  is deliberately not defended, the conditions under which a decision has to be reopened, and the
+  shapes that were considered and rejected.
+- `docs/architecture.md` — the mechanism as built: the multi-wrap envelope encryption, keypair-based
+  key slots, the enrollment and rotation ceremonies, and the transport-security policy per deployment
+  topology. `docs/data-model.md` covers backups and where the model meets the rest of the system.

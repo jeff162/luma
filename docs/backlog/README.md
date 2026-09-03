@@ -6,10 +6,14 @@ written so it can be picked up cold.
 > **The keep-and-link rule below is being replaced.** [`../doc-restructure.md`](../doc-restructure.md)
 > is the committed plan to retire completed project files entirely — rewriting what each holds into
 > topic-organized reference docs rather than keeping the file and linking to it, since a link to a
-> project filename decays and one already has. Read it before disposing of a shipped item. It is parked
-> behind two `pre-release.md` features as of 2026-08-26 — **both of which have since landed** (recurring
-> anomaly signals 2026-08-27, vault recovery 2026-09-01), so the gate it named is met. It takes the
-> **Completed** section with it when it lands.
+> project filename decays and one already had. Read it before disposing of a shipped item.
+>
+> **The first disposals landed 2026-09-02** — the security model became
+> [`../security-model.md`](../security-model.md). Every disposed project keeps a permanent row in that
+> plan's **Ledger**, which is what distinguishes *disposed* from *nobody got to it yet*; the row records
+> the file's **path**, so `git log -- <path>` still finds the last version of a file that no longer
+> exists. The **Completed** section below is retired along with the last disposal and is not being
+> extended — a newly shipped item folds into the topic docs and takes a ledger row.
 
 **When an item ships**, fold its durable "what it is and why" into the main docs (`architecture.md` /
 `data-model.md` / `ui-patterns.md` / `shared-components.md`) — those are what the read-first rule makes
@@ -335,22 +339,18 @@ reintroducing X". Nothing here is pending.
   row-id helpers; no `content-visibility` on a windowed row). What this file still holds is the record
   of the one list left unwindowed **on purpose** — `ImportRuleSuggestionReview` — and the four
   obstacles a future attempt would have to clear.
-- [security-and-deployment-model.md](security-and-deployment-model.md) — **COMPLETE (2026-08-13); every
-  phase built.** The settled security/deployment design: drop multi-tenant hosted;
-  one shared workspace with multiple login identities (login = perimeter, admin gates settings not data);
-  provider credentials protected by **multi-wrap envelope encryption** (one workspace DEK reachable through
-  a per-user slot guarded by a passphrase or a WebAuthn-PRF **passkey** — separate from login). Also
-  generalizes to **provider-agnostic connections** (a `connection`/adapter seam, Plaid then SimpleFIN; app
-  credentials moved from `.env` into the vault; connections stay on the Accounts → Connections tab), and
-  carries the **transport-security policy** (HTTP-vs-HTTPS per topology). The final phases (4–5) replaced
-  the planned bearer-secret **invite ceremony** with **keypair slots** — a slot owns an X25519 keypair
-  rather than wrapping the DEK directly, so access can be granted from a public key alone. That made
-  enrollment "enrol → approve" with no secret in transit, and made **key rotation** able to preserve every
-  remaining member, which the original design could not do at all. Read that section before reintroducing
-  any invite/bearer-code design.
-- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
-  (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
-  phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
+- [security-and-deployment-model.md](security-and-deployment-model.md) — **disposed 2026-09-02 into
+  [`../security-model.md`](../security-model.md); a residual stub remains.** The design record — the
+  threat model, the identity perimeter, secret custody, enrollment/revocation/rotation, the transport
+  policy and every rejected shape — moved to that topic doc. What is left in the file is the
+  build-phase log, which is *not* purely a work log: migration numbers, AAD schemes, endpoint names and
+  payload-format versions are mixed into it and read as `architecture.md` material. Relocating them is
+  its own pass; until it runs, the file is the only record of facts like *migration v18 folds the legacy
+  provider-item rows in carrying the ciphertext verbatim*.
+- ~~pre-auth-security-ui.md~~ — **disposed 2026-09-02, file deleted.** The Settings-forms rebuild it
+  tracked shipped in 2026-07-30; what it held past that was a work log of what a lint cleanup had
+  removed and what would have to be stitched back. The identity-perimeter substance is in
+  [`../security-model.md`](../security-model.md); the forms themselves are in `Settings.jsx`.
 - [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
   `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
   secret generated and stored in the control DB on first run, the blocking first-run setup screen and the
