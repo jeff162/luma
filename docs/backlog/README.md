@@ -209,13 +209,15 @@ than by feature.
 - [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Four dashboard tag-report
   follow-ups: a Settings-page manager mirror, capturing filters in a preset, cross-user sharing
   (a real `tag_report` table), and a richer (drag/NL) report builder.
-- [dashboard-reporting.md](dashboard-reporting.md) — **cash flow built 2026-08-25; the Trends-tab audit
-  still deferred.** Cash flow shipped as a third frame on the Expenses/Income selector — a **Sankey** for a
-  single period, diverging bars plus a net line for trends — resting on the existing `exclude_from_totals`
-  flag rather than any new transfer-pairing or per-view exclusion machinery. Still deferred: the `cash_date`
-  phase for cash-basis timing, a cash-flow form for **Compare** (left open deliberately, not an oversight),
-  and the **Trends-tab double-count audit**, which is gated on the Trends tab gaining a tag-report selector
-  and is unrelated to the cash-flow half despite sharing the file.
+- [dashboard-reporting.md](dashboard-reporting.md) — **reduced 2026-09-02 to what has not started.**
+  The cash-flow work shipped 2026-08-25 and its durable half is now in the topic docs: chart behaviour in
+  [`../ui-patterns.md`](../ui-patterns.md) → *Charts and overlays*, reporting semantics (including
+  `exclude_from_totals` as the *only* exclusion axis and the three richer schemes rejected in its favour)
+  in [`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*, and the endpoints in
+  `architecture.md`. What stays: the **`cash_date`** phase for cash-basis timing, a cash-flow form for
+  **Compare** (left open deliberately), the **trend-bucketing** question — whether the grain picker
+  should be the sole control — and the **Trends-tab double-count audit**, gated on that tab gaining a
+  tag-report selector and unrelated to cash flow despite sharing the file.
 - [import-input-formats.md](import-input-formats.md) — **SimpleFIN shipped 2026-08-07; the file formats
   deferred, ranked.** New *file* ingestion formats behind a shared **parse-seam extraction**: XLSX (Tier 1,
   reuses everything) and OFX/QFX/QBO (Tier 2, mapping-free + FITID dedupe). SimpleFIN was the separate

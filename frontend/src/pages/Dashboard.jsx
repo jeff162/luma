@@ -107,7 +107,8 @@ function makeTagReportId() {
 
 // The frame selector: which cross-cutting question the Single and Trends modes are answering. Cash flow
 // is a *frame*, not a top-level mode, because it wants the same period, compare and trend machinery the
-// other two use — see docs/backlog/dashboard-reporting.md for why the fourth-mode shape was rejected.
+// other two use — see docs/ui-patterns.md -> "The cash-flow diagram" for why the fourth-mode shape
+// was rejected.
 const DASHBOARD_VIEW_SPENDING = 'spending'
 const DASHBOARD_VIEW_INCOME = 'income'
 const DASHBOARD_VIEW_CASH_FLOW = 'cash_flow'

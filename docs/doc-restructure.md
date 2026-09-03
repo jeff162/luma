@@ -195,12 +195,15 @@ observations from the survey:
   actions · guidance and help · **charts and visualization** · theming · density and volume (→ C) ·
   time and formatting display.
 
-  Charts is the largest single gap and mostly still lives in `backlog/dashboard-reporting.md`: outlier
-  clamping against a percentile rather than the next-largest value · axis pinning and tick collision ·
-  `stackOffset="sign"` and the negation it depends on · explicit sizing rather than
-  `ResponsiveContainer` when the bucket set changes · scroll anchoring and re-centring · the
-  named-slice floor · **magnitude drives geometry, the label carries the truth**. Most carry an
-  explicit *don't re-propose* or *don't remove*.
+  ~~Charts is the largest single gap and mostly still lives in `backlog/dashboard-reporting.md`.~~
+  **Wrong, checked 2026-09-02.** All seven topics this survey listed — percentile-based outlier
+  clamping (and the rejected next-largest rule), axis pinning and the pill/tick collision,
+  `stackOffset="sign"` and its negation, explicit sizing instead of `ResponsiveContainer`, scroll
+  anchoring and re-centring, the named-slice floor, and *magnitude drives geometry, the label carries
+  the truth* — were **already** in `ui-patterns.md` → *Charts and overlays*, in more depth than the
+  backlog file carried them, folded in as the work landed. The survey read the project file without
+  diffing it against the topic doc. The genuinely homeless half was **reporting semantics**, which went
+  to `data-model.md` → *Reporting assumptions* → *Cash flow*.
 
 ## Routing table
 
@@ -217,7 +220,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `account-type-as-rule-criterion.md` | Split | data-model (account type as rule scope, precedence, matcher identity) · *open:* filtering/search, the query grammar |
 | `deployment-topologies.md` | ✅ Split 2026-09-02 (300 → 57) | **B** (nearly all), **A** (passkeys make the host name load-bearing), releasing (macOS/build detail) · *file keeps:* Shape A, Shape B step 3's remainder |
 | `backup-restore-scope-and-secrets.md` | Split | data-model (Backups), **A** (secrets custody, risk model, slot policy), **B** (restore semantics, identity reconciliation), **C** (streaming, memory) · *open:* sectioned artifact, `backup_recipient`, incremental chain |
-| `dashboard-reporting.md` | Split | ui-patterns (**charts** — the bulk), data-model (reporting semantics, cash-flow exclusion) · *open:* `cash_date`, trend bucketing, Trends-tab audit |
+| `dashboard-reporting.md` | ✅ Split 2026-09-02 (374 → 95) | ui-patterns (charts — **already there**; only the frame-vs-fourth-mode rejection was added), data-model (reporting semantics, cash-flow exclusion and its three rejected alternatives) · *file keeps:* `cash_date`, Compare, trend bucketing, Trends-tab audit |
 | `transaction-attachments.md` | Split | data-model (documents), ui-patterns, **B** (documents phase of restore) · *open:* tiers 2–3 |
 | `transaction-splits.md` | Ingest | data-model, ui-patterns, **E** |
 | `multi-payment-purchases.md` | Ingest | data-model, ui-patterns, **E** |
@@ -255,7 +258,10 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 2. ~~**A — Security model.**~~ **Done 2026-09-02** — [`security-model.md`](security-model.md).
 3. ~~**B — Deployment & operations.**~~ **Done 2026-09-02** — [`operations.md`](operations.md), the
    running half; [`releasing.md`](releasing.md) keeps the building half.
-4. **ui-patterns charts topic.** Largest single body of homeless material outside A and B.
+4. ~~**ui-patterns charts topic.**~~ **Done 2026-09-02 — and it was mostly already done.** The charts
+   material was in `ui-patterns.md` before this step began; what the step actually delivered was the
+   *reporting-semantics* half into `data-model.md`, plus one rejection (`cash flow is a frame, not a
+   fourth mode`) that `Dashboard.jsx` cited and no topic doc held.
 5. **C — Scale & limits.**
 6. **E — Mechanism index.** Small; cheap once splits and multi-payment are ingested.
 7. **D — Testing**, into CONTRIBUTING.
@@ -278,6 +284,7 @@ file that no longer exists, so the entry records the path rather than a project 
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
 | `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
+| `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
 | `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
 
 ## Open decisions
@@ -308,6 +315,16 @@ Found while doing A; they apply to every remaining category.
 - **Some "Survey" rows have gone stale in the right direction.** Rule 8 keeps a *pending* file whole,
   but two of the surveyed files completed after 2026-08-26. Re-check a row's status before honoring its
   disposition — `vault-passphrase-recovery.md` moved from Survey to Split on those grounds.
+- **A "still lives in the backlog" claim needs diffing, not reading.** The survey's largest single item
+  — charts — turned out to be already folded into `ui-patterns.md`, because the fold happens as work
+  lands (the `AGENTS.md` same-change rule) while the project file keeps its own copy of the narrative.
+  Before ingesting a topic, check the target doc for it: what looks like homeless material is often a
+  *duplicate*, and the disposal is then deletion rather than authorship. What is genuinely homeless
+  tends to be the half that never had an obvious home — here, reporting semantics.
+- **Existing docs have no tail sections yet.** `data-model.md` and `ui-patterns.md` predate rule 7, so a
+  rejection ingested into them goes inline, in the idiom each doc already uses, rather than into a
+  *Considered and rejected* section that does not exist. Whether to retrofit tails onto the older docs
+  is a step-8 question — doing it piecemeal mid-ingest would leave them half-structured.
 - **Deleting a file means finding every mention of it, not just the code ones.** `pre-auth-security-ui.md`
   was referenced from three other markdown files. Grep the whole tree, and expect the backlog index and a
   sibling project file to be among the hits.

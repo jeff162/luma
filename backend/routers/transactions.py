@@ -2659,7 +2659,7 @@ def monthly_cash_flow(
         "t.trashed_at IS NULL",
         # Cash flow is a cross-cutting dashboard frame, so the transfer exclusion that governs every
         # other such frame governs it too — and it is the *only* exclusion axis the design allows.
-        # See docs/backlog/dashboard-reporting.md.
+        # See docs/data-model.md -> "Reporting assumptions" -> "Cash flow".
         "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
     ]
     params: list = []

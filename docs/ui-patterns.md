@@ -1363,6 +1363,8 @@ Long-tail categorical breakdowns (the dashboard's Spending-by-group/category and
 
 The Dashboard's third frame draws a single period as a Sankey (`components/CashFlowSankey.jsx` over the graph built in `lib/cashFlowGraph.js`) and its Trends form as diverging bars around a zero centerline. Recharts ships `<Sankey>` but its stock node and link carry no labels, so both renderers are the app's own. What is worth knowing before touching it:
 
+- **Cash flow is a *frame*, not a fourth top-level mode.** It sits in the Expenses/Income selector, widened to three, rather than beside Single/Compare/Trends — because it wants the same period, compare and trend machinery those modes already own, and promoting it would fork all of it. An earlier draft did propose the fourth-mode shape; what settled it is that compare and trends are valid *frames* for cash flow rather than alternatives to it. **Don't re-propose the fourth mode.**
+
 - **A bucket's side is the sign of its own net, not its `category_type`.** An expense category that refunded more than it spent moved money *in* and sits on the incoming side; income clawed back sits on the outgoing side. This is what keeps the diagram honest under the signed-net reporting rule — the alternative is an `ABS()` somewhere, since no link can be drawn with a negative width. Both frames read the *same* summary rows the other frames read and re-project them onto one axis where positive means money in.
 
 - **Magnitude draws, the label tells the truth** — the same split already applied to floored pie wedges and stacked bands.

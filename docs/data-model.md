@@ -1309,6 +1309,57 @@ A few behavior rules matter across the whole app:
 
 If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.
 
+### Cash flow
+
+Cash flow is a **frame over the same population**, not a separate rule set: all transactions, minus
+`exclude_from_totals`, netted. The endpoints are in `architecture.md`; what follows is what the numbers
+are allowed to mean.
+
+**`exclude_from_totals` is the entire exclusion mechanism.** Excluded from spending means excluded from
+cash flow, and there is no second axis. The directional asymmetry people expect comes out of
+**categorization, not configuration**: an inflow that funds spending is categorized somewhere *not*
+excluded and reads as income, while a transfer out that represents saving is categorized somewhere
+excluded and drops out. No new field, no new setting, no new system category.
+
+Three richer mechanisms were considered and rejected. **Do not re-propose them:**
+
+- **Transfer-leg pairing** — treating a movement as internal when both legs are visible and as
+  boundary-crossing when one is missing. It decides *dynamically* what the category flag already decides
+  declaratively. (The deferred two-sided transfer-set primitive under *Recurring series* anticipates the
+  same pairing, and is not needed for this.)
+- **A boundary relative to the current filter selection** — money "leaving" whatever accounts are
+  selected. Its motivating case, validating a period against a statement, is served by reading the
+  statement. What it costs is disqualifying: cash flow for two accounts selected together would not equal
+  the sum of each selected alone, so *adding* an account to the filter could *lower* the total.
+- **A separate `exclude_from_cash_flow` flag**, or a settings surface for exempting categories. A second
+  exclusion axis on categories drifts against the first.
+
+**Credit-card payments need no special handling.** A card payment already sits under the seeded
+`Transfers` group, so the `COALESCE(parent, leaf)` rollup excludes it, while the purchases on that card
+count at their own transaction dates. The double-count that would otherwise arise does not exist.
+
+**A bucket's side is the sign of its own net, not its `category_type`.** An expense category that
+refunded more than it spent moved money *in* that period. This is what keeps the frame honest under
+signed-net reporting — no link in the diagram can have a negative width, so the alternative would be an
+`ABS()` somewhere. The consequence to design against: **a bucket changes sides between periods**, so
+nothing durable — colour, ordering, identity — may be keyed to the side it landed on.
+
+**The atom is a category's net for the period, not a transaction's sign.** A period's inflow is the sum
+of the categories that net money in and its outflow the sum of those that net money out, so a period's
+two bars *are* the two sides of that period's diagram. **Do not switch it to gross** to simplify the
+SQL: reading every negative-amount row as inflow and every positive one as outflow nets to the same
+figure while reporting larger magnitudes in both directions, and stops reconciling against the diagram
+beside it.
+
+**A rolling window is calendar months, not rows.** The two differ exactly when the ledger skips a month
+— taking twelve rows and running the axis continuously across them spans thirteen or more months under
+a label reading "Last 12 months". A ledger shorter than the window starts where its data starts rather
+than being padded with months it never had.
+
+**A tag report has no cash-flow reading.** A signature bucket mixes categories from both directions, so
+it has no single direction to net and no `category_type` to derive one from. Deciding what a
+mixed-direction signature's net *means* is the prerequisite for any proposal here.
+
 ## Transaction splits
 
 A purchase that spans categories — part groceries, part hardware — is held as **one ledger row with a set of allocations** (`txn_split`), never as a parent row with children. The per-item-rows model was already tried and abandoned for the marketplace importer (orders-only, 2026-07-10, see *Transaction links and Amazon order import*); reviving it here would have brought back a visible parent/child hierarchy, a double-count risk, and tree handling in editing, undo and import, to solve a problem that is really about reporting.
