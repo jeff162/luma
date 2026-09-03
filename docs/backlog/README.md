@@ -3,58 +3,63 @@
 Deferred and parked work that is **not** blocking current features. Each file is one initiative,
 written so it can be picked up cold.
 
-> **The keep-and-link rule below is being replaced.** [`../doc-restructure.md`](../doc-restructure.md)
-> is the committed plan to retire completed project files entirely — rewriting what each holds into
-> topic-organized reference docs rather than keeping the file and linking to it, since a link to a
-> project filename decays and one already had. Read it before disposing of a shipped item.
->
-> **The first disposals landed 2026-09-02** — the security model became
-> [`../security-model.md`](../security-model.md). Every disposed project keeps a permanent row in that
-> plan's **Ledger**, which is what distinguishes *disposed* from *nobody got to it yet*; the row records
-> the file's **path**, so `git log -- <path>` still finds the last version of a file that no longer
-> exists. The **Completed** section below is retired along with the last disposal and is not being
-> extended — a newly shipped item folds into the topic docs and takes a ledger row.
+**When an item ships, the file is retired rather than kept.** Fold its durable "what it is and why"
+into the topic docs — those are what the read-first rule makes someone open, so that is where a rule
+has to live to be found — and then **delete the project file and record it in the [Ledger](#ledger)
+below**. A file survives only where some topic's *Open* section still points at it for work that has
+not started.
 
-**When an item ships**, fold its durable "what it is and why" into the main docs (`architecture.md` /
-`data-model.md` / `ui-patterns.md` / `shared-components.md`) — those are what the read-first rule makes
-someone open, so that is where a rule has to live to be found. Then either delete the backlog file or,
-if it still holds something the main docs should not carry, move its entry to **Completed** below.
+This replaced a keep-and-link policy, and the reason is worth stating because the old one looked
+safer: **a link to a project filename decays.** Two code comments already cited a backlog file that no
+longer existed. Project filenames are transient by construction; topic docs are stable, so a code
+comment cites `docs/<topic>.md#considered-and-rejected` — or, for a multi-topic reference doc,
+`docs/<doc>.md` → *Section name* — and never a path under here. When a file is disposed of, repoint its
+citations in the same change.
 
-**What the main docs should not carry is the record of what was deliberately *not* done** — the
+**What the topic docs should not carry is the record of what was deliberately *not* done** — the
 obstacles, the rejected shapes, the "don't redo this" notes. Those answer a question nobody asks until
-they are already proposing the thing, so a doc read never surfaces them. Two habits make them reachable
-anyway, and both are load-bearing: the main-doc paragraph **links back** to the backlog file for depth
-(ten such links exist today), and the **code carries the decision at the site** — the header comment on
-`ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed", which
-no document could.
+they are already proposing the thing, so a doc read never surfaces them. They now have somewhere to go:
+see `AGENTS.md` → *Where rejections, obstacles and owed decisions go*, which says a single-question
+topic doc ends with **Considered and rejected / Obstacles / Open**, while a multi-topic reference doc
+keeps rejections inline beside their subject and carries only **Open**. The other half stays
+load-bearing: the **code carries the decision at the site** — the header comment on
+`ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed",
+which no document could.
 
-**A rejected shape is not a work log, and only one of them belongs here.** The distinction is what
-keeps these files readable: a *rejected shape* answers a question someone is about to ask again — what
-was considered, why it fails, what it would cost to revisit — and an *obstacle* is a trap that would
-bite a second attempt. Both earn their space. What does not is the narrative of arriving at the current
-state: an expectation that turned out wrong, the order in which things were discovered, what a testing
-pass revealed, which symptom looked like a different bug first. Nothing follows from any of it once the
-work has landed, and it buries the notes that do matter. Three tests, all of them cheap to apply:
+**A rejected shape is not a work log, and only one of them belongs anywhere.** A *rejected shape*
+answers a question someone is about to ask again — what was considered, why it fails, what it would
+cost to revisit. An *obstacle* is a trap that would bite a second attempt. Both earn their space. What
+does not is the narrative of arriving at the current state: an expectation that turned out wrong, the
+order in which things were discovered, what a testing pass revealed, which symptom looked like a
+different bug first. Nothing follows from any of it once the work has landed, and it buries the notes
+that do matter. Four tests, all cheap to apply:
 
 - **Could a reader re-propose this?** If yes, keep the rejection and its reason. If it could not occur
   to anyone, cut it.
 - **Would this bite a second attempt?** If yes, keep the obstacle. Being interesting is not the same as
   being load-bearing.
-- **Does the main doc already say it, better?** Then link, and delete the copy. A shipped mechanism
-  described in two places drifts, and the backlog copy is the one that goes stale — see the fold-into-
-  the-main-docs rule above.
-- **Is it in the wrong file rather than surplus?** Then move it. A cleanup pass is not only deletion:
-  a generalized rule buried in a phase entry belongs in `ui-patterns.md` (or whichever main doc owns
-  that question), and it is unreachable where it sits — nobody building a dialog reads the security
-  model. Relocating is the more valuable half of a pass, and the more easily skipped.
+- **Does a topic doc already say it, better?** Then delete the copy — and check first, because it
+  usually does. Repeatedly through this restructure, material that read as homeless in a project file
+  turned out to have been folded into a topic doc as the work landed, leaving a stale second copy
+  behind. A shipped mechanism described in two places drifts, and the backlog copy is the one that goes
+  stale.
+- **Is it in the wrong file rather than surplus?** Then move it. Disposal is not only deletion: a
+  generalized rule buried in a build-phase entry belongs in whichever topic doc owns that question, and
+  it is unreachable where it sits — nobody building a dialog reads the security model. Relocating is
+  the more valuable half of a pass, and the more easily skipped.
 
-A status line per item is separate from all this and is welcome: *done*, *in progress*, *what remains*
-is exactly what someone picking the file up cold needs first.
+**A doc's own outbound links are a checklist.** Before deleting a file, grep for what still points at
+it — not only code, but the sibling project files and this index. More than once the prose promised
+that depth or a measurement lived in the file about to be removed, and the disposal had to make good on
+that promise first.
+
+A status line per item is welcome and separate from all this: *done*, *in progress*, *what remains* is
+exactly what someone picking a file up cold needs first.
 
 **Why many small files rather than one long one:** an agent (or a person) picking up one initiative
 should be able to read one file, not scan a monolith for the paragraph that applies. The same reasoning
-splits the main docs by question — structure, field semantics, UI behavior, component choice — rather
-than by feature.
+splits the topic docs by question — structure, field semantics, UI behavior, security, operations,
+scale — rather than by feature.
 
 > **Before going public:** [`../pre-release.md`](../pre-release.md) holds the committed, blocking
 > plan — six features drawn from the files below, plus the release mechanics. Items named there are
@@ -277,70 +282,30 @@ than by feature.
   prose pass* entry is superseded by [`../doc-restructure.md`](../doc-restructure.md) and should be removed
   from there when the first disposal lands.
 
-## Completed (kept for the record)
+## Ledger
 
-Shipped work whose durable rules now live in the main docs. These files are kept because they still
-carry something the main docs should not — a rejected design, an obstacle list, a "read this before
-reintroducing X". Nothing here is pending.
+Every project file that has been disposed of, so **"disposed" is distinguishable from "nobody got to
+it yet"** — the question this index could not answer before. A row is permanent, and it records the
+**path** rather than a project name, because the path is what makes `git log -- <path>` find the last
+version of a file that no longer exists. That is the thread to pull on when a row's summary is not
+enough.
 
-- ~~transaction-splits.md~~ — **disposed 2026-09-02, file deleted.** The mechanism and every invariant
-  were already in `data-model.md` → *Transaction splits*, and the row/editor behaviour in
-  `ui-patterns.md`. Its forks now live in [`../mechanism-index.md`](../mechanism-index.md): the
-  per-item-rows model abandoned twice, the **two-parts-in-one-category** rule imposed and then reversed
-  (*don't re-impose it* — the fix is counting `DISTINCT` transactions, not constraining what the user
-  may record), rules never authoring a split, and mixed-sign parts as a coherent later relaxation that
-  is **not** a prerequisite for reimbursements. The pre-fill refusal edges went to `data-model.md`.
-  `services/txn_splits.py` cites both.
-- ~~multi-payment-purchases.md~~ — **disposed 2026-09-02, file deleted.** Its "three neighbours it is
-  not" table was the hand-rolled version of [`../mechanism-index.md`](../mechanism-index.md), which is
-  now the real one; the four reasoned exclusions (automatic suggestion with its OCR re-open condition, a
-  document on the link rather than a payment, an age-gated Tasks entry, a purchases list page) went to
-  `data-model.md` → *Multi-payment purchases*.
-- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **complete 2026-09-01; kept for its
-  rejected shapes and one owed test.** The recovery ladder is built: a **vault recovery code** (a third
-  `vault_slot.method`, one per user, recovered and re-keyed in a single atomic request), the destructive
-  **reset** with its lost-vs-compromise split and capability-driven revocation, `VaultDecryptError`
-  classified as *reconnect needed*, and **re-link adoption**. The durable rules live in
-  `architecture.md` (the vault section), `data-model.md` (a connection may hold no credential) and
-  `building-a-connector.md` (where the connection handle comes from). What this file still holds is the
-  reasoning behind two reversals worth not re-litigating — why the other-member check became a
-  **redirect rather than a refusal**, and why a **single** recovery code is as safe as a set — plus the
-  corrected account of what a re-link actually strands (coverage and cursor, *not* the mappings). The
-  **second pass (2026-09-01)** closed two defects in what shipped and one wider finding behind them:
-  `set_passphrase`, `register_passkey_slot` and `issue_recovery_code` each minted a *durable* unlock method
-  from a DEK merely found in the unlock cache, turning transient access to an unlocked session into
-  permanent independent access — now a five-minute proof window on every door that mints one, plus a passkey
-  route to a new passphrase and the re-enrollment rung that had never executed. One test is still owed:
-  reset → set → restore a credentials backup taken under the old passphrase.
-- ~~list-virtualization.md~~ — **disposed 2026-09-02, file deleted.** The windowing rules had already
-  been folded into [`../ui-patterns.md`](../ui-patterns.md); what it still held — the one list left
-  unwindowed on purpose and its four obstacles, plus the measurement method (re-baseline on a production
-  build; attribute before optimizing) — is in [`../scale-and-limits.md`](../scale-and-limits.md).
-  `ImportRuleSuggestionReview.jsx` cites it there now.
-- ~~transaction-list-limits.md~~ — **disposed 2026-09-02, file deleted.** The `limit` contract was
-  already in `data-model.md`; the caps that remain **on purpose** — the 36/60-month drawer trend windows
-  and the "All time" label that over-promises because of them, the trend-length server caps, the
-  money-movement preview undercount and the trash list — are now a table in
-  [`../scale-and-limits.md`](../scale-and-limits.md) with what each costs and what would have to be
-  observed before revisiting it.
-- [security-and-deployment-model.md](security-and-deployment-model.md) — **disposed 2026-09-02 into
-  [`../security-model.md`](../security-model.md); a residual stub remains.** The design record — the
-  threat model, the identity perimeter, secret custody, enrollment/revocation/rotation, the transport
-  policy and every rejected shape — moved to that topic doc. What is left in the file is the
-  build-phase log, which is *not* purely a work log: migration numbers, AAD schemes, endpoint names and
-  payload-format versions are mixed into it and read as `architecture.md` material. Relocating them is
-  its own pass; until it runs, the file is the only record of facts like *migration v18 folds the legacy
-  provider-item rows in carrying the ciphertext verbatim*.
-- ~~pre-auth-security-ui.md~~ — **disposed 2026-09-02, file deleted.** The Settings-forms rebuild it
-  tracked shipped in 2026-07-30; what it held past that was a work log of what a lint cleanup had
-  removed and what would have to be stitched back. The identity-perimeter substance is in
-  [`../security-model.md`](../security-model.md); the forms themselves are in `Settings.jsx`.
-- ~~optional-env-and-layered-config.md~~ — **disposed 2026-09-02, file deleted.** `.env` is optional and
-  the layered precedence is settled. The operator's half — the layer order, the irreducible env core, the
-  permanent per-file overrides, the two-installations case, and every rejected alternative — is in
-  [`../operations.md`](../operations.md); the mechanism is in `architecture.md` → *Configuration layers*;
-  why app-level provider credentials left `.env` is in [`../security-model.md`](../security-model.md). Its
-  one unbuilt follow-up, the mDNS service name, is carried in `operations.md` → *Open*.
+A file is kept only where something still points at it for work that has not started. Reachability
+from a chronological record is not reachability: `CHANGELOG.md` holds no backlog references and starts
+at the first public release, so it cannot point at anything completed before that.
+
+| Path | Disposed | Fed | File kept? |
+| --- | --- | --- | --- |
+| `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
+| `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
+| `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
+| `docs/backlog/transaction-splits.md` | 2026-09-02 | **E** (`mechanism-index.md`) — the forks and non-goals; data-model — the pre-fill refusal edges | **No** — deleted. Mechanism, invariants and UI behaviour were already in `data-model.md` / `ui-patterns.md`; `services/txn_splits.py` repointed to both |
+| `docs/backlog/multi-payment-purchases.md` | 2026-09-02 | **E** — its hand-rolled *three neighbours* table, generalized into the index; data-model — the four reasoned exclusions | **No** — deleted |
+| `docs/backlog/list-virtualization.md` | 2026-09-02 | **C** (`scale-and-limits.md`) — the unwindowed list and its four obstacles, the measurement method, the rejected hand-rolled windower and document-scroller mode | **No** — deleted. The windowing rules were already in `ui-patterns.md`; `ImportRuleSuggestionReview.jsx` repointed to C |
+| `docs/backlog/transaction-list-limits.md` | 2026-09-02 | **C** — the accepted caps as a table (cost, and the condition for revisiting each) | **No** — deleted. The `limit` contract was already in `data-model.md` |
+| `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |
+| `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
+| `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
 
 ## Related (already tracked elsewhere)
 

@@ -12,9 +12,24 @@ date. Anything in it worth keeping belongs in the topic docs it describes.
 is met, and feature 4 landing first did what it was meant to: the *recovery and compromise response*
 half of category A was written once rather than twice.
 
-**Steps 1 and 2 of the order below are done.** The tail-section shape is settled and recorded in
-[`../AGENTS.md`](../AGENTS.md) → *Every topic doc ends with the same three sections*; category **A** is
-[`security-model.md`](security-model.md). See the ledger for what that disposed.
+**All eight numbered steps below are done (2026-09-02).** Five topic docs exist —
+[`security-model.md`](security-model.md), [`operations.md`](operations.md),
+[`scale-and-limits.md`](scale-and-limits.md), [`mechanism-index.md`](mechanism-index.md), and
+`CONTRIBUTING.md` → *What is tested, what isn't, and why* — the tail-section rule is settled in
+[`../AGENTS.md`](../AGENTS.md), and `backlog/README.md` now carries the permanent ledger in place of
+its *Completed* section.
+
+**This file is not deletable yet, and the order is not what remains.** Its expiry condition is *the
+last completed project disposed of*, and **eleven `Split` rows in the routing table still owe an
+ingest** — each is a shipped feature whose file still holds a settled half:
+`backup-restore-scope-and-secrets` · `transaction-attachments` · `recurring-detection` ·
+`paypal-amazon-enrichment` · `paypal-money-movement-recognition` · `import-input-formats` ·
+`account-type-as-rule-criterion` · `i18n-display-formatting` · `tag-report-exclude-warning` ·
+`vault-passphrase-recovery` · `cleanup-pass` (its ui-patterns slice). The thirteen `Survey` rows stay
+by rule 8 and are **not** blocking deletion.
+
+Work the routing table row by row from here; the ordered steps were only ever the sequence for the
+*new* topic docs. When the last Split row is disposed of, delete this file.
 
 The predecessor entry — *Finish the backlog prose pass* in
 [`backlog/misc-followups.md`](backlog/misc-followups.md) — is superseded by this file and was struck
@@ -301,7 +316,9 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 5. ~~**C — Scale & limits.**~~ **Done 2026-09-02** — [`scale-and-limits.md`](scale-and-limits.md).
 6. ~~**E — Mechanism index.**~~ **Done 2026-09-02** — [`mechanism-index.md`](mechanism-index.md).
 7. ~~**D — Testing**, into CONTRIBUTING.~~ **Done 2026-09-02.**
-8. **Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.
+8. ~~**Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.~~
+   **Done 2026-09-02** — the keep-and-link policy is replaced, the *Completed* section is gone, and the
+   ledger now lives there permanently.
 
 *Done out of order, 2026-09-02:* the rule-7 amendment and the `## Open` sections on `data-model.md`,
 `ui-patterns.md` and `architecture.md`. It was pulled ahead of step 5 because most of the remaining
@@ -311,28 +328,10 @@ sections missing between them) and were regenerated from the headings.
 
 ## Ledger
 
-Replaces *Completed (kept for the record)*. A row per disposed project, so "disposed" is
-distinguishable from "nobody got to it yet". **A file is kept only if some topic's tail links to it** —
-reachability from a chronological record is not reachability, and `CHANGELOG.md` cannot serve: it holds
-zero backlog references and starts at 0.20, so it cannot point at anything completed before the first
-public release.
-
-A disposed project keeps its row permanently. Besides telling *disposed* apart from *not yet reached*,
-the row is a thread to pull on: the path is what makes `git log -- <path>` find the last version of a
-file that no longer exists, so the entry records the path rather than a project name.
-
-| Path | Disposed | Fed | File kept? |
-| --- | --- | --- | --- |
-| `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
-| `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
-| `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
-| `docs/backlog/transaction-splits.md` | 2026-09-02 | **E** (`mechanism-index.md`) — the forks and non-goals; data-model — the pre-fill refusal edges | **No** — deleted. Mechanism, invariants and UI behaviour were already in `data-model.md` / `ui-patterns.md`; `services/txn_splits.py` repointed to both |
-| `docs/backlog/multi-payment-purchases.md` | 2026-09-02 | **E** — its hand-rolled *three neighbours* table, generalized into the index; data-model — the four reasoned exclusions | **No** — deleted |
-| `docs/backlog/list-virtualization.md` | 2026-09-02 | **C** (`scale-and-limits.md`) — the unwindowed list and its four obstacles, the measurement method, the rejected hand-rolled windower and document-scroller mode | **No** — deleted. The windowing rules were already in `ui-patterns.md`; `ImportRuleSuggestionReview.jsx` repointed to C |
-| `docs/backlog/transaction-list-limits.md` | 2026-09-02 | **C** — the accepted caps as a table (cost, and the condition for revisiting each) | **No** — deleted. The `limit` contract was already in `data-model.md` |
-| `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |
-| `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
-| `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
+**Moved 2026-09-02 to [`backlog/README.md`](backlog/README.md) → *Ledger*,** where it replaced the
+*Completed (kept for the record)* section. It belongs there rather than here because the ledger is
+**permanent** and this file is not: a disposed project keeps its row forever, while this plan deletes
+itself once the last completed project is disposed of. Add new rows there, not here.
 
 ## Open decisions
 
