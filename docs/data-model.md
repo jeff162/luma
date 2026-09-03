@@ -156,7 +156,7 @@ Important conventions:
 
 - **How an imported cell reaches that sign** (`parse_amount`, the one parser behind both the import and the mapping preview — see `architecture.md` → "Preview contract"): a cell carries at most one of two direction signals, and they point opposite ways. A **bare sign** is in the *file's* convention (positive = money in), so it is inverted on the way to storage — `-50.00` and `(50.00)` are debits. A **`DR`/`CR` suffix** names the direction outright and is read as written, never inverted; where both appear the suffix wins, and in the two-column convention a suffix likewise overrides the column it sits in (a `CR` in the debit column is a credit). Conflating the two is a live failure mode, not a hypothetical: the suffix was formerly inverted along with everything else, so `50.00 CR` — a credit in the notation's own terms — imported as a debit (fixed 2026-08-13; `backend/tests/test_import_amount_parsing.py` is the record). Otherwise the column supplies the direction and the cell's own sign reverses it, so a negative or parenthesized debit-column cell reads as a refund. A blank/blank two-column row is `0.0`, not unparseable — zero is a real transaction
 
-- `date` is the **posted** date — when the transaction settled — and is the date every list, report, and total uses. `authorized_date` is the *other* date a source may publish: when the charge was authorized (a card swipe), which for a card transaction typically precedes posting by one to several days. It is nullable and populated only where the source supplies it: a data connection captures it as a locked field (Plaid `authorized_date`), while a CSV normally carries one date column and leaves it NULL. It exists for **duplicate detection**, not display: two sources routinely date the same charge differently — a Monarch export reports the transaction date, a Plaid sync the posted date — so every date test in the ladder asks whether **either** date applies. Without it a row reads as outside a covered range that morally contains it, and coverage never engages. It is deliberately *not* an alternative reporting date: introducing a second basis for "when did this happen" would make two totals for the same period both defensible. It does, however, supply `date` in the one case where a source has no posted date to give: a **pending** row has not posted, so a provider whose protocol makes the posted timestamp mandatory must put something there, and SimpleFIN puts `0`. Read literally that is a valid instant, and such rows entered the ledger dated 1970-01-01 — sorting before everything, inside no report period, beyond the reach of every date test in the duplicate ladder, and (since sync cards key on the transaction's own month) filed on a card labelled "January 1970". A zero is therefore read as *absent*, not as an epoch, and a pending row is dated by when the charge was made; when it settles the sync re-stamps `date` with the real posted date. A row with neither date is dropped at the adapter rather than dated from the import time or the window bound, both of which would be indistinguishable from a real date. **A field being required by a protocol is not a promise that it carries a value** — the sentinel is what a mandatory field degrades into, and a numeric sentinel converts without complaint
+- `date` is the **posted** date — when the transaction settled — and is the date every list, report, and total uses. `authorized_date` is the *other* date a source may publish: when the charge was authorized (a card swipe), which for a card transaction typically precedes posting by one to several days. It is nullable and populated only where the source supplies it: a data connection captures it as a locked field (Plaid `authorized_date`), while a CSV normally carries one date column and leaves it NULL. It exists for **duplicate detection**, not display: two sources routinely date the same charge differently — some exports reports the transaction date, others repo the posted date — so every date test in the ladder asks whether **either** date applies. Without it a row reads as outside a covered range that morally contains it, and coverage never engages. It is deliberately *not* an alternative reporting date: introducing a second basis for "when did this happen" would make two totals for the same period both defensible. It does, however, supply `date` in the one case where a source has no posted date to give: a **pending** row has not posted, so a provider whose protocol makes the posted timestamp mandatory must put something there, and SimpleFIN puts `0`. Read literally that is a valid instant, and such rows entered the ledger dated 1970-01-01 — sorting before everything, inside no report period, beyond the reach of every date test in the duplicate ladder, and (since sync cards key on the transaction's own month) filed on a card labelled "January 1970". A zero is therefore read as *absent*, not as an epoch, and a pending row is dated by when the charge was made; when it settles the sync re-stamps `date` with the real posted date. A row with neither date is dropped at the adapter rather than dated from the import time or the window bound, both of which would be indistinguishable from a real date. **A field being required by a protocol is not a promise that it carries a value** — the sentinel is what a mandatory field degrades into, and a numeric sentinel converts without complaint
 
 - **A transaction can also be entered by hand** (`POST /transactions`), for cash, a cheque, or an account nothing syncs. The data model always allowed for it — `external_transaction_id`, `needs_review` and duplicate detection each name hand-entered rows in their own definitions — so what a manual entry needs is not new columns but the *provenance* that makes it behave like every other row afterwards. Three parts of that are worth stating because none is visible in the row: it carries **no `import_batch_id` and no `external_transaction_id`**, since it belongs to no ingestion event; its `content_hash` is computed by the **importers' own `make_hash`**, which is the entire mechanism by which a later import or sync of the same charge recognizes it as a duplicate (a second hash implementation would digest identical data differently and the match would silently never fire); and an entry left **uncategorized is run through the rules**, exactly as an imported row is, so which door a transaction came through does not decide whether it lands in the uncategorized pile. The owner follows the account, as it does on every import. `needs_review` stays `0`: the row was just typed by the person who would be reviewing it
 
@@ -1004,7 +1004,7 @@ The review record (`review_state.suggestions[id]`, in the batch/profile/system s
 
 ## Transaction links and Amazon order import
 
-**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below), **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)) and **reimbursable expenses** (`kind='reimbursement'`, see [Reimbursable expenses](#reimbursable-expenses)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade.
+**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below), **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)) and **reimbursable expenses** (`kind='reimbursement'`, see [Reimbursable expenses](#reimbursable-expenses)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade. One trap for a new client: `get_link` returns `metadata` **already parsed** into a dict, so a reader that reaches for a JSON-string helper on it silently gets an empty object rather than an error — every field it was looking for reads as absent, and the write path keeps working, so the loss shows up only as a stored value that never comes back.
 
 **Amazon order import is the first client** (parsed from an AZAD orders/items export; **orders-only model**, 2026-07-10 — the earlier per-item itemization was superseded). Each order becomes **one spending transaction** in a chosen **Amazon account** — an ordinary account, since an account here is only a reporting/owner dimension with no balance or net-worth role — amount = net cash (`total − refund`), memo = the orders file's concatenated item list, categorized by the user's normal rules. The matching card charge (found by amount + date, with the account resolved from the funding-source map — see below) is recategorized into the excluded **"Amazon Funding"** leaf (created under the seeded `Transfers` group, so exclusion is inherited via `COALESCE(parent, leaf)`) and joined to the order by an `amazon_order` link (member roles `order` + `charge`). An order may link **several** charges (a split-shipment order — see the reconciliation bullet): each charge's prior categorization is stashed per charge in the link `metadata_json` (`charge_priors: {charge_id: prior}`; the legacy singular `charge_prior` written by the auto-matcher is still honored) so undo restores each exactly. The invariants that keep totals honest:
 
@@ -1495,8 +1495,8 @@ default, which is what makes grouping a purchase incapable of changing a total t
 
 **Every reporting surface is deliberately untouched.** Summaries, trends, the dashboard and every drill
 read plain `txn` and know nothing about purchases; a grouped payment reports exactly as it did before.
-This is the opposite of the choice [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md)
-makes, and for a stated reason: there the numbers are wrong across a period boundary and a holding
+This is the opposite of the choice [Reimbursable expenses](#reimbursable-expenses) makes, and for a
+stated reason: there the numbers are wrong across a period boundary and a holding
 category is what fixes them, so pairing is optional and late. Here the numbers are already right and
 only the *relationship* is missing, so the link is the whole feature and no category machinery is
 warranted. Do not add one.
@@ -1658,6 +1658,11 @@ exists, and there are only two candidates:
   overpayment arrived, so booking it into February would claim a gain in a month where nothing had yet
   gone right.
 
+**Settling is per record, never per position.** "Write off $50 of this category" sounds like the
+simpler control and has nothing to act on: a residual is a category balance, so it can only be moved by
+rewriting a *named transaction's* allocations, and a position-level action could not choose between the
+expense and the repayment without already knowing which expense fell short.
+
 **That asymmetry is why no mixed-sign split is needed, and the rule must not be reached for here.**
 Settling everything on the expense is the uniform-looking trap: a surplus larger than the buyer's own
 share drives the expense's real-category part negative, which `txn_splits.validate_parts` refuses by
@@ -1685,7 +1690,8 @@ no reporting gain.
 
 **The link is the fourth client of `txn_link`** (`kind='reimbursement'`, `services/reimbursements.py`),
 and it observes the primitive's contract: the link never mutates what it joins. `external_ref` carries
-the counterparty, `metadata_json` a note, the per-transaction **claims**, and — once finished — the **completion
+the counterparty, `metadata_json` the per-transaction **claims**, the record's own **reminder date**
+where it has one, and — once finished — the **completion
 record**, which stashes the target's prior allocations, category and provenance so any move can be
 reversed exactly (all null where completing moved nothing). Reversal reads that stash rather than
 recomputing an inverse, because the destination category may have been edited since and re-deriving
@@ -1718,7 +1724,17 @@ the row's receivable, each link's residual and every category total are identica
 **The invariant is per portion.** A transaction's claims across all reimbursements may not exceed its
 receivable, and what is left over is **unclaimed** — which is what the outstanding report lists as loose
 and what the link picker offers. Every claim must be non-zero and point the same way as the row's
-receivable.
+receivable. A transaction allocating *nothing* to the group is refused at the join with the next step
+named — split the expense so the part owed back lands in the group — because a member contributing
+nothing to the residual would sit in the report as a row with no action attached.
+
+**The expected total is deliberately not stored, though the first design said it would be.** It is the
+sum of the members' receivable claims, so a stored copy would be a second truth able to drift from the
+ledger the moment a split was edited — the same objection that makes roles derived rather than stated.
+A **free-text note** beside the record's name is likewise gone (removed 2026-09-02; nothing migrates,
+since `metadata_json` is a blob): the name is free text already and appears everywhere the record does,
+while the note reached exactly one surface. Surfacing it more widely to justify it is the wrong
+direction — that is inventing a use for a field after the fact.
 
 **One claim per transaction per reimbursement**, keyed by transaction id, and this shapes the picker.
 Attaching a second portion of a row a reimbursement already covers *replaces* the first rather than adding
@@ -1795,8 +1811,55 @@ portion belongs to a different reimbursement must not have that portion consumed
 and the claim is reduced along with the allocation — which keeps a row's claims and its receivable in
 step whichever of its reimbursements is settled first.
 
-Depth, the settled forks, and what was deliberately left out are in
-[`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md).
+**A reminder is a property of the debt, not of the transaction.** The date a receivable starts being
+asked about lives on the *record* (in the link's `metadata_json`, beside its claims), because one charge
+split between two friends is two debts that may be owed back on two different dates. A `remind_on` on
+`txn` could hold only one of them, which is the same "at most one reimbursement per transaction" mistake
+in another costume.
+
+It follows that **loose receivable money answers only to a household default**: an unclaimed portion has
+no record to carry a date, and the way to give one a date of its own is to track it — which is the thing
+worth doing with a receivable one intends to defer anyway. Storing per-row dates outside the ledger (in
+the per-user preference store, say) was rejected: it would put a ledger fact in a per-user surface that
+does not share the ledger's lifecycle.
+
+**The clock runs from the transaction's date, never from the record's creation.** A reimbursement
+entered today for a February charge is already months old. Dating it from the record would mean that
+tidying up — the one act the feature wants to encourage — postpones the reminder every time, and a
+repayment arriving would restart it, so partial progress would push the reminder further away than no
+progress at all. For the same reason a record's clock starts at its **oldest expense**, not its oldest
+member of any kind.
+
+**A record's reminder has three states, not two.** Absent means *follow the household default*; empty
+means the user switched this record off; a date means they chose it. "Off" and "unset" have to stay
+distinguishable, or turning a reminder off would silently revert the next time the default was
+consulted. The default itself is **ledger-level**, kept in a reserved shared scope of `ui_preference`
+rather than in `db_meta`: it is user-chosen configuration, and `db_meta` is deliberately outside the
+backup payload, so a value stored there would quietly revert to 30 days on restore. Zero disables the
+default and is not a dead end — a record can still carry a date of its own.
+
+**Only money still owed is ever due.** A surplus is a gain waiting to be booked rather than something to
+chase, an unmatched credit is not under-reported spending, and a completed record has no work left. The
+signal exists because an unsettled receivable *is* under-reported spending — the disease the
+flag-and-exclude model was rejected for — so it must not fire on any state where that is not true.
+
+**The signal is grouped by owner, read from `txn.owner_id`.** That column is stamped from the account
+when a row is created and is the axis every owner filter in the app already uses, so a task can
+deep-link to precisely the rows it counted; joining through to `account.owner_id` instead would fork a
+second owner axis that disagrees with the ledger the moment one row's owner is corrected. A record is
+attributed to the owners of its **expense** side — the question a reminder asks is who is owed, so a
+repayment landing on someone else's account does not make the debt theirs — and one whose expenses span
+two people appears under both. Grouping applies only where the household has **more than one personal
+owner**, since a built-in `Shared` owner exists as soon as the Owners page is opened.
+
+**Claims are exclusive, so moving one is its own operation.** What one record holds, another cannot,
+which is why the ordinary picker offers unclaimed money only — and which left a row whose receivable was
+entirely spoken for reachable from nowhere but the record already holding it. The move releases and
+re-attaches in one transaction, in that order: the invariant counts claims across every record, so an
+add before the release would be refused as an over-claim of a row that is merely mid-move.
+
+The mechanisms this one is adjacent to but is *not* — splits, multi-payment purchases, `txn_link`,
+`exclude_from_totals` — are told apart in [`mechanism-index.md`](mechanism-index.md).
 
 ## Open
 
@@ -1834,8 +1897,6 @@ decisions go*.
 - **Dedupe follow-ups**, including the prefix-stripping item whose precondition is now met — the open
   question there is the 4-character prefix floor.
   → [`backlog/import-dedupe-followups.md`](backlog/import-dedupe-followups.md)
-- **The Tasks signal for reimbursements** — the one piece of that feature still owed.
-  → [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md)
 - **An online merchant categorizer**, terminating in the existing rule store ("the rule is the cache").
   Parked design. → [`backlog/online-categorizer.md`](backlog/online-categorizer.md)
 - **`clean_name` / merchant-rename: keep or drop.** Dormant code awaiting a decision rather than a

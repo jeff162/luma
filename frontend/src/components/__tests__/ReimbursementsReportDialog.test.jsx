@@ -226,3 +226,71 @@ describe('dragging a payment onto what it repays', () => {
     expect(api.addReimbursementClaims).not.toHaveBeenCalled()
   })
 })
+
+/*
+ * The narrowing a Tasks reminder arrives with.
+ *
+ * The property worth pinning is that the report never shows a headline the list under it contradicts:
+ * the total is the *group's whole balance* by design, so a narrowed list has to state its own figure
+ * rather than leaving the reader to assume the big number describes what they can see.
+ */
+describe('opened from a reminder', () => {
+  const overdue = {
+    id: 'r1',
+    counterparty: 'Alex trip',
+    owed: 375,
+    repaid: 0,
+    residual: 375,
+    completed: false,
+    expense_date: '2020-02-14',
+    members: [{
+      txn_id: 't1', date: '2020-02-14', payee: 'Tickets', claim: 375, receivable: 375,
+      trashed: false, role: 'expense', owner_id: 'alex', owner_name: 'Alex',
+    }],
+  }
+  const recent = {
+    ...overdue,
+    id: 'r2',
+    counterparty: 'Robin lunch',
+    expense_date: '2099-01-01',
+    members: [{ ...overdue.members[0], txn_id: 't2', date: '2099-01-01', owner_id: 'robin', owner_name: 'Robin' }],
+  }
+
+  function openReport(props = {}) {
+    api.getOutstandingReimbursements.mockResolvedValue({
+      total: 750, reimbursements: [overdue, recent], loose: [], reminder_days: 30,
+    })
+    return render(
+      <ReimbursementsReportDialog categories={[]} onClose={() => {}} {...props} />,
+    )
+  }
+
+  it('shows only the named owner when opened from that owner\'s task', async () => {
+    openReport({ ownerId: 'alex' })
+    expect(await screen.findByText('Alex trip')).toBeTruthy()
+    expect(screen.queryByText('Robin lunch')).toBeNull()
+  })
+
+  it('shows only what is due when the link says so', async () => {
+    openReport({ dueOnly: true })
+    expect(await screen.findByText('Alex trip')).toBeTruthy()
+    expect(screen.queryByText('Robin lunch')).toBeNull()
+  })
+
+  it('states what the narrowed list adds up to, so it cannot contradict the headline', async () => {
+    openReport({ ownerId: 'alex' })
+    expect(await screen.findByText(/of the total above/)).toBeTruthy()
+  })
+
+  it('lets the narrowing be dropped', async () => {
+    openReport({ ownerId: 'alex' })
+    await userEvent.click(await screen.findByRole('button', { name: 'Show everything' }))
+    expect(await screen.findByText('Robin lunch')).toBeTruthy()
+  })
+
+  it('leaves the report unnarrowed when opened normally', async () => {
+    openReport()
+    expect(await screen.findByText('Alex trip')).toBeTruthy()
+    expect(screen.getByText('Robin lunch')).toBeTruthy()
+  })
+})

@@ -2,24 +2,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * Where a repayment goes: the open reimbursements it could be repaying.
+ * What a row pairs with: the open reimbursements and the untracked rows on the other side of it.
  *
  * This exists because the sign of a row decides what there is to *do* with it. Money out is an expense
- * — the useful act is saying it is coming back, which needs no counterpart yet. Money in repays
- * something, so the useful act is naming what. Offering "track this" on both put a repayment into a
- * record of its own, and since a claim belongs to exactly one record, the expense could then never be
- * joined to it: both sides had spent their money on separate records. Every one of the user's expenses
- * ended up stranded that way.
+ * — the useful act is saying it is coming back. Money in repays something, so the useful act is naming
+ * what. Offering "track this" on both put a repayment into a record of its own, and since a claim
+ * belongs to exactly one record, the expense could then never be joined to it: both sides had spent
+ * their money on separate records. Every one of the user's expenses ended up stranded that way.
+ *
+ * **It now asks in both directions.** Starting from a repayment offers the expenses it could repay;
+ * starting from an expense offers the repayments already sitting unmatched in the ledger. The temporal
+ * norm is money out first and back later, so an expense usually has nothing to offer and its caller goes
+ * straight to tracking — but a credit clearing before its receipt is entered is a real case, and it used
+ * to be reachable only from the credit's side. The sign still decides the *wording*, which is not the
+ * same sentence in both directions: an expense asks what repaid it, not what it repays.
  *
  * **Tracking alone stays available** rather than being removed as the wrong answer. A repayment can
- * genuinely arrive before its expense is recorded — the credit clears before the receipt is entered —
- * and refusing it would leave that money with nowhere to go at all. It is the quiet option because it
- * is the rarer one, not because it is invalid.
+ * genuinely arrive before its expense is recorded, and refusing it would leave that money with nowhere
+ * to go at all. It is the quiet option because it is the rarer one, not because it is invalid.
  */
 
 import { Button } from './ui.jsx'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
-import { reimbursementListLabel, residualSummary } from '../lib/reimbursements.js'
+import {
+  matchAloneHint,
+  matchPrompt,
+  reimbursementListLabel,
+  residualSummary,
+} from '../lib/reimbursements.js'
 
 const rowStyle = {
   display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline',
@@ -32,6 +42,10 @@ export default function ReimbursementMatchPicker({
   reimbursements = [],
   rows = [],
   amountLabel = '',
+  // Which side the row being matched is on. It changes the question and the fallback, not the
+  // candidates — those are already the opposite sign by construction.
+  repayment = true,
+  trackAloneLabel = '',
   busy = false,
   onMatch,
   onMatchRow,
@@ -42,7 +56,7 @@ export default function ReimbursementMatchPicker({
   return (
     <div style={{ display: 'grid', gap: 4 }}>
       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-        {amountLabel ? `What does ${amountLabel} repay?` : 'What does this repay?'}
+        {matchPrompt({ repayment, amountLabel })}
       </div>
 
       {reimbursements.map(reimbursement => (
@@ -60,10 +74,10 @@ export default function ReimbursementMatchPicker({
         </button>
       ))}
 
-      {/* Expenses nobody has tracked yet. Listed beside the records because both are just receivable
-          money: which of them happens to carry a record is not something the person matching them
-          should have to think about, and requiring one first is what made this unreachable. Picking one
-          creates the reimbursement with both sides on it. */}
+      {/* The other side, untracked. Listed beside the records because both are just receivable money:
+          which of them happens to carry a record is not something the person matching them should have
+          to think about, and requiring one first is what made this unreachable. Picking one creates the
+          reimbursement with both sides on it. */}
       {rows.map(row => (
         <button
           key={row.txn_id}
@@ -83,9 +97,7 @@ export default function ReimbursementMatchPicker({
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
         <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-          {empty
-            ? 'Nothing is waiting to be repaid yet.'
-            : 'Or record it on its own until the expense is entered.'}
+          {matchAloneHint({ repayment, empty })}
         </span>
         <span style={{ display: 'flex', gap: 6 }}>
           {onCancel ? <Button variant="ghost" small onClick={onCancel} disabled={busy}>Cancel</Button> : null}
@@ -95,7 +107,7 @@ export default function ReimbursementMatchPicker({
             onClick={() => onTrackAlone?.()}
             disabled={busy}
           >
-            {busy ? 'Working…' : 'Record on its own'}
+            {busy ? 'Working…' : (trackAloneLabel || 'Record on its own')}
           </Button>
         </span>
       </div>

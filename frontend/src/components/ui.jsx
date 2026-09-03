@@ -735,6 +735,11 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
   }
   return (
     <button
+      // The DOM attribute, not just the dimmed look and the dropped handlers. Without it the control
+      // stays focusable, still announces as enabled to a screen reader, and still submits a form it
+      // sits in — so a button that looks unavailable is only unavailable to a mouse. The handlers stay
+      // guarded as well: `disabled` blocks activation, but a caller can pass one through a wrapper.
+      disabled={!!disabled}
       onClick={disabled ? undefined : onClick}
       onMouseDown={disabled ? undefined : onMouseDown}
       style={{ ...base, ...variants[variant] }}

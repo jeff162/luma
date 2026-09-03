@@ -9,6 +9,7 @@ import {
   claimRemainder,
   claimablePortions,
   dropRefusal,
+  isDue,
   reimbursementBoard,
   reimbursementListLabel,
   residualSummary,
@@ -34,10 +35,27 @@ import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
  * them together gives the receivable group's own balance, which is what makes the header figure
  * trustworthy with nothing linked at all.
  *
+ * **It owns the reminder default**, which is the one piece of configuration this feature has. It lives
+ * here rather than on the Settings page because this is the surface where the outstanding money already
+ * is — it is where someone goes when wondering why something is being asked about, and one orphan row
+ * on a long page of unrelated machinery is not somewhere anyone would find it. The setting is
+ * ledger-level: one ledger has one answer, and the reminders are shown to everyone.
+ *
+ * **Opened from a Tasks reminder it arrives narrowed** — to that owner, and to what is actually due — so
+ * the screen and the badge cannot disagree about which rows were meant. The narrowing is visible and
+ * removable rather than silent, because a report that quietly hid most of its contents would be worse
+ * than one that did not filter at all.
+ *
  * A dialog rather than a page, following the Amazon reconciliation report it is modelled on: it is a
  * periodic review of a pile of work rather than a place to navigate to and dwell in.
  */
-export default function ReimbursementsReportDialog({ categories, onAddCategory, onClose, onChanged }) {
+export default function ReimbursementsReportDialog({
+  categories, onAddCategory, onClose, onChanged,
+  // The Tasks deep link's narrowing. `ownerId` uses the same `unassigned` token the transaction list's
+  // owner facet does, so the task's link and this filter name the same set.
+  ownerId = null,
+  dueOnly = false,
+}) {
   const [report, setReport] = useState(null)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(null)
@@ -50,6 +68,11 @@ export default function ReimbursementsReportDialog({ categories, onAddCategory, 
   const [dropTarget, setDropTarget] = useState(null)
   const [pendingDrop, setPendingDrop] = useState(null)
   const [busy, setBusy] = useState(false)
+  // The narrowing starts as the caller asked for it and is then the reader's to drop, which is why it is
+  // state rather than a prop read straight through.
+  const [owner, setOwner] = useState(ownerId)
+  const [showDueOnly, setShowDueOnly] = useState(dueOnly)
+  const [savingDays, setSavingDays] = useState(false)
 
   const load = useCallback(() => {
     let cancelled = false
@@ -61,7 +84,35 @@ export default function ReimbursementsReportDialog({ categories, onAddCategory, 
 
   useEffect(load, [load])
 
-  const board = reimbursementBoard(report)
+  const board = reimbursementBoard(report, { ownerId: owner, dueOnly: showDueOnly })
+  const reminderDays = report?.reminder_days || 0
+  // Counted off the unfiltered report so the control can say what dropping the filter would reveal.
+  const everything = reimbursementBoard(report)
+  const dueCount = everything.expenses.filter(entry => isDue(entry.dueOn)).length
+  const allOwners = everything.expenses.flatMap(entry => entry.owners || [])
+  const ownerName = owner && allOwners.find(o => o.id === owner)?.name
+  const filtered = everything.expenses.length - board.expenses.length
+  // What the narrowed list actually adds up to. The headline above stays the *group's whole balance*,
+  // which is the property that makes it trustworthy — so with a filter on, the two would silently
+  // disagree unless the subset states its own figure.
+  const shownTotal = board.expenses.reduce((sum, entry) => sum
+    + (entry.kind === 'record' ? entry.reimbursement.residual : entry.row.unclaimed), 0)
+  // Worth naming an owner on a row only where the board holds more than one. Otherwise it is the same
+  // name repeated down the column, which says nothing and costs the label its room.
+  const showOwners = new Set(allOwners.map(o => o.id)).size > 1
+
+  async function saveReminderDays(days) {
+    setSavingDays(true)
+    setError('')
+    try {
+      await api.setReimbursementSettings(days)
+      load()
+    } catch (err) {
+      setError(err?.message || 'That reminder setting could not be saved.')
+    } finally {
+      setSavingDays(false)
+    }
+  }
 
   function afterChange() {
     load()
@@ -176,8 +227,36 @@ export default function ReimbursementsReportDialog({ categories, onAddCategory, 
             <span style={{ fontSize: 16, fontWeight: 600 }}>{formatMoneyMagnitude(Math.abs(report.total))}</span>
           </div>
 
+          {/* The narrowing a task's link arrived with, stated and removable. A report that quietly hid
+              most of its rows would be worse than one that did not filter — the reader would be looking
+              at a total that did not match the list under it. */}
+          {filtered > 0 || owner || showDueOnly ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              fontSize: 12.5, padding: '6px 8px', borderRadius: 6,
+              background: 'var(--surface2)', border: '1px solid var(--border)',
+            }}>
+              <span style={{ color: 'var(--muted)' }}>
+                Showing {showDueOnly ? 'what is due' : 'everything'}
+                {ownerName ? ` on ${ownerName}'s accounts` : (owner ? ' on unassigned accounts' : '')}
+                {' '}&mdash; {formatMoneyMagnitude(Math.abs(shownTotal))} of the total above
+                {filtered > 0 ? ` · ${filtered} hidden` : ''}
+              </span>
+              <Button
+                variant="ghost"
+                small
+                onClick={() => { setOwner(null); setShowDueOnly(false) }}
+                disabled={!owner && !showDueOnly}
+              >Show everything</Button>
+            </div>
+          ) : null}
+
           {!board.expenses.length && !board.income.length ? (
-            <EmptyState message="Nothing is waiting to come back." />
+            <EmptyState message={
+              owner || showDueOnly
+                ? 'Nothing here matches that. Show everything to see the rest.'
+                : 'Nothing is waiting to come back.'
+            } />
           ) : null}
 
           {pendingDrop ? (
@@ -209,6 +288,7 @@ export default function ReimbursementsReportDialog({ categories, onAddCategory, 
                   <BoardEntry
                     key={`${entry.kind}-${entry.id}`}
                     entry={entry}
+                    showOwner={showOwners}
                     dropTarget={dropTarget === entry.id}
                     onOpen={() => openEntry(entry)}
                     onDragOver={event => allowDrop(event, entry)}
@@ -246,6 +326,40 @@ export default function ReimbursementsReportDialog({ categories, onAddCategory, 
               </Section>
             </div>
           )}
+
+          {/* The one piece of configuration this feature has, at the foot of the surface that shows what
+              it acts on. Stated as a sentence rather than as a labelled field because it is a single
+              number with an obvious unit, and 0 is a real answer — the disable switch, which is not a
+              dead end since a record can still be given a date of its own. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+            fontSize: 12.5, color: 'var(--muted)',
+            borderTop: '1px solid var(--border)', paddingTop: 10,
+          }}>
+            <label htmlFor="reimbursement-reminder-days">Ask about anything still owed after</label>
+            <input
+              id="reimbursement-reminder-days"
+              type="number"
+              min="0"
+              max="3650"
+              defaultValue={reminderDays}
+              disabled={savingDays}
+              // On blur rather than on every keystroke: this writes a household-wide setting and
+              // reloads the report, so a request per digit would be both wasteful and visibly jumpy.
+              onBlur={e => {
+                const next = Number(e.target.value)
+                if (Number.isFinite(next) && next !== reminderDays) saveReminderDays(next)
+              }}
+              style={{
+                font: 'inherit', fontSize: 12.5, width: 64, padding: '3px 6px', borderRadius: 6,
+                border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+              }}
+            />
+            <span>
+              days{reminderDays ? '' : ' — 0 turns the default reminder off'}
+              {dueCount ? ` · ${dueCount} past that now` : ''}
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -308,9 +422,14 @@ const looseRowStyle = {
  * across two reimbursements appears under both, and stating its full value in each would double it on
  * screen.
  */
-function BoardEntry({ entry, dropTarget, onOpen, onDragOver, onDragLeave, onDrop }) {
+function BoardEntry({ entry, showOwner, dropTarget, onOpen, onDragOver, onDragLeave, onDrop }) {
   const tracked = entry.kind === 'record'
   const amount = tracked ? entry.reimbursement.residual : entry.row.unclaimed
+  const due = isDue(entry.dueOn)
+  // Whose it is, where that is not the same answer for everything on screen. A record whose expenses
+  // span two people names both — the debt genuinely concerns both, and picking one would hide it from
+  // the other.
+  const owners = showOwner ? (entry.owners || []).map(owner => owner.name).join(' & ') : ''
   return (
     <div
       onDragOver={onDragOver}
@@ -326,7 +445,11 @@ function BoardEntry({ entry, dropTarget, onOpen, onDragOver, onDragLeave, onDrop
     >
       <button type="button" onClick={onOpen} style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
         <span style={{ fontWeight: tracked ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Ahead of the name rather than after it: it is the reason the row is being looked at, and a
+              marker at the end of a truncating label is the first thing to disappear. */}
+          {due ? <span title={`Due since ${entry.dueOn}`} style={{ color: 'var(--danger)' }}>● </span> : null}
           {tracked ? reimbursementListLabel(entry.reimbursement) : entry.row.payee}
+          {owners ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}> · {owners}</span> : null}
         </span>
         <span style={{ textAlign: 'right', color: getTransactionAmountColor(amount) }}>
           {formatTransactionAmount(amount)}

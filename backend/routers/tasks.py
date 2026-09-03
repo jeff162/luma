@@ -37,6 +37,7 @@ from backend import transport
 from backend.services import crypto_service
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.recurring_signals import compute_signals
+from backend.services.reimbursements import due_reminders
 
 router = APIRouter()
 
@@ -255,8 +256,59 @@ def _build_tasks(request: Request | None) -> list[dict]:
             })
 
         tasks.extend(_recurring_signal_tasks(conn))
+        tasks.extend(_reimbursement_tasks(conn))
 
     return tasks
+
+
+def _reimbursement_tasks(conn) -> list[dict]:
+    """Receivables that have gone quiet for longer than they should have, one task per owner.
+
+    **Why this is a task at all**: until a receivable is settled, spending is under-reported — the
+    disease the flag-and-exclude model was rejected for, differing only in that the amount is visible
+    here. Nothing else in the app goes looking for money that never came back.
+
+    **One task per owner, gated on the household actually having several people.** Someone with a
+    reminder on their own card can act on it and leave another person's alone, which is the whole reason
+    the split exists; below that threshold the split would be a heading over a single group. The gate is
+    `owner_grouping_applies` rather than "any owner exists", because a built-in *Shared* owner appears
+    the first time the Owners page is opened.
+
+    **No `dismiss_key`.** These carry a per-record snooze instead — pushing a reminder out is a statement
+    about *that* receivable, following the recurring signals rather than the count-ratcheting tasks. An
+    aggregate dismissal on top would be a second mechanism doing the same job, and it would hide a
+    newly-due reminder behind a count that had not risen.
+    """
+    report = due_reminders(conn)
+    if not report["total"]:
+        return []
+    if not report["grouped"]:
+        return [_reimbursement_task(group=None, count=report["total"])]
+    return [
+        _reimbursement_task(group=group, count=group["count"])
+        for group in report["groups"]
+    ]
+
+
+def _reimbursement_task(*, group: dict | None, count: int) -> dict:
+    # The link opens the reimbursements report already narrowed to what the task counted, so the screen
+    # and the badge cannot disagree about which rows are meant. `owner_ids` is the token the transaction
+    # list's own owner facet uses, including `unassigned` for an account nobody owns.
+    link = "/transactions?reimbursements=1&due=1"
+    if group:
+        link += f"&owner_ids={group['owner_id']}"
+    whose = f" — {group['owner_name']}" if group else ""
+    return {
+        "id":          f"reimbursements_due_{group['owner_id']}" if group else "reimbursements_due",
+        "title":       f"Reimbursements to chase{whose}",
+        "description": f"{count} reimbursable expense{'s have' if count != 1 else ' has'} been waiting "
+                       "longer than expected. Chase it, push the reminder out, or complete it if the "
+                       "money is never coming back.",
+        "count":       count,
+        "link":        link,
+        "link_label":  "Review reimbursements",
+        "severity":    SEVERITY_WARNING,
+    }
 
 
 # Each anomaly kind becomes one task naming what it is and pointing at the Recurring page's review

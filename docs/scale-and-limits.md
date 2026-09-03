@@ -137,6 +137,29 @@ The figures are transient allocation during the operation, not resting footprint
 operation that dies on a small machine — and fixing only the export would have been half an answer,
 since **a ledger that can be backed up and not restored has no backup.**
 
+## The Tasks list is recomputed on every mutation
+
+`/tasks` has no cache and no timer. It is fetched on every route change *and* on every successful
+mutation anywhere in the app (the `luma:data-mutated` broadcast), so each of its conditions runs at that
+cadence. Two of them are not constant-time, and both were accepted on the same reasoning:
+
+- **Amazon reconciliation** reconciles each completed Amazon batch on demand — bounded by the number of
+  such batches, which is small in practice.
+- **Reimbursement reminders** load the whole outstanding report: every transaction holding money in the
+  receivable group, plus roughly four queries per open reimbursement record. The per-record half is
+  bounded by how many the user is tracking at once, which is tens rather than thousands.
+
+**A user who does not use the feature pays two queries.** The receivable group is seeded for everyone
+but ships empty, so `reimbursable_leaf_ids` returns nothing and the whole computation exits before
+touching `txn`. That is what makes the cost proportional to use rather than to ledger size, and it is
+the property to preserve if either condition is extended.
+
+The half that does grow with time is the set of transactions holding receivable money, which **includes
+the members of completed reimbursements** — those deliberately stay in the group, since the two sides
+cancel there. Their portions are fully claimed, so they are excluded before the expensive per-row work,
+but they are still scanned. Revisit if a ledger accumulates enough resolved reimbursements for that scan
+to show up in a mutation's latency; the fix would be a leaner due-query that never assembles the report.
+
 ## Measuring performance
 
 **Re-baseline on a production build with the DevTools Components panel closed.** A development build

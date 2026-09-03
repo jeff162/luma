@@ -13,6 +13,21 @@ test file's docstring). Two tiers:
 
 ---
 
+## Known intermittent failure — unexplained
+
+`test_transaction_splits.py::SplitProtectionTests::test_bulk_recategorize_declines_split_rows_and_reports_the_count`
+failed **once**, in a full-suite run on 2026-09-03, and has not reproduced in five subsequent full runs.
+
+Recorded because the obvious explanation is wrong and would waste the next person's time: **the suite is
+not order-randomized** — no `pytest-randomly` is installed, so every run executes in the same order, and
+"it was just an unlucky ordering" does not apply. That leaves a genuine intermittency. The test drives a
+real `TestClient` against a temp database, so the candidates worth checking first are a SQLite lock
+timeout under load (the run that failed was competing with other work on the machine) and shared state
+in the `api_client()` fixture.
+
+No output was captured beyond the test name. If it recurs, keep the full assertion text — that is the
+missing piece, and it is what turns this from a rumour into a bug.
+
 ## Harness
 
 ### End-to-end UI runs on Playwright against an isolated stack

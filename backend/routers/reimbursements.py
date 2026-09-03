@@ -35,15 +35,21 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db
 from backend.services.reimbursements import (
+    DEFAULT_REMINDER_DAYS,
+    MAX_REMINDER_DAYS,
     ReimbursementError,
     add_claims,
     create_reimbursement,
+    default_reminder_days,
     delete_reimbursement,
+    due_reminders,
     get_reimbursement,
+    move_claim,
     outstanding,
     remove_transaction,
     complete,
     reopen,
+    set_default_reminder_days,
     update_reimbursement,
 )
 
@@ -66,10 +72,30 @@ class ReimbursementCreate(BaseModel):
 
 class ReimbursementUpdate(BaseModel):
     counterparty: Optional[str] = None
+    # The reminder has three states, so it takes three fields rather than one nullable date: a date of
+    # its own, switched off (`clear_reminder`), or back to following the household default
+    # (`follow_default_reminder`). See `services.reimbursements.update_reimbursement` for why "off" and
+    # "follow the default" must not collapse into one empty value.
+    remind_on: Optional[str] = None
+    clear_reminder: bool = False
+    follow_default_reminder: bool = False
+
+
+class ReminderSettings(BaseModel):
+    # 0 disables the default, which is not a dead end: a record can still be given a date of its own.
+    reminder_days: int
 
 
 class ReimbursementMembers(BaseModel):
     claims: list[ClaimIn]
+
+
+class ClaimMove(BaseModel):
+    """Re-attach a portion another reimbursement is holding. The amount is not accepted: what moves is
+    the claim as it stands, so restating it would be a second truth able to disagree with the record it
+    is being taken from."""
+    txn_id: str
+    from_link_id: str
 
 
 class CompleteRequest(BaseModel):
@@ -97,6 +123,37 @@ def read_outstanding():
         return outstanding(conn)
 
 
+@router.get("/settings")
+def read_settings():
+    """The household's default reminder gap. Ledger-level rather than per-user — one ledger has one
+    answer, and the reminders are shown to everyone whoever's accounts they are on."""
+    with get_db() as conn:
+        return _settings_payload(default_reminder_days(conn))
+
+
+@router.put("/settings")
+def write_settings(body: ReminderSettings):
+    with get_db() as conn:
+        return _settings_payload(_guard(lambda: set_default_reminder_days(conn, body.reminder_days)))
+
+
+def _settings_payload(days: int) -> dict:
+    # The bounds ride along so the control can state them rather than discovering them by rejection.
+    return {
+        "reminder_days": days,
+        "default_reminder_days": DEFAULT_REMINDER_DAYS,
+        "max_reminder_days": MAX_REMINDER_DAYS,
+    }
+
+
+@router.get("/due")
+def read_due():
+    """Receivables that have gone quiet longer than they should have, grouped by whose they are. Backs
+    the Tasks signal; exposed here so the report can say the same thing without a second definition."""
+    with get_db() as conn:
+        return due_reminders(conn)
+
+
 @router.post("")
 def create(body: ReimbursementCreate):
     with get_db() as conn:
@@ -120,7 +177,11 @@ def read(link_id: str):
 def update(link_id: str, body: ReimbursementUpdate):
     with get_db() as conn:
         return _guard(lambda: update_reimbursement(
-            conn, link_id, counterparty=body.counterparty,
+            conn, link_id,
+            counterparty=body.counterparty,
+            remind_on=body.remind_on,
+            clear_reminder=body.clear_reminder,
+            follow_default_reminder=body.follow_default_reminder,
         ))
 
 
@@ -130,6 +191,14 @@ def add(link_id: str, body: ReimbursementMembers):
         return _guard(lambda: add_claims(
             conn, link_id, [claim.model_dump() for claim in body.claims],
         ))
+
+
+@router.post("/{link_id}/transactions/move")
+def move(link_id: str, body: ClaimMove):
+    """Move a portion here from the reimbursement currently holding it — the fix for a row attached to
+    the wrong record, which the ordinary picker cannot offer because it lists unclaimed money only."""
+    with get_db() as conn:
+        return _guard(lambda: move_claim(conn, link_id, body.txn_id, body.from_link_id))
 
 
 @router.delete("/{link_id}/transactions/{txn_id}")

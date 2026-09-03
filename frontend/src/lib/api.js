@@ -584,10 +584,24 @@ export const api = {
     request(`/reimbursements/${id}/transactions`, { method: 'POST', body: JSON.stringify({ claims }) }),
   removeReimbursementTransaction: (id, txnId) =>
     request(`/reimbursements/${id}/transactions/${txnId}`, { method: 'DELETE' }),
+  // Re-attach a portion another reimbursement is holding. The amount is not sent: what moves is the
+  // claim as it stands, and restating it would be a second truth able to disagree with the record it is
+  // taken from. The reply carries `moved_from`, since emptying the old record deletes it.
+  moveReimbursementClaim: (id, txnId, fromLinkId) =>
+    request(`/reimbursements/${id}/transactions/move`,
+      { method: 'POST', body: JSON.stringify({ txn_id: txnId, from_link_id: fromLinkId }) }),
   completeReimbursement: (id, body) =>
     request(`/reimbursements/${id}/complete`, { method: 'POST', body: JSON.stringify(body) }),
   reopenReimbursement: (id)         => request(`/reimbursements/${id}/complete`, { method: 'DELETE' }),
   deleteReimbursement: (id)         => request(`/reimbursements/${id}`, { method: 'DELETE' }),
+  // The household's default reminder gap, and the receivables that have gone past it. Ledger-level
+  // rather than per-user: one ledger has one answer, and the reminders are shown to everyone whoever's
+  // accounts they sit on. `/outstanding` carries `reminder_days` too, so a surface already holding the
+  // report derives overdue-ness from that rather than fetching this a second time.
+  getReimbursementSettings: () => request('/reimbursements/settings'),
+  setReimbursementSettings: (days) =>
+    request('/reimbursements/settings', { method: 'PUT', body: JSON.stringify({ reminder_days: days }) }),
+  getDueReimbursements: () => request('/reimbursements/due'),
   // Trash (soft-delete) for transactions. Mirrors the account trash flow: trashed rows are
   // filtered out of every read until they're explicitly restored or the trash is emptied.
   trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),

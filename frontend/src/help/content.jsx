@@ -818,8 +818,8 @@ export const HELP_TOPICS = [
     id: 'reimbursable-expenses',
     section: 'organizing',
     title: 'Money that comes back later',
-    surfaces: ['Transactions (Reimbursements)', 'Transaction detail (Reimbursement)', 'Transactions (↩ marker)'],
-    summary: 'Concert tickets bought for friends, a work expense claimed afterwards. The part owed back goes into a category under the Reimbursable group, which keeps it out of spending totals until it is resolved -- so the month of the purchase reports only what was really spent. Linking the expense to the repayment tracks what is still owed; completing it closes the record and moves any difference into a real category.',
+    surfaces: ['Transactions (Reimbursements)', 'Transaction detail (Reimbursement)', 'Transactions (↩ marker)', 'Tasks'],
+    summary: 'Concert tickets bought for friends, a work expense claimed afterwards. The part owed back goes into a category under the Reimbursable group, which keeps it out of spending totals until it is resolved -- so the month of the purchase reports only what was really spent. Linking the expense to the repayment tracks what is still owed; completing it closes the record and moves any difference into a real category. Anything outstanding longer than expected is raised on Tasks, so an expense that is never chased cannot quietly understate a month for good.',
     body: () => (
       <>
         <p>
@@ -904,6 +904,35 @@ export const HELP_TOPICS = [
         <p>
           In the transaction list a <strong>&#8617;</strong> marker on a row opens its reimbursement
           directly, dimmed once that reimbursement is finished.
+        </p>
+
+        <h4>Being reminded about one</h4>
+        <p>
+          An expense that is never chased is the one way this arrangement can still mislead: money parked
+          in the group stays out of spending totals for as long as it sits there, so a repayment that
+          never arrives quietly understates a month for good. A receivable that has been outstanding
+          longer than expected therefore appears on the Tasks page.
+        </p>
+        <p>
+          How long is &ldquo;longer than expected&rdquo; is set at the foot of the{' '}
+          <strong>Reimbursements</strong> report, and it is measured from the date of the transaction
+          rather than from when the record was made -- an expense entered months after the fact is
+          already overdue, and recording it should not push the reminder further away. Thirty days suits
+          a work expense; a set of tickets that will not be settled until the night itself is the case
+          for setting a date directly on the record instead. <strong>0</strong> switches the default off
+          altogether, and records with their own dates still work.
+        </p>
+        <p>
+          Each record carries its own answer: the default, a chosen date, or no reminder at all. A due
+          record offers <strong>Not yet</strong>, which pushes it out without any further decision --
+          most of the time a reminder needs nothing more than that. Money that has not been tracked has
+          no record to hold a date, so it follows the default until it is tracked.
+        </p>
+        <p>
+          Where more than one person is set up as an owner, the reminders arrive as one task per owner,
+          based on the account each transaction sits on. That way one person&rsquo;s outstanding expenses
+          can be worked through without wading through another&rsquo;s. Every task is visible to
+          everyone; the split is there to make them separable, not private.
         </p>
 
         <h4>Finishing one</h4>

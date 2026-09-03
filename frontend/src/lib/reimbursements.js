@@ -280,21 +280,61 @@ export function isRepaymentRow(unclaimed) {
  * A record whose only member is a repayment sits on the left with everything else: it is a record, and
  * what it is waiting for is an expense.
  */
-export function reimbursementBoard(report) {
+export function reimbursementBoard(report, { ownerId = null, dueOnly = false, today } = {}) {
+  const reminderDays = report?.reminder_days || 0
   const records = (report?.reimbursements || []).map(item => {
     const members = (item?.members || []).filter(member => !member?.trashed)
     const dates = members.map(member => member?.date).filter(Boolean).sort()
-    return { kind: 'record', id: item.id, date: dates[0] || '', reimbursement: item, members }
+    return {
+      kind: 'record',
+      id: item.id,
+      date: dates[0] || '',
+      reimbursement: item,
+      members,
+      // Whose it is: the owners of the **expense** side, since the question a reminder asks is who is
+      // owed. A repayment landing on someone else's account does not make the debt theirs.
+      owners: ownersOf(members.filter(member => round2(member.claim) > 0)),
+      dueOn: recordDueDate(item, reminderDays),
+    }
   })
   const loose = (report?.loose || []).map(row => ({
-    kind: 'row', id: row.txn_id, date: row.date || '', row,
+    kind: 'row',
+    id: row.txn_id,
+    date: row.date || '',
+    row,
+    owners: ownersOf([row]),
+    dueOn: looseDueDate(row, reminderDays),
   }))
   const owed = loose.filter(entry => round2(entry.row.unclaimed) > 0)
   const paid = loose.filter(entry => round2(entry.row.unclaimed) < 0)
+  const keep = entry => matchesOwner(entry, ownerId) && (!dueOnly || isDue(entry.dueOn, today))
   return {
-    expenses: byDateDescending([...records, ...owed]),
+    // The right-hand pile is money *in*, which is never due and belongs to nobody in particular for the
+    // purpose of chasing — narrowing it by the task's owner would hide the very repayments that could
+    // settle what the task is about.
+    expenses: byDateDescending([...records, ...owed].filter(keep)),
     income: byDateDescending(paid),
   }
+}
+
+function ownersOf(rows) {
+  const seen = []
+  for (const row of rows || []) {
+    const id = row?.owner_id || UNASSIGNED_OWNER
+    if (!seen.some(owner => owner.id === id)) {
+      seen.push({ id, name: row?.owner_name || 'Unassigned' })
+    }
+  }
+  return seen
+}
+
+// `unassigned` rather than a null id, matching the token the transaction list's own owner facet uses —
+// which is what lets a task deep-link to exactly the rows it counted.
+export const UNASSIGNED_OWNER = 'unassigned'
+
+function matchesOwner(entry, ownerId) {
+  if (!ownerId) return true
+  return (entry.owners || []).some(owner => owner.id === ownerId)
 }
 
 // Newest first, with the id as the tiebreak so the order is stable across reloads rather than following
@@ -331,7 +371,7 @@ export function dropRefusal(entry, row) {
 }
 
 /*
- * What a repayment could be repaying: both piles, not just the tracked one.
+ * What a row could be paired with: both piles, not just the tracked one, and in **both directions**.
  *
  * The first cut of the sign-driven action offered only existing records, which left the common case
  * unreachable — an expense nobody has tracked yet cannot be chosen, so "this repays that" was impossible
@@ -339,13 +379,20 @@ export function dropRefusal(entry, row) {
  * both just receivable rows; which of them happens to have a record attached is not something the person
  * matching them should have to think about.
  *
+ * **It answers for an expense as well as for a repayment.** Starting from a repayment offers the
+ * expenses it could repay; starting from an expense offers the repayments already sitting in the ledger
+ * waiting to be matched. The temporal norm is money out first and back later, so an expense usually has
+ * nothing to offer and the caller falls through to plain tracking — but the case where a credit cleared
+ * before its receipt was entered is real, and the asymmetry made it reachable only from the credit's
+ * side. The sign still decides the *wording*; it no longer decides whether the question is asked.
+ *
  * **Opposite sign only.** A repayment repays expenses; an expense is repaid by repayments. Same-sign
  * rows are not candidates, so the list never offers a pairing the server would refuse.
  *
- * **Records already claiming this row are excluded.** A reimbursement holds at most one claim per
- * transaction, so adding a second portion of the same row to the same record *replaces* the first rather
- * than adding to it — offering it here would look like accumulating and quietly overwrite. Changing an
- * existing claim is the editor's job.
+ * **Records already claiming this row are excluded** from `tracked`. A reimbursement holds at most one
+ * claim per transaction, so adding a second portion of the same row to the same record *replaces* the
+ * first rather than adding to it — offering it here would look like accumulating and quietly overwrite.
+ * Changing an existing claim is the editor's job.
  */
 export function matchCandidates(report, { txnId, amount } = {}) {
   const claimSign = round2(amount) < 0 ? -1 : 1
@@ -359,6 +406,30 @@ export function matchCandidates(report, { txnId, amount } = {}) {
     return (remaining < 0 ? -1 : 1) !== claimSign
   })
   return { tracked, untracked }
+}
+
+/*
+ * The question the match picker asks, which is not the same question in both directions.
+ *
+ * A repayment asks what it repays; an expense asks what repaid it. Rendering one sentence for both — or
+ * the repayment's sentence with the amount swapped — would describe an expense as though it were money
+ * coming back, which is the reading this feature has had to be corrected out of more than once.
+ */
+export function matchPrompt({ repayment, amountLabel } = {}) {
+  if (repayment) return amountLabel ? `What does ${amountLabel} repay?` : 'What does this repay?'
+  return amountLabel ? `What repaid ${amountLabel}?` : 'What repaid this?'
+}
+
+/** The quieter fallback beside the candidates, phrased for the side it is offered on. */
+export function matchAloneHint({ repayment, empty } = {}) {
+  if (empty) {
+    return repayment
+      ? 'Nothing is waiting to be repaid yet.'
+      : 'Nothing has come back yet that could be matched to this.'
+  }
+  return repayment
+    ? 'Or record it on its own until the expense is entered.'
+    : 'Or just expect it back, and match the repayment when it arrives.'
 }
 
 /*
@@ -509,4 +580,140 @@ export function hasRepayment(reimbursement) {
 export function primaryAction(reimbursement) {
   if (!reimbursement || reimbursement.completed) return 'save'
   return reimbursementStatus(reimbursement) === 'square' && hasRepayment(reimbursement) ? 'complete' : 'save'
+}
+
+/*
+ * Reminders — when a receivable stops being "waiting" and starts being "ask about it".
+ *
+ * **The clock runs from the transaction, never from the record.** A reimbursement entered today for a
+ * charge in February is already months old, and dating it from the record would mean that tidying up —
+ * the one act that should be encouraged — postpones the reminder every time. The server measures it the
+ * same way; these helpers exist so the report and the editor can say the same thing without a second
+ * round trip, reading the `reminder_days` the outstanding report already carries.
+ *
+ * **A record has three answers, not two.** No stored value means *follow the household default*; an
+ * empty one means the user switched this record's reminder off; a date means they chose it. Collapsing
+ * the first two would make "no reminder" silently revert on the next unrelated save, which is exactly
+ * what a reminder must not do.
+ */
+
+export const FOLLOWING_DEFAULT = 'default'
+export const REMINDER_OFF = 'off'
+export const REMINDER_ON = 'date'
+
+/** Which of the three answers a record currently holds. */
+export function reminderMode(reimbursement) {
+  const value = reimbursement?.remind_on
+  if (value === undefined || value === null) return FOLLOWING_DEFAULT
+  return value ? REMINDER_ON : REMINDER_OFF
+}
+
+export function addDays(isoDate, days) {
+  if (!isoDate || !Number.isFinite(Number(days))) return null
+  const parsed = new Date(`${String(isoDate).slice(0, 10)}T00:00:00Z`)
+  if (Number.isNaN(parsed.getTime())) return null
+  parsed.setUTCDate(parsed.getUTCDate() + Number(days))
+  return parsed.toISOString().slice(0, 10)
+}
+
+export function todayIso() {
+  const now = new Date()
+  // Local rather than UTC: "is this due today?" is a question about the user's calendar, and a UTC day
+  // boundary would fire a reminder the evening before west of Greenwich.
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+/*
+ * When a record starts nagging, or null where it never does.
+ *
+ * Only money still *owed* is ever due. A surplus is a gain waiting to be booked rather than something
+ * to chase, and a completed record has no work left on it at all — nagging about either would be the
+ * feature asking the user to go and collect something they already have.
+ */
+export function recordDueDate(reimbursement, reminderDays) {
+  if (!reimbursement || reimbursement.completed) return null
+  if (round2(reimbursement.residual) < CENT) return null
+  const mode = reminderMode(reimbursement)
+  if (mode === REMINDER_OFF) return null
+  if (mode === REMINDER_ON) return String(reimbursement.remind_on).slice(0, 10)
+  return reminderDays ? addDays(reimbursement.expense_date, reminderDays) : null
+}
+
+/*
+ * When a loose row starts nagging. It answers only to the household default: there is no record to hang
+ * a date on, which is what *Track this* is for — and a receivable worth deferring by hand is one worth
+ * naming anyway.
+ *
+ * Money in is never due. An unmatched credit is not under-reported spending, so there is nothing to
+ * chase about it.
+ */
+export function looseDueDate(row, reminderDays) {
+  if (!row || round2(row.unclaimed) < CENT) return null
+  return reminderDays ? addDays(row.date, reminderDays) : null
+}
+
+/** Whether a board entry has come due, computed the same way for both piles. */
+export function entryDueDate(entry, reminderDays) {
+  if (entry?.kind === 'record') return recordDueDate(entry.reimbursement, reminderDays)
+  if (entry?.kind === 'row') return looseDueDate(entry.row, reminderDays)
+  return null
+}
+
+export function isDue(dueOn, today = todayIso()) {
+  return !!dueOn && dueOn <= today
+}
+
+/*
+ * How a record's reminder reads where there is room for one line.
+ *
+ * The default case names the date it works out to rather than the rule behind it: "following the
+ * household default" is a fact about configuration, and what the reader wants to know is when they will
+ * next be asked about this money.
+ */
+export function reminderSummary(reimbursement, reminderDays, today = todayIso()) {
+  const mode = reminderMode(reimbursement)
+  if (mode === REMINDER_OFF) return 'No reminder'
+  const dueOn = recordDueDate(reimbursement, reminderDays)
+  if (!dueOn) {
+    // Nothing owed, or the default is switched off and this record never chose a date of its own.
+    return round2(reimbursement?.residual) < CENT ? 'Nothing outstanding' : 'No reminder'
+  }
+  const prefix = mode === FOLLOWING_DEFAULT ? 'Reminder' : 'Reminder set for'
+  return isDue(dueOn, today) ? `${prefix} ${dueOn} — due now` : `${prefix} ${dueOn}`
+}
+
+/*
+ * Portions held by *other* records, as the "move it here" list.
+ *
+ * Claims are exclusive, so the ordinary picker offers unclaimed money only — which leaves a row whose
+ * receivable is entirely spoken for unreachable from anywhere but the record already holding it. Rows
+ * landing on the wrong record are ordinary (a repayment matched to the wrong friend), so the fix should
+ * not be releasing it first and hoping to find it again.
+ *
+ * Excluded here: this record's own claims (nothing to move), and rows it already covers — a record holds
+ * one claim per transaction, so a move onto one of those would replace rather than add.
+ */
+export function movableClaims(report, linkId) {
+  const target = (report?.reimbursements || []).find(item => item.id === linkId)
+  const alreadyHere = new Set(
+    (target?.members || []).map(member => member.txn_id),
+  )
+  const rows = []
+  for (const record of report?.reimbursements || []) {
+    if (record.id === linkId || record.completed) continue
+    for (const member of record.members || []) {
+      if (member.trashed || alreadyHere.has(member.txn_id)) continue
+      if (Math.abs(round2(member.claim)) < CENT) continue
+      rows.push({
+        txn_id: member.txn_id,
+        date: member.date,
+        payee: member.payee,
+        claim: round2(member.claim),
+        claim_label: member.claim_label || null,
+        from: { id: record.id, label: reimbursementListLabel(record) },
+      })
+    }
+  }
+  return rows.sort((a, b) => (b.date || '').localeCompare(a.date || '')
+    || String(a.txn_id).localeCompare(String(b.txn_id)))
 }

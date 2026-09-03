@@ -116,7 +116,5 @@ splitting stays a manual act.
 
 ## Open
 
-- **Reimbursable expenses still owes its Tasks signal.**
-  → [`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md)
 - **Attachment tier 2 (extraction)** is the named precondition for automatic purchase suggestion above.
   → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)

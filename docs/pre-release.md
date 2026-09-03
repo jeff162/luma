@@ -379,8 +379,10 @@ guard, the summary-endpoint tests, and a before/after comparison over a real-dat
 
 ## Landed alongside, off-plan
 
-Not one of the six, and not scoped here — recorded because it moved surfaces and versions that later
-steps in this plan depend on.
+Not one of the six, and not scoped here. These two are recorded for a specific reason — each moved a
+**schema or payload version** the release notes have to name — and **not as an inventory of what
+shipped**: plenty has landed that is named nowhere in this document, and keeping a complete list here
+was never the intent.
 
 **Recurring series amount identity** (shipped 2026-09-01; the durable record is
 [`data-model.md`](data-model.md) → *Recurring series*). Amount becomes part of a series' identity where it is the only thing telling two
@@ -419,8 +421,12 @@ Two things it moved that matter to the steps below:
   test is: unzip, run, confirm the databases land beside the executable and the app opens.
 - **Screenshots.** The README has none, and it is a dashboard-driven visual application whose whole job
   is letting someone decide quickly. This will cost more prospective users than any missing document.
-  **Deliberately last, after every feature lands** — cash-flow reporting adds a whole dashboard frame
-  and recurring anomalies change what the surfaces show, so anything shot earlier would be reshot.
+  **Deliberately last, after every feature lands** — a feature that adds a dashboard frame or changes
+  what a surface shows makes anything shot earlier a reshoot.
+
+  **Do not take this document as the inventory of what moved.** It is a plan for what had to happen, not
+  a log of what did, and plenty has landed that is named nowhere in it. Work out what needs an image
+  from the app and the diff at the time of shooting.
 - **Cut the release.** `docs/releasing.md` has the checklist. Note that CI does **not** publish —
   attaching the four artifacts and their `.sha256` files to a written release is a manual step, and
   nothing is downloadable until it happens.
@@ -447,8 +453,13 @@ Two things it moved that matter to the steps below:
 
 ## Deliberately not in this release
 
-Named so they are not re-litigated under deadline pressure: reimbursable expenses, attachment tiers 2
-and 3, the online categorizer, and everything else in `docs/backlog/`.
+Named so they are not re-litigated under deadline pressure: attachment tiers 2 and 3, the online
+categorizer, and everything else in `docs/backlog/`.
+
+**Reimbursable expenses was on this list and is not any more** — it was built anyway, and completed
+2026-09-03. The list is corrected rather than annotated, because a "deliberately not" entry that has
+shipped is a false statement about the plan, and the next reader has no way to tell which entries are
+still true.
 
 **Transaction splits was moved back in, 2026-08-23.** It was deferred here on the grounds that invasive
 cross-cutting reporting surgery is the wrong thing to have in flight while strangers start reading the

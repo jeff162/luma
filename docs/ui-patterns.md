@@ -1114,6 +1114,12 @@ diverge on a third that is worth understanding before a fourth is added.
   portals to `<body>`, which is load-bearing rather than tidy: a `position: fixed` overlay mounted
   inside a table stacks against whatever ancestor established a containing block, not the viewport.
 
+  It follows that **a record's terminal action lives in the dialog and nowhere else.** Putting
+  *complete* on the row's right-click menu was proposed and rejected: the dialog already holds the
+  guards, the write-off path and the copy that says what the click will do to an earlier month, and an
+  action that ends a record while moving money between categories must not be reachable only by a
+  gesture nobody discovers by looking.
+
 - **The change-report callback must be a stable reference.** Each panel reports its record so the host
   can patch the ledger row without refetching the page, and the host re-renders on that report. A fetch
   effect that depends on the callback therefore refetches on every report and loops between loading and

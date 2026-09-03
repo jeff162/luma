@@ -312,3 +312,93 @@ class TaskDismissalTests(TasksFixtureTestCase):
             with self.assertRaises(HTTPException) as raised:
                 dismiss_task("configure_https", self._request())
         self.assertEqual(raised.exception.status_code, 404)
+
+
+class ReimbursementTaskTests(TasksFixtureTestCase):
+    """The reminder signal: that it appears at all, and that it splits by owner only where that means
+    something.
+
+    The gate is more than one *personal* owner rather than "any owner exists". A built-in `Shared` owner
+    appears the first time the Owners page is opened, so the looser test would split a single-person
+    install into groups all saying the same thing.
+    """
+
+    def _receivable_leaf(self) -> str:
+        from backend.services.excluded_categories import REIMBURSABLE_SYSTEM_KEY
+
+        leaf_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                group = conn.execute(
+                    "SELECT id FROM category WHERE system_key = ?", (REIMBURSABLE_SYSTEM_KEY,)
+                ).fetchone()["id"]
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals, "
+                    "sort_order) VALUES (?,?,'Owed by friends','expense',1,0)",
+                    (leaf_id, group),
+                )
+        return leaf_id
+
+    def _owner(self, name: str) -> str:
+        owner_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT INTO owner (id, name) VALUES (?, ?)", (owner_id, name))
+        return owner_id
+
+    def _receivable_txn(self, leaf: str, owner_id: str, *, date: str = "2026-01-05") -> str:
+        txn_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO txn
+                      (id, account_id, owner_id, category_id, amount, merchant_name,
+                       display_name, raw_name, date, is_pending)
+                    VALUES (?, ?, ?, ?, 120.00, 'Tickets', 'Tickets', 'Tickets', ?, 0)
+                    """,
+                    (txn_id, self.account, owner_id, leaf, date),
+                )
+        return txn_id
+
+    def _reimbursement_tasks(self) -> list[dict]:
+        with self._use_db_path():
+            result = get_tasks()
+        return [t for t in result["tasks"] if t["id"].startswith("reimbursements_due")]
+
+    def test_an_overdue_receivable_raises_one_task(self):
+        leaf = self._receivable_leaf()
+        self._receivable_txn(leaf, SHARED_OWNER_ID)
+        tasks = self._reimbursement_tasks()
+        self.assertEqual([t["id"] for t in tasks], ["reimbursements_due"])
+        self.assertEqual(tasks[0]["count"], 1)
+
+    def test_it_carries_no_dismiss_key(self):
+        # Snoozing a record is the dismissal. An aggregate one would be a second mechanism doing the
+        # same job, and it would hide a newly-due reminder behind a count that had not risen.
+        leaf = self._receivable_leaf()
+        self._receivable_txn(leaf, SHARED_OWNER_ID)
+        self.assertNotIn("dismiss_key", self._reimbursement_tasks()[0])
+
+    def test_a_recent_receivable_raises_nothing(self):
+        leaf = self._receivable_leaf()
+        self._receivable_txn(leaf, SHARED_OWNER_ID, date="2099-01-01")
+        self.assertEqual(self._reimbursement_tasks(), [])
+
+    def test_one_personal_owner_is_not_split_by_owner(self):
+        leaf = self._receivable_leaf()
+        alex = self._owner("Alex")
+        self._receivable_txn(leaf, alex)
+        self.assertEqual([t["id"] for t in self._reimbursement_tasks()], ["reimbursements_due"])
+
+    def test_two_personal_owners_get_a_task_each(self):
+        leaf = self._receivable_leaf()
+        alex = self._owner("Alex")
+        robin = self._owner("Robin")
+        self._receivable_txn(leaf, alex)
+        self._receivable_txn(leaf, robin)
+        tasks = self._reimbursement_tasks()
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual({t["count"] for t in tasks}, {1})
+        # Each links to its own owner's rows, so the screen and the badge cannot disagree.
+        self.assertTrue(all("owner_ids=" in t["link"] for t in tasks))

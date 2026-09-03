@@ -37,17 +37,26 @@ from backend.services.excluded_categories import (
     reimbursable_leaf_ids,
 )
 from backend.services.reimbursements import (
+    DEFAULT_REMINDER_DAYS,
     EXPENSE_ROLE,
     REPAYMENT_ROLE,
+    UNASSIGNED_OWNER,
     ReimbursementError,
     add_claims,
     create_reimbursement,
+    default_reminder_days,
+    due_reminders,
+    get_reimbursement,
+    move_claim,
     outstanding,
+    owner_grouping_applies,
     receivable_amounts,
     reimbursements_for_txn,
     complete,
     reopen,
+    set_default_reminder_days,
     unclaimed_amounts,
+    update_reimbursement,
 )
 from backend.services.txn_splits import get_split_parts, save_split
 
@@ -747,6 +756,84 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(reopened.json()["residual"], 150.0)
             self.assertEqual(client.get("/api/reimbursements/outstanding").json()["total"], 150.0)
 
+    def test_the_literal_settings_and_due_paths_are_not_swallowed_as_lookups(self):
+        # Same hazard as `/outstanding`: both are declared alongside `/{link_id}`, so only real routing
+        # proves they are not being read as a reimbursement whose id happens to be "settings".
+        from backend.tests._api_client import api_client
+
+        with api_client() as (client, path):
+            self._seed(path)
+            settings = client.get("/api/reimbursements/settings")
+            self.assertEqual(settings.status_code, 200, settings.text)
+            self.assertEqual(settings.json()["reminder_days"], 30)
+
+            due = client.get("/api/reimbursements/due")
+            self.assertEqual(due.status_code, 200, due.text)
+            # The seeded expense is dated 2026-02-14 and untracked, so it is loose and long overdue.
+            self.assertEqual(due.json()["total"], 1)
+
+    def test_the_reminder_default_round_trips_and_bounds_are_enforced(self):
+        from backend.tests._api_client import api_client
+
+        with api_client() as (client, path):
+            self._seed(path)
+            saved = client.put("/api/reimbursements/settings", json={"reminder_days": 45})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["reminder_days"], 45)
+            self.assertEqual(client.get("/api/reimbursements/settings").json()["reminder_days"], 45)
+            # Zero is the disable switch, not an invalid value.
+            self.assertEqual(
+                client.put("/api/reimbursements/settings", json={"reminder_days": 0}).json()["reminder_days"], 0
+            )
+            self.assertEqual(client.get("/api/reimbursements/due").json()["total"], 0)
+            refused = client.put("/api/reimbursements/settings", json={"reminder_days": -1})
+            self.assertEqual(refused.status_code, 400, refused.text)
+
+    def test_a_reminder_date_round_trips_through_the_patch(self):
+        from backend.tests._api_client import api_client
+
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            created = client.post(
+                "/api/reimbursements", json={"claims": [{"txn_id": seeded["expense"]}]}
+            ).json()
+            self.assertIsNone(created["remind_on"])
+            dated = client.patch(
+                f"/api/reimbursements/{created['id']}",
+                json={"counterparty": "Friends", "remind_on": "2026-12-01"},
+            )
+            self.assertEqual(dated.status_code, 200, dated.text)
+            self.assertEqual(dated.json()["remind_on"], "2026-12-01")
+            self.assertEqual(client.get("/api/reimbursements/due").json()["total"], 0)
+
+            off = client.patch(
+                f"/api/reimbursements/{created['id']}",
+                json={"counterparty": "Friends", "clear_reminder": True},
+            )
+            self.assertEqual(off.json()["remind_on"], "")
+
+    def test_a_portion_moves_between_records_over_the_api(self):
+        from backend.tests._api_client import api_client
+
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            wrong = client.post(
+                "/api/reimbursements",
+                json={"claims": [{"txn_id": seeded["repayment"]}], "counterparty": "Wrong"},
+            ).json()
+            right = client.post(
+                "/api/reimbursements",
+                json={"claims": [{"txn_id": seeded["expense"]}], "counterparty": "Right"},
+            ).json()
+            moved = client.post(
+                f"/api/reimbursements/{right['id']}/transactions/move",
+                json={"txn_id": seeded["repayment"], "from_link_id": wrong["id"]},
+            )
+            self.assertEqual(moved.status_code, 200, moved.text)
+            self.assertEqual(moved.json()["repaid"], -350.0)
+            self.assertTrue(moved.json()["moved_from"]["deleted"])
+            self.assertEqual(client.get(f"/api/reimbursements/{wrong['id']}").status_code, 404)
+
     def test_a_broken_invariant_comes_back_as_a_400_the_screen_can_show(self):
         from backend.tests._api_client import api_client
 
@@ -903,3 +990,277 @@ class SharesOfOneTransactionTests(ReimbursementTestCase):
             ).fetchone()["total"]
         self.assertEqual(report["total"], round(float(balance), 2))
         self.assertEqual([row["unclaimed"] for row in report["loose"]], [-200.0])
+
+
+class ReminderTests(ReimbursementTestCase):
+    """When a receivable starts asking to be chased, and whose reminder it is.
+
+    The clock runs from the **transaction's** date rather than from the record's creation, which is the
+    half most likely to be got wrong: a record made today for a charge in February is already months
+    overdue, and dating it from the record would let tidying up postpone the reminder indefinitely.
+    """
+
+    def _due_ids(self, conn, today="2026-09-03"):
+        report = due_reminders(conn, today=today)
+        return report["total"], {group["owner_id"] for group in report["groups"]}
+
+    def test_an_old_expense_comes_due_on_the_default_gap(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            # The charge is 2026-02-14 and the default gap is 30 days, so it is long past due.
+            total, _ = self._due_ids(conn)
+        self.assertEqual(total, 1)
+
+    def test_a_recent_expense_is_not_due_yet(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            total, _ = self._due_ids(conn, today="2026-02-20")
+        self.assertEqual(total, 0)
+
+    def test_the_clock_runs_from_the_expense_not_from_the_record(self):
+        # The record is made months after the charge. It must be due immediately rather than starting a
+        # fresh 30 days, or tidying up would keep pushing the reminder away.
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            total, _ = self._due_ids(conn, today="2026-03-16")
+        self.assertEqual(total, 1)
+
+    def test_a_repayment_arriving_does_not_restart_the_clock(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            repayment = self._repayment(conn, 100, date="2026-09-01")
+            create_reimbursement(conn, [
+                {"txn_id": txn_id, "amount": 375.0}, {"txn_id": repayment, "amount": -100.0},
+            ], counterparty="Dana")
+            total, _ = self._due_ids(conn)
+        self.assertEqual(total, 1)
+
+    def test_a_records_own_date_overrides_the_default(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Concert")
+            update_reimbursement(conn, record["id"], counterparty="Concert", remind_on="2026-12-01")
+            self.assertEqual(self._due_ids(conn)[0], 0)
+            self.assertEqual(self._due_ids(conn, today="2026-12-02")[0], 1)
+
+    def test_a_record_can_switch_its_reminder_off(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", clear_reminder=True)
+            self.assertEqual(self._due_ids(conn)[0], 0)
+
+    def test_switching_off_survives_a_later_save(self):
+        # "Off" and "follow the default" are different answers. Collapsing them into one empty value
+        # would make a switched-off reminder quietly return on the next unrelated edit.
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", clear_reminder=True)
+            update_reimbursement(conn, record["id"], counterparty="Dana Renamed")
+            self.assertEqual(self._due_ids(conn)[0], 0)
+
+    def test_a_record_can_go_back_to_following_the_default(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", clear_reminder=True)
+            update_reimbursement(conn, record["id"], counterparty="Dana", follow_default_reminder=True)
+            self.assertEqual(self._due_ids(conn)[0], 1)
+
+    def test_a_reminder_survives_claims_being_added(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", remind_on="2026-12-01")
+            repayment = self._repayment(conn, 100)
+            updated = add_claims(conn, record["id"], [{"txn_id": repayment, "amount": -100.0}])
+        self.assertEqual(updated["remind_on"], "2026-12-01")
+
+    def test_a_reminder_survives_completing_and_reopening(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            repayment = self._repayment(conn, 375)
+            record = create_reimbursement(conn, self._claims(txn_id, repayment), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", remind_on="2026-12-01")
+            completed = complete(conn, record["id"])
+            self.assertEqual(completed["remind_on"], "2026-12-01")
+            self.assertEqual(reopen(conn, record["id"])["remind_on"], "2026-12-01")
+
+    def test_a_completed_reimbursement_stops_being_due(self):
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            repayment = self._repayment(conn, 375)
+            record = create_reimbursement(conn, self._claims(txn_id, repayment), counterparty="Dana")
+            self.assertEqual(self._due_ids(conn)[0], 0)  # square, so nothing is owed
+            complete(conn, record["id"])
+            self.assertEqual(self._due_ids(conn)[0], 0)
+
+    def test_a_surplus_is_never_due(self):
+        # Repaid over is a gain waiting to be booked, not money to chase. Chasing it would be the
+        # feature telling the user to go and collect something they already have.
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            repayment = self._repayment(conn, 400)
+            create_reimbursement(conn, self._claims(txn_id, repayment), counterparty="Dana")
+            self.assertEqual(self._due_ids(conn)[0], 0)
+
+    def test_loose_receivable_comes_due_on_the_default(self):
+        with self._db() as conn:
+            self._tickets(conn)  # never tracked; it is loose receivable money
+            total, _ = self._due_ids(conn)
+        self.assertEqual(total, 1)
+
+    def test_an_unmatched_credit_is_not_due(self):
+        # Money in that nothing has claimed is not under-reported spending; there is nothing to chase.
+        with self._db() as conn:
+            self._repayment(conn, 375, date="2026-02-01")
+            total, _ = self._due_ids(conn)
+        self.assertEqual(total, 0)
+
+    def test_a_zero_default_switches_the_signal_off(self):
+        with self._db() as conn:
+            self._tickets(conn)
+            set_default_reminder_days(conn, 0)
+            try:
+                self.assertEqual(self._due_ids(conn)[0], 0)
+            finally:
+                set_default_reminder_days(conn, DEFAULT_REMINDER_DAYS)
+
+    def test_a_record_keeps_its_own_date_when_the_default_is_off(self):
+        # The disable switch must not be a dead end: an explicit date still fires.
+        with self._db() as conn:
+            txn_id = self._tickets(conn)
+            record = create_reimbursement(conn, self._claims(txn_id), counterparty="Dana")
+            update_reimbursement(conn, record["id"], counterparty="Dana", remind_on="2026-03-01")
+            set_default_reminder_days(conn, 0)
+            try:
+                self.assertEqual(self._due_ids(conn)[0], 1)
+            finally:
+                set_default_reminder_days(conn, DEFAULT_REMINDER_DAYS)
+
+
+class ReminderOwnerTests(ReimbursementTestCase):
+    """Whose reminder it is. Grouping reads `txn.owner_id` — the axis every owner filter uses — and
+    attributes a record to the owners of its **expense** side, since the question is who is owed."""
+
+    def setUp(self):
+        super().setUp()
+        with self._db() as conn:
+            self.alex = str(uuid.uuid4())
+            self.robin = str(uuid.uuid4())
+            conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Alex')", (self.alex,))
+            conn.execute("INSERT INTO owner (id, name) VALUES (?, 'Robin')", (self.robin,))
+            self.alex_account = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO account (id, external_account_id, provider, name, display_name, type, "
+                "subtype, mask, owner_id) VALUES (?, ?, 'fixture_reimb', 'Harborline Card', "
+                "'Harborline Card', 'credit', 'credit card', '1111', ?)",
+                (self.alex_account, f"acct_{self.alex_account}", self.alex),
+            )
+
+    def _owned_txn(self, conn, owner_id, *, amount, date="2026-02-14"):
+        txn_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, "
+            "display_name, raw_name, date, is_pending, category_overridden) "
+            "VALUES (?,?,?,?,?,'Tickets','Tickets','Tickets',?,0,0)",
+            (txn_id, self.alex_account, owner_id, self.receivable, amount, date),
+        )
+        return txn_id
+
+    def test_grouping_applies_once_the_household_has_two_people(self):
+        with self._db() as conn:
+            self.assertTrue(owner_grouping_applies(conn))
+
+    def test_a_lone_personal_owner_is_not_grouped(self):
+        # `ensure_shared_owner` mints a built-in Shared row the first time the Owners page is opened, so
+        # "any owner exists" would split a single-person install into groups saying the same thing.
+        with self._db() as conn:
+            conn.execute("DELETE FROM owner WHERE id = ?", (self.robin,))
+            self.assertFalse(owner_grouping_applies(conn))
+
+    def test_a_reminder_is_attributed_to_the_owner_of_the_expense(self):
+        with self._db() as conn:
+            expense = self._owned_txn(conn, self.alex, amount=375.0)
+            create_reimbursement(conn, self._claims(expense), counterparty="Dana")
+            groups = due_reminders(conn, today="2026-09-03")["groups"]
+        self.assertEqual([(g["owner_id"], g["count"]) for g in groups], [(self.alex, 1)])
+
+    def test_the_repayment_side_does_not_decide_whose_it_is(self):
+        # An expense on one person's card repaid into another's account is the owed person's reminder.
+        with self._db() as conn:
+            expense = self._owned_txn(conn, self.alex, amount=375.0)
+            repayment = self._owned_txn(conn, self.robin, amount=-100.0, date="2026-03-01")
+            create_reimbursement(conn, [
+                {"txn_id": expense, "amount": 375.0}, {"txn_id": repayment, "amount": -100.0},
+            ], counterparty="Dana")
+            groups = due_reminders(conn, today="2026-09-03")["groups"]
+        self.assertEqual([g["owner_id"] for g in groups], [self.alex])
+
+    def test_a_record_spanning_two_owners_appears_under_both(self):
+        with self._db() as conn:
+            mine = self._owned_txn(conn, self.alex, amount=200.0)
+            theirs = self._owned_txn(conn, self.robin, amount=175.0)
+            create_reimbursement(conn, [
+                {"txn_id": mine, "amount": 200.0}, {"txn_id": theirs, "amount": 175.0},
+            ], counterparty="Shared trip")
+            groups = due_reminders(conn, today="2026-09-03")["groups"]
+        self.assertEqual({g["owner_id"] for g in groups}, {self.alex, self.robin})
+
+    def test_an_unowned_row_lands_in_the_unassigned_bucket(self):
+        with self._db() as conn:
+            orphan = self._owned_txn(conn, None, amount=120.0)
+            create_reimbursement(conn, self._claims(orphan), counterparty="Nobody")
+            groups = due_reminders(conn, today="2026-09-03")["groups"]
+        self.assertEqual([g["owner_id"] for g in groups], [UNASSIGNED_OWNER])
+
+
+class MoveClaimTests(ReimbursementTestCase):
+    """Moving a portion between records — the path out of a row attached to the wrong reimbursement,
+    which the ordinary picker cannot offer because it lists unclaimed money only."""
+
+    def test_a_portion_moves_and_empties_its_old_record(self):
+        with self._db() as conn:
+            charge = self._tickets(conn)
+            repayment = self._repayment(conn, 375)
+            wrong = create_reimbursement(conn, self._claims(repayment), counterparty="Wrong friend")
+            right = create_reimbursement(conn, self._claims(charge), counterparty="Right friend")
+            moved = move_claim(conn, right["id"], repayment, wrong["id"])
+            self.assertEqual(moved["repaid"], -375.0)
+            self.assertTrue(moved["moved_from"]["deleted"])
+            with self.assertRaises(ReimbursementError):
+                get_reimbursement(conn, wrong["id"])
+
+    def test_the_old_record_survives_when_it_still_holds_something(self):
+        with self._db() as conn:
+            charge = self._tickets(conn)
+            first = self._repayment(conn, 200)
+            second = self._repayment(conn, 175, date="2026-07-10")
+            source = create_reimbursement(conn, self._claims(first, second), counterparty="Both")
+            target = create_reimbursement(conn, self._claims(charge), counterparty="Right friend")
+            moved = move_claim(conn, target["id"], second, source["id"])
+            self.assertFalse(moved["moved_from"]["deleted"])
+            self.assertEqual(get_reimbursement(conn, source["id"])["repaid"], -200.0)
+
+    def test_moving_into_a_record_that_already_covers_the_row_is_refused(self):
+        # A record holds one claim per transaction, so this would replace rather than accumulate —
+        # silently discarding what the target was already tracking.
+        with self._db() as conn:
+            deposit = self._txn(conn, amount=-400.0, date="2026-07-03", category=self.receivable)
+            source = create_reimbursement(conn, [{"txn_id": deposit, "amount": -150.0}], counterparty="A")
+            target = create_reimbursement(conn, [{"txn_id": deposit, "amount": -250.0}], counterparty="B")
+            with self.assertRaises(ReimbursementError):
+                move_claim(conn, target["id"], deposit, source["id"])
+
+    def test_moving_a_portion_that_is_not_there_is_refused(self):
+        with self._db() as conn:
+            charge = self._tickets(conn)
+            repayment = self._repayment(conn, 375)
+            source = create_reimbursement(conn, self._claims(charge), counterparty="A")
+            target = create_reimbursement(conn, self._claims(repayment), counterparty="B")
+            with self.assertRaises(ReimbursementError):
+                move_claim(conn, target["id"], repayment, source["id"])

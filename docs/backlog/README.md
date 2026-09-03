@@ -127,42 +127,6 @@ scale — rather than by feature.
   [online-categorizer.md](online-categorizer.md) and should be designed with it), phase 4 (an approved
   itemization pre-filling a split), the **sizing assumption** and the signal that would falsify it, and
   the space-reclamation view — plus why originals are never sunset on a timer.
-- [reimbursable-expenses.md](reimbursable-expenses.md) — **built 2026-09-02: service, API, detail
-  panel, ledger marker, the outstanding report (a two-column board with drag-to-pair) and the Help
-  topic. Still owed: the Tasks signal.** Reworked repeatedly under real use — rows to *portions*, one
-  action to **sign-driven** actions (money out expects a repayment, money in names what it repays), a
-  Tracked/Not-tracked report to a board split by direction, and from "settle" to **complete** (a
-  repaid-in-full reimbursement had no terminal action at all while a zero residual was an error, so the
-  feature's own happy ending was unreachable). Don't re-impose either. The app seeds the **group only**:
-  leaves are named for what the money is *for*, not for its state, which is why finished rows stay put
-  and a "Completed" leaf was designed and rejected. A reimbursement covers a **claim on
-  part of a transaction** (a *portion*), because one charge split between two friends is two debts and one
-  ATM deposit can repay both — "at most one reimbursement per transaction" was the first rule and could not model
-  the file's own motivating example. Don't re-impose it. The durable model is in `data-model.md` → Reimbursable expenses. Money
-  that leaves as an expense and returns later (tickets bought for friends, work expenses claimed back).
-  The categorization is already right; the problem is that the netting **crosses period boundaries**, so
-  a month overstates spending until the repayment lands. Models it as a **receivable category** carrying
-  the existing `exclude_from_totals` treatment — nothing is restated automatically, nothing is asserted
-  about a repayment that may never come, and "who still owes me" is the category's sum. The design turns on the
-  **residual**: a repayment is often *not* equal (tickets resold at a loss or a profit), a short
-  repayment and an unpaid one are indistinguishable by amount, so a **settle** action is what moves the
-  leftover to a real category. **Which transaction carries that move is settled and is not a preference:**
-  the residual is a category balance rather than a row, so the sign decides — a positive residual settles
-  on the **expense** (explicitly restating the original period, which is the point) and a negative one on
-  the **repayment**. That asymmetry is what keeps mixed-sign splits from looking like a prerequisite;
-  they are not one, and the file records why. Pairing is **optional and late** — needed only to settle,
-  and served by `txn_link` (`kind='reimbursement'`) rather than a new table. Downstream of
-  transaction splits, **which have since shipped** — so the dependency is met
-  and this can start. The receivable lives under a **seeded top-level `Reimbursable` group** carrying a
-  `system_key` — which is load-bearing, since the empty-category sweep skips only system rows and an
-  empty receivable category is its *healthy* state. The feature keys on the **group**, not one blessed
-  leaf, so the one-category-versus-per-counterparty question is moot: leaves are the user's to add and
-  the group's `exclude_from_totals` covers them all. No migration — `_seed_default_categories` runs
-  ahead of the migrate branch. The group is **undeletable and its exclusion unchangeable** — flat
-  refusals, since the delete never durably worked anyway (re-seeding returns it) and clearing the
-  exclusion silently restores the overstatement the feature removes; leaves stay entirely the user's,
-  because an existing parent always wins `COALESCE(parent, leaf)`. The default leaf is
-  `Awaiting reimbursement`.
 - [refactor-audits.md](refactor-audits.md) — **recurring process; the method moved 2026-09-02** to `CONTRIBUTING.md` → *Auditing for duplication*. Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
@@ -308,6 +272,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/recurring-detection.md` | 2026-09-03 (partial) | data-model — most was already there; this added the **both-readings** detector rule (a plausible whole-set rhythm is not sufficient — two price points a fortnight apart interleave into a bogus biweekly), **apply the sign before ordering a typed band**, and why there is deliberately **no duplicated-charge signal**. ui-patterns — reusing a shared control means reusing its *contract* | **Yes**, 257 → 44 — the pool-load optimization is the only item left. `services/recurring_detection.py` repointed |
 | `docs/backlog/transaction-attachments.md` | 2026-09-03 (partial) | data-model / ui-patterns / **B** — phase 1 was already folded in as it landed; this relocated the **client-side backup blob** (the browser is the last hop still holding a whole artifact) to **C** → *Obstacles* | **Yes**, 366 → 149 — tiers 1b/2/3, phase 4, the sizing assumption and space reclamation are unstarted. `services/documents.py` repointed |
 | `docs/backlog/backup-restore-scope-and-secrets.md` | 2026-09-03 (partial) | data-model / **A** / **B** / **C** — all already ingested; this added to **B** why a restore's outcome depends on the database it never touches, and that turning sign-in off is a flag flip rather than a reinstall | **Yes**, 505 → 101 — the sectioned artifact, restore-time identity reconciliation, `backup_recipient`, member slots and the incremental chain are unstarted |
+| `docs/backlog/reimbursable-expenses.md` | 2026-09-03 | data-model — the reminder model (record-level date, the transaction-dated clock, the three-way answer, the ledger-level default and why it is not `db_meta`), owner grouping, moving a claim, and the rejections that had no home yet: the unstored expected total, the removed free-text note, and settling per record rather than per position. ui-patterns — a record's terminal action lives in its dialog, not on a right-click menu. shared-components — the symmetric match picker, and the rejected dropping of named portions. **C** (`scale-and-limits.md`) — `/tasks` is recomputed on every mutation, and what that costs here | **No** — deleted, 377 lines. The mechanism, invariants and every guard were already in `data-model.md` as the work landed; this pass added the reminder half and relocated the four rejections the topic docs did not yet carry. `services/reimbursements.py` repointed to `data-model.md` and `mechanism-index.md` |
 | `docs/backlog/vault-passphrase-recovery.md` | 2026-09-03 | **A** (`security-model.md`) — the recovery ladder, reset as compromise response, the mint-a-method gate and both reversals (the two narrower rules that each miss a case; the other-member refusal that became a redirect). The one owed test moved to `test-coverage-gaps.md` | **No** — deleted, 674 lines. The A-slice was ingested 2026-09-02 but the file was never reduced; on re-reading, nothing survived the diff except that test, and the running test checklist is its natural owner |
 
 

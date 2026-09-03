@@ -27,6 +27,8 @@ vi.mock('../../lib/api.js', () => ({
     completeReimbursement: vi.fn(),
     uncompleteReimbursement: vi.fn(),
     deleteReimbursement: vi.fn(),
+    getReimbursementSettings: vi.fn(),
+    moveReimbursementClaim: vi.fn(),
   },
 }))
 
@@ -73,7 +75,12 @@ function open(reimbursement) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  api.getOutstandingReimbursements.mockResolvedValue({ total: 0, reimbursements: [], loose: [] })
+  api.getOutstandingReimbursements.mockResolvedValue({
+    total: 0, reimbursements: [], loose: [], reminder_days: 30,
+  })
+  api.getReimbursementSettings.mockResolvedValue({
+    reminder_days: 30, default_reminder_days: 30, max_reminder_days: 3650,
+  })
 })
 afterEach(cleanup)
 
@@ -96,20 +103,21 @@ describe('completing', () => {
     open(record())
     await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
     expect(screen.queryByText(/expense or repayment/i)).toBeNull()
-    expect(screen.queryByRole('combobox')).toBeNull()
+    // Named specifically: the dialog also carries the reminder control, which is a combobox too.
+    expect(screen.queryByLabelText(/Which expense fell short/)).toBeNull()
+    expect(screen.queryByLabelText(/Which repayment carries/)).toBeNull()
   })
 
   it('asks which transaction only when the role has more than one candidate', async () => {
     open(record({ members: [EXPENSE, SECOND_EXPENSE, REPAYMENT], owed: 495, residual: 145 }))
     await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
-    const chooser = screen.getByRole('combobox')
-    expect(chooser).toBeTruthy()
+    expect(screen.getByLabelText(/Which expense fell short/)).toBeTruthy()
     expect(screen.getByText(/Which expense fell short/)).toBeTruthy()
   })
 
   it('will not settle without a category', async () => {
-    // The shared Button simulates `disabled` rather than setting the DOM property, so the gate is
-    // asserted by clicking and checking the request never went out.
+    // Asserted by clicking and checking the request never went out, rather than by reading the
+    // attribute: what matters is that the gate holds, not how the button expresses being unavailable.
     open(record())
     await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
     await userEvent.click(screen.getByRole('button', { name: 'Complete' }))

@@ -66,7 +66,7 @@ lockfile is released. The in-app control is **registered by the launcher**, so a
 plain uvicorn does not offer it: on a supervised box, stopping the process from a browser is either
 futile or a way for one signed-in user to take the service from everyone else.
 
-**Where the output goes.** An application started from Finder has no terminal, so both streams are
+**Where the output goes.** An application started from Finder on MacOS has no terminal, so both streams are
 redirected to `luma-desktop.log` beside the data. That is detected from the environment LaunchServices
 sets rather than by asking whether stdout is a terminal — that question also answers "no" for a pipe,
 and diverting output whenever something captures it would take the diagnostics away from the smoke
@@ -128,8 +128,7 @@ nowhere earlier to read them from:
 | **Deployment gates** | `SESSION_COOKIE_SECURE`, `LUMA_DEVELOPER_OPTIONS` |
 
 **The per-file overrides are permanent, not a deprecation.** Fixing the default filenames is exactly
-what makes them load-bearing: a database that does not use the default name — an install carrying files
-named before a rename — is reachable *only* through them. Removing them would not force such an install
+what makes them load-bearing: a database that does not use the default name is reachable *only* through them. Removing them would not force such an install
 to rename anything; it would silently create empty databases beside data that still exists, which
 presents as total data loss.
 

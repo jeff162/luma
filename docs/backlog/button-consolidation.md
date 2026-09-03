@@ -28,6 +28,13 @@ perceived "too large" is driven more by *fill weight and shadow* than by pixel s
 - **Key insight:** the Rules soft-12px button and the recurring solid-12px button have near-identical
   metrics but look very different — **solid vs. soft-tint fill** (and the ghost's drop shadow) drive the
   perception far more than font/padding. So the audit's central decision is *treatment*, not just size.
+- **`disabled` was cosmetic until 2026-09-03, and is now real.** The shared `Button` dimmed the control
+  and dropped its `onClick`/`onMouseDown`, but never set the DOM `disabled` attribute — so a button that
+  looked unavailable stayed focusable, announced as enabled to a screen reader, and would still submit a
+  form it sat in. Found while working on reimbursable expenses and fixed there; noted here because it is
+  a property of the shared component rather than of that feature. The consequence for this audit is that
+  a disabled `Button` now takes the browser's own disabled behaviour as well as the dimming, which is
+  worth checking against whatever treatment the pass settles on.
 
 ## Open decisions for the task
 

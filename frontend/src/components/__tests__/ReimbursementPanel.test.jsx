@@ -30,6 +30,8 @@ vi.mock('../../lib/api.js', () => ({
     completeReimbursement: vi.fn(),
     uncompleteReimbursement: vi.fn(),
     deleteReimbursement: vi.fn(),
+    getReimbursementSettings: vi.fn(),
+    moveReimbursementClaim: vi.fn(),
   },
 }))
 
@@ -76,7 +78,12 @@ beforeEach(() => {
   // Starting a reimbursement opens the editor, which fetches on mount. Left unmocked that returns
   // undefined and throws inside a passive effect — a test-only crash that says nothing about the panel.
   api.getReimbursement.mockResolvedValue(REIMBURSEMENT)
-  api.getOutstandingReimbursements.mockResolvedValue({ total: 0, reimbursements: [], loose: [] })
+  api.getOutstandingReimbursements.mockResolvedValue({
+    total: 0, reimbursements: [], loose: [], reminder_days: 30,
+  })
+  api.getReimbursementSettings.mockResolvedValue({
+    reminder_days: 30, default_reminder_days: 30, max_reminder_days: 3650,
+  })
 })
 
 afterEach(cleanup)

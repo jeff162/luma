@@ -27,12 +27,10 @@ copy that goes stale is the one nobody runs.
 ## What is defended, and what is deliberately not
 
 The whole model follows from one premise: **the deployment is your own machine or your own LAN box.**
-There is no multi-tenant hosting target, and dropping it is what makes the server trustworthy enough to
-hold keys.
 
 - **The ledger is plaintext at rest, and that is accepted.** Transactions, categories, rules, tags,
   mappings and import history sit unencrypted in SQLite. Anyone with the database files or disk access
-  reads them. Protecting the ledger at rest is explicitly not a goal: it would need pervasive field
+  can read them. Protecting the ledger at rest is explicitly not a goal: it would need pervasive field
   encryption or whole-database encryption, and both are out of scope.
 - **Whole-database file encryption is therefore redundant, not merely unimplemented.** The only secrets
   worth protecting are already ciphertext at the field level, and their keys are never stored in a form

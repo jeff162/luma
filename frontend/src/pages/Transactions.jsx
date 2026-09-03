@@ -200,7 +200,22 @@ export default function Transactions() {
   const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [addingTransaction, setAddingTransaction] = useState(false)
-  const [reimbursementsOpen, setReimbursementsOpen] = useState(false)
+  // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
+  // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
+  // rather than being applied here: the report owns what its filters mean.
+  const [reimbursementsOpen, setReimbursementsOpen] = useState(
+    () => new URLSearchParams(location.search).get('reimbursements') === '1'
+  )
+  // Read once at mount, like the two flags above: the deep link describes how the page was *opened*,
+  // so re-deriving it later would reapply a filter the reader may have already cleared.
+  const [reimbursementsDeepLink] = useState(() => {
+    const params = new URLSearchParams(location.search)
+    return {
+      dueOnly: params.get('due') === '1',
+      // One owner, because a task names one. A comma list would be a filter the task never produces.
+      ownerId: (params.get('owner_ids') || '').split(',')[0] || null,
+    }
+  })
   const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
   // Page-local amount filter (ledger only — never the shared FilterBar/Dashboard). Bounds compare
@@ -1288,6 +1303,8 @@ export default function Transactions() {
           <ReimbursementsReportDialog
             categories={categories}
             onAddCategory={addCategory}
+            ownerId={reimbursementsDeepLink.ownerId}
+            dueOnly={reimbursementsDeepLink.dueOnly}
             onClose={() => setReimbursementsOpen(false)}
             // Completing or editing one can move a transaction's allocations, so the ledger behind is
             // refetched rather than patched — the change is not confined to the rows on screen.

@@ -74,17 +74,20 @@ Follows the ``txn_link`` contract: the link never mutates what it joins. Settlem
 and recorded in ``metadata_json`` — the target's prior allocations *and* the prior claims — so it can be
 reversed exactly.
 
-See ``docs/backlog/reimbursable-expenses.md`` for the decisions and the alternatives rejected.
+See ``docs/data-model.md`` -> *Reimbursable expenses* for the model, its invariants, the reminder rules
+and the alternatives rejected on the way; ``docs/mechanism-index.md`` for the neighbouring mechanisms
+this is not.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
 
 from backend.json_utils import safe_json_dict
 from backend.services.excluded_categories import reimbursable_leaf_ids
+from backend.services.preferences import get_shared_preference, set_shared_preference
 from backend.services.txn_links import (
     add_member,
     create_link,
@@ -111,6 +114,25 @@ MAX_CLAIM_LABEL_LENGTH = 200
 # round-tripped through JSON. Mirrors `txn_splits._CENT`.
 _CENT = 0.005
 
+# How long a receivable is left alone before it is worth mentioning, and where that answer is kept.
+#
+# **Measured from the transaction's own date, never from when the record was made.** A reimbursement
+# entered today for a charge in February is already seven months old, and dating the clock from the
+# record would reset it every time the user got round to tidying up — the one action that must not
+# postpone the reminder.
+#
+# 30 days rather than 45: the cost of firing early is one click to push it out, and the cost of firing
+# late is the whole point of the feature, since an unsettled receivable is under-reported spending for
+# as long as it sits there. Ledger-level rather than per-user (see `preferences.SHARED_SCOPE_ID`) —
+# one ledger has one answer, and the reminders are shown to everyone regardless of whose accounts they
+# are on.
+DEFAULT_REMINDER_DAYS = 30
+REMINDER_DAYS_PREF_KEY = "reimbursements.reminder_days"
+# The ceiling is a sanity bound rather than a policy: a reminder further out than a few years is not a
+# reminder. 0 means "never remind by default", which is the disable switch — a record may still carry a
+# date of its own, which is what stops disabling the default from being a dead end.
+MAX_REMINDER_DAYS = 3650
+
 
 class ReimbursementError(ValueError):
     """A requested change would break one of this module's invariants. Carries a user-facing message."""
@@ -134,6 +156,63 @@ def _round(value) -> float:
 
 def _same_direction(a: float, b: float) -> bool:
     return (a > 0) == (b > 0)
+
+
+def _today() -> str:
+    return date_cls.today().isoformat()
+
+
+def _clean_date(value: Optional[str]) -> Optional[str]:
+    """An ISO date, or None. Anything unparseable is refused rather than stored: a reminder that never
+    fires because its date is nonsense is worse than no reminder, since the screen still shows one."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return date_cls.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        raise ReimbursementError("That is not a date.")
+
+
+# ---------------------------------------------------------------------------
+# Reminders
+# ---------------------------------------------------------------------------
+
+def default_reminder_days(conn: sqlite3.Connection) -> int:
+    """The household's default gap, clamped. An unreadable stored value falls back to the default rather
+    than raising: this is read on the Tasks path, and a bad preference must not take the page down."""
+    raw = get_shared_preference(conn, REMINDER_DAYS_PREF_KEY)
+    if raw is None:
+        return DEFAULT_REMINDER_DAYS
+    try:
+        days = int(str(raw).strip().strip('"'))
+    except (TypeError, ValueError):
+        return DEFAULT_REMINDER_DAYS
+    return max(0, min(days, MAX_REMINDER_DAYS))
+
+
+def set_default_reminder_days(conn: sqlite3.Connection, days: int) -> int:
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        raise ReimbursementError("That is not a number of days.")
+    if value < 0 or value > MAX_REMINDER_DAYS:
+        raise ReimbursementError(f"Choose between 0 and {MAX_REMINDER_DAYS} days.")
+    set_shared_preference(conn, REMINDER_DAYS_PREF_KEY, str(value))
+    return value
+
+
+def _default_due_date(from_date: Optional[str], days: int) -> Optional[str]:
+    """When a receivable dated `from_date` starts being worth mentioning, or None where the default is
+    switched off. Kept separate from the stored per-record date because they answer different questions:
+    this one is derived and moves if the default changes, that one is a decision the user made."""
+    if not days or not from_date:
+        return None
+    try:
+        start = date_cls.fromisoformat(str(from_date)[:10])
+    except ValueError:
+        return None
+    return (start + timedelta(days=days)).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -294,11 +373,27 @@ def _read_claims(metadata) -> dict[str, dict]:
     return claims
 
 
+def _read_remind_on(metadata) -> Optional[str]:
+    """The record's own reminder date, if it has been given one. Absent means *use the household
+    default*; the explicit string `""` means the user turned this record's reminder off, which is a
+    different answer and has to survive as one — collapsing them would make "no reminder" revert to the
+    default on the next save."""
+    # `get_link` hands back an already-parsed dict; `safe_json_dict` is the fallback for a raw payload.
+    # Mirrors `_read_claims` — reading only the string form here is what made every stored reminder read
+    # as absent, so a switched-off one quietly returned to following the default on the next save.
+    data = metadata if isinstance(metadata, dict) else safe_json_dict(metadata)
+    if "remind_on" not in data:
+        return None
+    value = data.get("remind_on")
+    return "" if not value else str(value)[:10]
+
+
 def _metadata(
     claims: dict[str, dict],
     completion: Optional[dict] = None,
+    remind_on: Optional[str] = None,
 ) -> dict:
-    """The link's stored blob: its claims, and the settlement record once it has one.
+    """The link's stored blob: its claims, the settlement record once it has one, and the reminder.
 
     A free-text **note** used to ride here too. It was removed because it earned nothing: the record's
     name is free text already and appears everywhere the record does, while the note reached exactly one
@@ -311,6 +406,10 @@ def _metadata(
     }}
     if completion is not None:
         data["completion"] = completion
+    # Written only when the record has an answer of its own, so an untouched record keeps following the
+    # household default rather than being frozen at whatever it happened to be on the day it was made.
+    if remind_on is not None:
+        data["remind_on"] = remind_on
     return data
 
 
@@ -328,11 +427,13 @@ def _member_rows(conn: sqlite3.Connection, link: dict) -> list[dict]:
     places = ",".join("?" for _ in txn_ids)
     rows = conn.execute(
         f"""
-        SELECT t.id AS txn_id, t.date, t.amount, t.trashed_at,
+        SELECT t.id AS txn_id, t.date, t.amount, t.trashed_at, t.owner_id,
                COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
-               COALESCE(a.display_name, a.name, '') AS account_name
+               COALESCE(a.display_name, a.name, '') AS account_name,
+               o.name AS owner_name
         FROM   txn t
         LEFT   JOIN account a ON a.id = t.account_id
+        LEFT   JOIN owner   o ON o.id = t.owner_id
         WHERE  t.id IN ({places})
         ORDER  BY t.date, t.id
         """,
@@ -350,6 +451,12 @@ def _member_rows(conn: sqlite3.Connection, link: dict) -> list[dict]:
             "amount": row["amount"],
             "payee": row["payee"],
             "account_name": row["account_name"],
+            # `txn.owner_id`, not a join through to the account's: the transaction's own owner is what
+            # every owner filter in the app reads, and it is stamped from the account when the row is
+            # created. Reading the account here instead would disagree with the ledger the moment an
+            # owner had been corrected on a single row.
+            "owner_id": row["owner_id"],
+            "owner_name": row["owner_name"],
             "trashed": row["trashed_at"] is not None,
             "claim": claim["amount"],
             "claim_label": claim.get("label"),
@@ -375,6 +482,12 @@ def _summarize(link: dict, members: Sequence[dict]) -> dict:
     live = [member for member in members if not member["trashed"]]
     owed = round(sum(m["claim"] for m in live if m["claim"] > 0), 2)
     repaid = round(sum(m["claim"] for m in live if m["claim"] < 0), 2)
+    remind_on = _read_remind_on(metadata)
+    # The record's clock starts at its **oldest expense**, not at its creation or its earliest member of
+    # any kind: a repayment arriving is progress, and letting it restart the clock would postpone the
+    # reminder every time something came back. Where nothing is owed yet — a credit recorded on its own
+    # — there is nothing to be waiting for, so there is no date to derive.
+    expense_dates = sorted(m["date"] for m in live if m["claim"] > 0 and m.get("date"))
     return {
         "id": link["id"],
         "counterparty": link.get("external_ref"),
@@ -384,6 +497,10 @@ def _summarize(link: dict, members: Sequence[dict]) -> dict:
         "completion": metadata.get("completion"),
         "completed": bool(metadata.get("completion")),
         "created_at": link.get("created_at"),
+        # `None` means "follow the household default", `""` means the user switched this one off, and a
+        # date means they chose it. The three are distinct on purpose — see `_read_remind_on`.
+        "remind_on": remind_on,
+        "expense_date": expense_dates[0] if expense_dates else None,
         "members": list(members),
     }
 
@@ -525,6 +642,8 @@ def create_reimbursement(
         REIMBURSEMENT_LINK_KIND,
         [(txn_id, _role_for(claim["amount"])) for txn_id, claim in resolved.items()],
         external_ref=_clean_text(counterparty, MAX_COUNTERPARTY_LENGTH),
+        # No reminder of its own: a new record follows the household default, measured from its own
+        # oldest expense. Stamping a date here would freeze it at today's setting.
         metadata=_metadata(resolved),
     )
     return _load(conn, link_id)
@@ -535,15 +654,33 @@ def update_reimbursement(
     link_id: str,
     *,
     counterparty: Optional[str] = None,
+    remind_on: Optional[str] = None,
+    clear_reminder: bool = False,
+    follow_default_reminder: bool = False,
 ) -> dict:
-    """Rewrite the reimbursement's name. It is replaced with what is passed, so clearing it is sending
-    it empty — a partial update would leave no way to remove a name that was wrong. Claims and the
-    settlement record are preserved: they describe what was done rather than what was typed.
+    """Rewrite the reimbursement's name and reminder. Both are replaced with what is passed, so clearing
+    a name is sending it empty — a partial update would leave no way to remove one that was wrong.
+    Claims and the settlement record are preserved: they describe what was done rather than what was
+    typed.
+
+    **The reminder has three states rather than two**, which is why it takes three arguments instead of
+    one nullable date. A record can carry a date of its own, can be switched off (`clear_reminder`), or
+    can go back to following the household default (`follow_default_reminder`). Collapsing "off" and
+    "follow the default" into a single empty value is what would make turning a reminder off silently
+    undo itself the next time the default was consulted.
 
     Allowed after completion on purpose: a name is documentation, not an accounting fact, and a finished
     record nobody named is exactly the one worth labelling."""
     existing = _load(conn, link_id)
     link = get_link(conn, link_id)
+    if follow_default_reminder:
+        next_reminder = None
+    elif clear_reminder:
+        next_reminder = ""
+    elif remind_on is not None:
+        next_reminder = _clean_date(remind_on)
+    else:
+        next_reminder = _read_remind_on(link.get("metadata"))
     conn.execute(
         "UPDATE txn_link SET external_ref = ? WHERE id = ?",
         (_clean_text(counterparty, MAX_COUNTERPARTY_LENGTH), link_id),
@@ -554,6 +691,7 @@ def update_reimbursement(
         _metadata(
             _read_claims(link.get("metadata")),
             existing.get("completion"),
+            next_reminder,
         ),
     )
     return _load(conn, link_id)
@@ -573,7 +711,8 @@ def add_claims(conn: sqlite3.Connection, link_id: str, claims: Iterable[dict]) -
     for txn_id, claim in resolved.items():
         add_member(conn, link_id, txn_id, _role_for(claim["amount"]))
     set_metadata(
-        conn, link_id, _metadata(merged, reimbursement.get("completion"))
+        conn, link_id,
+        _metadata(merged, reimbursement.get("completion"), _read_remind_on(link.get("metadata")))
     )
     return _load(conn, link_id)
 
@@ -591,9 +730,53 @@ def remove_transaction(conn: sqlite3.Connection, link_id: str, txn_id: str) -> O
     claims.pop(txn_id)
     remove_member(conn, link_id, txn_id)
     set_metadata(
-        conn, link_id, _metadata(claims, reimbursement.get("completion"))
+        conn, link_id,
+        _metadata(claims, reimbursement.get("completion"), _read_remind_on(link.get("metadata")))
     )
     return _load(conn, link_id)
+
+
+def move_claim(conn: sqlite3.Connection, link_id: str, txn_id: str, from_link_id: str) -> dict:
+    """Take a portion another reimbursement is holding and attach it to this one instead.
+
+    **Why this needs an operation of its own.** Claims are exclusive — what one record holds, another
+    cannot — so the ordinary picker offers only *unclaimed* money. That is right for adding, and it
+    leaves a row whose receivable is entirely spoken for unreachable: attaching it somewhere else meant
+    releasing it from its current record first, and a record with nothing left is deleted on the way, so
+    the release and the re-attach could not be one act. Rows landing on the wrong record are ordinary —
+    a repayment matched to the wrong friend — and the fix should not be two destructive steps.
+
+    Order is load-bearing: the claim is released **before** it is re-attached, because the invariant
+    counts claims across every record and the add would otherwise be refused as an over-claim of a row
+    that is merely mid-move. Both halves ride the caller's transaction, so a failure on the second
+    leaves the first unwritten rather than stranding the portion between records.
+    """
+    if link_id == from_link_id:
+        raise ReimbursementError("That portion is already part of this reimbursement.")
+    target = _require_open(_load(conn, link_id), "move a transaction into")
+    source = _require_open(_load(conn, from_link_id), "move a transaction out of")
+    claims = _read_claims(get_link(conn, from_link_id).get("metadata"))
+    claim = claims.get(txn_id)
+    if not claim:
+        raise ReimbursementError("That transaction is not part of the reimbursement it is being moved from.")
+    # A record holds at most one claim per transaction, so an add here would *replace* what is already
+    # there rather than accumulate — silently discarding money the target was tracking.
+    if _read_claims(get_link(conn, link_id).get("metadata")).get(txn_id):
+        raise ReimbursementError(
+            "This reimbursement already covers part of that transaction — change the amount here instead."
+        )
+    amount, label = claim["amount"], claim.get("label")
+    remove_transaction(conn, from_link_id, txn_id)
+    add_claims(conn, link_id, [{"txn_id": txn_id, "amount": amount, "label": label}])
+    # Named for the caller's benefit: the source may have been deleted by the removal, and a surface
+    # showing it needs to know rather than re-fetching a record that is gone.
+    result = _load(conn, link_id)
+    result["moved_from"] = {
+        "id": from_link_id,
+        "counterparty": source.get("counterparty"),
+        "deleted": len(claims) <= 1,
+    }
+    return result
 
 
 def delete_reimbursement(conn: sqlite3.Connection, link_id: str) -> None:
@@ -802,6 +985,7 @@ def complete(
                     "prior": None,
                     "prior_claims": prior_claims,
                 },
+                _read_remind_on(link.get("metadata")),
             ),
         )
         return _load(conn, link_id)
@@ -875,6 +1059,7 @@ def complete(
                 "prior": prior_state,
                 "prior_claims": prior_claims,
             },
+            _read_remind_on(link.get("metadata")),
         ),
     )
     return _load(conn, link_id)
@@ -894,10 +1079,18 @@ def reopen(conn: sqlite3.Connection, link_id: str) -> dict:
         raise ReimbursementError("This reimbursement is not complete.")
     if completion.get("txn_id"):
         _restore_state(conn, completion["txn_id"], completion.get("prior") or {})
+    link = get_link(conn, link_id)
     set_metadata(
         conn,
         link_id,
-        _metadata(_read_claims({"claims": completion.get("prior_claims") or {}})),
+        _metadata(
+            _read_claims({"claims": completion.get("prior_claims") or {}}),
+            None,
+            # The reminder is not part of what completing moved, so reopening leaves it alone. A record
+            # reopened past its date is due again immediately, which is the honest reading: it is
+            # outstanding once more.
+            _read_remind_on(link.get("metadata")),
+        ),
     )
     return _load(conn, link_id)
 
@@ -923,9 +1116,12 @@ def outstanding(conn: sqlite3.Connection) -> dict:
     equals the receivable group's own balance, which is the property that lets the headline figure be
     trusted without anything being linked.
     """
+    # Carried on the report so every surface derives "is this overdue?" from one number rather than
+    # fetching the setting separately and drifting from the Tasks signal that counts the same rows.
+    days = default_reminder_days(conn)
     leaves = reimbursable_leaf_ids(conn)
     if not leaves:
-        return {"total": 0.0, "reimbursements": [], "loose": []}
+        return {"total": 0.0, "reimbursements": [], "loose": [], "reminder_days": days}
 
     leaf_places = ",".join("?" for _ in leaves)
     holder_ids = [
@@ -945,7 +1141,7 @@ def outstanding(conn: sqlite3.Connection) -> dict:
         )
     ]
     if not holder_ids:
-        return {"total": 0.0, "reimbursements": [], "loose": []}
+        return {"total": 0.0, "reimbursements": [], "loose": [], "reminder_days": days}
 
     link_ids: list[str] = []
     for claims in _claims_by_txn(conn, holder_ids).values():
@@ -962,7 +1158,135 @@ def outstanding(conn: sqlite3.Connection) -> dict:
     total = round(
         sum(item["residual"] for item in reimbursements) + sum(row["unclaimed"] for row in loose), 2
     )
-    return {"total": total, "reimbursements": reimbursements, "loose": loose}
+    return {
+        "total": total,
+        "reimbursements": reimbursements,
+        "loose": loose,
+        "reminder_days": days,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reminders that have come due
+# ---------------------------------------------------------------------------
+
+# The bucket a receivable on an account nobody owns falls into. `unassigned` rather than a null owner id
+# because that is the token the transaction list's owner facet already understands, which is what lets a
+# task deep-link to exactly the rows it counted.
+UNASSIGNED_OWNER = "unassigned"
+
+
+def _due_date_for_record(record: dict, days: int) -> Optional[str]:
+    """When this record starts nagging, or None where it never does.
+
+    A record's own date wins over the default, and an empty one means the user switched it off. Only
+    money still *owed* is ever due: a surplus is a gain waiting to be booked rather than something to
+    chase, and a record with nothing owed at all is a credit sitting on its own.
+    """
+    if record.get("completed") or record.get("residual", 0) < _CENT:
+        return None
+    own = record.get("remind_on")
+    if own == "":
+        return None
+    if own:
+        return own
+    return _default_due_date(record.get("expense_date"), days)
+
+
+def _record_owners(record: dict) -> list[tuple[Optional[str], Optional[str]]]:
+    """Whose reminder this is: the owners of its **expense** members.
+
+    The question a reminder asks is "has this come back yet?", so the person it concerns is the one the
+    money left — the repayment side does not get a vote on who is owed. A record whose expenses sit on
+    two people's accounts is genuinely both their business and appears under each; that is rare, and
+    surfacing it twice is the failure worth having over hiding it from the person who is owed.
+    """
+    seen: list[tuple[Optional[str], Optional[str]]] = []
+    for member in record.get("members", []):
+        if member.get("trashed") or member.get("claim", 0) <= 0:
+            continue
+        key = (member.get("owner_id"), member.get("owner_name"))
+        if key not in seen:
+            seen.append(key)
+    return seen or [(None, None)]
+
+
+def owner_grouping_applies(conn: sqlite3.Connection) -> bool:
+    """Whether this household has enough people for per-owner reminders to mean anything.
+
+    The test is **more than one personal owner**, not "any owner exists". `ensure_shared_owner` mints a
+    built-in *Shared* row the first time the Owners page is opened, so the looser test would split a
+    single-person install into owner groups that all say the same thing. This is the same threshold
+    `routers/owners.py` uses when it decides Shared has stopped being meaningful.
+    """
+    from backend.db.database import SHARED_OWNER_NAME
+
+    personal = conn.execute(
+        "SELECT COUNT(*) AS n FROM owner WHERE LOWER(name) <> LOWER(?)", (SHARED_OWNER_NAME,)
+    ).fetchone()["n"]
+    return personal > 1
+
+
+def due_reminders(conn: sqlite3.Connection, *, today: Optional[str] = None) -> dict:
+    """Receivables that have gone quiet for longer than they should have, grouped by whose they are.
+
+    **Why this exists at all**: until a receivable is settled, spending is under-reported — the exact
+    disease the flag-and-exclude model was rejected for. The only difference is that here the amount is
+    visible, and a reminder is what makes someone go and look at it.
+
+    Both piles are counted. A *record* is due against its own reminder date or the household default; a
+    *loose* row has nowhere to store a date of its own, so it only ever answers to the default, and
+    changing that is what "Track this" is for. Only money still owed is ever due — see
+    `_due_date_for_record`.
+
+    Grouping is by the owner of the transaction, which is `txn.owner_id` rather than a join through to
+    the account: it is stamped from the account when a row is created and it is the axis every owner
+    filter reads, so a task can deep-link to precisely the rows it counted.
+    """
+    now = today or _today()
+    days = default_reminder_days(conn)
+    report = outstanding(conn)
+
+    # Keyed by owner so a record touching two of them lands in both; the value carries what the task
+    # needs to describe itself and nothing more.
+    groups: dict[str, dict] = {}
+
+    def add(owner_id, owner_name, amount, due_on):
+        key = owner_id or UNASSIGNED_OWNER
+        group = groups.setdefault(key, {
+            "owner_id": key,
+            "owner_name": owner_name or "Unassigned",
+            "count": 0,
+            "amount": 0.0,
+            "oldest_due": due_on,
+        })
+        group["count"] += 1
+        group["amount"] = round(group["amount"] + abs(amount), 2)
+        if due_on < (group["oldest_due"] or due_on):
+            group["oldest_due"] = due_on
+
+    for record in report["reimbursements"]:
+        due_on = _due_date_for_record(record, days)
+        if not due_on or due_on > now:
+            continue
+        for owner_id, owner_name in _record_owners(record):
+            add(owner_id, owner_name, record["residual"], due_on)
+
+    for row in report["loose"]:
+        unclaimed = row.get("unclaimed", 0.0)
+        if unclaimed < _CENT:
+            continue
+        due_on = _default_due_date(row.get("date"), days)
+        if not due_on or due_on > now:
+            continue
+        add(row.get("owner_id"), row.get("owner_name"), unclaimed, due_on)
+
+    ordered = sorted(groups.values(), key=lambda g: (-g["count"], g["owner_name"]))
+    return {
+        "grouped": owner_grouping_applies(conn),
+        "total": sum(group["count"] for group in ordered),
+        "groups": ordered,
+    }
 
 
 def _loose_rows(
@@ -979,11 +1303,13 @@ def _loose_rows(
     places = ",".join("?" for _ in txn_ids)
     rows = conn.execute(
         f"""
-        SELECT t.id AS txn_id, t.date, t.amount,
+        SELECT t.id AS txn_id, t.date, t.amount, t.owner_id,
                COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
-               COALESCE(a.display_name, a.name, '') AS account_name
+               COALESCE(a.display_name, a.name, '') AS account_name,
+               o.name AS owner_name
         FROM   txn t
         LEFT   JOIN account a ON a.id = t.account_id
+        LEFT   JOIN owner   o ON o.id = t.owner_id
         WHERE  t.id IN ({places})
         ORDER  BY t.date DESC, t.id
         """,
@@ -997,6 +1323,8 @@ def _loose_rows(
             "amount": row["amount"],
             "payee": row["payee"],
             "account_name": row["account_name"],
+            "owner_id": row["owner_id"],
+            "owner_name": row["owner_name"],
             "receivable": receivable.get(row["txn_id"], 0.0),
             "unclaimed": unclaimed.get(row["txn_id"], 0.0),
             "parts": receivable_parts(conn, row["txn_id"]),

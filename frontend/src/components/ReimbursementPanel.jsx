@@ -89,22 +89,39 @@ export default function ReimbursementPanel({ txnId, categories, onAddCategory, o
   const remainder = claimRemainder(state)
   const repayment = isRepaymentRow(state.unclaimed)
 
-  // A repayment is not tracked, it is *matched*: the sign says the row repays something, so the step
-  // after choosing a portion is choosing what it repays. Held here rather than jumped straight to,
-  // because the open reimbursements have to be fetched before there is anything to choose from.
+  /*
+   * What happens after a portion is chosen, which is *matching* on both sides now.
+   *
+   * A repayment repays something, so it asks what. An expense is repaid by something, so it asks what
+   * repaid it — but only when there is an answer to give: the temporal norm is money out first and back
+   * later, so an expense usually has no unmatched credit waiting for it, and putting an empty chooser in
+   * front of the ordinary case would cost every reimbursable expense a click to dismiss. So the
+   * candidates are fetched either way and an expense with none falls straight through to tracking, which
+   * is what the old asymmetry did unconditionally.
+   *
+   * The fetch is not skippable for an expense: whether anything is waiting is exactly the question, and
+   * it can only be answered by asking.
+   */
   async function choosePortion(portion) {
-    if (!repayment) return startTracking(portion)
     setChoosing(false)
     setStarting(true)
     setError('')
+    let candidates = null
     try {
       const report = await api.getOutstandingReimbursements()
-      setMatching({ portion, ...matchCandidates(report, { txnId, amount: portion.amount }) })
+      candidates = matchCandidates(report, { txnId, amount: portion.amount })
     } catch (err) {
       setError(err?.message || 'The open reimbursements could not be loaded.')
     } finally {
       setStarting(false)
     }
+    if (!candidates) return
+    // Falling through rather than showing an empty chooser — and outside the block above, so tracking
+    // owns the busy state for its own request instead of having it cleared out from under it.
+    if (!repayment && !candidates.tracked.length && !candidates.untracked.length) {
+      return startTracking(portion)
+    }
+    setMatching({ portion, ...candidates })
   }
 
   /*
@@ -228,6 +245,11 @@ export default function ReimbursementPanel({ txnId, categories, onAddCategory, o
               reimbursements={matching.tracked}
               rows={matching.untracked}
               amountLabel={formatMoneyMagnitude(Math.abs(matching.portion.amount))}
+              repayment={repayment}
+              // On the expense side "record it on its own" would describe the *ordinary* outcome as a
+              // fallback. Expecting it back is the normal thing to do with a reimbursable expense; the
+              // list beside it is the exception.
+              trackAloneLabel={repayment ? '' : 'Just expect it back'}
               busy={starting}
               onMatch={matchTo}
               onMatchRow={matchToRow}

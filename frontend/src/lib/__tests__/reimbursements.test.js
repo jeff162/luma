@@ -26,6 +26,19 @@ import {
   residualSummary,
   completeExplanation,
   completionTargets,
+  FOLLOWING_DEFAULT,
+  REMINDER_OFF,
+  REMINDER_ON,
+  addDays,
+  entryDueDate,
+  isDue,
+  looseDueDate,
+  matchAloneHint,
+  matchPrompt,
+  movableClaims,
+  recordDueDate,
+  reminderMode,
+  reminderSummary,
 } from '../reimbursements.js'
 
 const expense = { txn_id: 'e1', role: 'expense', trashed: false, claim: 375 }
@@ -544,5 +557,212 @@ describe('primaryAction', () => {
 
   it('leaves Save primary once it is finished', () => {
     expect(primaryAction(completed)).toBe('save')
+  })
+})
+
+/*
+ * Reminders. The load-bearing claims are that the clock runs from the *transaction* rather than from
+ * the record, and that a record has three answers rather than two — a date, switched off, or following
+ * the household default. Collapsing the last two is what would make "no reminder" revert on the next
+ * unrelated save.
+ */
+
+const owedRecord = {
+  owed: 375,
+  repaid: 0,
+  residual: 375,
+  completed: false,
+  expense_date: '2026-02-14',
+  members: [expense],
+}
+
+describe('reminderMode', () => {
+  it('reads an absent value as following the household default', () => {
+    expect(reminderMode(owedRecord)).toBe(FOLLOWING_DEFAULT)
+    expect(reminderMode({ ...owedRecord, remind_on: null })).toBe(FOLLOWING_DEFAULT)
+  })
+
+  it('reads an empty value as switched off, not as unset', () => {
+    // The distinction the whole three-way answer exists for: were these the same, turning a reminder
+    // off would silently undo itself the next time the default was consulted.
+    expect(reminderMode({ ...owedRecord, remind_on: '' })).toBe(REMINDER_OFF)
+  })
+
+  it('reads a date as a choice the user made', () => {
+    expect(reminderMode({ ...owedRecord, remind_on: '2026-12-01' })).toBe(REMINDER_ON)
+  })
+})
+
+describe('recordDueDate', () => {
+  it('measures the default gap from the expense, not from the record', () => {
+    expect(recordDueDate(owedRecord, 30)).toBe('2026-03-16')
+  })
+
+  it('lets a record override the default', () => {
+    expect(recordDueDate({ ...owedRecord, remind_on: '2026-12-01' }, 30)).toBe('2026-12-01')
+  })
+
+  it('never comes due when switched off', () => {
+    expect(recordDueDate({ ...owedRecord, remind_on: '' }, 30)).toBeNull()
+  })
+
+  it('never comes due when the household default is off and it chose no date', () => {
+    expect(recordDueDate(owedRecord, 0)).toBeNull()
+  })
+
+  it('keeps its own date even when the household default is off', () => {
+    // The disable switch must not be a dead end: an explicit date still fires.
+    expect(recordDueDate({ ...owedRecord, remind_on: '2026-03-01' }, 0)).toBe('2026-03-01')
+  })
+
+  it('says nothing about a surplus', () => {
+    // Repaid over is a gain waiting to be booked, not money to chase.
+    expect(recordDueDate({ ...owedRecord, residual: -25 }, 30)).toBeNull()
+  })
+
+  it('says nothing about a completed record', () => {
+    expect(recordDueDate({ ...owedRecord, completed: true }, 30)).toBeNull()
+  })
+})
+
+describe('looseDueDate', () => {
+  it('measures from the row, which is the only date it has', () => {
+    expect(looseDueDate({ date: '2026-02-14', unclaimed: 375 }, 30)).toBe('2026-03-16')
+  })
+
+  it('never comes due on money coming in', () => {
+    // An unmatched credit is not under-reported spending, so there is nothing to chase about it.
+    expect(looseDueDate({ date: '2026-02-14', unclaimed: -375 }, 30)).toBeNull()
+  })
+})
+
+describe('reminderSummary', () => {
+  it('names the date the default works out to, not the rule behind it', () => {
+    expect(reminderSummary(owedRecord, 30, '2026-03-01')).toBe('Reminder 2026-03-16')
+  })
+
+  it('marks one that has already come due', () => {
+    expect(reminderSummary(owedRecord, 30, '2026-09-03')).toMatch(/due now$/)
+  })
+
+  it('says so plainly when it is switched off', () => {
+    expect(reminderSummary({ ...owedRecord, remind_on: '' }, 30, '2026-09-03')).toBe('No reminder')
+  })
+
+  it('reports a settled record as having nothing outstanding rather than no reminder', () => {
+    expect(reminderSummary({ ...owedRecord, residual: 0 }, 30, '2026-09-03')).toBe('Nothing outstanding')
+  })
+})
+
+describe('addDays and isDue', () => {
+  it('crosses a month boundary correctly', () => {
+    expect(addDays('2026-01-20', 30)).toBe('2026-02-19')
+  })
+
+  it('treats the due date itself as due', () => {
+    expect(isDue('2026-03-16', '2026-03-16')).toBe(true)
+    expect(isDue('2026-03-16', '2026-03-15')).toBe(false)
+    expect(isDue(null, '2026-03-16')).toBe(false)
+  })
+})
+
+describe('the board, narrowed', () => {
+  const alexExpense = { ...expense, owner_id: 'alex', owner_name: 'Alex', date: '2026-02-14' }
+  const robinExpense = { ...secondExpense, owner_id: 'robin', owner_name: 'Robin', date: '2026-02-20' }
+  const report = {
+    reminder_days: 30,
+    reimbursements: [
+      { id: 'a', owed: 375, repaid: 0, residual: 375, completed: false, expense_date: '2026-02-14', members: [alexExpense] },
+      { id: 'b', owed: 100, repaid: 0, residual: 100, completed: false, expense_date: '2026-02-20', members: [robinExpense] },
+    ],
+    loose: [],
+  }
+
+  it('attributes a record to the owner of its expense side', () => {
+    const board = reimbursementBoard(report)
+    expect(board.expenses.map(entry => entry.owners[0].name)).toEqual(['Robin', 'Alex'])
+  })
+
+  it('narrows to one owner', () => {
+    const board = reimbursementBoard(report, { ownerId: 'alex' })
+    expect(board.expenses.map(entry => entry.id)).toEqual(['a'])
+  })
+
+  it('narrows to what is due', () => {
+    const board = reimbursementBoard(report, { dueOnly: true, today: '2026-03-18' })
+    // Alex's is 30 days past 2026-02-14; Robin's is not due until 2026-03-22.
+    expect(board.expenses.map(entry => entry.id)).toEqual(['a'])
+  })
+
+  it('leaves money coming in unnarrowed, since it is what could settle the rest', () => {
+    const withCredit = {
+      ...report,
+      loose: [{ txn_id: 'c1', date: '2026-07-01', unclaimed: -200, owner_id: 'robin', owner_name: 'Robin' }],
+    }
+    expect(reimbursementBoard(withCredit, { ownerId: 'alex' }).income).toHaveLength(1)
+  })
+
+  it('puts a record spanning two owners under both', () => {
+    const shared = {
+      ...report,
+      reimbursements: [{
+        id: 'c', owed: 475, repaid: 0, residual: 475, completed: false,
+        expense_date: '2026-02-14', members: [alexExpense, robinExpense],
+      }],
+    }
+    expect(reimbursementBoard(shared, { ownerId: 'alex' }).expenses).toHaveLength(1)
+    expect(reimbursementBoard(shared, { ownerId: 'robin' }).expenses).toHaveLength(1)
+  })
+})
+
+describe('entryDueDate', () => {
+  it('answers for both piles the same way', () => {
+    const record = { kind: 'record', reimbursement: { ...owedRecord } }
+    const row = { kind: 'row', row: { date: '2026-02-14', unclaimed: 375 } }
+    expect(entryDueDate(record, 30)).toBe('2026-03-16')
+    expect(entryDueDate(row, 30)).toBe('2026-03-16')
+  })
+})
+
+describe('matchPrompt and matchAloneHint', () => {
+  it('asks the opposite question on each side', () => {
+    // Not one sentence with the amount swapped: an expense asks what repaid it, not what it repays.
+    expect(matchPrompt({ repayment: true, amountLabel: '$250.00' })).toBe('What does $250.00 repay?')
+    expect(matchPrompt({ repayment: false, amountLabel: '$250.00' })).toBe('What repaid $250.00?')
+  })
+
+  it('offers the fallback in the words of the side it is on', () => {
+    expect(matchAloneHint({ repayment: false, empty: false })).toMatch(/expect it back/)
+    expect(matchAloneHint({ repayment: true, empty: false })).toMatch(/record it on its own/)
+  })
+})
+
+describe('movableClaims', () => {
+  const held = {
+    id: 'other',
+    completed: false,
+    members: [{ txn_id: 'r9', date: '2026-07-03', payee: 'Repayment', claim: -200, trashed: false }],
+    counterparty: 'Wrong friend',
+  }
+  const target = { id: 'mine', completed: false, members: [expense], counterparty: 'Right friend' }
+
+  it('offers what another record is holding', () => {
+    const rows = movableClaims({ reimbursements: [target, held] }, 'mine')
+    expect(rows.map(row => row.txn_id)).toEqual(['r9'])
+    expect(rows[0].from.label).toBe('Wrong friend')
+  })
+
+  it('never offers a record its own portions, only the other record\'s', () => {
+    const rows = movableClaims({ reimbursements: [target, held] }, 'other')
+    expect(rows.map(row => row.txn_id)).toEqual(['e1'])
+  })
+
+  it('skips a row this record already covers, which a move would replace rather than add', () => {
+    const overlapping = { ...held, members: [{ ...held.members[0], txn_id: 'e1' }] }
+    expect(movableClaims({ reimbursements: [target, overlapping] }, 'mine')).toHaveLength(0)
+  })
+
+  it('skips a completed record, which has no work left to take from', () => {
+    expect(movableClaims({ reimbursements: [target, { ...held, completed: true }] }, 'mine')).toHaveLength(0)
   })
 })

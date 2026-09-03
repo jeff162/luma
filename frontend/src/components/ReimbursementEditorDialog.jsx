@@ -7,16 +7,24 @@ import { api } from '../lib/api.js'
 import ClaimPortionPicker from './ClaimPortionPicker.jsx'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import {
+  FOLLOWING_DEFAULT,
+  REMINDER_OFF,
+  addDays,
   claimablePortions,
   claimRemainder,
   completeExplanation,
   completionTargets,
   hasRepayment,
+  movableClaims,
   needsTargetChoice,
   primaryAction,
+  recordDueDate,
   reimbursementDisplayLabel,
   reimbursementStatus,
+  reminderMode,
+  reminderSummary,
   residualSummary,
+  todayIso,
 } from '../lib/reimbursements.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
@@ -81,6 +89,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   const [unlinking, setUnlinking] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   const [loose, setLoose] = useState([])
+  // Portions other records are holding, offered beside the loose ones so a row on the wrong record can
+  // be brought here instead of being released first and hunted down again.
+  const [movable, setMovable] = useState([])
+  const [moving, setMoving] = useState(null)
+  const [reminderDays, setReminderDays] = useState(0)
   const [completeOpen, setCompleteOpen] = useState(false)
   const [completeCategory, setCompleteCategory] = useState(null)
   const [completeTarget, setCompleteTarget] = useState('')
@@ -95,12 +108,27 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
         // Seeded once, on the load that opened the dialog. See the header.
         setForm(current => current || (record ? {
           counterparty: record.counterparty || '',
+          // The reminder is seeded as its three-way answer rather than as a date, because "following
+          // the default" and "no reminder" are both states a date cannot express. See
+          // `lib/reimbursements.js`.
+          reminderMode: reminderMode(record),
+          remindOn: record.remind_on || '',
         } : null))
       })
       .catch(err => { if (!cancelled) setError(err?.message || 'This reimbursement could not be loaded.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [linkId])
+
+  // The household default, so the reminder control can say what "following the default" works out to
+  // for *this* record rather than naming a rule the reader then has to apply themselves.
+  useEffect(() => {
+    let cancelled = false
+    api.getReimbursementSettings()
+      .then(settings => { if (!cancelled) setReminderDays(settings?.reminder_days || 0) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const members = reimbursement?.members || []
   const status = reimbursementStatus(reimbursement)
@@ -117,7 +145,9 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   // is a single Close. Comparing against the record rather than tracking a dirty flag means typing and
   // then undoing it settles back to Close, which is the honest reading of "nothing to save".
   const fieldsEdited = !!reimbursement && !!form
-    && form.counterparty !== (reimbursement.counterparty || '')
+    && (form.counterparty !== (reimbursement.counterparty || '')
+      || form.reminderMode !== reminderMode(reimbursement)
+      || (form.reminderMode === 'date' && form.remindOn !== (reimbursement.remind_on || '')))
   const settledAndUnedited = status === 'completed' && !fieldsEdited
   const completeTitle = nothingToMove
     ? 'The repayments match what was owed — close this reimbursement'
@@ -137,6 +167,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
     try {
       const updated = await api.updateReimbursement(reimbursement.id, {
         counterparty: form.counterparty,
+        // Three fields rather than one nullable date: a record can carry its own date, be switched off,
+        // or go back to following the household default, and "off" must not read as "unset".
+        remind_on: form.reminderMode === 'date' ? form.remindOn : null,
+        clear_reminder: form.reminderMode === REMINDER_OFF,
+        follow_default_reminder: form.reminderMode === FOLLOWING_DEFAULT,
       })
       setReimbursement(updated)
       onSaved?.(updated)
@@ -152,9 +187,31 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
     try {
       const report = await api.getOutstandingReimbursements()
       setLoose(report.loose || [])
+      setMovable(movableClaims(report, reimbursement.id))
       setLinkOpen(true)
     } catch (err) {
       setError(err?.message || 'The unlinked receivables could not be loaded.')
+    }
+  }
+
+  /*
+   * Bring a portion here from the record currently holding it.
+   *
+   * Confirmed rather than done on click, because it takes the money off another record and may delete
+   * that record outright — the same weight as removing a member, which is also confirmed. The server
+   * releases and re-attaches in one transaction, so there is no state where the portion belongs to
+   * neither.
+   */
+  async function confirmMove() {
+    const target = moving
+    setMoving(null)
+    if (!target) return
+    setLinkOpen(false)
+    setError('')
+    try {
+      publish(await api.moveReimbursementClaim(reimbursement.id, target.txn_id, target.from.id))
+    } catch (err) {
+      setError(err?.message || 'That portion could not be moved.')
     }
   }
 
@@ -299,6 +356,18 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
             />
           </div>
 
+          {/* Beside the name rather than tucked below the totals: the two together are what the record
+              *is* — what it is called and when it will be asked about. A completed record still shows
+              it, read-only, because the date is part of the history of what happened. */}
+          {status === 'completed' ? null : (
+            <ReminderField
+              form={form}
+              reimbursement={reimbursement}
+              reminderDays={reminderDays}
+              onChange={next => setForm(prev => ({ ...prev, ...next }))}
+            />
+          )}
+
           <div style={{ display: 'grid', gap: 3 }}>
             {members.map(member => (
               <MemberRow
@@ -342,6 +411,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
                   <select
                     value={completeTarget}
                     onChange={e => setCompleteTarget(e.target.value)}
+                    aria-label={status === 'outstanding' ? 'Which expense fell short?' : 'Which repayment carries the surplus?'}
                     style={{ font: 'inherit', padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
                   >
                     <option value="">Choose one…</option>
@@ -431,7 +501,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
           width="min(520px, 100%)"
           actions={<Button variant="ghost" onClick={() => setLinkOpen(false)}>Cancel</Button>}
         >
-          {loose.length === 0 ? (
+          {loose.length === 0 && movable.length === 0 ? (
             <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
               Nothing else is waiting. A repayment has to be categorized to the Reimbursable group before
               it can be linked here.
@@ -461,12 +531,124 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
                   />
                 </div>
               ))}
+
+              {/* Portions another record is holding. Listed *after* the unclaimed ones and behind a
+                  confirm, because taking one moves money off another record and may delete it — this is
+                  a correction, not the ordinary way to add something. Without it a row whose receivable
+                  is entirely claimed could only be moved by releasing it from its current record first,
+                  which deletes that record on the way if it was its last portion. */}
+              {movable.length ? (
+                <div style={{ display: 'grid', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Already on another reimbursement
+                  </div>
+                  {movable.map(row => (
+                    <div key={`${row.from.id}-${row.txn_id}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'grid', gap: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {row.date} · {row.payee}
+                          {row.claim_label ? <span style={{ color: 'var(--muted)' }}> · {row.claim_label}</span> : null}
+                        </span>
+                        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                          on {row.from.label} · {formatTransactionAmount(row.claim)}
+                        </span>
+                      </div>
+                      <Button variant="ghost" small onClick={() => setMoving(row)}>Move here</Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </AppDialog>
       ) : null}
+
+      {moving ? (
+        <AppConfirmDialog
+          title="Move this portion here?"
+          description={
+            `${formatTransactionAmount(moving.claim)} of ${moving.payee} currently counts toward `
+            + `${moving.from.label}. Moving it here takes it off that reimbursement`
+            + '. The transactions themselves are not changed.'
+          }
+          confirmLabel="Move it"
+          onConfirm={confirmMove}
+          onCancel={() => setMoving(null)}
+        />
+      ) : null}
     </AppDialog>,
     document.body,
+  )
+}
+
+/*
+ * When this record will next be asked about.
+ *
+ * **Three answers, not a date and a checkbox.** Following the household default, a date of its own, or
+ * no reminder at all — and the first two are genuinely different even when they land on the same day,
+ * because a record following the default moves when the default does. Storing "off" as an empty date
+ * would make it indistinguishable from "never set", so it would quietly revert to the default on the
+ * next unrelated save.
+ *
+ * **The default option names the date it works out to**, not the rule behind it. "Following the
+ * household default" is a fact about configuration; what the reader wants to know is when they will be
+ * asked about this money. Where nothing is owed, or the default is switched off, there is no date to
+ * name and it says so instead of showing an empty one.
+ *
+ * The push-out button is the snooze the Tasks signal points at: a due reminder is most often not a
+ * decision to make, just a "not yet", and making the user open a date picker to say so is the friction
+ * that turns a reminder into something to be ignored.
+ */
+function ReminderField({ form, reimbursement, reminderDays, onChange }) {
+  const mode = form.reminderMode
+  const dueOn = recordDueDate(reimbursement, reminderDays)
+  const due = !!dueOn && dueOn <= todayIso()
+  const pushedTo = addDays(todayIso(), reminderDays || 30)
+  return (
+    <div style={{ display: 'grid', gap: 4, maxWidth: 420 }}>
+      <label style={fieldLabelStyle} htmlFor="reimbursement-reminder-mode">Reminder</label>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select
+          id="reimbursement-reminder-mode"
+          value={mode}
+          onChange={e => onChange({
+            reminderMode: e.target.value,
+            // Seeded so switching to a date does not open on an empty field the user has to fill in
+            // before the control means anything.
+            remindOn: e.target.value === 'date'
+              ? (form.remindOn || dueOn || pushedTo || todayIso())
+              : form.remindOn,
+          })}
+          style={selectStyle}
+        >
+          <option value={FOLLOWING_DEFAULT}>Use the default</option>
+          <option value="date">Remind me on…</option>
+          <option value={REMINDER_OFF}>No reminder</option>
+        </select>
+        {mode === 'date' ? (
+          <input
+            type="date"
+            value={form.remindOn || ''}
+            onChange={e => onChange({ remindOn: e.target.value })}
+            aria-label="Reminder date"
+            style={selectStyle}
+          />
+        ) : null}
+        {due ? (
+          <Button
+            variant="ghost"
+            small
+            onClick={() => onChange({ reminderMode: 'date', remindOn: pushedTo })}
+            title="Push this reminder out and stop it asking for now"
+          >Not yet</Button>
+        ) : null}
+      </div>
+      <span style={{ fontSize: 12, color: due ? 'var(--danger)' : 'var(--muted)' }}>
+        {mode === 'date'
+          ? 'Nothing will be shown about this until then.'
+          : reminderSummary(reimbursement, reminderDays)}
+      </span>
+    </div>
   )
 }
 
@@ -540,6 +722,13 @@ function MemberRow({ member, isThisRow, onRemove }) {
       ) : <span />}
     </div>
   )
+}
+
+// Shared by the reminder's select and its date input so the pair reads as one control rather than as
+// two differently-shaped fields sitting next to each other.
+const selectStyle = {
+  font: 'inherit', fontSize: 12.5, padding: '4px 6px', borderRadius: 6,
+  border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
 }
 
 const fieldLabelStyle = {
