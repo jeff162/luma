@@ -1,8 +1,13 @@
 # Tooling — lint strictness & ruff
 
-**Status: deferred, not started (migrated from `TODO.md` 2026-07-30).** Two "enable, measure,
-triage, then gate" linter tasks, one frontend (eslint) and one backend (ruff). Neither is
-blocking; the narrow-by-design philosophy means strictness is added only where it earns its keep.
+**Status: deferred, not started (migrated from `TODO.md` 2026-07-30).** Three deferred tooling
+tasks: two "enable, measure, triage, then gate" linter projects (frontend eslint, backend ruff) and a
+vitest matcher setup. None is blocking.
+
+The **posture** these follow — narrow by design, enable one rule as a warning, measure before deciding,
+promote to error only once the existing hits are cleared, and count before conviction — is in
+[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) → *Lint posture*. What stays here is the specific work
+each project needs.
 
 ## Raise lint strictness to a reasonable baseline and triage the results
 
@@ -75,9 +80,11 @@ harmless — either accept the small import cost or scope it with `environmentMa
 ## Wire up ruff (and replace the bespoke timestamp guard with `flake8-datetimez`)
 
 **Context.** `backend/pyproject.toml` configures ruff (`[tool.ruff]`, selecting
-`E`/`F`/`W`/`I`), but ruff is **never actually run** — it's not in CI (there is
-no `.github/workflows`), not in `scripts/pre-commit.sh`, and not installed in
-the venv. So the config is currently aspirational. The one enforced backend
+`E`/`F`/`W`/`I`), but ruff is **never actually run** — not in
+`scripts/pre-commit.sh`, not installed in the venv, and not invoked by
+`.github/workflows/release.yml` (which runs the test suite before building, so
+there is now a CI job to hang a lint step on — this note used to say no workflow
+existed at all). So the config is currently aspirational. The one enforced backend
 gate is the comment check in the pre-commit hook, alongside a small bespoke
 timestamp guard (`scripts/check-backend-timestamps.js`) that bans
 `datetime.utcnow()` and no-arg `datetime.now()` so stored timestamps keep

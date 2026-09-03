@@ -15,18 +15,12 @@ retiring those patterns before they spread.
 
 ## How to run an audit
 
-Two detection lenses:
-
-- **Structural (find repeated shapes now).** `jscpd` over `frontend/src` / `backend` for copy-paste
-  blocks; `semgrep` (or plain `ripgrep` on a structural signature) to enumerate a fan-out and confirm
-  a refactor's blast radius. This is the primary tool.
-- **Historical (co-change).** *Not useful in this repo* — commits are batched (solo dev, heavy dev
-  phase), so "changed together" is noise. Revisit only if commit granularity tightens.
-
-Then a **reading/judgment pass** (an agent audit works well): rank candidates by frequency × safety,
-and for each apply the caveats — **rule of three** (don't centralize two copies that may diverge) and
-**divergence risk** (a forced abstraction that leaks is worse than duplication). Output "do it / leave
-it," not raw grep hits.
+The method — the two detection lenses, why historical co-change is useless in this repo, and the
+rule-of-three / divergence-risk caveats that decide most candidates — is in
+[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) → *Auditing for duplication*. Concretely here: `jscpd`
+over `frontend/src` / `backend` for copy-paste blocks, and `semgrep` (or `ripgrep` on a structural
+signature) to enumerate a fan-out and confirm a refactor's blast radius. An agent reading pass works
+well for the judgment half; its output is "do it / leave it", not raw hits.
 
 ## Carried candidates from the first run (frontend)
 

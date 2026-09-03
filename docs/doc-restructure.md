@@ -175,7 +175,16 @@ lists · database concurrency · provider request budgets · frontend cache inva
 
 ### D. Testing & verification *(extend `CONTRIBUTING.md`)*
 
-CONTRIBUTING covers *how to run* the suites. Nothing covers *what is tested, what isn't, and why*.
+**[Written 2026-09-02 as `CONTRIBUTING.md` → *What is tested, what isn't, and why*.]** Extending the
+existing doc was right — the mechanics were already there and complete, and the missing half sits
+directly under them. Writing a separate testing doc would have split one audience across two files.
+
+**It surfaced a live defect rather than only relocating prose:** the migration/fresh-schema parity guard
+was recorded as "dormant until the first post-rebrand migration", and that precondition passed dozens of
+migrations ago with no test built. That status is corrected in the backlog file and the gap is named in
+CONTRIBUTING as the most consequential open one.
+
+CONTRIBUTING covers *how to run* the suites. Nothing covered *what is tested, what isn't, and why*.
 
 Topics: the vitest/Playwright boundary — currently stated only in `CLAUDE.md`, `AGENTS.md` and a vite
 config comment · known coverage gaps and why each is open · migration and fresh-schema parity · lint
@@ -258,15 +267,15 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `import-history-windowing.md` | ✅ Split 2026-09-02 (52 → 36) | **C** (retention, and why the reconcile pass stays capped) · *file keeps:* the archive UX, unstarted |
 | `tag-report-exclude-warning.md` | Split | ui-patterns (report conflict notes) · *open:* include narrowing |
 | ~~`transaction-list-limits.md`~~ | ✅ Ingested 2026-09-02, deleted | **C** (the accepted caps, as a table of cost + revisit condition). The `limit` contract was already in data-model |
-| `refactor-audits.md` | Split | **D** (audit method, rule of three, divergence risk) · *recurring process, file stays* |
-| `cleanup-pass.md` | Split | ui-patterns (tooltip migration, press-scoped labels), **D** (console cleanliness, dead code) |
+| `refactor-audits.md` | ✅ Split 2026-09-02 (72 → 66) | **D** (the method: two lenses, why co-change is useless here, rule of three, divergence risk) · *file keeps* its candidate list; recurring process |
+| `cleanup-pass.md` | Split · **D slice taken 2026-09-02** | **D** (console cleanliness as *signal preservation*) · *still owed:* the ui-patterns slice (tooltip migration, press-scoped labels) |
 | `import-dedupe-followups.md` | Survey | data-model (dedupe tiers, the re-measurement method) |
 | `ofx-direct-connect.md` | Survey · **A-slice relocated 2026-09-02** | **A** (the threat-model consequence — the *rule* moved, the OFX-specific facts stayed and now point at it), building-a-connector |
 | `database-diagnostics.md` | Survey · **B slot filled 2026-09-02** | **B** (what a structural check does *not* cover — recorded in B's *Obstacles*; the build itself is B's *Open*), data-model (the invariants a checker would assert) |
 | `vault-passphrase-recovery.md` | Split · **A-slice ingested 2026-09-02** | **A** (recovery, reset as compromise response — done; it completed 2026-09-01, so rule 8 no longer applied) · *file kept* for its two reversals and one owed test |
 | `reimbursable-expenses.md` | Survey | data-model, **E** |
-| `test-coverage-gaps.md` | Survey | **D** |
-| `lint-and-tooling.md` | Survey | **D** |
+| `test-coverage-gaps.md` | Survey · **D slot filled 2026-09-02** | **D** (what a unit runner cannot reach; the parity gap, whose stale "dormant" status was corrected) · *file stays:* it is a running checklist |
+| `lint-and-tooling.md` | Survey · **D slot filled 2026-09-02** | **D** (the enable → measure → triage → gate posture, and *count before conviction*) · *file stays:* three deferred projects; a stale "no CI exists" claim was corrected |
 | `query-cache-invalidation.md` | Survey | **C**, architecture (frontend data flow) |
 | `online-categorizer.md` | Survey | data-model (the rule is the cache) |
 | `merchant-rename-fate.md` | Survey | data-model (rules/`clean_name`) — a keep-or-drop decision, not a doc |
@@ -291,7 +300,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
    fourth mode`) that `Dashboard.jsx` cited and no topic doc held.
 5. ~~**C — Scale & limits.**~~ **Done 2026-09-02** — [`scale-and-limits.md`](scale-and-limits.md).
 6. ~~**E — Mechanism index.**~~ **Done 2026-09-02** — [`mechanism-index.md`](mechanism-index.md).
-7. **D — Testing**, into CONTRIBUTING.
+7. ~~**D — Testing**, into CONTRIBUTING.~~ **Done 2026-09-02.**
 8. **Rewrite `backlog/README.md`**, replacing the Completed section with the ledger below.
 
 *Done out of order, 2026-09-02:* the rule-7 amendment and the `## Open` sections on `data-model.md`,

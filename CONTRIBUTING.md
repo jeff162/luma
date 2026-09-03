@@ -8,6 +8,7 @@ changing the application.
 - [Goals](#goals)
 - [Local development](#local-development)
 - [Useful checks](#useful-checks)
+- [What is tested, what isn't, and why](#what-is-tested-what-isnt-and-why)
 - [Hooks and lint](#hooks-and-lint)
 - [Project conventions](#project-conventions)
 - [Important product invariants](#important-product-invariants)
@@ -203,6 +204,123 @@ The Playwright config pins its own ports (frontend 5199, backend 8099) and
 runs against an isolated backend with throwaway databases, so it is unaffected
 by a local `.env`. If needed, `PLAYWRIGHT_BASE_URL` can override the target URL
 explicitly for one run.
+
+## What is tested, what isn't, and why
+
+The section above is how to *run* the suites. This is what they cover, what they structurally cannot,
+and which gaps are open on purpose.
+
+### The three lanes, and the line that matters
+
+| Lane | Runs in | Needs the app? |
+| --- | --- | --- |
+| **pytest** (`scripts/run_tests.sh`) | Python, isolated temp SQLite | no |
+| **vitest** (`npm test`) | Node, with per-file jsdom opt-in | no |
+| **Playwright** (`npm run ui:test*`) | real browsers, driving a running app | **yes** |
+
+**The line falls between the first two and the third**, and it is worth stating plainly because
+"frontend tests" sounds like it should sit on the far side of it. **vitest is a unit runner** — no
+browser engine, no app, nothing rendered to a screen — so it belongs with pytest. Playwright is the
+only lane that launches anything.
+
+That line is load-bearing for **agent contributors**, who must not launch the app or run the
+browser-driven suite to check their own work (see `AGENTS.md` / `CLAUDE.md`, which state it as a hard
+rule). The corollary is the half that gets forgotten: **the unit lanes are expected**, and skipping
+vitest after a frontend change ships it behind nothing but lint and a build. The `test:` block in
+`frontend/vite.config.js` draws the same line in the config itself.
+
+**Match the check to the change.** A comment or documentation edit needs lint (which includes the
+comment-quality checks for both halves of the repo) and, for a touched Python file, a syntax check —
+not a full suite run that cannot observe anything the edit could have altered.
+
+### What a unit runner structurally cannot reach
+
+These are not gaps to close. They are the reason some defects can only be found another way, and
+knowing which is which stops a green suite being read as more assurance than it is:
+
+- **A chart cannot be rendered under it.** jsdom performs no layout, so anything whose correctness is
+  geometric — an axis aligned to a plot, a diverging bar's stacking, a label that must clear a tick —
+  produces no measurable output. Two of the worst chart defects in this repo's history had *every
+  tooltip figure correct throughout*, which is exactly why they survived to first use.
+- **A virtualized list renders nothing without stubbed geometry.** The existing harness stubs the
+  resize observer and the size properties, keyed off each row's index — keyed specifically so a row
+  never reports the *viewport's* height, which would make one row appear to fill the screen and silently
+  defeat every assertion.
+- **An adapter's transport needs a test that inspects the wire.** Asserting on a normalized return value
+  proves the mapping, not the request: a window cap, a sign convention, a pacing rule and a budget are
+  all properties of what was *sent*. See `building-a-connector.md`.
+- **Console warnings are only visible in a browser**, which makes a quiet console a testing asset
+  rather than tidiness. The point is **signal preservation**: once the baseline is clean, a *new* real
+  error stands out instead of being lost in known noise. React warnings usually flag a real latent bug
+  and are worth prioritizing; one-off third-party and extension noise is not.
+- **How a component sits in the live tree** is not observable in isolation. The pattern is established
+  enough to plan around: a first pass against the real app has repeatedly found several defects in an
+  hour, every one of them about placement or wiring rather than logic. Treat that pass as blocking work
+  rather than a formality, and hand it to the person who can run the app.
+
+### Migration and fresh-schema parity — currently unguarded
+
+A database's schema comes into existence **two ways that share no code**. A fresh install runs
+`init_db`'s `CREATE TABLE` script and is stamped straight to `CURRENT_VERSION`, skipping migrations
+entirely. An existing file is advanced in place by `run_migrations`. So every schema change lives in two
+places that must be kept in lockstep by hand — the canonical create block *and* the migration that
+introduces or alters it.
+
+**Nothing asserts that the two paths converge**, so they can drift silently: add a column to the create
+block and forget the migration, or the reverse, and brand-new versus upgraded databases end up with
+different schemas — a bug only users with older files ever hit.
+
+This was written down as dormant, to be built alongside the *first* post-rebrand migration rather than
+after a drift bug. **That precondition passed a long time ago** — the baseline is well past v1 with
+dozens of registered migrations — and the guard still does not exist. It is the most consequential open
+gap in this section.
+
+The shape it wants: build the schema both ways into two temp databases and diff the *structure* —
+column names, types, nullability and defaults; foreign keys; indexes — via `PRAGMA`, never by diffing
+`sqlite_master.sql` text, which is too brittle (whitespace, `IF NOT EXISTS`, column order). Compare the
+*table sets* first, so "new table added to only one path" trips before the per-table diff. Ignore
+version rows and seeded data, which differ legitimately.
+
+### Lint posture: enable, measure, triage, then gate
+
+The rule sets are **narrow by design**; strictness is added only where it earns its keep. The procedure
+is the same for either half of the repo:
+
+1. Enable one candidate rule as a **warning**.
+2. Run it and read the count and locations *before* deciding anything.
+3. Fix the genuine, cheap hits. For false positives, prefer tuning the rule's options over restructuring
+   correct code.
+4. Promote to **error** only once the existing hits are cleared, so it becomes a real regression gate.
+   Leave a noisy or low-value rule **off**, with a one-line comment saying why.
+
+**Count before conviction.** A rule reporting ~89 hits against placeholder-only inputs was measured
+against what a browser actually does — a placeholder *is* the accessible name there, so the real defect
+count was about one. Chasing the raw number would have been most of a day for nothing. Conversely a
+browser-console check that no linter enforces is not a rule at all, and deciding to ignore it is a
+legitimate outcome to record rather than a task to carry.
+
+### Auditing for duplication
+
+A periodic pass looks for **shotgun surgery** (one logical change forcing edits in many places) and
+**divergent duplication** (the same shape copy-pasted). Two lenses, and only one works here:
+
+- **Structural** — a copy-paste detector over each half of the tree, plus a structural search to
+  enumerate a fan-out and confirm a refactor's blast radius. This is the primary tool.
+- **Historical co-change** — *not useful in this repo*, because commits are batched, so "changed
+  together" is noise. Revisit only if commit granularity tightens.
+
+Then a reading pass, ranking candidates by frequency × safety, and applying two caveats that decide
+most cases: the **rule of three** — do not centralize two copies that may still diverge — and
+**divergence risk**, since a forced abstraction that leaks is worse than the duplication it replaced.
+The output is "do it / leave it", not raw hits. A deliberate *leave* is a result worth recording.
+
+### Where the open gaps are listed
+
+`docs/backlog/test-coverage-gaps.md` is a **running checklist** of tests that are wanted and not yet
+built — HTTP-contract tests behind direct-call unit tests, the rule-collision UI flows, component
+coverage for the shared interactive surfaces, and the parity guard above. Delete an entry when its test
+lands. `docs/backlog/lint-and-tooling.md` holds the two deferred linter projects, and
+`docs/backlog/refactor-audits.md` carries the audit's standing candidate list.
 
 ## Hooks and lint
 

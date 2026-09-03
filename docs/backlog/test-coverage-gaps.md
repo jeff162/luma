@@ -152,18 +152,22 @@ recorded version. So once migrations exist, each schema change lives in two
 places that must stay in lockstep by hand: the canonical `CREATE TABLE` block
 *and* the migration that introduces (or alters) it.
 
-**Status: dormant until the first post-rebrand migration.** The chain was reset
-at the Luma rebrand — `MIGRATIONS` is empty and the baseline is `v1`, so there is
-nothing for the two paths to disagree about *yet*. This entry exists so the
-parity guard is built alongside the **first** new migration, not after a drift
-bug. Until then there is nothing to test.
+**Status: OWED — the precondition passed long ago (corrected 2026-09-02).** This
+entry used to read "dormant until the first post-rebrand migration: `MIGRATIONS`
+is empty and the baseline is `v1`, so there is nothing for the two paths to
+disagree about *yet*". That has not been true for a long time — `CURRENT_VERSION`
+is well past v1 with dozens of registered migrations, and no parity test exists.
+The guard was meant to be built alongside the **first** new migration precisely so
+it would not be built after a drift bug; it is now the most consequential open gap
+in this file. The durable *why* is in `CONTRIBUTING.md` → *Migration and
+fresh-schema parity*.
 
 **Why it's worth a test (once migrations exist).** Nothing asserts the two paths
 converge, so they can silently drift: add a column to the `init_db` CREATE block
 and forget the migration (or vice versa) and brand-new vs upgraded DBs end up
 with different schemas — a bug only users with old files hit.
 
-### Backend unit test — build when the first migration lands
+### Backend unit test — owed now
 
 **Shape.** Build the schema both ways into two temp DBs and diff the structure:
 
@@ -179,10 +183,11 @@ with different schemas — a bug only users with old files hit.
       and assert the *sets* match first, so "new table added to only one path"
       trips before the per-table column diff.
 
-**Baseline to capture.** Unlike the old pre-rebrand chain (additive deltas with
-no from-zero build), the new baseline is well-defined: the **complete** `v1`
-schema, i.e. `init_db` as of the reset. Snapshot that DDL once as a fixture and
-migrate forward from it; a fresh `init_db` at the same version must match.
+**Baseline to capture.** The baseline is well-defined: the **complete** `v1`
+schema, i.e. `init_db` as of the rebrand reset. Snapshot that DDL once as a fixture
+and migrate forward from it; a fresh `init_db` at the same version must match.
+Recovering that snapshot now means reading it out of history rather than off the
+current tree, which is part of what the delay has cost.
 
 **Notes.** Mirror the temp-DB harness in `backend/tests/`. Compare schema
 *structure* only — ignore `db_meta` version rows and seeded data

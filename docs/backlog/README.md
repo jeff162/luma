@@ -169,7 +169,7 @@ than by feature.
   exclusion silently restores the overstatement the feature removes; leaves stay entirely the user's,
   because an existing parent always wins `COALESCE(parent, leaf)`. The default leaf is
   `Awaiting reimbursement`.
-- [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
+- [refactor-audits.md](refactor-audits.md) — **recurring process; the method moved 2026-09-02** to `CONTRIBUTING.md` → *Auditing for duplication*. Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
   deferred candidates (row-patch util, the four drill panels), and the next scope (**backend audit**).
@@ -255,10 +255,10 @@ than by feature.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
   hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
   only if transaction-derived views proliferate enough to hurt.
-- [lint-and-tooling.md](lint-and-tooling.md) — **deferred.** Two "enable → measure → triage → gate"
+- [lint-and-tooling.md](lint-and-tooling.md) — **deferred; the posture moved 2026-09-02** to `CONTRIBUTING.md` → *Lint posture*. Two "enable → measure → triage → gate"
   linter passes: raise eslint strictness beyond the narrow baseline, and make the aspirational **ruff**
   config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
-- [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist.** Owed tests: rule-collision
+- [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist. The migration/fresh-schema parity entry was corrected 2026-09-02 from "dormant" to OWED** — its precondition passed dozens of migrations ago and no test exists. Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
   post-rebrand migration), rule-suggestion owner-scope stability, and a component-test harness for
   `Settings.jsx`, which has none of any kind. Also records the E2E harness that *is* available
