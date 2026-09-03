@@ -348,7 +348,7 @@ function ImportTab({ onAmazonDetected }) {
     Promise.all([
       api.getImportProfiles(),
       // include_children so a CSV value whose original account has been grouped under
-      // another (e.g. "Chase Checking 1234" attached to "Chase") still appears for the
+      // another (e.g. "Northgate Checking 1234" attached to "Northgate") still appears for the
       // exact-name and stem-match lookups below — otherwise the prior mapping silently
       // disappears the moment the user groups accounts on the Accounts page.
       api.getAccounts({ include_children: true }),

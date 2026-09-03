@@ -181,7 +181,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         # import matches A's row on (date, amount, normalized payee). Per-pair-distinct model:
         # the cross-account suspect check runs for all batch rows regardless of whether the
         # receiving account is brand new — no precondition gate.
-        account_a = self._insert_account("Chase")
+        account_a = self._insert_account("Northgate")
         account_b = self._insert_account("Credit Card ...4103")
         batch = self._insert_batch()
 

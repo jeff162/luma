@@ -71,7 +71,7 @@ class CrossAccountWindowEvidenceTests(unittest.TestCase):
                     (account_id, name, name, SHARED_OWNER_ID),
                 )
             conn.execute("INSERT INTO import_batch (id, filename, status) VALUES ('b-csv','Monarch.csv','completed')")
-            conn.execute("INSERT INTO import_batch (id, filename, status) VALUES ('b-conn','Chase · July 2026','completed')")
+            conn.execute("INSERT INTO import_batch (id, filename, status) VALUES ('b-conn','Northgate · July 2026','completed')")
 
     def tearDown(self):
         self.tempdir.cleanup()

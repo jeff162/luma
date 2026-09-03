@@ -237,11 +237,11 @@ class OrderDisposition:
     charge_amount: Optional[float]
     match_last4: Optional[str]
     match_date: Optional[str]
-    # The paying instrument's network label (the leg's method, e.g. "Riverstone") — with
+    # The paying instrument's network label (the leg's method, e.g. "Visa") — with
     # `match_last4` it identifies the instrument for the funding-source → account map (see doc).
     match_network: Optional[str] = None
     # A card the payments string *names* but gives no dollar amount for (non-cash orders only —
-    # "Riverstone ending in 5093; Rewards Points;", the 2024+ points-order shape). The export
+    # "Visa ending in 5093; Rewards Points;", the 2024+ points-order shape). The export
     # hides the card/points split, so classification lands non-cash; the importer probes the ledger
     # for a unique full-total charge on this card and upgrades the order to cash when one exists
     # (see the router's bare-card probe).

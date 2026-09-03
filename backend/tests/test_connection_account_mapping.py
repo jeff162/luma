@@ -69,7 +69,7 @@ class _MappingFixture(unittest.TestCase):
         with database.get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, institution) VALUES (?,?,?,?)",
-                ("conn-1", "plaid", "item-1", "Chase"),
+                ("conn-1", "plaid", "item-1", "Northgate"),
             )
             self.owner_id = conn.execute("SELECT id FROM owner LIMIT 1").fetchone()["id"]
 
@@ -90,7 +90,7 @@ class _MappingFixture(unittest.TestCase):
 
     def _apply(self, conn, mappings):
         return apply_account_mapping(
-            conn, connection_id="conn-1", provider="plaid", institution="Chase",
+            conn, connection_id="conn-1", provider="plaid", institution="Northgate",
             mappings=mappings, default_owner_id=self.owner_id,
         )
 
@@ -103,7 +103,7 @@ class ConnectionAccountMappingTests(_MappingFixture):
         # created until the user has said what each provider account *is*.
         with database.get_db() as conn:
             upsert_connection_accounts(
-                conn, connection_id="conn-1", provider="plaid", institution="Chase",
+                conn, connection_id="conn-1", provider="plaid", institution="Northgate",
                 accounts=PROVIDER_ACCOUNTS, default_owner_id=self.owner_id,
             )
             self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
@@ -268,7 +268,7 @@ class ConnectionAccountMappingTests(_MappingFixture):
             self._record(conn)
             self._apply(conn, {"ext-checking": {"mode": "skip"}})
             upsert_connection_accounts(
-                conn, connection_id="conn-1", provider="plaid", institution="Chase",
+                conn, connection_id="conn-1", provider="plaid", institution="Northgate",
                 accounts=PROVIDER_ACCOUNTS, default_owner_id=self.owner_id,
             )
             self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
@@ -320,7 +320,7 @@ class ConnectionAccountMappingTests(_MappingFixture):
             conn.execute("DELETE FROM account WHERE id = ?", (created,))
 
             upsert_connection_accounts(
-                conn, connection_id="conn-1", provider="plaid", institution="Chase",
+                conn, connection_id="conn-1", provider="plaid", institution="Northgate",
                 accounts=PROVIDER_ACCOUNTS, default_owner_id=self.owner_id,
             )
             rebuilt = conn.execute(

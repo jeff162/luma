@@ -23,7 +23,7 @@ describe('getTxnOriginRows source/connection rows', () => {
 
   it('adds a Connection row for a synced batch and none for a CSV batch', () => {
     const synced = row(
-      { merchant_name: 'X', import_batch_filename: 'Chase · Initial import', import_batch_provider: 'plaid' },
+      { merchant_name: 'X', import_batch_filename: 'Northgate · Initial import', import_batch_provider: 'plaid' },
       'connection',
     )
     expect(synced).toMatchObject({ label: 'Connection', value: 'Plaid' })

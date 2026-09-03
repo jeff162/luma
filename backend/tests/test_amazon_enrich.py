@@ -222,7 +222,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(orders[0]["category_id"], funding_id)
 
     def test_bare_card_order_upgrades_to_cash_when_full_total_charge_exists(self):
-        # The bare-card probe: "Riverstone ending in 5093; Rewards Points;" (2024+ shape) names a
+        # The bare-card probe: "Visa ending in 5093; Rewards Points;" (2024+ shape) names a
         # card but discloses no amounts, so classification alone says non-cash — but a unique ledger
         # charge equal to the full total proves the card paid everything. The order imports as ordinary
         # cash: counted at its total, the charge matched + excluded.

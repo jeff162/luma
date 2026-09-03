@@ -62,13 +62,13 @@ class MigrationV24Tests(unittest.TestCase):
             INSERT INTO db_meta (key, value) VALUES ('version', '23');
 
             INSERT INTO connection (id, provider, external_id, institution)
-              VALUES ('conn-1', 'plaid', 'item-1', 'Chase');
+              VALUES ('conn-1', 'plaid', 'item-1', 'Northgate');
             INSERT INTO account (id, name, display_name, type, mask, external_account_id, connection_id, provider)
               VALUES ('acct-card', 'CREDIT CARD', 'CREDIT CARD', 'credit', '4103', 'ext-card', 'conn-1', 'plaid');
             INSERT INTO account (id, name, display_name, type, provider)
               VALUES ('acct-csv', 'Monarch Checking', 'Monarch Checking', 'depository', 'csv');
             INSERT INTO import_batch (id, filename, status, connection_id)
-              VALUES ('card-1', 'Chase · July 2026', 'completed', 'conn-1');
+              VALUES ('card-1', 'Northgate · July 2026', 'completed', 'conn-1');
             INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count)
               VALUES ('card-1', 'ext-card', 'acct-card', 12);
         """)

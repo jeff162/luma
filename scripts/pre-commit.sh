@@ -21,6 +21,15 @@ done
 
 STATUS=0
 
+# Personal data — every staged file, not just source: a real account name or card last-4 leaks the same
+# whether it lands in a fixture, a comment or a doc. No-ops unless a local term list exists (see
+# scripts/check-personal-data.js for why that list is not in the repository).
+if [ -n "$FILES" ]; then
+  echo "Checking for personal data..."
+  node scripts/check-personal-data.js $FILES
+  if [ $? -ne 0 ]; then STATUS=1; fi
+fi
+
 # Frontend
 if [ -n "$FRONTEND_FILES" ]; then
   echo "Checking frontend comments..."

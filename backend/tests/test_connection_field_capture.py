@@ -179,7 +179,7 @@ class CapturedFieldSelectionTests(unittest.TestCase):
         self._stack.__enter__()
         with database.get_db() as conn:
             conn.execute(
-                "INSERT INTO connection (id, provider, external_id, institution) VALUES ('c1','plaid','i1','Chase')"
+                "INSERT INTO connection (id, provider, external_id, institution) VALUES ('c1','plaid','i1','Northgate')"
             )
 
     def tearDown(self):

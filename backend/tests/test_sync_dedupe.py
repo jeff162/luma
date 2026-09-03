@@ -11,7 +11,7 @@ The cases below are the ones actually observed in a real ledger, kept concrete o
                  overlap, but the dates are three days apart because one source reports the posted
                  date and the other the transaction date.
   Whole Foods    identical text, four days apart — outside the old ±3 soft-flag window entirely.
-  Chase payment  Plaid `Payment Thank You Bill` vs. CSV `Chase` — ZERO text overlap on the same day.
+  Northgate payment  Plaid `Payment Thank You Bill` vs. CSV `Northgate` — ZERO text overlap on the same day.
                  No text tier can ever match these; only coverage can.
 
 The third is the important one: it is why the mapping exists at all. Coverage only rejects a row when
@@ -90,7 +90,7 @@ class SyncDedupeTests(unittest.TestCase):
         with self._db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES ('conn-1','plaid','item-1','','Chase')"
+                "VALUES ('conn-1','plaid','item-1','','Northgate')"
             )
             for acct, name in ((self.CSV_ACCOUNT, "Northgate Voyager"), (self.PLAID_ACCOUNT, "CREDIT CARD")):
                 conn.execute(
@@ -193,10 +193,10 @@ class SyncDedupeTests(unittest.TestCase):
     # ---- the reported cases --------------------------------------------
 
     def test_zero_text_overlap_inside_covered_range_is_rejected_when_mapped(self):
-        # The Chase payment: "Payment Thank You Bill" vs "Chase", same day, same amount. No text tier
+        # The Northgate payment: "Payment Thank You Bill" vs "Northgate", same day, same amount. No text tier
         # can match these — coverage is the only rule that can, and it only applies because the
         # mapping declares this provider account to BE the CSV account.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._map("existing")
         res = self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
 
@@ -207,7 +207,7 @@ class SyncDedupeTests(unittest.TestCase):
     def test_the_same_row_imports_when_the_account_is_unmapped(self):
         # The contrast that shows the mapping is what does the work: with no mapping the provider
         # account is nobody's alias, coverage cannot apply, and the row lands as it always did.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         res = self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         self.assertEqual(res["added"], 1)
         self.assertEqual(res["deduped"], 0)
@@ -269,7 +269,7 @@ class SyncDedupeTests(unittest.TestCase):
     # ---- what a rejected row leaves behind ------------------------------
 
     def test_a_rejected_row_is_recorded_for_review_not_silently_dropped(self):
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._map("existing")
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         with self._db() as conn:
@@ -315,7 +315,7 @@ class SyncDedupeTests(unittest.TestCase):
             cards = [r["filename"] for r in conn.execute(
                 "SELECT filename FROM import_batch WHERE source_kind = 'connection_sync' ORDER BY filename"
             ).fetchall()]
-        self.assertEqual(cards, ["Chase · August 2026", "Chase · July 2026"])
+        self.assertEqual(cards, ["Northgate · August 2026", "Northgate · July 2026"])
 
     def test_sync_cards_never_record_coverage(self):
         # A card holds whatever a delta happened to deliver, which proves nothing about the dates it

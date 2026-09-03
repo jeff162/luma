@@ -74,7 +74,7 @@ class ConnectionRescanTests(unittest.TestCase):
         with self._db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES ('conn-1','plaid','item-1','','Chase')"
+                "VALUES ('conn-1','plaid','item-1','','Northgate')"
             )
             for acct, name in ((self.CSV_ACCOUNT, "Northgate Voyager"), (self.PLAID_ACCOUNT, "CREDIT CARD")):
                 conn.execute(
@@ -203,9 +203,9 @@ class ConnectionRescanTests(unittest.TestCase):
     # ---- the case the re-scan exists for -------------------------------
 
     def test_a_row_synced_before_the_mapping_is_confirmed_afterwards(self):
-        # The whole point. The Chase payment has zero text overlap with its CSV twin, so only coverage
+        # The whole point. The Northgate payment has zero text overlap with its CSV twin, so only coverage
         # can catch it — and coverage needs the mapping, which did not exist when the row arrived.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self.assertEqual(self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])["added"], 1)
         self.assertEqual(len(self._live_synced_rows()), 1)
 
@@ -218,7 +218,7 @@ class ConnectionRescanTests(unittest.TestCase):
     def test_a_confirmed_row_is_trashed_not_deleted_and_keeps_what_the_user_did_to_it(self):
         # "Removed" must mean recoverable. The row keeps its category and its pointer to the copy that
         # survived, which is what makes the duplicate report able to show it and Restore able to undo.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         synced_id = self._synced_row_ids()[0]
         with self._db() as conn:
@@ -238,7 +238,7 @@ class ConnectionRescanTests(unittest.TestCase):
     def test_the_removal_shows_up_in_its_own_cards_duplicate_report(self):
         # The report is the recovery surface, so a re-scan removal has to be visible there — labelled
         # by the occasion (re-scan), not left as an unexplained "other".
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         self._map("existing", target=self.PLAID_ACCOUNT, account_id=self.PLAID_ACCOUNT)
         self._rescan()
@@ -285,7 +285,7 @@ class ConnectionRescanTests(unittest.TestCase):
         self.assertEqual(len(self._live_synced_rows()), 2)
 
     def test_running_it_twice_changes_nothing_the_second_time(self):
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         self._map("existing", target=self.PLAID_ACCOUNT, account_id=self.PLAID_ACCOUNT)
 
@@ -301,7 +301,7 @@ class ConnectionRescanTests(unittest.TestCase):
 
     def test_a_row_the_user_already_ruled_on_is_left_alone(self):
         # A re-scan makes decisions where none were made. It never re-opens one the user made.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         synced_id = self._synced_row_ids()[0]
         with self._db() as conn:
@@ -318,7 +318,7 @@ class ConnectionRescanTests(unittest.TestCase):
     def test_an_unmapped_connection_scans_nothing(self):
         # No mapping means no premise for any cross-account conclusion — the same reason these rows
         # imported in the first place. The re-scan must not invent one.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
 
         result = self._rescan()
@@ -332,7 +332,7 @@ class ConnectionRescanTests(unittest.TestCase):
         # not the history already synced under the old one. Those rows are outside the mapping, so the
         # ladder has nothing to judge them against — they are counted so the number is visible rather
         # than the rows quietly ignored. Moving them is an account merge, a separate deliberate act.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         self._map("existing", target=self.CSV_ACCOUNT, account_id=self.CSV_ACCOUNT)
 
@@ -348,7 +348,7 @@ class ConnectionRescanTests(unittest.TestCase):
         # A mapping decision that changes nothing to compare against is worth nothing until the rows
         # already in the ledger are re-judged, so the mapping call runs it rather than making the user
         # find a second button.
-        self._csv_batch([("2026-07-13", -21.25, "Chase")])
+        self._csv_batch([("2026-07-13", -21.25, "Northgate")])
         self._sync([self._synced("p1", "2026-07-13", -21.25, None, "Payment Thank You Bill")])
         with self._db() as conn:
             conn.execute(

@@ -166,7 +166,7 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         # A matching card charge exists (find_payment_match -> a candidate): a real duplicate, kept
         # rejected, and the corroborating charge is surfaced in the report.
         charge = {"id": "CARD-CHARGE", "date": "2025-10-16", "merchant_name": "PAYPAL RANDONNEURS",
-                  "amount": -10.00, "account_id": "ACCT-CARD", "account_name": "Chase", "cross_account": True}
+                  "amount": -10.00, "account_id": "ACCT-CARD", "account_name": "Northgate", "cross_account": True}
         verdict = self._eval_covered_payment(charge, "RANDONNEURS USA")
         self.assertTrue(verdict.hard_reject)
         self.assertEqual(verdict.matched["candidate_count"], 1)

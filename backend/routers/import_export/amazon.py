@@ -415,7 +415,7 @@ def _match_charge(conn, order, account_id, disposition):
 
 def _resolve_bare_card_order(conn, order, account_id, disposition):
     """The bare-card probe (decision doc, settled 2026-07-16): resolve a payments string that names a
-    card but discloses no per-leg amounts (``Riverstone ending in 5093; Rewards Points;`` — the
+    card but discloses no per-leg amounts (``Visa ending in 5093; Rewards Points;`` — the
     2024+ points-order shape). Classification alone conservatively lands non-cash ($0: points may have
     paid everything), but the ledger can settle it: if a *unique* eligible charge equal to the order's
     **full total** exists on the named card (the matcher's own rules — funding map / last-4, ±3-day

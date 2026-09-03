@@ -4130,7 +4130,7 @@ def list_batches():
                    b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
                    b.connection_id, p.name AS profile_name,
                    -- Connection provenance for data-source (sync) cards: the provider disambiguates two
-                   -- connections at the same institution (e.g. one "Chase" via Plaid, another via a
+                   -- connections at the same institution (e.g. one "Northgate" via Plaid, another via a
                    -- different provider), and institution is the stable label the group header shows.
                    conn.provider    AS connection_provider,
                    conn.institution AS connection_institution,

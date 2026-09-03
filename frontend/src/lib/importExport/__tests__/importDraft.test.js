@@ -158,7 +158,7 @@ describe('getSuggestedDataSourceName', () => {
 describe('groupFilesBySource', () => {
   const profiles = [
     { id: 'p-riverstone', name: 'Riverstone', header_fingerprint: 'fp-riverstone' },
-    { id: 'p-northgate', name: 'Chase', header_fingerprint: 'fp-northgate' },
+    { id: 'p-northgate', name: 'Northgate', header_fingerprint: 'fp-northgate' },
     { id: 'p-alt', name: 'Riverstone (alt)', header_fingerprint: 'fp-riverstone' }, // same shape as Riverstone -> ambiguous
   ]
   const entry = (name, fingerprint) => ({
@@ -174,7 +174,7 @@ describe('groupFilesBySource', () => {
     expect(groups).toHaveLength(1)
     expect(groups[0].files.map(f => f.file.name)).toEqual(['Northgate_01.csv', 'Northgate_02.csv'])
     expect(groups[0].profileId).toBe('p-northgate')
-    expect(groups[0].label).toBe('Chase')
+    expect(groups[0].label).toBe('Northgate')
     expect(groups[0].ambiguous).toBe(false)
   })
 
@@ -184,7 +184,7 @@ describe('groupFilesBySource', () => {
       [profiles[0], profiles[1]],
     )
     expect(groups.map(g => g.fingerprint)).toEqual(['fp-northgate', 'fp-riverstone'])
-    expect(groups[0].files).toHaveLength(2) // both Chase files, even though Riverstone came between them
+    expect(groups[0].files).toHaveLength(2) // both Northgate files, even though Riverstone came between them
     expect(groups[1].files).toHaveLength(1)
   })
 

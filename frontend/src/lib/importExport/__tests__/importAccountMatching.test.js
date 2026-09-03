@@ -38,7 +38,7 @@ describe('normalizeAccountMatchStem', () => {
 
   it('leaves a number that is part of the name alone', () => {
     // The suffix has to be mask-shaped. "Account 2" is a name, not a masked account.
-    expect(normalizeAccountMatchStem('Riverstone ··· Blue Cash')).toBe('riverstone summit cash')
+    expect(normalizeAccountMatchStem('Riverstone ··· Summit Cash')).toBe('riverstone summit cash')
     expect(normalizeAccountMatchStem('401k')).toBe('401k')
   })
 })

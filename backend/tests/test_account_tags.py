@@ -104,8 +104,8 @@ class AccountTagTests(unittest.TestCase):
         self.assertEqual([(t["id"], t["source"]) for t in tags], [(tag_id, "account")])
 
     def test_child_inherits_parent_account_tag(self):
-        parent_id = self._insert_account("Chase")
-        child_id = self._insert_account("Chase 4321", parent_account_id=parent_id)
+        parent_id = self._insert_account("Northgate")
+        child_id = self._insert_account("Northgate 4321", parent_account_id=parent_id)
         tag_id = self._insert_tag("Joint")
         child_txn = self._insert_txn(account_id=child_id, merchant="Cafe")
         self._set_tags(parent_id, [tag_id])
@@ -114,8 +114,8 @@ class AccountTagTests(unittest.TestCase):
         self.assertEqual([t["id"] for t in tags], [tag_id])
 
     def test_child_own_tag_is_dormant_then_restored_on_detach(self):
-        parent_id = self._insert_account("Chase")
-        child_id = self._insert_account("Chase 4321", parent_account_id=parent_id)
+        parent_id = self._insert_account("Northgate")
+        child_id = self._insert_account("Northgate 4321", parent_account_id=parent_id)
         tag_id = self._insert_tag("Personal")
         child_txn = self._insert_txn(account_id=child_id, merchant="Cafe")
         self._set_tags(child_id, [tag_id])
@@ -130,8 +130,8 @@ class AccountTagTests(unittest.TestCase):
         self.assertEqual([t["id"] for t in self._visible_tags(child_txn)], [tag_id])
 
     def test_tag_filter_matches_account_and_inheriting_children(self):
-        parent_id = self._insert_account("Chase")
-        child_id = self._insert_account("Chase 4321", parent_account_id=parent_id)
+        parent_id = self._insert_account("Northgate")
+        child_id = self._insert_account("Northgate 4321", parent_account_id=parent_id)
         other_id = self._insert_account("Riverstone")
         tag_id = self._insert_tag("Joint")
         parent_txn = self._insert_txn(account_id=parent_id, merchant="Parent buy")

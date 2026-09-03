@@ -25,7 +25,7 @@ function preview(headers, rows, extra = {}) {
 
 describe('inferFilenamePattern', () => {
   it('strips trailing date/sequence suffixes down to the stable base', () => {
-    expect(inferFilenamePattern('Northgate_2026-03-15.csv')).toBe('Chase')
+    expect(inferFilenamePattern('Northgate_2026-03-15.csv')).toBe('Northgate')
     expect(inferFilenamePattern('statement_20260315.csv')).toBe('statement')
     expect(inferFilenamePattern('export-2026-03.csv')).toBe('export')
   })

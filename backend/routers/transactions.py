@@ -1081,7 +1081,7 @@ def list_transactions(
                 b.imported_at AS import_batch_imported_at,
                 -- Data-source (sync) provenance for the origin hover: the provider names which
                 -- connection a synced row came from, so two same-institution connections (both
-                -- labeled e.g. "Chase") are still tellable apart. NULL for CSV/manual batches.
+                -- labeled e.g. "Northgate") are still tellable apart. NULL for CSV/manual batches.
                 bconn.provider AS import_batch_provider,
                 o.name        AS owner_name,
                 o.color       AS owner_color,

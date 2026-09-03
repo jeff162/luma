@@ -260,7 +260,7 @@ export function ImportHistorySection({
                               ) : isConnection ? (
                                 // Muted provenance cue on the group header: which data connection these
                                 // synced cards came from, so multiple same-institution connections (e.g.
-                                // two "Chase") are distinguishable. Mirrors the hover's Connection row.
+                                // two "Northgate") are distinguishable. Mirrors the hover's Connection row.
                                 //
                                 // A disconnected group says so outright rather than falling through to
                                 // the generic label, which read as an ordinary live connection sitting
