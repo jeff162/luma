@@ -1,19 +1,20 @@
 # Building a Connector
 
 How to add a new data source, and — more usefully — which of this system's assumptions are actually
-**Plaid's assumptions** wearing a general name. The seam was built around one aggregator first, and
-almost every trait that looked universal turned out to belong to that provider. Each time one of those
-was discovered, the fix was the same shape: stop branching on the provider's name, and have the source
-*declare* the fact so the shared path can honor it.
+**one provider's assumptions** wearing a general name. The seam was built around a single aggregator
+first, so anything in it that looks universal may only be that provider's behaviour under a neutral
+name; distrust the general-sounding ones. The fix is always the same shape: stop branching on the
+provider's name, and have the source *declare* the fact so the shared path can honor it.
 
-This document is the checklist of those facts. Read it before writing an adapter; the failures below are
-all ones that shipped, and every one of them was silent.
+This document is the checklist of those facts. **None of the failures below announce themselves** —
+each one produces a plausible-looking result, so a test that does not already know what to look for
+will not find it.
 
 > Scope note: "connector" here means any **data source** that produces transactions — a provider
 > connection (a `ProviderAdapter`) *or* a file importer. The two do not share a base class, so some
 > declarations live on the adapter class and some in a registry (`services/source_capabilities.py`).
 
-**Which half of this document is yours.** Most of the hard-won material below came from building
+**Which sections apply.** Most of the material below came from building
 provider adapters, so the connection sections are the longer ones — but the rules that survived turned
 out to be about *sources*, not about connections, and a file importer hits several of them unchanged.
 

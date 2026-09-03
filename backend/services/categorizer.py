@@ -41,8 +41,8 @@ def extract_source_match_text(evidence) -> str:
     haystack for `match_source_text` rules: the normalized description slot plus the source-specific
     `extra_text_fields` (e.g. an "Original Statement" column). The account label is deliberately
     excluded — it identifies the account, not the statement text — matching what the merchant origin
-    surfaces show as `text`-scope. See `import_evidence_json` (data-model.md) and
-    docs/import-source-fields-plan.md.
+    surfaces show as `text`-scope. See `import_evidence_json` and the rule action list in
+    docs/data-model.md.
     """
     if not isinstance(evidence, dict):
         return ""

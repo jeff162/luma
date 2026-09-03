@@ -20,8 +20,7 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 - **A "why not X?" question scopes the work to X.** Asked why some flagged rows had not been matched,
   the honest answer was about how a stored verdict is labeled and tiered; the response instead designed
-  an automatic pairing mechanism the user had not asked for and had to be pulled back from it. Answer
-  the question that was asked, propose the smallest change that answers it, and surface a larger design
+  an automatic pairing mechanism nobody had asked for. Answer the question that was asked, propose the smallest change that answers it, and surface a larger design
   as an option rather than exploring it unprompted — the more so once a session has already run long,
   since a long investigation is itself a cost the user is paying.
 
@@ -44,9 +43,9 @@ instruction and fix the drift rather than silently choosing the looser version.
   manual inspection. All of it was avoidable: Playwright's WebKit build was already installed on the
   dev machine, and driving the real app in it located the true cause in minutes. The rule in
   `CLAUDE.md` forbids browser-driving to check one's *own* work, and explicitly permits it to diagnose
-  a bug the user reported that cannot be diagnosed another way — that permission is worth *asking about
-  early*, since the user's feedback was "best would have been for you to have raised this as a
-  possibility and just asked." Reproduce first, then theorize.
+  a reported bug that cannot be diagnosed another way. **Asking early is what that permission is for** —
+  raising the possibility costs one question, while theorizing blind costs a round trip per hypothesis.
+  Reproduce first, then theorize.
 
 - **A cross-browser report is a claim about sequence until proven otherwise.** That same bug was
   reported as Safari-only and Chromium-clean; both engines in fact collapsed identically once the exact
@@ -99,8 +98,10 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 - **Measure before blaming, and measure on a copy of real data.** The first suspect for a 109-second
   freeze was the recurring auto-scan; it measured 0.03 s and was innocent. The actual cause measured 109 s
-  on the same database and 1 s with an index. `cp` the live DB to the scratchpad and drive the real
-  functions against it — the test fixtures are tiny (largest ~1,200 rows) and cannot show a cost that only
+  on the same database and 1 s with an index. Take the copy with `sqlite3 <live.db> ".backup <scratch.db>"` rather than
+  `cp`: both databases run in WAL mode, so copying the main file alone drops whatever is committed but
+  still sitting in the `-wal`, and the copy is then quietly missing recent rows. Drive the real functions
+  against that copy — the test fixtures are tiny (largest ~1,200 rows) and cannot show a cost that only
   appears at ledger scale. Two sweeps worth repeating: EXPLAIN the SQL the suite actually executes (trace
   it with `sqlite3.set_trace_callback` from a pytest plugin, then `EXPLAIN QUERY PLAN` each statement
   against a real-data copy and flag scans of large tables), and grep `with get_db()` blocks that both
@@ -169,32 +170,27 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 ### Separate "I know the mechanism" from "I know the cause"
 
-A diagnosis can be solidly right about *how* a symptom is produced and still have no idea *why the
-precondition held* — and only the second licenses a preventive fix. Worked example (2026-08-31): an
-import card showed a raw provider account id instead of an account name. The mechanism was confirmable
-and eventually reproducible in a test — a sync resolves a row's account through the durable
-`account.external_account_id` but labels it from the per-connection `connection_account`, so a row whose
-`connection_account` entry is missing imports correctly under an unreadable label. What could *not* be
-established was why that entry was missing: the connection had already been deleted, cascading the
-evidence away.
+Being right about *how* a symptom is produced says nothing about *why the precondition held*, and only
+the second licenses a preventive fix. The two come apart routinely: a mechanism can be confirmed and
+even reproduced in a test while its cause stays unrecoverable, the evidence having cascaded away with a
+deleted row.
 
-The first diagnosis was also simply **wrong** — it named a nearby fallback on the *skipped-row* path,
-which writes `account_id: None`, while the card in question had a real account id and an imported row.
-Reading one line further is what caught it. State which line, then check the observed data actually
-matches that line's preconditions.
+**Before naming a mechanism, state which line produces it, then check that the observed data meets that
+line's preconditions.** What this catches is a plausible neighbour — a fallback on the *skipped-row*
+path, which writes `account_id: None`, offered as the explanation for a row that had a real account id.
 
-**How to apply.** Say plainly which half you have. When the mechanism is confirmed and the cause is not,
-prefer the change that is correct regardless of the cause — here, a presentational fix plus a recorded
-diagnostic — over one aimed at the unproven cause, which may fix nothing and cannot be validated. And
-prefer a fix with no semantic blast radius: the label in that example is not display text, it is written
-into row evidence and feeds duplicate matching, so "just correct the label" would have altered matching
-on the strength of a guess. **The user asked for exactly this distinction and declined a speculative
-fix; treat being asked "how confident are you?" as a request for the split, not for reassurance.**
+**How to apply.** Say plainly which half is in hand, and treat "how confident are you?" as a request for
+that split rather than for reassurance. With the mechanism confirmed and the cause unproven, prefer the
+change that is correct either way over one aimed at the guess, which may fix nothing and cannot be
+validated — and prefer the fix with no semantic blast radius. A label that looks presentational may be
+written into row evidence and feed duplicate matching, so "just correct the label" can alter matching on
+the strength of that guess.
 
-Where a cause is unrecoverable, leave something behind that makes a recurrence diagnosable — a log entry
-on the path that fired, recorded where a developer would look. Pick the surface by who can act on it:
-in that example the advisory went to the log-only `advisories`, never to `last_sync_warnings`, which is
-shown on the connection card and is reserved for what the *user* can act on.
+Where a cause is unrecoverable, leave the recurrence diagnosable: record an advisory on the path that
+fired, into `connection_sync_log.advisories` — a table with a reader behind it (Settings →
+**Connection sync log**), not a console line nobody opens. Pick the surface by who can act on it:
+`advisories` is the developer's, while `last_sync_warnings` shows on the connection card and is reserved
+for what the *user* can act on.
 
 ## Implementation Bias
 
@@ -209,17 +205,13 @@ shown on the connection card and is reserved for what the *user* can act on.
   Where that applies, recommend the cleanup plainly and say the standard requires it. The only real
   question left is scope and sequencing, never whether quality work is worth doing.
 
-- **A constraint on what the user may record needs a reason beyond implementation convenience.** Split
-  allocations were given a "one part per category" rule, and it was written into `data-model.md` as a
-  settled decision with a rationale. The real reason was to avoid changing five `COUNT(*)`s to
-  `COUNT(DISTINCT)`. The user asked what the problem with repeating a category actually was, and there
-  wasn't one worth the cost: two records bought in one order are two purchases at two prices, and the
-  rule discarded exactly the detail the feature existed to capture. Sums were never affected — only a
-  bucket's row count, which `COUNT(DISTINCT)` reports more honestly anyway. Before constraining the
-  data model, ask whether the difficulty is in the *domain* or in the queries; if it is the queries,
-  fix the queries. And when a rule like that is reversed, record the reversal where the rationale was
-  (with a "don't re-impose it"), because the original argument will read as plausible to the next
-  person who finds it.
+- **A constraint on what may be recorded needs a reason in the domain, not in the queries.** Split
+  allocations were given a "one part per category" rule, written into `data-model.md` as settled and
+  supplied with a rationale; the real reason was avoiding five `COUNT(*)` → `COUNT(DISTINCT)` edits, and
+  it discarded exactly the detail the feature existed to capture. Before constraining the data model,
+  ask which side the difficulty is on — if it is the queries, fix the queries. When such a rule is
+  reversed, record the reversal where the rationale lived, with a "don't re-impose it", because the
+  original argument reads as plausible to whoever finds it next.
 
 - **A green unit suite says nothing about how a component sits in the live tree — and that is where the
   defects are.** Attachments phase 1 shipped with ~40 new tests passing and the user found four defects
@@ -238,9 +230,9 @@ shown on the connection card and is reserved for what the *user* can act on.
   it over four round trips.
 
 - **Withholding a capability keeps being the mistake, and it arrives wearing two different arguments.**
-  The first is *the user might be confused* — a search prefix made mandatory, a document marker left as
-  an inert counter — where the honest fix was to **explain** rather than to withhold: a label, a marker,
-  or a tooltip, which it almost always is. The second is *another route already reaches it*, which is
+  The first is *it might be confusing* — a search prefix made mandatory, a document marker left as an
+  inert counter — where the fix was to **explain** rather than to withhold: a label, a marker, or a
+  tooltip, which it almost always is. The second is *another route already reaches it*, which is
   how the multi-payment purchase marker was first built inert: the row's pencil opened a panel holding
   the editor, so a marker that opened the same thing read as redundant. It is not redundant, because the
   question is not whether the capability is reachable but whether **this** control does what it stands
@@ -304,10 +296,10 @@ shown on the connection card and is reserved for what the *user* can act on.
 - **"Our own UI never calls it" is not a security boundary, and one instance is not the class.** An
   authenticated endpoint let an unlocked session replace the vault passphrase with no proof of the old
   one — turning transient access to someone's screen into durable, independent access that survives a
-  relock. It was reported to the user as *optional* hardening, on the reasoning that the app's client
-  never makes that call. The user pushed back, correctly: reachability for an authenticated endpoint is
-  the API surface, not the client, and the repo was heading for public release. Then their follow-up —
-  *does that leave any actions that still don't require proof?* — found a fourth operation in the same
+  relock. It was graded as *optional* hardening on the reasoning that the app's client never makes that
+  call — which is not the test: reachability for an authenticated endpoint is the API surface, not the
+  client. The follow-up question that settled it — *does that leave any actions that still don't require
+  proof?* — found a fourth operation in the same
   class with a **shorter** path to abuse than the three being fixed, which had not been enumerated
   because only the reported instance was in view.
 

@@ -8,11 +8,28 @@ It is meant to help agents, and perhaps other contributors, make decisions that 
 
 ## Decision-Making Principles
 
-**Calibrate care to blast radius.** How much rigor a decision warrants — how hard to verify it, whether to ask first, how conservative to be — scales with how reversible it is, how likely the user is to *notice* if it's wrong, and how costly it would be to undo later. Cheap + reversible + visible: act, and say what you did. Irreversible, *or* hard for the user to observe, *or* expensive to unwind: slow down — prefer the reversible option, surface the decision before committing, and verify to the point of *proof*. Confirm the change actually behaves; don't accept a result that is merely consistent with success (a passing check you have never watched fail proves little). This is the dial behind the more specific principles in this section — they are what "slow down" looks like in practice.
+**Calibrate care to blast radius.** How much *process* a decision warrants — how hard to verify it, whether to ask first, how much to surface before committing — scales with how reversible it is, how likely a wrong result is to be *noticed*, and how costly it would be to undo later. Cheap + reversible + visible: act, and say what you did. Irreversible, *or* hard to observe, *or* expensive to unwind: slow down — where two designs are otherwise equally sound prefer the one easier to unwind, surface the decision before committing, and verify to the point of *proof*. Confirm the change actually behaves; don't accept a result that is merely consistent with success (a passing check you have never watched fail proves little). This is the dial behind the more specific principles in this section — they are what "slow down" looks like in practice.
 
-A key input to that dial: the user does not review most of the code directly and, even if they did, is unlikely to catch frontend/UI or backend problems even when looking. Changes the user can't easily observe or exercise are therefore **low-observability by default**, which by itself raises the bar — for those, the user's review cannot be the backstop, so you are. Prove the behavior and flag the non-obvious choices you made rather than relying on "they'll catch it."
+**The dial governs process, never quality.** Reversibility is a reason to ask less and verify less. It
+is never a reason to accept a worse change: a change is right when it accomplishes the goal *and* is
+clean and well-structured, and "easy to undo" substitutes for neither. Nor is "they will say if it's
+wrong" a verification strategy. The inversion is the one to watch for, because it reads backwards — a
+local patch is often easy to reverse *because* it doesn't integrate, which is the same property that
+makes it the wrong change. Where the correct fix is large, deep, or crosses subsystems, that is a
+reason to surface it and its scope, not a reason to prefer the shallow one.
+
+A key input to that dial: most code here is not reviewed line by line, and UI or backend defects are unlikely to be caught by reading even when someone looks. Changes that cannot easily be observed or exercised are therefore **low-observability by default**, which by itself raises the bar — for those, review cannot be the backstop, so you are. Prove the behavior and flag the non-obvious choices you made rather than relying on "they'll catch it."
 
 **"Verify to the point of proof" never authorizes browser/app self-verification.** This is the loophole to name explicitly: a high-blast-radius or low-observability *UI* change makes it tempting to read "prove it behaves" as "drive the app / run Playwright to be sure." That is exactly the prohibited move (hard rule in `CLAUDE.md` / `AGENTS.md`). The proof path for UI is: non-browser checks you *can* do (lint, backend unit tests, reasoning about the diff), plus **handing the exercise to the user** — tell them precisely what to click and what correct looks like. Rigor scales with blast radius; the *method* still excludes you driving a browser to confirm your own work.
+
+**A term with both an everyday meaning and a narrower in-app one must signal which is in force**,
+unless it plainly reads as a term of art. Writing to the application's internal definition is not a
+defense when the ordinary sense is what a reader arrives with: "each account belongs to at most one
+owner" is true of the `owner` table and false of people, because a Shared account really does belong to
+two of them. Naming the set — "at most one of the defined owners" — is what makes it a claim about
+configuration rather than about households. The discipline already holds for the term where a collision
+would hurt most: login identities are consistently **member** or **profile**, never "user account",
+which would collide with a bank account.
 
 - Prefer explicit user choice over hidden inference when a decision changes meaning.
 
@@ -20,7 +37,7 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Avoid silent guesses that are hard for the user to notice later. Suggested values should be visible as suggestions, not disguised as confirmed choices.
 
-- Favor workflows that are understandable and reversible. A user should usually be able to see what happened, back out of it, or correct it without needing cleanup work.
+- Favor workflows that are understandable and reversible. It should usually be possible to see what happened, back out of it, or correct it without needing cleanup work.
 
 - Accept small asymmetries when two workflows are genuinely different. Consistency matters, but not at the cost of forcing every path into the same shape when the user intent is different.
 
@@ -38,11 +55,11 @@ A key input to that dial: the user does not review most of the code directly and
 
 - If a UI behavior is meant to be shared, implement the shared version rather than fixing one copy and planning to catch up later.
 
-- Required user actions should be visually clear. If a screen is waiting on the user to make a choice, the next step should read naturally from the layout, not just from helper text.
+- Required user actions should be visually clear. If a screen is waiting on a choice, the next step should read naturally from the layout, not just from helper text.
 
-- Overlay panels should feel deliberate: they should open in sensible positions, be visually distinct from panels behind them, and not disappear unless the user explicitly dismisses them when the decision matters.
+- Overlay panels should feel deliberate: they should open in sensible positions, be visually distinct from panels behind them, and not disappear unless explicitly dismissed when the decision matters.
 
-- **Flicker and layout jitter are defects, not cosmetics — the user finds them actively distracting and wants them removed wherever they appear.** Most operations here are local and return in a few milliseconds, so an indicator bound straight to a `loading` flag reports nothing and just repaints the screen. Two rules follow, both in `ui-patterns.md` with the components that implement them: an announcement waits until the work has outlasted a delay and then stays long enough to be read (`useBusyIndicator`), and a reload keeps what is on screen rather than swapping it for a spinner (`{loading && rows.length === 0 ? <Spinner/> : rows}`, or `StaleWhileRefreshing` where the held content would otherwise claim to be current). Prefer removing the layout change over deferring it. When a fix in this area is asked for, look for the same shape elsewhere rather than patching the one instance reported.
+- **Flicker and layout jitter are defects, not cosmetics — they are actively distracting, and belong removed wherever they appear or, better, not created in the first place.** Most operations here are local and return in a few milliseconds, so an indicator bound straight to a `loading` flag reports nothing and just repaints the screen. Two rules follow, both in `ui-patterns.md` with the components that implement them: an announcement waits until the work has outlasted a delay and then stays long enough to be read (`useBusyIndicator`), and a reload keeps what is on screen rather than swapping it for a spinner (`{loading && rows.length === 0 ? <Spinner/> : rows}`, or `StaleWhileRefreshing` where the held content would otherwise claim to be current). Prefer removing the layout change over deferring it. When a fix in this area is asked for, look for the same shape elsewhere rather than patching the one instance reported.
 
 - **Calibrate destructive styling to reversibility, not to how alarming the action sounds.** Reserve `danger` (red) for what cannot be undone; an action that is reversible with effort — re-linking a bank, re-syncing history that a cursor reset will pull back — is not danger even when it deletes rows, and its red belongs on the *confirm button*, where the click that actually does the thing lives. Spending the color on recoverable actions leaves nothing to mark the permanent ones. The name is not the signal: "Remove synced transactions" reads worse than "Disconnect" and is the more recoverable of the two.
 
@@ -66,7 +83,7 @@ A key input to that dial: the user does not review most of the code directly and
 
 - This project is aiming for high-quality code under the covers, not just something that works. Get it right the first time rather than landing a fix and iterating toward correct. If the right shape is not yet clear, investigate until it is before writing code.
 
-- For workflow changes that touch generated state, persisted review state, rules, imports, categorization, or undo/return paths, do a short design pass before implementation. This is not ceremony; it is how to avoid local fixes in a state machine. The pass should name every affected surface (for example pending cards, conflict cards, accepted/saved cards, rule editors, selection/match editors, matching reports, save/apply flows, undo, and return-to-pending), then write the lifecycle table in plain language: each state, what owns the rows, what owns any created rule, what `source_row_ids` mean in that state, and what should happen when the user broadens/narrows criteria or backs out. If this model cannot be stated crisply, stop and ask or keep investigating before changing code.
+- For workflow changes that touch generated state, persisted review state, rules, imports, categorization, or undo/return paths, do a short design pass before implementation. This is not ceremony; it is how to avoid local fixes in a state machine. The pass should name every affected surface (for example pending cards, conflict cards, accepted/saved cards, rule editors, selection/match editors, matching reports, save/apply flows, undo, and return-to-pending), then write the lifecycle table in plain language: each state, what owns the rows, what owns any created rule, what `source_row_ids` mean in that state, and what should happen when criteria are broadened or narrowed, or the flow is backed out. If this model cannot be stated crisply, stop and ask or keep investigating before changing code.
 
 - If an implementation limitation would make a UI action mean less, more, or something different from what its label naturally implies, stop and surface the semantic choice. Do not silently hide, narrow, broaden, or reroute the action as a workaround. If choosing a conservative interim behavior, name it in the final summary as a product decision and explain the omitted alternative.
 

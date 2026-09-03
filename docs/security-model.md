@@ -51,13 +51,21 @@ credential.** No live unlock secret ⇒ no KEK ⇒ nothing opens.
 
 ## Why the provider credential is the only thing encrypted
 
-A leaked credential is worse than a leaked ledger in exactly one dimension — **duration**. The ledger a
-thief copies is a static snapshot they already have; nothing done afterwards changes it. A credential
-keeps pulling **new** data until it is revoked. That difference, and only that difference, is what earns
-the credential at-rest protection the ledger does not get.
+A leaked credential outlasts and outreaches a leaked ledger, and both halves matter. The ledger a thief
+copies is a static snapshot; nothing done afterwards changes it. A credential keeps pulling **new** data
+until it is revoked — **duration**, the dimension that holds even in the best case — and it reaches
+whatever the provider exposes to it, which is not bounded by what was ever imported. Those are what earn
+it at-rest protection the ledger does not get.
+
+How far past the ledger the second half goes is exactly what the next section's conditioning decides: a
+credential that is read-only and revocable stays close to "narrower than what is already plaintext on
+disk", and one that is neither does not. Do not read the duration argument as the whole case — it is the
+part that survives when every assumption below holds.
 
 Exactly two columns are encrypted under the workspace DEK — the per-connection credential and the
-app-level provider secret. They are registered in `crypto_service.ENCRYPTED_COLUMNS`, and that registry
+app-level provider secret. **The second is protected for breadth rather than duration**: an app-level
+secret is not scoped to one connection, so its loss reaches every connection made under it and the
+ability to authorize more. They are registered in `crypto_service.ENCRYPTED_COLUMNS`, and that registry
 is an invariant rather than a convenience: rotation, reset and the backup paths are all driven off it, so
 **a third encrypted column that is not registered is silently unreachable by all three**. A test fails if
 one is added without being listed. Add the registration in the same change as the column.

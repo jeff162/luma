@@ -139,7 +139,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 ### Rules and categorization
 
-- **Storage:** `category\_rule`
+- **Storage:** `category_rule`
 
 - **Runtime:** categorizer service
 
@@ -260,7 +260,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 ### Import / export
 
-- **Backend:** `backend/routers/import\_export/` (a package; `__init__.py` assembles one combined router and preserves the original `backend.routers.import_export` import surface)
+- **Backend:** `backend/routers/import_export/` (a package; `__init__.py` assembles one combined router and preserves the original `backend.routers.import_export` import surface)
 
 - **Handles:** CSV preview/import, saved import profiles, support undo import operations, CSV export, data backup/restore, and credentials backup/restore
 
@@ -1032,7 +1032,7 @@ particular field means.
 
 #### Developer reset tools
 
-When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
+When `LUMA_DEVELOPER_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
 
 - **`Clear browser-local state`:** clears browser `localStorage` / `sessionStorage`
 

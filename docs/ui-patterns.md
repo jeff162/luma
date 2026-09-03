@@ -438,6 +438,16 @@ Transaction tables should share the same row-level metadata treatment.
 
 - Hovering a tag marker should reveal its label, and clicking row markers should use the shared inline popover patterns instead of page-local dialogs.
 
+- **One registry decides what "the source said" means, everywhere it is shown.** The origin hover card,
+  the transaction detail's Origin block and the rule editor's read-only source panel all render from
+  `lib/importSourceFields.js`, which resolves each field from either a first-class `txn` column or a path
+  into `import_evidence_json` and tags it with a scope (`name` / `text` / `meta`) saying which surfaces
+  show it. Consuming the registry rather than parsing evidence per surface is what keeps three views of
+  one row agreeing. It is deliberately **dynamic**: the evidence's `extra_text_fields` bag expands into
+  rows labelled with the source file's own header, so a column only one source publishes appears without
+  being hardcoded, and a resolver that finds nothing drops its row instead of rendering a blank. Present
+  on some rows and absent on others is the intended behavior given how unlike each other sources are.
+
 - **The origin hover card carries the copy affordance where it is showing a real transaction** (`copyable` on `MerchantOriginHoverCard`). The card is `interactive`, so its text was always selectable and `Ctrl+C` always worked — but nothing said so, which is indistinguishable from it not working. The button is the same shared `CopyTransactionsButton` the transaction editor uses, producing the same record through the same formatter. It is **opt-in** rather than automatic for two reasons: the card is also fed *partial* origin objects (the duplicate report's hard-rejected rows never became transactions), where a copy would hand back a half-record; and the button reads `useTransactionShare`, which throws where that provider is not mounted.
 
 - **Needs-review marker.** A row still flagged `needs_review` (freshly imported/synced, not yet looked over) carries a quiet amber `R` in the same strip with a tooltip. It is a **distinct glyph**, not a colored dot, precisely so it doesn't read as another tag (tags use one fixed glyph with color carrying identity). Its color is the themeable `--review-marker-color` variable (per-theme so it stays legible on light surfaces); a future Settings → Appearance swatch will override it per user, which is why it is a variable from the start rather than a hardcoded value. The marker is non-interactive — clearing happens via a manual category edit, the row context-menu "Mark reviewed", bulk Mark reviewed, or the per-batch "Mark all reviewed". See the `needs_review` field in `data-model.md`.

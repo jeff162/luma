@@ -8,9 +8,9 @@
 // (e.g. an "Original Statement" column), whose label is the file's own header.
 //
 // This is deliberately dynamic-aware so source-specific columns surface without being hardcoded.
-// Consumers (the transaction detail Origin block, the merchant origin hover, and — later — rule
-// matching on source text or selectable report columns) all read from here rather than re-parsing
-// the evidence themselves. See docs/import-source-fields-plan.md.
+// Consumers (the transaction detail Origin block, the merchant origin hover, and the rule editor's
+// source panel) all read from here rather than re-parsing the evidence themselves.
+// See docs/ui-patterns.md → Row-level metadata, and docs/data-model.md → import_evidence_json.
 //
 // Row shape: { key, label, value, scope, always?, suffix?, note?, href? }
 //   scope  — 'name' (identity), 'text' (source free text), 'meta' (file / provenance)

@@ -79,7 +79,7 @@ Before working on shared systems, persistence, or invariants — same rule — r
 
 - Commenting simple CRUD or obvious queries
 
-- Structural or UI narration (e.g. �Render�, �Header�)
+- Structural or UI narration (e.g. "Render", "Header")
 
 ## General
 
@@ -134,6 +134,8 @@ When working on the codebase:
 
   - `docs/ui-patterns.md` — shared UI behavior and interaction models
 
+  - `docs/import-reconciliation-playbook.md` — the user-facing "when situation X arises, reach for tool Y" guide, and the content source of truth for the in-app help topics. Changing an import or reconciliation tool means updating the situation here first, then reconciling the matching help topic so the in-app copy does not drift
+
   - `docs/mechanism-index.md` — the "which mechanism is this?" domain lookup; consult **before recording a relationship between transactions**, or building anything that groups, divides, offsets or hides money. Several of these look alike and are not interchangeable; the wrong one fails quietly rather than loudly
 
   - `docs/shared-components.md` — the "what shared component do I use for X?" index; consult **before building any UI element** (reuse is the default; a new one-off requires explicit justification)
@@ -159,6 +161,13 @@ The three sections, in a topic doc:
 - **`## Considered and rejected`** — shapes that were tried, designed, or seriously proposed and turned down, each **with the reason**, so the verdict is re-derivable rather than merely recorded. The filter is *could a reader plausibly re-propose this?* — not *was it interesting?* A rejected alternative belongs here; an argument that the chosen design was correct does not, because nothing follows from it once the work has landed.
 - **`## Obstacles`** — what a second attempt actually hits: a constraint that makes the obvious approach fail, an ordering that cannot be violated, a seam with no atomicity. These apply whether or not the work is planned, which is why they are separated from *Open*.
 - **`## Open`** — decisions still owed, each naming the **live backlog item** that will feed this topic when it is picked up. This is the link from the stable doc to the transient one: a pending project stays a project file, and its slot here is what keeps it reachable.
+
+**Audience decides whether a topic doc takes the tail at all.** The three sections serve a *developer*
+deciding whether to rebuild something. A topic doc written for the person **using** the app —
+`import-reconciliation-playbook.md`, whose prose is also the source for the in-app help copy — takes
+none of them, and the rejections and owed decisions about its subject live in the developer doc that
+owns the mechanism. Do not add empty sections to such a file to make it match the shape; the shape
+follows from who is reading.
 
 Two rules make these load-bearing rather than decorative:
 

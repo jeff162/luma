@@ -79,12 +79,28 @@ Use these only when necessary, for:
 * tricky or non-obvious logic
 * workarounds or edge cases
 * subtle interactions with APIs or UI behavior
+* a deliberate exception to a pattern the rest of the code follows
 
 **Guidelines:**
 
 * Place directly above the relevant code
 * Keep them short and specific
 * Only include when the reasoning is not obvious
+
+### The deliberate exception
+
+A workaround is code that is wrong but necessary. An exception is code that is **correct and looks
+wrong** — and it earns a comment for a second reason beyond explaining itself: *do not copy this.* The
+project's own default makes this acute, since the instruction everywhere else is to find the closest
+existing implementation and match its shape. An unexplained divergence therefore fails twice over: it
+gets copied into a case where it does not apply, or it gets "simplified" back into line and the reason
+it existed is gone with it. Say which pattern is being departed from, why this case is not that case,
+and what breaks if the divergence is removed.
+
+Unlike the docs, **a code comment may keep the failure that motivated it.** `docs/` cuts the work log
+because git history sits beside it; a line of code has no such neighbour, and the account of what went
+wrong is often the only thing standing between the fix and someone who finds the code puzzling. Keep it
+where it does that work, not as a running narrative of the change.
 
 ---
 

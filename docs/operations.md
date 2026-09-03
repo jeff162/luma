@@ -61,8 +61,19 @@ distribution does not have and the resulting wall of errors reads as a crash whi
 running normally.
 
 **Stopping it.** *Shut down Luma* in the navigation panel, the Dock's Quit or Command-Q on macOS,
-Ctrl+C, or a signal — all converge on uvicorn's graceful path, so in-flight requests finish and the
-lockfile is released. The in-app control is **registered by the launcher**, so an instance started with
+Ctrl+C, **closing the terminal a portable build was started from**, and a system shutdown all converge on
+uvicorn's graceful path, so in-flight requests finish and the lockfile is released. The last two are not
+special-cased: a system shutdown reaches the process as an ordinary SIGTERM, and a closing terminal as
+SIGHUP. Neither is graceful by default — SIGTERM would be delivered a second time to `SIG_DFL` after
+uvicorn's own handler stands down, and SIGHUP is not in uvicorn's handled set at all — so the launcher
+installs handlers for both (`_install_stop_signal_handlers`). **Windows is the exception**: it has no
+SIGHUP, so closing a console window there is not a graceful stop.
+
+The grace is bounded from outside and unbounded from inside: the server waits on in-flight requests
+indefinitely, while the macOS wrapper allows 20 seconds after SIGTERM before SIGKILL, and a supervisor
+elsewhere allows whatever its unit specifies. A stop during a long operation can therefore be cut short —
+which costs the in-flight transaction (rolled back) and leaves the lockfile behind, both of which the
+next launch already handles. The in-app control is **registered by the launcher**, so an instance started with
 plain uvicorn does not offer it: on a supervised box, stopping the process from a browser is either
 futile or a way for one signed-in user to take the service from everyone else.
 
@@ -180,6 +191,13 @@ concrete confusion it produces is a restore of a pre-perimeter backup that leave
 **and the fix there is a flag flip, not a reinstall**: disabling sign-in protection is an admin-gated
 setting (`disable_auth_mode()`), so deleting both databases to reach it is a far heavier workaround than
 the situation needs.
+
+**A manual copy needs `.backup`, not `cp`.** Both databases run in WAL mode, so copying the `.db` file
+alone leaves behind anything committed but not yet checkpointed and yields a copy quietly missing recent
+rows. Take it with `sqlite3 <source.db> ".backup <target.db>"`, which is correct against a running
+instance; copying by hand means copying the `-wal` alongside the `.db`, with nothing writing meanwhile.
+This applies to a snapshot taken for safety before a restore — the app's own backup is a row-level export
+and is unaffected.
 
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.
