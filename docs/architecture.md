@@ -123,6 +123,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Signed monthly totals:** `/summary/monthly-trend` returns signed sums (no `ABS()`), so refunds in an expense scope render as negative bars instead of being folded into magnitudes. A `view` query parameter (`spending` | `income` | `cash_flow`) chooses the cross-cutting frame when no category/payee scope is given; for a category scope, the sign is auto-flipped for income-type categories so received income reads as positive. The cross-cutting frames also exclude categories marked `exclude_from_totals` so transfers do not pollute dashboard totals.
 
+
 - **Cash-flow monthly split:** `/summary/monthly-cash-flow` returns `inflow`, `outflow` and `net` per month over the same population as `monthly-trend`'s `cash_flow` view. Its atom is a *leaf category's net for the month* rather than a transaction's sign: the categories that net money in make up `inflow` and those that net money out make up `outflow`, so a refund inside an expense category reduces that month's outflow instead of appearing as income. That is the same rule the single-period Sankey needs to decide a node's side (no link can have a negative width), which is what makes a month's bars equal the sides of that month's diagram, and `net` equals `monthly-trend`'s `cash_flow` total for the same filters. It returns no `count`: an accurate one is `COUNT(DISTINCT t.id)` per month, which cannot be recovered by summing per-bucket counts because the split-expansion seam puts one transaction in several buckets, and reading the source twice to get it is the cost that seam is shaped to avoid.
 
 - **Tag-scoped transaction filtering:** the `/transactions` list endpoint accepts the same `view` (`spending` | `income` | `cash_flow`) for dashboard-style scoping — `cash_flow` applies no category-type clause but still drops `exclude_from_totals` categories, so a drill from a cash-flow node lists exactly the rows its figure came from. The `tag_ids` filter matches a transaction through any of three paths — direct (`txn_tag`), inherited from leaf category (`category_tag`), or inherited from parent group (`category_tag`) — so tag-aware reporting picks up tags applied at the most natural level.
@@ -420,6 +421,16 @@ row's `db_path`) is retained as **dormant plumbing** — excising it would be ri
 stays wired, resolving every identity to the one configured database. The per-tenant *directory* layout
 it once implied is gone: creating a tenant record points it at `DB_PATH`, so there is no second location
 for data to land in.
+
+**A 401 is answered by the shell, not by the caller.** `request()` in `lib/api.js` dispatches
+`SESSION_LOST_EVENT` (`luma:session-lost`) on any 401 and `App.jsx` listens: it drops back behind the
+gate and re-runs the identity bootstrap, which re-establishes a passwordless session or stops on the
+chooser / sign-in. The alternative — every surface handling its own — is what shipped first, and it
+surfaced a lapse as whatever error text the unlucky component happened to render (a red "Not
+authenticated" inside a report dialog, with nothing to act on). Two rules keep it from feeding itself:
+the `/auth/` endpoints never signal, because their 401 is the bootstrap's *answer* rather than a lapse;
+and a signal suppresses further ones for five seconds, because a page holds several requests in flight
+and the bootstrap it triggers makes more calls that may 401 while it works.
 
 - **Login is an authentication *perimeter*, not an authorization system.** Its only job is to keep
   *non-users* out. Once inside, every user sees and edits the **same** data with no row- or scope-level

@@ -43,7 +43,7 @@ from pydantic import BaseModel
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
-from backend.services.transfer_categories import ensure_excluded_transfers_leaf
+from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.amazon_import import (
     AmazonItem,
     AmazonOrder,

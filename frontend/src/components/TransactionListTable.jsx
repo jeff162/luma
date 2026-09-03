@@ -18,6 +18,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import { transactionRowKey } from '../lib/splitRows.js'
 import PillGridTable from './PillGridTable.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import { SelectAllCheckbox } from './ui.jsx'
@@ -134,6 +135,11 @@ export default function TransactionListTable({
   // fires after a rule is created/applied from the menu.
   onTrashed = null,
   onRuleSaved = null,
+  // A split was rewritten. Only matters to a host whose rows are *expanded allocations* (a
+  // category-scoped list), where the parts' categories and amounts came from the server and a row patch
+  // cannot restate them — such a host passes its refetch. Where none is given the table falls back to
+  // dropping the stale allocation rows rather than leaving them showing figures that are no longer true.
+  onSplitSaved = null,
   getRowStyle,
   maxHeight = 420,
   showAccount = true,
@@ -194,6 +200,11 @@ export default function TransactionListTable({
     reconcileRow: (txnId, patch) => patchRows(txnId, patch),
     removeRow: txnId => { onRowsChange?.(prev => prev.filter(row => row.id !== txnId)); onTrashed?.(txnId) },
     onRuleSaved,
+    onSplitSaved: (txnId, result) => {
+      if (onSplitSaved) { onSplitSaved(txnId, result); return }
+      const expanded = (rows || []).some(row => row.id === txnId && row.split_part_id)
+      if (expanded) onRowsChange?.(prev => prev.filter(row => !(row.id === txnId && row.split_part_id)))
+    },
     categories,
     onAddCategory,
   })
@@ -427,7 +438,7 @@ export default function TransactionListTable({
             <WindowedRows
               scrollRef={internalScrollRef}
               items={visibleRows}
-              getItemKey={txn => txn.id}
+              getItemKey={transactionRowKey}
               estimateSize={41}
               measureKey={activeColumns.map(col => col.width).join(',')}
               renderRow={txn => renderRow(activeColumns, gridTemplateColumns, txn)}

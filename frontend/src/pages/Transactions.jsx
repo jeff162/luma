@@ -15,6 +15,7 @@ import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { MerchantCell, CategoryCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
+import { transactionRowKey } from '../lib/splitRows.js'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
@@ -25,6 +26,8 @@ import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
+import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
+import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 
@@ -196,6 +199,8 @@ export default function Transactions() {
   const [editId, setEditId] = useState(null)
   const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
+  const [addingTransaction, setAddingTransaction] = useState(false)
+  const [reimbursementsOpen, setReimbursementsOpen] = useState(false)
   const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
   // Page-local amount filter (ledger only — never the shared FilterBar/Dashboard). Bounds compare
@@ -901,7 +906,14 @@ export default function Transactions() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
-        <PageHeader title="Transactions" />
+        <PageHeader title="Transactions">
+          {/* The ledger is where someone notices a transaction is missing, so this is where adding one
+              belongs — beside the list it will appear in, not parked in Settings. */}
+          <Button variant="ghost" onClick={() => setAddingTransaction(true)}>Add transaction</Button>
+          {/* The review surface for money owed back. Beside the ledger because that is where the rows
+              live; it lists only what is still open, so it empties as things are completed. */}
+          <Button variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
+        </PageHeader>
       </div>
 
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
@@ -1089,7 +1101,7 @@ export default function Transactions() {
                     <WindowedRows
                       scrollRef={listScrollRef}
                       items={data.transactions}
-                      getItemKey={txn => txn.id}
+                      getItemKey={transactionRowKey}
                       estimateSize={40}
                       measureKey={activeColumns.map(col => col.width).join(',')}
                       renderRow={txn => (
@@ -1257,6 +1269,29 @@ export default function Transactions() {
               }
             }}
             onDismiss={() => setRulePrompt(null)}
+          />
+        )}
+
+        {addingTransaction && (
+          <AddTransactionDialog
+            categories={categories}
+            onAddCategory={addCategory}
+            onClose={() => setAddingTransaction(false)}
+            // A reload rather than an optimistic insert: the new row has to land in the current sort
+            // and filter, which only the query knows — and the server may have categorized it by rule
+            // on the way in, so what comes back is not what was sent.
+            onCreated={() => { isFirstLoad.current = true; load() }}
+          />
+        )}
+
+        {reimbursementsOpen && (
+          <ReimbursementsReportDialog
+            categories={categories}
+            onAddCategory={addCategory}
+            onClose={() => setReimbursementsOpen(false)}
+            // Completing or editing one can move a transaction's allocations, so the ledger behind is
+            // refetched rather than patched — the change is not confined to the rows on screen.
+            onChanged={() => { isFirstLoad.current = true; load() }}
           />
         )}
 

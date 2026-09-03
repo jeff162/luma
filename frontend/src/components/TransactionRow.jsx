@@ -14,6 +14,7 @@ import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import PurchaseEditorDialog from './PurchaseEditorDialog.jsx'
+import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
@@ -21,6 +22,8 @@ import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
 import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
+import { reimbursementMarkerTooltip, reimbursementStatus } from '../lib/reimbursements.js'
+import { isSplitPartRow, splitPartSummary } from '../lib/splitRows.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -34,6 +37,21 @@ import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerC
 // scrolls past. A caller can still override `openDelay` if it needs to. See ui-patterns.md.
 function RowTooltip({ openDelay = ROW_HOVER_OPEN_DELAY_MS, ...props }) {
   return <Tooltip openDelay={openDelay} {...props} />
+}
+
+// The category cell on one expanded allocation of a split: the badge and the ◧ beside it are a single
+// control, since both lead to the same editor. Reset to nothing visible so the badge reads exactly as it
+// does on an ordinary row — the button contributes the hit area and the cursor, not chrome of its own.
+const splitPartControlStyle = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  font: 'inherit',
+  color: 'inherit',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  cursor: 'pointer',
 }
 
 const detailButtonStyle = {
@@ -626,7 +644,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -635,6 +653,9 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
   const [showDocuments, setShowDocuments] = useState(false)
   const [viewingDocument, setViewingDocument] = useState(null)
   const [editingPurchase, setEditingPurchase] = useState(false)
+  // Which reimbursement's editor is open, by link id — a row may have a share in several, so a boolean
+  // could not say which one the click was about.
+  const [editingReimbursement, setEditingReimbursement] = useState(null)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
   // Tracking via state alone (no separate loading flag) avoids a cancel-loop where
   // the effect re-runs on every loading-state flip and aborts its own in-flight fetch.
@@ -737,6 +758,39 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
               🔗
             </button>
           </RowTooltip>
+        ) : null}
+        {(txn.reimbursements || []).length ? (
+          /* Money owed back against this row. It opens the reimbursement, like every other interactive
+             marker in this strip opens what it stands for — and it is the answer to "I have to go find
+             this in the transaction editor" for a row noticed anywhere in the ledger.
+
+             One marker per reimbursement rather than one for the row: a charge split between two people
+             is two debts, and a single marker would have to pick one of them to open. */
+          (txn.reimbursements || []).map(reimbursement => (
+            <RowTooltip
+              key={reimbursement.id}
+              content={<span>{reimbursementMarkerTooltip(reimbursement)} — click to open</span>}
+              maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+            >
+              <button
+                type="button"
+                onClick={event => {
+                  event.stopPropagation()
+                  setEditingReimbursement(reimbursement.id)
+                }}
+                aria-label={`${reimbursementMarkerTooltip(reimbursement)} — open this reimbursement`}
+                style={{
+                  ...iconButtonStyle,
+                  fontSize: 11,
+                  // A finished one is still worth marking — it explains why the money is where it is —
+                  // but it is not work, so it recedes rather than competing with the open ones.
+                  opacity: reimbursementStatus(reimbursement) === 'completed' ? 0.45 : 1,
+                }}
+              >
+                ↩
+              </button>
+            </RowTooltip>
+          ))
         ) : null}
         {txn.suspect_duplicate_of ? (
           <RowTooltip
@@ -889,6 +943,17 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
             onSaved={purchase => onUpdatePurchase?.(txn.id, purchaseRowSummary(purchase, txn.id))}
           />
         ) : null}
+        {editingReimbursement ? (
+          /* Owned here for the same reason the purchase editor beside it is: this dialog needs nothing
+             from the host but somewhere to report the result. */
+          <ReimbursementEditorDialog
+            linkId={editingReimbursement}
+            txnId={txn.id}
+            categories={[]}
+            onClose={() => setEditingReimbursement(null)}
+            onSaved={() => onUpdateReimbursements?.(txn.id)}
+          />
+        ) : null}
         {excludedFromTotals ? (
           <RowTooltip
             content={<span>Not counted in spending totals — its category is in a group excluded from totals (e.g. Transfers).</span>}
@@ -952,7 +1017,10 @@ function SplitPartsHoverCard({ parts, txnAmount }) {
   return (
     <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
       {parts.map((part, i) => (
-        <div key={part.category_id || `part-${i}`} style={{ display: 'grid', gap: 1 }}>
+        // Keyed by position, not by category: two allocations may name the same category, so the
+        // category id is not an identity here. The list is static — rendered in the stored order,
+        // never sorted or filtered in place — so the index is the stable one.
+        <div key={`part-${i}`} style={{ display: 'grid', gap: 1 }}>
           <div style={{ display: 'flex', gap: 16, justifyContent: 'space-between' }}>
             <span>{part.category_name || 'Uncategorized'}</span>
             <span style={{
@@ -1034,7 +1102,58 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
 
   if (txn.is_split) {
     const parts = txn.split_parts || []
-    const partCount = txn.split_part_count || parts.length
+    const { partCount, total } = splitPartSummary(txn)
+
+    // One expanded allocation of a split, not the split itself. The row's category and amount are the
+    // *part's*, so the cell names that category: the "Split (N)" marker below would claim the row is the
+    // whole purchase, and its hover would answer a question about this $10 row with the other part's
+    // $240.
+    //
+    // The badge and its ◧ are one control, and it leads to the split editor rather than the picker —
+    // the same destination the whole-split row's chip has, so a split's category is edited in one place
+    // whether the row is expanded or not. Repointing a single allocation in place would be the lighter
+    // gesture and is the thing to build if this proves a nuisance; what stops it today is that every
+    // surface reconciles an edited row by transaction id, which is the right identity for a note or a
+    // tag and the wrong one here — two allocations sharing a category would both take the new one.
+    if (isSplitPartRow(txn)) {
+      // The transaction's own amount, which an expanded row does not carry — summed from the parts,
+      // which the split invariant guarantees add up to it.
+      const wholeAmount = total ?? txn.amount
+      const content = (
+        <>
+          <CategoryDisplay id={txn.category_id} name={txn.category_name} />
+          <span aria-hidden="true" style={{ color: 'var(--muted)' }}>◧</span>
+        </>
+      )
+      const control = onOpenSplit ? (
+        <button
+          onClick={e => { e.stopPropagation(); onOpenSplit(txn) }}
+          aria-label={`${txn.category_name || 'Uncategorized'} — one part of a split; edit the split`}
+          style={splitPartControlStyle}
+        >{content}</button>
+      ) : (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{content}</span>
+      )
+      return (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <RowTooltip
+            maxWidth={320}
+            content={
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ color: 'var(--muted)' }}>
+                  {partCount ? `One of ${partCount} parts` : 'Part'} of{' '}
+                  {formatSignedMoneyAmount(wholeAmount * transactionDirection(wholeAmount))}
+                </div>
+                {parts.length ? <SplitPartsHoverCard parts={parts} txnAmount={wholeAmount} /> : null}
+              </div>
+            }
+          >
+            {control}
+          </RowTooltip>
+        </div>
+      )
+    }
+
     const chip = (
       <span style={{
         border: '1px dashed var(--border)', borderRadius: 6, color: 'var(--muted)',

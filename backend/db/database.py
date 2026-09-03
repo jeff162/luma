@@ -2537,6 +2537,9 @@ def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool =
     # — since the built-in rules target these leaves by name — no data-mutating starter rules can exist
     # for them either.
     import uuid
+
+    from backend.services.excluded_categories import REIMBURSABLE_GROUP, REIMBURSABLE_SYSTEM_KEY
+
     category_columns = {
         row["name"]
         for row in conn.execute("PRAGMA table_info(category)").fetchall()
@@ -2625,6 +2628,26 @@ def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool =
     travel        = upsert_cat("Vacation & Travel", category_type="expense")
     utilities     = upsert_cat("Utilities", category_type="expense")
     transfers     = upsert_cat("Transfers", category_type="expense", exclude_from_totals=1)
+    # The reimbursable-expenses holding group. Seeded for everyone, like the other top-level reporting
+    # groups; its leaves are created on first use (services/excluded_categories.py), so someone who
+    # never records a reimbursable is left with one empty group and no stray category.
+    #
+    # The stamp below adopts a same-named group the user built by hand before this existed. Without it
+    # the tree would gain a *second* top-level "Reimbursable", because upsert_cat matches a keyed group
+    # by key alone and would not see theirs. Adoption then asserts exclude_from_totals the same way
+    # seeding does for every other group that is already present under its own name.
+    if has_system_key:
+        conn.execute(
+            """UPDATE category SET system_key = ?
+               WHERE name = ? AND parent_id IS NULL AND system_key IS NULL""",
+            (REIMBURSABLE_SYSTEM_KEY, REIMBURSABLE_GROUP),
+        )
+    upsert_cat(
+        REIMBURSABLE_GROUP,
+        category_type="expense",
+        exclude_from_totals=1,
+        system_key=REIMBURSABLE_SYSTEM_KEY,
+    )
 
     if not include_leaves:
         return

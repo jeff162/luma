@@ -150,6 +150,10 @@ Important conventions:
 
 - `date` is the **posted** date — when the transaction settled — and is the date every list, report, and total uses. `authorized_date` is the *other* date a source may publish: when the charge was authorized (a card swipe), which for a card transaction typically precedes posting by one to several days. It is nullable and populated only where the source supplies it: a data connection captures it as a locked field (Plaid `authorized_date`), while a CSV normally carries one date column and leaves it NULL. It exists for **duplicate detection**, not display: two sources routinely date the same charge differently — a Monarch export reports the transaction date, a Plaid sync the posted date — so every date test in the ladder asks whether **either** date applies. Without it a row reads as outside a covered range that morally contains it, and coverage never engages. It is deliberately *not* an alternative reporting date: introducing a second basis for "when did this happen" would make two totals for the same period both defensible. It does, however, supply `date` in the one case where a source has no posted date to give: a **pending** row has not posted, so a provider whose protocol makes the posted timestamp mandatory must put something there, and SimpleFIN puts `0`. Read literally that is a valid instant, and such rows entered the ledger dated 1970-01-01 — sorting before everything, inside no report period, beyond the reach of every date test in the duplicate ladder, and (since sync cards key on the transaction's own month) filed on a card labelled "January 1970". A zero is therefore read as *absent*, not as an epoch, and a pending row is dated by when the charge was made; when it settles the sync re-stamps `date` with the real posted date. A row with neither date is dropped at the adapter rather than dated from the import time or the window bound, both of which would be indistinguishable from a real date. **A field being required by a protocol is not a promise that it carries a value** — the sentinel is what a mandatory field degrades into, and a numeric sentinel converts without complaint
 
+- **A transaction can also be entered by hand** (`POST /transactions`), for cash, a cheque, or an account nothing syncs. The data model always allowed for it — `external_transaction_id`, `needs_review` and duplicate detection each name hand-entered rows in their own definitions — so what a manual entry needs is not new columns but the *provenance* that makes it behave like every other row afterwards. Three parts of that are worth stating because none is visible in the row: it carries **no `import_batch_id` and no `external_transaction_id`**, since it belongs to no ingestion event; its `content_hash` is computed by the **importers' own `make_hash`**, which is the entire mechanism by which a later import or sync of the same charge recognizes it as a duplicate (a second hash implementation would digest identical data differently and the match would silently never fire); and an entry left **uncategorized is run through the rules**, exactly as an imported row is, so which door a transaction came through does not decide whether it lands in the uncategorized pile. The owner follows the account, as it does on every import. `needs_review` stays `0`: the row was just typed by the person who would be reviewing it
+
+- **Editing an existing transaction's amount is deliberately not offered**, for hand-entered rows or any other. A mistake is corrected by trashing the row and re-entering it. The reason is blast radius rather than difficulty: an amount is the sum a split's allocations must match and the quantity a reimbursement's claims are drawn against, so changing one in place would have to resum and revalidate both. `date` is editable through the bulk editor, which touches neither
+
 - `category\_overridden = 1` means rule reruns must leave the current category alone
 
 - `category\_source` records whether the current category came from a manual edit, an import that used categories present in the data, a rule, or an **enrichment** — a feature (Amazon order import, wallet funding-leg suppression) moving the row into an excluded category as part of a link it can reverse
@@ -436,7 +440,7 @@ Important behavior:
 
 - owner-scoped rules beat global rules when otherwise similar
 
-- at most one rule per *matcher* (keyword + the `match\_expr` clause set + owner + account + account **type** + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). The `match\_expr` is canonicalized (clauses sorted) so reordering clauses never forks a phantom duplicate, and a multi-clause rule is a *distinct* matcher from a single-keyword rule that happens to share the derived keyword (`contains "amazon flash"` ≠ `{contains "amazon", contains "flash"}`). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
+- at most one rule per *matcher* (keyword + the `match\_expr` clause set + owner + account + account **type** + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). The `match\_expr` is canonicalized (clauses sorted) so reordering clauses never forks a phantom duplicate, and a multi-clause rule is a *distinct* matcher from a single-keyword rule that happens to portion the derived keyword (`contains "amazon flash"` ≠ `{contains "amazon", contains "flash"}`). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
 
 - **Last-used tracking + trash + cleanup (stale-rule hygiene).** Three `category_rule` columns support cleaning out obsolete rules:
   - **`last_effect_date`** — the newest transaction *date* a rule has applied a **live effect** (category, rename, or tag) to, kept as a **monotonic-forward max**. It's a "does this rule still do anything" signal, not an event log: it's the transaction's date (never wall-clock), so a re-run can't drift it toward "now", and a rule that only touches old rows stays old-dated. Seeded by the v15 data-init (a derived pass, re-run after a restore of a pre-v15 backup — see *Schema evolution*) and maintained incrementally afterward. The seed **and** every apply site (`recategorize_all`, `_apply_rule_to_existing`, and the CSV import loop) attribute a row through the **same** `effect_rule_ids` helper (+ `bump_rule_effect_dates`), so they can't disagree — an earlier bug had the seed use its own stricter, source-gated logic and diverge. **Attribution is by winning *matcher*, not by a row's stored source:** a rule is credited for a row it *wins* (would categorize) even when import or an earlier manual edit currently holds that row's category (`category_source != 'rule'`) — the rule is still what categorizes that merchant, so it isn't stale. It is therefore **not** the raw match count the ↗ report shows (that is the *pure* matcher, every row the rule hits): a row shadowed by a **more-specific** rule credits that winner, not this rule, so a rule that always loses can match rows yet legitimately read "never used". Monotonic-max can slightly *overstate* freshness (a rule that once categorized a row later overridden still shows that date), which is the **safe** bias for a cleanup tool — it errs toward keeping a maybe-active rule.
@@ -971,7 +975,7 @@ The review record (`review_state.suggestions[id]`, in the batch/profile/system s
 
 ## Transaction links and Amazon order import
 
-**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below) and **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade.
+**`txn_link` is a general association primitive, not an Amazon feature.** A link groups a set of transactions under a `kind` (e.g. `amazon_order`), each membership row (`txn_link_member`) carrying a `role` within the link (e.g. the funding `charge` vs the `item` rows it was split into); a link also carries an optional `external_ref` (the external entity it represents — an Amazon order id, which is the reconciliation key) and a `metadata_json` blob for kind-specific data. The primitive is deliberately **pure association**: creating or deleting a link never mutates the linked transactions (no category change, no `exclude_from_totals`, no amount change). Whatever feature owns the link performs those mutations and records what it did in `metadata_json` so it can reverse them. That separation is what lets the one table serve unrelated cases — Amazon order itemization, **wallet funding-leg suppression** (`kind='wallet_funding'`, see below), **multi-payment purchases** (`kind='purchase'`, see [Multi-payment purchases](#multi-payment-purchases)) and **reimbursable expenses** (`kind='reimbursement'`, see [Reimbursable expenses](#reimbursable-expenses)) today, credit-card payment-leg pairing and a cash-flow lens as intended future clients. Both tables ride in backups. A member row cascades away with either endpoint (`ON DELETE CASCADE` on both FKs), but a link row has **no** FK to `txn`, so the owning feature (and the wipe path) must delete stale links explicitly rather than relying on cascade.
 
 **Amazon order import is the first client** (parsed from an AZAD orders/items export; **orders-only model**, 2026-07-10 — the earlier per-item itemization was superseded). Each order becomes **one spending transaction** in a chosen **Amazon account** — an ordinary account, since an account here is only a reporting/owner dimension with no balance or net-worth role — amount = net cash (`total − refund`), memo = the orders file's concatenated item list, categorized by the user's normal rules. The matching card charge (found by amount + date, with the account resolved from the funding-source map — see below) is recategorized into the excluded **"Amazon Funding"** leaf (created under the seeded `Transfers` group, so exclusion is inherited via `COALESCE(parent, leaf)`) and joined to the order by an `amazon_order` link (member roles `order` + `charge`). An order may link **several** charges (a split-shipment order — see the reconciliation bullet): each charge's prior categorization is stashed per charge in the link `metadata_json` (`charge_priors: {charge_id: prior}`; the legacy singular `charge_prior` written by the auto-matcher is still honored) so undo restores each exactly. The invariants that keep totals honest:
 
@@ -1327,6 +1331,8 @@ A part also carries an optional **`label`** — free text naming what that alloc
 
 The list feed carries a split row's allocations inline (`split_parts`, plus `split_part_count`), resolved for the whole page in one query keyed only on the rows already flagged `is_split`. They are part of the payload rather than a per-row lookup because the ledger renders them in the row's hover, where a fetch would mean a loading state inside a tooltip.
 
+**An expanded row is not a transaction, and says so.** The seam also projects `split_part_id` — the id of the allocation that matched, null where none did — and the list feed carries it. Two things need it, and both are silently wrong without it. First, **identity**: expanded, `t.id` no longer identifies a row, because two parts may name the same category (the split rules permit it) and come back as two rows with one id; two parts alike in category *and* amount are not distinguishable by value either, so the part id is the only honest key, and it is what the windowed lists key their rows by. Second, **which kind of row this is**: an expanded row carries the part's `category_id` and `amount` but the transaction's own `is_split`, so a renderer reading the flag alone treats one allocation as the whole split — labelling a $10 part "Split (2)" and answering a hover about it with the other part's $240. `split_part_id IS NOT NULL` is the test that separates the two, and the frontend writes it down once in `lib/splitRows.js`.
+
 **Expansion is opt-in per query, and the rule is what a query is *for*.** Summaries and trends always expand — rollup is their job. The transaction list expands **only when a category-shaped facet scopes it** (a category or group filter, or a `spending`/`income` view, which resolve through a category): scoped that way a split returns as the part that matched, so a drill-down's visible rows sum to the total its summary reported; unscoped, the ledger shows one row per purchase at its full amount. Everything else — dedupe, rule matching, recurring detection, import, export — reads plain `txn`, because those operate on the purchase rather than on how it was allocated.
 
 **Tags resolve per part without any special handling.** A row's effective tags are already the union of its direct `txn_tag` rows (keyed on the transaction id) and the tags inherited from its category. Under expansion a direct tag therefore applies to the whole transaction and every part, while an inherited tag follows each part's own category — which is the semantic worth wanting, and is what the existing SQL already meant. One consequence to expect: in the tag-signature report a split transaction can contribute to two signature buckets, each with its part's amount.
@@ -1454,3 +1460,225 @@ the next read — and is not worth complicating the trigger to avoid.
 
 Depth, the surfaces, and what was deliberately left out are in
 [`backlog/multi-payment-purchases.md`](backlog/multi-payment-purchases.md).
+
+## Reimbursable expenses
+
+Money that leaves as an expense and comes back later — concert tickets bought for friends, a work
+expense paid personally and claimed afterwards. Both movements are already recorded correctly and
+categorization is already right; what breaks is that **the netting crosses a period boundary**, so
+February overstates spending until July's repayment lands, and July shows an inflow that is not income.
+
+**The model is a holding category, not a restatement.** The reimbursable portion of the expense is
+allocated (through `txn_split`) to a leaf under the seeded, excluded **`Reimbursable`** group, and the
+later inflow lands against the same group instead of against income. February then reports its own
+spending correctly on its own, July reports no income, and **the outstanding balance is simply the
+group's sum** — no pairing required to produce it. Nothing is asserted about a repayment that may never
+arrive, which is the failure of the obvious alternative (flag the expense and exclude it): if the money
+never comes back, spending is under-reported permanently with nothing showing what is outstanding.
+
+**The group is machinery, and its identity is `system_key = 'reimbursable'`, not its name.** Two
+properties follow, both load-bearing. The empty-category sweep deletes leaves with no transactions and
+groups with no surviving children, skipping only `system_key IS NOT NULL` rows — and a receivable
+category is *empty exactly when nothing is outstanding*, which is its healthy state rather than evidence
+it is unused. And the user may rename the group freely, because every read resolves it by key. It is
+seeded for everyone like the other top-level reporting groups; its **leaves are created on first use**
+(`services/excluded_categories.py`), so someone who never records a reimbursable carries one empty group
+and no stray category.
+
+**The group carries the state; its leaves carry the thing, and no leaf is seeded.** `Reimbursable ›
+Concert tickets` — "owed back" is already said by the parent, so a leaf that says it again is doing the
+group's job instead of its own. Only the user knows what a given receivable is *for*, which is why the
+app seeds the group and nothing inside it.
+
+The rule generalizes and is worth stating because getting it wrong is self-concealing: **a category
+named for a state goes stale, because the state changes and the name does not.** A leaf called
+"Awaiting reimbursement" is a lie about every row in it the moment that row is repaid, and the apparent
+fix — a second "Completed" leaf that finishing moves rows into — was designed and then rejected here,
+because it pays for a bad label by destroying a good one. Moving a finished row out of "Concert tickets"
+loses exactly the thing that made it findable. Named for what the money is, a leaf stays true forever
+and nothing has to move.
+
+Nothing is lost by leaving completed rows where they are, on any surface: a completed pair is `+n` and
+`−n` inside the same excluded group, so it **nets to zero and cannot distort the group's balance**
+wherever it sits; the outstanding report lists open reimbursements only; and the ledger's row marker
+renders a completed one dimmed and an open one bright.
+
+**The feature keys on the group, never on one blessed leaf.** Any active leaf inside it is a receivable,
+so the user may keep the default `Awaiting reimbursement`, rename it, or add their own beside it. This
+is what makes "one receivable category or one per counterparty" a non-question, and it is safe because
+`exclude_from_totals` is `NOT NULL`, so an existing parent always wins
+`COALESCE(parent.exclude_from_totals, leaf.exclude_from_totals, 0)` — a leaf under the group cannot opt
+itself back into spending totals whatever it carries. **The group itself cannot be deleted, moved, or
+have its `exclude_from_totals` changed** — three flat refusals rather than gates on whether it currently
+holds anything:
+
+- **delete** never durably worked anyway: seeding restores the group at next start, leaving deactivated
+  leaves holding the balance outside the group the feature reads.
+- **move** is the quietest of the three. Reparenting turns the group into a *leaf*, and every lookup
+  that finds it requires `parent_id IS NULL` — so the next write creates a second group while the whole
+  outstanding balance stays stranded under the moved row, and the report reads zero with nothing having
+  visibly gone wrong.
+- **exclusion** is the likeliest accident, and clearing it silently restores the exact overstatement the
+  feature exists to remove.
+
+Renaming and re-sorting stay open, because the key is the identity and what the group is called is the
+user's business.
+
+**The residual is the feature.** A repayment is not reliably equal to the expense — tickets bought for
+$400 may be sold on for $350 or $450 — so the receivable rarely closes cleanly, and what is left behind
+is the point: repaid short leaves a real cost genuinely incurred, repaid over leaves a genuine gain, and
+not repaid at all leaves money still outstanding. A short repayment and an unpaid one are
+**indistinguishable by amount**, and only the user knows which happened, which is what makes *settling*
+an explicit act rather than something derived.
+
+**Where a residual lands is decided by its sign, and is not a preference.** The residual is a category
+balance rather than a row, so moving it means rewriting the allocations of a transaction that already
+exists, and there are only two candidates:
+
+- a **positive** residual (repaid short, or never repaid) settles on an **expense** — the shortfall is
+  money genuinely spent, and only an outbound row points the right way to absorb it. This **restates the
+  original period, deliberately**: $125 is what February actually cost once the repayment is final. The
+  restatement is explicit and user-initiated; nothing restates on its own.
+- a **negative** residual (repaid over) settles on the **repayment** — the surplus came back when the
+  overpayment arrived, so booking it into February would claim a gain in a month where nothing had yet
+  gone right.
+
+**That asymmetry is why no mixed-sign split is needed, and the rule must not be reached for here.**
+Settling everything on the expense is the uniform-looking trap: a surplus larger than the buyer's own
+share drives the expense's real-category part negative, which `txn_splits.validate_parts` refuses by
+design — and would make relaxing that rule look like a prerequisite for this feature. It is not one.
+Sending a surplus to the repayment is legal at *any* magnitude, because every component of an inbound
+repayment points the same way.
+
+**Completing is the terminal act, and it is not the same thing as settling a residual.** A
+reimbursement that was repaid in full has nothing to move and still has to be finishable, or it sits on
+the open list forever — which is exactly what happened while "already square" was an error rather than
+the easy case, leaving the outcome the whole feature aims at unreachable. So `complete` means *this is
+finished*: it moves a residual where there is one, closes with no change where there is not, and asks
+for a destination category only in the first case. **Any residual must be given a category** — a
+shortfall, a surplus, or a reimbursement nothing was ever repaid against (the write-off, where the
+residual is the whole amount). There is no path that closes a reimbursement leaving money unaccounted
+for in the holding group, which is what keeps the group's balance meaning "still owed". `reopen` reverses either, restoring allocations only
+where any were moved.
+
+**The outstanding report lists open reimbursements only.** A completed one is absent rather than sorted
+to the bottom or filed under a second heading: there is no work left on it, and it stays reachable from
+any of its transactions. The headline total is unaffected either way, because a completed
+reimbursement's claims sum to zero. Note the consequence that its transactions **stay in the holding
+group** — the two sides cancel there, so no report is wrong, and moving them would restate a period for
+no reporting gain.
+
+**The link is the fourth client of `txn_link`** (`kind='reimbursement'`, `services/reimbursements.py`),
+and it observes the primitive's contract: the link never mutates what it joins. `external_ref` carries
+the counterparty, `metadata_json` a note, the per-transaction **claims**, and — once finished — the **completion
+record**, which stashes the target's prior allocations, category and provenance so any move can be
+reversed exactly (all null where completing moved nothing). Reversal reads that stash rather than
+recomputing an inverse, because the destination category may have been edited since and re-deriving
+"what it must have been" would launder those edits into the restore.
+
+**A reimbursement covers a *portion* of a transaction, not the transaction — and this is the correction
+that matters most here.** The first implementation made a transaction the unit and enforced "at most one
+reimbursement per transaction". That cannot express two ordinary uses of splits, which exist precisely
+so one ledger row can mean several things:
+
+- one charge split between two friends is **two debts**, each needing its own counterparty, its own
+  repayments and its own settlement;
+- one ATM deposit split across buckets can **repay two different debts at once**.
+
+So a link records a **claim** per transaction — how much of that row's receivable belongs to *this*
+reimbursement — and a row may appear in as many reimbursements as it has receivable money to divide.
+`txn_link_member` is keyed `(link_id, txn_id)`, so several links over one row need no schema change; the
+claims live in the link's `metadata_json`. Do not reintroduce the per-row rule: it reads as a tidy
+invariant and is the thing that made the feature unable to model its own motivating example.
+
+**Claims are stored as amounts, deliberately, not as split-part ids.** `save_split` deletes and
+reinserts a transaction's parts on every edit, so part ids are not stable across an ordinary re-split
+and a claim keyed on one would break the first time an amount was adjusted. A part is still how the
+*user* picks a portion — the picker offers "Dana's ticket $250" — but what is written down is the amount,
+with the part's label kept alongside as display provenance that no arithmetic reads. One consequence:
+when settling draws a residual out of a row holding several shares, *which* allocation shrinks is taken
+in order, so the labels are not evidence of whose money moved. Nothing reported anywhere depends on it —
+the row's receivable, each link's residual and every category total are identical either way.
+
+**The invariant is per portion.** A transaction's claims across all reimbursements may not exceed its
+receivable, and what is left over is **unclaimed** — which is what the outstanding report lists as loose
+and what the link picker offers. Every claim must be non-zero and point the same way as the row's
+receivable.
+
+**One claim per transaction per reimbursement**, keyed by transaction id, and this shapes the picker.
+Attaching a second portion of a row a reimbursement already covers *replaces* the first rather than adding
+to it — which is what makes re-picking a share a correction instead of a silent doubling, and which is
+why choosing several portions has to mean **one claim for their sum**. The picker is therefore multi-select
+(`ClaimPortionPicker`): a charge divided between two people is routinely owed back in full by one of them,
+and there is no other way to express it.
+
+**The outstanding report is organised by direction, not by tracked-ness.** Left is everything owed back
+— records and unclaimed expenses together — and right is money in that nothing has claimed; a record
+shows its members nested under it, dated by its earliest member so it sorts where the debt started.
+Nesting hangs off the record rather than off an expense because a reimbursement may hold several
+expenses and one payment may be split across two records, and each nested line states *that record's
+claim* rather than the transaction's amount.
+
+**A pairing is offered against both piles, because tracked-or-not is not a property of the money.** When
+a repayment asks what it repays, the candidates are the open reimbursements *and* the untracked
+receivable rows of the opposite sign; picking an untracked one creates the record holding both sides at
+once. Offering only records made the ordinary case unreachable — an expense had to be turned into a
+record by hand before anything could be matched to it, which is a step that exists only because of how
+the data happens to be stored. Two filters keep the list honest: **opposite sign only**, so it never
+proposes a pairing the server would refuse; and **not a record that already claims this row**, since a
+reimbursement holds one claim per transaction and a second would replace the first rather than add to it.
+
+**The sign decides what there is to do with a row, not just what role it plays.** Roles are already
+derived from it; the surfaces follow the same rule. Money out is an expense — the act is saying it is
+coming back, which needs no counterpart to exist yet. Money in repays something — the act is naming
+what, chosen from the open reimbursements. Offering "track this" on both is what stranded every expense
+in one ledger: a repayment tracked on its own became a record holding only a credit, and since **a claim
+belongs to exactly one record**, the expense (already claimed by its own) could never be joined to it.
+Recording a repayment alone stays available, because a credit can genuinely clear before its receipt is
+entered; it is the quiet option rather than a refused one.
+
+Worth stating plainly because it is what makes the asymmetry legible: **tracking is optional.** The
+outstanding total is the open records' residuals plus the unclaimed money in the group, so an untracked
+reimbursable expense is already counted, as loose. A record adds exactly two things the category cannot
+— a counterparty's name, and the pairing that settling requires.
+
+**A reimbursement with no expense recorded is a credit, not an overpayment.** Its only entries are
+repayments, so the arithmetic makes every penny a surplus — reported as one it reads as an error on a
+record whose sole entry *is* that money. It is named separately in the summary text (`Unmatched $240.00
+credit`) rather than as a distinct status, because for every other purpose it genuinely is a surplus and
+completes the same way. The amount named is whatever the surface is describing: a card inside one
+transaction's panel names that row's claim, a list describing the whole record names its total.
+
+**Every figure the panel shows is stated against the row's whole receivable.** A claim's amount is
+otherwise a number with no visible cause: a $250 deposit with $10 claimed reported "$240.00 not yet
+matched" while the reimbursement holding that $10 said nothing about this row at all, so the missing $10
+was unaccounted for anywhere on screen. Each reimbursement card therefore names what it claims *of this
+transaction* (where the row is shared — on a row it covers whole it would only restate the figure beside
+it), the unclaimed line reads "$240.00 of $250.00", and a refused selection names both the sum asked for
+and the standing claim rather than only the limit.
+
+A consequence worth stating, because it looks like a bug from the UI: **a claim is an amount, never a set
+of parts.** Split parts are rewritten wholesale by `save_split`, so binding a claim to one would not
+survive an edit. Once part of a row is claimed, its named portions therefore no longer describe what is
+available — a $250 deposit divided $10/$240 with $10 claimed still lists both portions while only $240 is
+left. Every subset remains a *legal* claim (the limit is the total, not the identity), but none of them is
+"the remainder" by name, so an explicit **everything not yet claimed** option is offered — and only in
+that case, since otherwise it would sit beside a share of identical value.
+
+**Roles are derived, never stored as an independent fact.** A member's role follows the sign of its
+claim — positive is an `expense`, negative a `repayment` — so there is no second truth able to disagree
+with the ledger.
+
+**Pairing stays optional and late.** Reporting works off the category aggregate with nothing linked at
+all; a link is required only to settle, because that is the one operation that has to know which inflow
+closes which expense. One payment may close several expenses (an employer settling a month of receipts),
+so the link is one-to-many throughout and the residual's target is named by the user whenever a role has
+more than one candidate — nothing in the ledger can say which expense fell short.
+
+**Settling draws against this link's own claim, never against the whole row.** A charge whose other
+portion belongs to a different reimbursement must not have that portion consumed, so the limit is the claim,
+and the claim is reduced along with the allocation — which keeps a row's claims and its receivable in
+step whichever of its reimbursements is settled first.
+
+Depth, the settled forks, and what was deliberately left out are in
+[`backlog/reimbursable-expenses.md`](backlog/reimbursable-expenses.md).

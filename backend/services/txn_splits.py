@@ -82,6 +82,10 @@ def txn_effective_sql(conn: sqlite3.Connection, *, expand: bool) -> str:
     out from under it stays uncategorized instead of silently falling back to the transaction's own
     category, and neither of the two inconsistent states — a flag with no parts, parts with no flag —
     can make a transaction vanish from the totals or be counted twice.
+
+    The seam also projects `split_part_id` — the id of the part that matched, NULL when none did — which
+    is the only thing distinguishing two expanded rows of the same transaction. Aggregations ignore it;
+    see `split_part_id_sql` for who needs it and why.
     """
     if not expand:
         return "txn"
@@ -89,7 +93,31 @@ def txn_effective_sql(conn: sqlite3.Connection, *, expand: bool) -> str:
     projected = ", ".join(
         _PART_OVERRIDE[c] if c in _PART_OVERRIDE else f"t.{c}" for c in cols
     )
-    return f"(SELECT {projected} FROM txn t LEFT JOIN txn_split s ON s.txn_id = t.id)"
+    return (
+        f"(SELECT {projected}, s.id AS split_part_id "
+        f"FROM txn t LEFT JOIN txn_split s ON s.txn_id = t.id)"
+    )
+
+
+def split_part_id_sql(*, expand: bool) -> str:
+    """How a caller selects `split_part_id`, given whether its row source is expanded.
+
+    Only queries that return *rows to render* need this; aggregations never look at it. Two things
+    depend on it, and both are wrong without it:
+
+    - **Identity.** Expanded, `t.id` no longer identifies a row — two parts of one transaction that
+      share a category (which the split rules permit) come back as two rows with the same id, and two
+      parts alike in category *and* amount are indistinguishable by value. `split_part_id` is what a
+      list keys rows by.
+    - **Telling the caller which kind of row this is.** An expanded row carries the part's category and
+      amount but the *transaction's* `is_split`, so a renderer reading `is_split` alone treats one
+      allocation as the whole split. `split_part_id IS NOT NULL` is the test that separates them.
+
+    Unexpanded the row source is the bare `txn` table, which has no such column, so the constant keeps
+    the payload shape identical across both branches rather than making every consumer handle a field
+    that is sometimes absent.
+    """
+    return "t.split_part_id" if expand else "NULL"
 
 
 # The two columns an allocation speaks for. `s.txn_id IS NULL` is the "no part matched" test — the join

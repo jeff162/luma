@@ -54,7 +54,12 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     [rangeMode, rangeKey, trend],
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
-  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}` : null
+  // Bumped when a split is rewritten from this list. Its rows are the server's *expanded* allocations —
+  // scoped to this category, a split transaction arrives as the part that matched — so a rewritten split
+  // can move a row to another category or out of the window entirely, which no row patch can restate.
+  // Folding it into the paging key is the reload: `usePagedTransactions` refetches when the key changes.
+  const [reloadNonce, setReloadNonce] = useState(0)
+  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}|${reloadNonce}` : null
   const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({ ...range.params, category_ids: String(category.id), limit, offset, sort_by: sort.key, sort_dir: sort.dir })
   ), [range, category.id])
@@ -190,6 +195,9 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     onTransactionOpenDetail={setPayeeDetail}
                     onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
                     onRowsChange={setLocalMonthTxns}
+                    // This list is scoped to one category, so its rows are expanded allocations —
+                    // a rewritten split has to be fetched again rather than patched. See reloadNonce.
+                    onSplitSaved={() => setReloadNonce(n => n + 1)}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

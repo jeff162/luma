@@ -17,6 +17,7 @@ from typing import Optional
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
+import uuid
 from backend.db.database import get_db
 from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
 from backend.services.account_groups import effective_account_id_sql
@@ -31,19 +32,27 @@ from backend.services.transaction_tags import (
 )
 from backend.json_utils import safe_json_dict
 from backend.services.amazon_import import parse_item_evidence
-from backend.services.categorizer import categorize_transaction, load_categorization_rules
+from backend.services.categorizer import categorize_transaction, load_categorization_rules, recategorize_all
 from backend.services.documents import (
     INGEST_GRACE_SECONDS,
     documents_map_for,
     sweep_unreferenced_files,
 )
 from backend.services.purchase_links import purchase_for_txn, purchase_map_for
+from backend.services.reimbursements import (
+    receivable_amounts,
+    receivable_parts,
+    reimbursement_map_for,
+    reimbursements_for_txn,
+    unclaimed_amounts,
+)
 from backend.services.txn_splits import (
     SPLIT_CATEGORY_SOURCE,
     SplitValidationError,
     clear_split,
     get_split_parts_map,
     get_split_parts,
+    split_part_id_sql,
     proportional_allocation,
     save_split,
     split_txn_ids,
@@ -1088,7 +1097,11 @@ def list_transactions(
                 rex.series_id    AS recurring_excluded_series_id,
                 rxs.display_name AS recurring_excluded_series_name,
                 {document_match_column}
-                t.is_split
+                t.is_split,
+                -- Which allocation this row is, when the row source is expanded (NULL otherwise). It
+                -- is what makes an expanded row identifiable and what tells the ledger it is holding
+                -- one part rather than a whole split. See services/txn_splits.py.
+                {split_part_id_sql(expand=expand_splits)} AS split_part_id
             FROM   {_src} t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
@@ -1125,6 +1138,10 @@ def list_transactions(
         # ordinal, totals) rather than the sibling payments: this marker explains the row rather than
         # acting on it, so the panel is where the payments are listed. See services/purchase_links.py.
         purchases_by_txn = purchase_map_for(conn, txn_ids) if rows else {}
+        # The reimbursements each row has a share in, for the row's marker. A **list**, because a split
+        # row can be part of several — two friends' shares of one charge, a deposit repaying both — so a
+        # singular field would name one and hide the rest. See services/reimbursements.py.
+        reimbursements_by_txn = reimbursement_map_for(conn, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
@@ -1136,6 +1153,7 @@ def list_transactions(
             txn["documents"] = docs
             txn["document_count"] = len(docs)
             txn["purchase"] = purchases_by_txn.get(txn["id"])
+            txn["reimbursements"] = reimbursements_by_txn.get(txn["id"], [])
 
     return {
         "total": total,
@@ -1178,6 +1196,121 @@ def _resolved_tags_response(conn, txn_id: str) -> dict:
         "tags": list_visible_transaction_tags(conn, txn_id),
         "blocked_tags": get_blocked_transaction_tag_map(conn, [txn_id]).get(txn_id, []),
     }
+
+
+# --- Manual entry ------------------------------------------------------------------------------
+# Cash, a cheque, a charge on an account nothing syncs. The data model has always allowed for it —
+# `external_transaction_id` and `needs_review` both name hand-entered rows in their own definitions, and
+# duplicate detection already treats a row with no import batch as a legitimate candidate rather than
+# withholding it. What was missing was only the way in.
+
+
+class TransactionCreate(BaseModel):
+    account_id: str
+    # YYYY-MM-DD, matching the bulk date setter and what the ledger stores.
+    date: str
+    # **Signed, in the ledger's convention** (`amount > 0` is money out), like every other amount the API
+    # carries. A person types a magnitude, so the direction is chosen in the UI and applied there before
+    # the request is made — the same boundary `signedExpectedTotal` draws for a purchase total, and the
+    # reason it is drawn there is that the derived figure can be shown back before it is saved.
+    amount: float
+    payee: str
+    category_id: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.post("")
+def create_transaction(body: TransactionCreate):
+    """Record a transaction by hand.
+
+    Two decisions are worth stating because neither is visible in the row afterwards:
+
+    **The content hash is the *same* function the importers use.** That is what lets a later import or
+    sync of the same charge recognize the hand-entered row as its duplicate — the behavior duplicate
+    detection already documents. A second hash implementation here would compute a different digest for
+    identical data and the match would silently never happen.
+
+    **An uncategorized entry is run through the rules**, exactly as an imported row is. Skipping it would
+    drop every hand-entered transaction into the uncategorized pile the app then nags about, for no
+    reason other than which door it came through.
+    """
+    # Local import: the hash belongs to the import pipeline and is shared rather than reimplemented (see
+    # the docstring). Imported inside the function to keep this router free of a load-order dependency
+    # on the import package.
+    from backend.routers.import_export.core import make_hash
+
+    payee = (body.payee or "").strip()
+    if not payee:
+        raise HTTPException(status_code=400, detail="A payee or description is required")
+    date = (body.date or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    amount = round(float(body.amount), 2)
+    if amount == 0:
+        raise HTTPException(status_code=400, detail="A transaction needs an amount")
+
+    with get_db() as conn:
+        account = conn.execute(
+            "SELECT id, owner_id, trashed_at FROM account WHERE id = ?", (body.account_id,)
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account["trashed_at"]:
+            raise HTTPException(status_code=400, detail="That account is in the trash")
+
+        category_id = (body.category_id or "").strip() or None
+        if category_id:
+            category = conn.execute(
+                "SELECT id, parent_id, is_active FROM category WHERE id = ?", (category_id,)
+            ).fetchone()
+            if not category:
+                raise HTTPException(status_code=404, detail="Category not found")
+            if category["parent_id"] is None:
+                raise HTTPException(status_code=400, detail="Choose a category, not a group")
+            if "is_active" in category.keys() and not category["is_active"]:
+                raise HTTPException(status_code=400, detail="That category has been deleted")
+
+        txn_id = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO txn
+              (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name,
+               date, is_pending, content_hash, category_overridden, category_source,
+               display_name_source, needs_review)
+            VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,'manual',0)
+            """,
+            (
+                txn_id,
+                account["id"],
+                # The owner follows the account, the same rule the importers apply.
+                account["owner_id"],
+                category_id,
+                amount,
+                payee,
+                payee,
+                payee,
+                date,
+                make_hash(date, amount, payee),
+                1 if category_id else 0,
+                "manual" if category_id else None,
+            ),
+        )
+        if body.notes and body.notes.strip():
+            conn.execute("UPDATE txn SET notes = ? WHERE id = ?", (body.notes.strip(), txn_id))
+        if not category_id:
+            recategorize_all(conn, txn_ids=[txn_id])
+        # The recurring detector's membership cache is only rewritten by a scan, and none of its
+        # triggers cover a row appearing outside an import — so a hand-entered charge would never join
+        # the series it belongs to without this.
+        rescan_edited_transactions(conn, [txn_id])
+        row = conn.execute(
+            """SELECT t.id, t.date, t.amount, t.display_name, t.category_id, t.notes,
+                      COALESCE(c.name, '') AS category_name
+               FROM   txn t LEFT JOIN category c ON c.id = t.category_id
+               WHERE  t.id = ?""",
+            (txn_id,),
+        ).fetchone()
+    return dict(row)
 
 
 @router.patch("/{txn_id}/category")
@@ -1345,6 +1478,30 @@ def get_transaction_purchase(txn_id: str):
         if not conn.execute("SELECT 1 FROM txn WHERE id = ?", (txn_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Transaction not found")
         return {"purchase": purchase_for_txn(conn, txn_id)}
+
+
+# --- Reimbursable expenses ----------------------------------------------------------------------
+# The transaction-scoped read, and the reason it carries `receivable` alongside the link: a row holding
+# money in the Reimbursable group is a receivable whether or not anything has been linked to it yet, so
+# the panel has something true to say about an unlinked row — which is the state every reimbursement
+# starts in. Everything that acts on a reimbursement is addressed by its own id, in
+# routers/reimbursements.py.
+
+
+@router.get("/{txn_id}/reimbursement")
+def get_transaction_reimbursement(txn_id: str):
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM txn WHERE id = ?", (txn_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {
+            # A list: one row may be split between several reimbursements — two friends' shares of a
+            # charge, or an ATM deposit repaying two debts — so a singular field here would pick one and
+            # hide the rest.
+            "reimbursements": reimbursements_for_txn(conn, txn_id),
+            "receivable": receivable_amounts(conn, [txn_id]).get(txn_id, 0.0),
+            "unclaimed": unclaimed_amounts(conn, [txn_id]).get(txn_id, 0.0),
+            "parts": receivable_parts(conn, txn_id),
+        }
 
 
 @router.patch("/{txn_id}/imported-category")

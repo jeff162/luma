@@ -16,6 +16,7 @@
  *   - reconcileRow(id, patch)  patch a row in place after a note/tag edit
  *   - removeRow(id)            drop a row after it is trashed (and adjust any total/panels)
  *   - onRuleSaved(info)        optional: react to a rule create/apply from the menu
+ *   - onSplitSaved(id, result) optional: a split was rewritten — refetch if the list shows allocations
  *   - categories / onAddCategory  the category list the split editor's pickers render. Passing
  *                              a non-empty `categories` is what turns the split action on: without
  *                              one the menu
@@ -34,10 +35,11 @@ import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '.
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import SplitEditorDialog from '../components/SplitEditorDialog.jsx'
+import { wholeTransactionRow } from './splitRows.js'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 
-export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, categories, onAddCategory } = {}) {
+export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, categories, onAddCategory } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const navigate = useNavigate()
   const [noteTarget, setNoteTarget] = useState(null)
@@ -257,8 +259,11 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const ruleMatchSlow = useBusyIndicator(Boolean(menu?.txn?.id) && !ruleMatchReady, { delayMs: PAINT_GATE_DELAY_MS })
   const menuReady = Boolean(menu) && (ruleMatchReady || ruleMatchSlow)
 
+  // The editor edits the *purchase*, so a row that is one expanded allocation is restored to the whole
+  // transaction on the way in — otherwise it would reconcile the full allocation set against one part's
+  // amount and refuse every save. See lib/splitRows.js.
   function openSplitFromMenu(txn) {
-    setSplitTarget(txn)
+    setSplitTarget(wholeTransactionRow(txn))
   }
 
   // A saved split changes what the row reports (its marker, its part count, its provenance), so the
@@ -266,10 +271,19 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   function handleSplitSaved(txnId, { is_split, parts }) {
     reconcileRow?.(txnId, {
       is_split,
+      // The allocations themselves, not just how many. Patching the count alone left the row holding
+      // the *previous* split: its hover listed categories and amounts that had since been rewritten,
+      // and stayed wrong until something refetched the page. The saved parts arrive here already —
+      // they were simply not passed on.
+      split_parts: parts || [],
       split_part_count: parts?.length || 0,
       category_source: is_split ? 'split' : 'manual',
       category_overridden: 1,
     })
+    // A list showing *expanded* allocations cannot be corrected by a row patch: its rows carry the
+    // parts' own categories and amounts, and a rewritten split may put them in a different category or
+    // out of the list entirely. Only the host can resolve that, by refetching its scope.
+    onSplitSaved?.(txnId, { is_split, parts: parts || [] })
   }
 
   return {

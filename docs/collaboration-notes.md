@@ -122,6 +122,23 @@ There are two different bars here, one stricter than the other:
 
 - **Test data / fixtures:** large, well-established, generic-type vendors are fine and can make fixtures readable (Amazon, Starbucks, Netflix, etc.). What to avoid is **PII** and **very niche or personal-specific vendors** — a specific local business, a government office tied to a real place, or a product name that mirrors the user's own accounts. Genericize those personal-specific parts ("Rewards Card" / "Cashback Card" for cards, "Credit Card" / "Legacy Card" for an umbrella account) and describe the scenario's *shape* generically in comments ("a legacy umbrella account that physically maps to two real cards") rather than naming the real products involved. The `data/` directory holds the user's **real** data — read it to understand shapes if useful, but **never copy any of it into a checked-in test or fixture** (real card last-4s, account names, merchant/instrument strings are PII); reproduce the *shape* with fabricated values instead.
 
+### UI Vocabulary
+
+- **Reuse the app's own money words rather than inventing per-feature ones.** Money out is **Spent**,
+  money in is **Received** — set by the manual-entry direction selector and now used by the reimbursement
+  summaries too. A feature that coins its own ("came back", "paid out", "money in") makes the same
+  quantity read differently on two screens.
+
+- **Prefer the verb or the adjective to the abstract noun.** An expense is *reimbursable*; the button
+  says **Expect $375.00 back**, not "track this reimbursement". The noun is kept only where a record is
+  genuinely being named. Nouns like this read as jargon to the person using the app even when they are
+  exactly right in the code.
+
+- **Say the thing, not the mechanism, and don't repeat what the surrounding text already said.** A
+  column under a subtitle reading "…is expected back" is headed *Expected*, not "Expected back"; an
+  instruction above a picker is not restated under it. Ambiguous direction words are worse than plain
+  ones — "Owed back" can be read as money *owed by* the reader.
+
 ## Error Handling Preferences
 
 - When refusing an action is the right behavior, prefer a clear in-app explanation over clever automatic renaming or silent repair.

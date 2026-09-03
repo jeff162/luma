@@ -160,7 +160,10 @@ Recorded so they are not re-opened; each was a real fork.
 - **Sign** — every part shares the transaction's sign. `_summary_signed_total_sql` requires the bucket's
   type to be constant, and `data-model.md` → Reporting assumptions ties income groups to money-in. A
   mixed-sign split (a part representing a refunded item) is a coherent future relaxation, deliberately
-  not in v1.
+  not in v1. **It is not a prerequisite for reimbursable expenses**, which is the reading to expect and
+  refuse: settling an over-repayment looks like it needs a negative part only when the residual is
+  forced onto the original expense, and it is not — see
+  [`reimbursable-expenses.md`](reimbursable-expenses.md) → *Where the residual lands*.
 - **Rules authoring splits** — no. A rule sets one category; splits stay a manual act.
 - **Full-force apply and bulk edit** — refuse and report a count (above).
 - **List contract** — the part's amount under a category-shaped facet (above).

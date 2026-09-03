@@ -815,6 +815,146 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'reimbursable-expenses',
+    section: 'organizing',
+    title: 'Money that comes back later',
+    surfaces: ['Transactions (Reimbursements)', 'Transaction detail (Reimbursement)', 'Transactions (↩ marker)'],
+    summary: 'Concert tickets bought for friends, a work expense claimed afterwards. The part owed back goes into a category under the Reimbursable group, which keeps it out of spending totals until it is resolved -- so the month of the purchase reports only what was really spent. Linking the expense to the repayment tracks what is still owed; completing it closes the record and moves any difference into a real category.',
+    body: () => (
+      <>
+        <p>
+          Some money leaves as an expense and comes back weeks or months later. Three concert tickets on
+          one card charge with two of them bought for friends; a work expense paid personally and claimed
+          afterwards. Both movements are recorded correctly, and the totals still mislead: the month of
+          the purchase reports the whole amount as spending, and the month the money returns reports an
+          inflow that is not income.
+        </p>
+        <p>
+          The fix is to park the part that is owed back somewhere that does not count. A seeded{' '}
+          <strong>Reimbursable</strong> group sits alongside the other category groups and is excluded
+          from totals, exactly as <strong>Transfers</strong> is. Money allocated to a category inside it
+          drops out of spending until it is resolved -- so February reports what was actually spent, July
+          reports no income, and the balance of the group is what is still owed.
+        </p>
+
+        <h4>Naming the categories inside it</h4>
+        <p>
+          The group ships empty on purpose. Its categories are the user&rsquo;s own, and the useful way to
+          name them is for <em>what the money is for</em> -- <em>Concert tickets</em>,{' '}
+          <em>Work expenses</em>, <em>Lunches</em> -- rather than for where it has got to.
+        </p>
+        <p>
+          A name such as &ldquo;awaiting reimbursement&rdquo; describes a <em>state</em>, and a state
+          name stops being true the moment the state changes: every repaid transaction sitting in it is
+          then filed under a description that no longer applies. The group already says the money is owed
+          back, so the category&rsquo;s job is to say what it was. Named that way it stays accurate for
+          good, and a finished reimbursement is still where it can be found again.
+        </p>
+
+        <h4>Recording one</h4>
+        <p>
+          A wholly reimbursable expense is categorized straight into one of those categories. Where only
+          part of it is owed back -- one ticket kept, two bought for friends --{' '}
+          <HelpLink to="/help/transaction-splits">split the transaction</HelpLink> and put the part owed
+          back into the reimbursable category, leaving the rest where it belongs. Splitting is also what
+          allows one charge to be owed by two different people: two items, one for each.
+        </p>
+        <p>
+          The repayment, when it arrives, is categorized into a reimbursable category too. That is what
+          keeps it out of income, and what lets the two cancel.
+        </p>
+
+        <h4>Tracking who owes what</h4>
+        <p>
+          Reporting is already correct at this point with nothing linked -- the numbers do not depend on
+          it. Linking answers a different question: which repayment settles which expense, and how much is
+          still outstanding.
+        </p>
+        <p>
+          The transaction detail panel shows a <strong>Reimbursement</strong> section on any transaction
+          holding money in the group, and what it offers follows the direction of the money. On an
+          expense it is <strong>Expect $&hellip; back</strong>, which starts a record. On money that came
+          in it is <strong>Match $&hellip; to an expense</strong>, which lists the open records and the
+          expenses nothing has claimed yet &mdash; picking one pairs them in a single step. Where a
+          transaction is divided, the portions are offered as toggles and any combination can be chosen;
+          several portions become one claim for their total.
+        </p>
+        <p>
+          A reimbursement covers a <em>portion</em> of a transaction rather than the whole row, which is
+          what allows one charge split between two people to be two separate records, and one deposit to
+          repay both of them at once. Each record takes a name &mdash; a person, an employer, an
+          occasion &mdash; which is what identifies it everywhere it appears.
+        </p>
+        <p>
+          Tracking is optional. An expense sitting in the group is already counted as outstanding with no
+          record at all; a record adds the two things the category cannot &mdash; a name, and the pairing
+          that completing requires.
+        </p>
+
+        <h4>Seeing what is outstanding</h4>
+        <p>
+          <strong>Reimbursements</strong> on the Transactions page &mdash; and on the Categories page
+          while the reimbursable group or one of its categories is selected &mdash; lists everything
+          still owed in two columns: <strong>Expected</strong> on the left, holding both tracked records
+          and expenses nothing has claimed yet, and <strong>Received</strong> on the right. A payment can
+          be dragged from the right onto whatever it repays. An untracked row there is not a problem to
+          fix -- it is where every reimbursable sits between the purchase and the repayment. The total of
+          both columns is the balance of the group.
+        </p>
+        <p>
+          In the transaction list a <strong>&#8617;</strong> marker on a row opens its reimbursement
+          directly, dimmed once that reimbursement is finished.
+        </p>
+
+        <h4>Finishing one</h4>
+        <p>
+          <strong>Complete</strong> closes the record. What it does depends on whether the two sides
+          balance, and the button is emphasized only in the case where nothing has to be decided.
+        </p>
+        <ul>
+          <li>
+            <strong>Repaid in full</strong> -- nothing moves. The two sides already cancel, so completing
+            only records that it is finished, and it drops off the outstanding list.
+          </li>
+          <li>
+            <strong>Repaid short</strong> -- the shortfall was really spent, so it moves onto the expense
+            under a category chosen at that point. This updates the month the expense is in, which is the
+            intended effect: that is what the purchase actually cost once the repayment is known to be
+            final.
+          </li>
+          <li>
+            <strong>Repaid over</strong> -- the surplus arrived with the overpayment, so it is
+            booked against the repayment, in that month. The original expense is left alone.
+          </li>
+          <li>
+            <strong>Never repaid</strong> -- the whole amount was spending after all, and completing
+            records it as such. The button stays available but unemphasized, since a reimbursement with
+            nothing linked against it is far more often unfinished than written off.
+          </li>
+        </ul>
+        <p>
+          Any amount left over has to be given a category, so there is no way to close a reimbursement
+          leaving money unaccounted for in the group. <strong>Reopen</strong> reverses a completion
+          exactly, putting back whatever it moved.
+        </p>
+        <p>
+          Completed reimbursements stay in the category they were already in. Their two sides cancel, so
+          they never distort what the group says is outstanding, and leaving them put is what keeps them
+          findable.
+        </p>
+
+        <h4>What the group will not allow</h4>
+        <p>
+          The <strong>Reimbursable</strong> group can be renamed and its contents are entirely the
+          user&rsquo;s to add to, rename and remove. The group itself cannot be deleted, moved inside
+          another group, or counted toward spending totals: each of those would either strand money owed
+          back where nothing can find it, or silently restore the overstatement the group exists to
+          remove.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'duplicate-report',
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',

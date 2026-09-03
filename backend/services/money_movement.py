@@ -39,7 +39,7 @@ from typing import Optional
 
 from backend.services import txn_links
 from backend.services.account_groups import effective_account_ids
-from backend.services.transfer_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
+from backend.services.excluded_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
 
 LINK_KIND = "wallet_funding"
 MONEY_MOVEMENT_CATEGORY = "Money movement"

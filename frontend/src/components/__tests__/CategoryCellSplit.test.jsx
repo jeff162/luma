@@ -146,6 +146,77 @@ describe('CategoryCell on a split transaction', () => {
 })
 
 
+// A category-scoped list asks the server to expand splits, so the same cell also has to render one
+// *allocation* — the case the whole-split branch above gets wrong if it is allowed to claim the row.
+describe('CategoryCell on one expanded part of a split', () => {
+  // The reported shape: a $250 deposit divided into $10 and $240 within one category, listed under it.
+  // Stored negative because a deposit is, and rendered as the money-in magnitudes it reads as.
+  const PART = {
+    id: 't1', amount: -10, is_split: true, split_part_id: 'p1', split_part_count: 2,
+    category_id: 'groceries', category_name: 'Groceries',
+    split_parts: [
+      { category_id: 'groceries', category_name: 'Groceries', amount: -10, label: null },
+      { category_id: 'groceries', category_name: 'Groceries', amount: -240, label: null },
+    ],
+  }
+
+  it('names the category the part is actually in', () => {
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} onOpenSplit={vi.fn()} />)
+    expect(screen.getByText('Groceries')).toBeTruthy()
+    // The whole-split marker would say the row is the entire $250 purchase, which is the bug.
+    expect(screen.queryByText('Split (2)')).toBeNull()
+  })
+
+  it('sends a click on the category to the split editor, not the picker', async () => {
+    // One allocation is not the row's to repoint — the editor is where a split's categories are set,
+    // and it shows the sibling part while the user is deciding. Same destination the unexpanded row's
+    // chip has, so a split behaves one way whichever list it is in.
+    const user = userEvent.setup()
+    const onSave = vi.fn()
+    const onOpenSplit = vi.fn()
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={onSave} onOpenSplit={onOpenSplit} />)
+    await user.click(screen.getByText('Groceries'))
+    expect(onOpenSplit).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Household')).toBeNull()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('says on hover which part it is and what the whole transaction was', async () => {
+    const user = userEvent.setup()
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} onOpenSplit={vi.fn()} />)
+    // The row's own amount is $10; the $250 is summed from the parts, which the row does not otherwise
+    // carry. Absent until hovered, so the assertion below is about the hover and not a tooltip that
+    // renders its content unconditionally.
+    expect(screen.queryByText('One of 2 parts of $250.00')).toBeNull()
+
+    await user.hover(screen.getByRole('button', { name: /edit the split/ }))
+
+    expect(await screen.findByText('One of 2 parts of $250.00')).toBeTruthy()
+    // The sibling allocation is the answer to "why does this row say $10?", so the same hover card the
+    // ledger uses lists it.
+    expect(screen.getByText('$240.00')).toBeTruthy()
+  })
+
+  it('is one control, so the marker leads where the badge does', async () => {
+    const user = userEvent.setup()
+    const onOpenSplit = vi.fn()
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} onOpenSplit={onOpenSplit} />)
+    await user.click(screen.getByText('◧'))
+    expect(onOpenSplit).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the category in the control, so it is not announced as a bare glyph', () => {
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} onOpenSplit={vi.fn()} />)
+    expect(screen.getByRole('button', { name: /^Groceries — one part of a split/ })).toBeTruthy()
+  })
+
+  it('still reads as the part\'s category where a host cannot open the editor', () => {
+    render(<CategoryCell txn={PART} categories={CATEGORIES} onSave={vi.fn()} />)
+    expect(screen.getByText('Groceries')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /edit the split/ })).toBeNull()
+  })
+})
+
 describe('the row menu\'s split entry', () => {
   const menuProps = {
     onClose: () => {},

@@ -8,7 +8,7 @@ import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-d
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
-import { api } from './lib/api.js'
+import { api, SESSION_LOST_EVENT } from './lib/api.js'
 import {
   BACKEND_RETURNED_EVENT,
   BACKEND_STOPPED_EVENT,
@@ -1071,6 +1071,9 @@ export default function App() {
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth)
   const [navResizing, setNavResizing] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
+  // Bumped when the api layer reports a lost session; the identity bootstrap below keys on it so the
+  // shell re-establishes or re-gates rather than sitting on a dead session.
+  const [sessionEpoch, setSessionEpoch] = useState(0)
   const [authEnabled, setAuthEnabled] = useState(false)
   const [needsBootstrap, setNeedsBootstrap] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
@@ -1280,12 +1283,28 @@ export default function App() {
 
     loadAuth()
     return () => { cancelled = true }
-    // This is a true once-per-mount bootstrap. hydrateStartupRoute closes over
-    // location.pathname + navigate; wrapping it in useCallback and listing it
-    // here would re-fire the auth check on every URL change, which is wrong.
+    // Re-runs only when the session is lost (`sessionEpoch`), which is the one thing that invalidates
+    // its result. hydrateStartupRoute closes over location.pathname + navigate; wrapping it in
+    // useCallback and listing it here would re-fire the auth check on every URL change, which is wrong.
     // Other call sites invoke hydrateStartupRoute directly from click handlers
     // and don't need stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionEpoch])
+
+  /*
+   * A 401 anywhere means the server no longer knows who is asking, so the shell — not the surface that
+   * happened to make the request — answers it: drop back behind the gate and re-run the bootstrap,
+   * which re-establishes a passwordless session or stops on the chooser / sign-in. Before this, a lapse
+   * surfaced as whatever error text the unlucky component rendered, with nothing to act on.
+   */
+  useEffect(() => {
+    function onSessionLost() {
+      setAuthChecked(false)
+      setCurrentUser(null)
+      setSessionEpoch(epoch => epoch + 1)
+    }
+    window.addEventListener(SESSION_LOST_EVENT, onSessionLost)
+    return () => window.removeEventListener(SESSION_LOST_EVENT, onSessionLost)
   }, [])
 
   useEffect(() => {

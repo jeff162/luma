@@ -1,5 +1,5 @@
 """
-The shared excluded-transfers-leaf helper (`services/transfer_categories.py`).
+The shared excluded-transfers-leaf helper (`services/excluded_categories.py`).
 
 Both the Amazon importer and wallet money-movement suppression put a row into an excluded leaf under the
 seeded `Transfers` group. The invariant this guards: a transaction may only be assigned to a *leaf*, never
@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.services.transfer_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
+from backend.services.excluded_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
 
 
 class TransferCategoriesTests(unittest.TestCase):

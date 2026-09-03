@@ -223,7 +223,7 @@ Two different surfaces respond to a narrowing pane in two different, deliberate 
 
 - **Wide data tables** (the Transactions ledger, the Categories matching-transactions list) have columns with hard min-widths and **scroll horizontally inside their own clamped viewport** once the pane is narrower than that floor. The table chrome around them (titles, filters, action buttons) should wrap or reflow — only the table body scrolls.
 
-- **Entity/management lists** (the Accounts list) **never grow a horizontal scrollbar** — a scrollbar on a list the user navigates and drags would be worse than letting columns adjust. The Accounts list keeps **one fluid filler column** (the primary label, e.g. account Name, as `minmax(0, 1fr)`) that absorbs all slack, so the table always exactly fits its container. Its other data columns (Type/Owner/Tags) are **user-resizable fixed-pixel columns**: resizing one reflows the fluid Name column rather than widening the table, so resizing can never produce overflow. The fixed drag-handle and delete gutters stay constant. This is the deliberate counterpart to the wide-data-table pattern above: that one scrolls; this one reflows. Widths persist via `useColumnPreference` (keyed `ui.accounts.columns`); because the Accounts row is hand-rendered (drag-to-merge, child indentation, owner pills, inline tag picker) it keeps its own `PillTableHeader` + list rather than adopting `PillGridTable`, sharing one computed grid-template string between the header and every row. Now that the table is the sole content of its own tab (it no longer shares a width with the sparse Owners/Connections panels) it sits at a modestly wider fixed width, giving the fluid Name column more room by default. The truncated label still surfaces its full text via a hover tooltip, so narrowing a column never hides information. Name itself carries no resize grip — a fluid column has no fixed edge to drag (widen it by shrinking the others); making Name directly draggable would require giving it a pixel width and accepting horizontal scroll when over-widened (the wide-data-table model).
+- **Entity/management lists** (the Accounts list) **never grow a horizontal scrollbar** — a scrollbar on a list the user navigates and drags would be worse than letting columns adjust. The Accounts list keeps **one fluid filler column** (the primary label, e.g. account Name, as `minmax(0, 1fr)`) that absorbs all slack, so the table always exactly fits its container. Its other data columns (Type/Owner/Tags) are **user-resizable fixed-pixel columns**: resizing one reflows the fluid Name column rather than widening the table, so resizing can never produce overflow. The fixed drag-handle and delete gutters stay constant. This is the deliberate counterpart to the wide-data-table pattern above: that one scrolls; this one reflows. Widths persist via `useColumnPreference` (keyed `ui.accounts.columns`); because the Accounts row is hand-rendered (drag-to-merge, child indentation, owner pills, inline tag picker) it keeps its own `PillTableHeader` + list rather than adopting `PillGridTable`, sharing one computed grid-template string between the header and every row. Now that the table is the sole content of its own tab (it no longer portions a width with the sparse Owners/Connections panels) it sits at a modestly wider fixed width, giving the fluid Name column more room by default. The truncated label still surfaces its full text via a hover tooltip, so narrowing a column never hides information. Name itself carries no resize grip — a fluid column has no fixed edge to drag (widen it by shrinking the others); making Name directly draggable would require giving it a pixel width and accepting horizontal scroll when over-widened (the wide-data-table model).
 
 **A width measured from one surface and mirrored onto another must ignore zero.** The Accounts page measures its account-table panel with a `ResizeObserver` and passes that pixel width to the cards on the *other* tabs, so the page reads as one anchored column. The observed element exists only on the Accounts tab, so switching tabs unmounts it — and the observer reports a final size of **0** on the way out. Adopted literally, that becomes `width: 0px` on every card of the tab being switched *to*, which collapses each one to its borders while its contents spill out at min-content width. The rule: a zero from a `ResizeObserver` usually means the element is leaving, not that it measured nothing, and the last real measurement should stand until a real one replaces it.
 
@@ -251,6 +251,39 @@ Tree views should use the same visual grammar wherever they appear.
 
 - Protected system rows should read differently from ordinary editable taxonomy rows. Use italic labels for immutable system buckets such as `Unassigned` and the synthetic `Uncategorized` child it can surface when uncategorized transactions exist.
 - When uncategorized transactions need different debit/credit presentation, keep that split synthetic. Expense-side uncategorized rows may stay under `Unassigned`, while uncategorized credits may surface as a separate income-side system bucket such as `Other Income` without creating a real stored category.
+
+### What a protected row may have done to it is a table, not a flag
+
+"Protected" is not one property. The Categories tree gates six separate things — rename, delete, drag
+out, accept a dropped leaf, hold tags, and change `exclude_from_totals` — and for a long time answered
+all six from a single `isSystemCategory` predicate. That held only while every protected row answered
+them the same way, and stopped the moment a third kind appeared: the reimbursable holding group may be
+renamed and tagged and accepts dropped leaves, yet must never be deleted, moved, or counted. A single
+boolean would have to be wrong in one direction or the other.
+
+So capability lives in one table keyed by *kind* (`lib/categoryCapabilities.js`), and the JSX asks for
+the capability it actually needs rather than for an identity. Two things this buys, both of which had
+already gone wrong once:
+
+- **Adding a protected kind is filling in a row**, not finding six predicates scattered through a page.
+  The gap that motivated it was backend guards landing while the UI still rendered live controls for
+  them — a checkbox that errored on click.
+- **The kinds stay distinguishable.** `synthetic` rows are not database records at all, so nothing can
+  be done to them for want of anything to act on; `unassigned` is a real row deliberately held still.
+  Those are different reasons, and folding them together is what made the third kind hard to see.
+
+Identity predicates (*which* group is `Unassigned`, is this row synthetic) stay as they are — they
+answer real questions. What moved is only the use of identity as a stand-in for permission.
+
+A capability that is withheld should still **render, disabled, saying why** where the control is the
+only thing on screen explaining the behaviour — the reimbursable group's exclusion checkbox is checked
+and greyed with "always, for this group" beside it, because hiding it would leave nothing to account for
+why that group's money never reaches a total. Where the capability simply does not exist and nothing
+needs explaining, remove the affordance instead: `Unassigned` and the reimbursable group both hide
+Delete rather than offering one that refuses.
+
+This governs **rendering only**. The backend refuses the same operations independently, since that is
+what holds across every entry point; the table exists so the screen agrees with it.
 
 ## Section toggles
 
@@ -403,9 +436,15 @@ Transaction tables should share the same row-level metadata treatment.
 
 - **Split rows read as "Split (N)", not as a category, and hovering shows the allocation.** A transaction whose amount is allocated across several categories has no single category to show, so the shared `CategoryCell` renders a quiet `Split (N)` chip in place of the category badge and routes a click to the split editor rather than the picker. Hovering the chip lists each part — category name and **signed** amount — through the same `RowTooltip` dwell the origin cards use. The amounts are the point of the hover rather than a nicety: in a category-scoped list the row shows only the *part* that matched, so this is where "why does this row say $60 when the purchase was $100?" is answered. The parts ride in the list payload (`split_parts`) rather than being fetched per hover, which would put a loading state inside a tooltip for a handful of rows. The tooltip deliberately does **not** describe the click — `cursor: pointer` carries that, and a hover is worth more spent on the row's content than on its gesture. The click target changes deliberately: the backend refuses a single-category assignment on a split row (it would orphan the allocations), and a control that opens and then fails is worse than one that leads where the user actually needs to go. A host that cannot open the editor — a display-only list — renders the chip read-only rather than offering the picker. The way *in* for a transaction that is not split yet is a `Split…` button beside the category in the transaction detail panel.
 
-  **One editor per surface, two ways in.** The split editor is owned by `useTransactionRowActions`, not by each host: the row menu opens it, and a host hands the same `openSplitFromMenu` to its `CategoryCell` so clicking the marker lands in the identical dialog. The menu item is named for the row's resulting state (`Split…` on an ordinary row, `Edit split…` on one already split) rather than for the operation, and it is **withheld entirely** where the host has no category list to give the editor's pickers — an empty picker is not a usable editor, and offering a dead entry is worse than offering none.
+  **One editor per surface, two ways in.** The split editor is owned by `useTransactionRowActions`, not by each host: the row menu opens it, and a host hands the same `openSplitFromMenu` to its `CategoryCell` so clicking the marker lands in the identical dialog. Every way in goes through `openSplitFromMenu`, which is also where an expanded allocation is restored to the whole transaction (`wholeTransactionRow`) — the editor reconciles the parts against `txn.amount`, and a part row's amount is one allocation's, so without that it would open on a $10 transaction whose parts sum to $250 and refuse every save. The menu item is named for the row's resulting state (`Split…` on an ordinary row, `Edit split…` on one already split) rather than for the operation, and it is **withheld entirely** where the host has no category list to give the editor's pickers — an empty picker is not a usable editor, and offering a dead entry is worse than offering none.
 
-  **In a category-scoped list a split row shows the part, not the purchase.** The list endpoint expands splits whenever a category-shaped facet scopes it, so a drill-down into one category shows that transaction at its **allocation** amount — which is what makes the panel's visible rows sum to the total in its header. The chip still reads `Split (N)` there, because the panel's own scope already says which category these rows are in. Expect the dissonance that follows and leave it: opening the same row's detail panel shows the *whole* transaction's amount, since that is what the transaction is.
+  **In a category-scoped list a split row shows the part, not the purchase — and the cell names the part's own category.** The list endpoint expands splits whenever a category-shaped facet scopes it, so a drill-down into one category shows that transaction at its **allocation** amount, which is what makes the panel's visible rows sum to the total in its header. On those rows the cell renders that allocation's category as an ordinary badge with a quiet `◧` marker beside it, *not* the `Split (N)` chip: the chip claims the row is the whole purchase, and its hover would answer a question about a $10 row with the other part's $240. Badge and marker are **one control**, carrying "One of N parts of $250.00" on hover — the transaction total, summed from the allocations, since an expanded row does not carry it — above the same `SplitPartsHoverCard` the ledger uses. Clicking anywhere in it opens the split editor, which is the same destination the unexpanded row's chip has: a split's categories are edited in one place whether the row is expanded or not, and the editor shows the sibling allocation while the user decides. Repointing one allocation *in place* would be the lighter gesture and is the better end state — what stands in the way is not the backend but the reconcile identity: every surface merges an edited row by transaction id, which is right for a note or a tag and wrong here, since two allocations sharing a category would both take the new one. What tells the two cases apart is `split_part_id`, never `is_split` — see `lib/splitRows.js`, and *Transaction splits* in [`data-model.md`](data-model.md).
+
+  **The detail panel opened from such a row describes the transaction, and fetches it to do so.** The panel reads its header off the row object it is handed but fetches Documents, Purchase and Reimbursement *by transaction id*, so an unresolved part row makes it describe a part in one half and the purchase in the other — the symptom was a $10 header above a line reporting a $250 receivable. It therefore re-fetches by id when `split_part_id` is set, and only then: every ordinary row still opens straight off the object, with no request and no loading state. Fetching rather than reconstructing from the row is deliberate — the transaction's own category is genuinely not in the expanded payload, and a field added to the seam's substitution list later would silently reintroduce the bug in any recovery written at the call site.
+
+  Expect the dissonance that remains and leave it: the panel shows the *whole* transaction's amount, which is not the figure the row beside it shows, because that is what the transaction is.
+
+  **A windowed transaction list keys its rows with `transactionRowKey`, not `txn.id`.** Expanded, the id is not unique — two allocations in one category arrive as two rows with the same id, and identical amounts leave nothing else to separate them — so the virtualizer, which caches measurements by key, folds the pair into one item. The helper appends the part id where there is one. The same rule applies to any list rendering allocations: `SplitPartsHoverCard` keys its rows by position rather than by `category_id` for exactly this reason.
 
 - **The purchase editor is one dialog with two ways in**, the same rule the split editor follows above: the ledger row's `🔗` marker opens `PurchaseEditorDialog`, and so does the detail panel's purchase summary. It is a dialog rather than a section inlined in the panel *because* the row is one of its hosts — a row has nowhere to inline an editor, and building the panel's copy first and the row's second is exactly the drift this repo keeps finding in its own history. Two consequences worth knowing. It **portals to the body**: `AppDialog` renders where it is mounted, and a `position: fixed` overlay opened from inside a table stacks against whatever ancestor established a containing block — `DocumentViewerDialog` carries the symptom that taught this (opened from a row it surfaced under the page header with its title bar cut off). And the dialog is **owned by `TransactionMarkersCell` directly**, not threaded down from `useTransactionRowActions` the way the split editor is: the split editor needs `categories` from the host and appears in the row menu too, whereas this one needs nothing but somewhere to report its result, so a controller in between would be plumbing with no decision in it. The result travels back as `onUpdatePurchase(txnId, summary)` beside the existing `onUpdateNote` / `onUpdateTags`, so the marker follows an ungroup without the page refetching.
 
@@ -1039,6 +1078,83 @@ When a profile matches, it should carry reusable import workspace state, includi
 
 The local draft must not override a matched profile. It exists only so a manual/no-profile import session can resume later if the next file is still compatible.
 
+### Sections on the transaction detail panel
+
+`DocumentsPanel`, `PurchasePanel` and `ReimbursementPanel` are the family, and they portion two rules and
+diverge on a third that is worth understanding before a fourth is added.
+
+- **A section renders only where it has something to say.** An always-present empty frame would sit on
+  every row in the ledger to serve the handful it applies to. What "something to say" means is the
+  divergence: the purchase panel needs *two* rows to have been grouped, so an ungrouped row gets
+  nothing, and the realization that two payments belong together happens in the ledger where the bulk
+  action lives. A receivable is different — money allocated to the `Reimbursable` group makes that one
+  row a receivable on its own, and the gap between the purchase and the repayment is the state a
+  reimbursement spends most of its life in rather than an unfinished step. So that panel speaks for an
+  unlinked row too. The test is whether the row *by itself* already carries the state.
+
+- **The panel is a summary; the editor is a dialog.** The dialog exists so a ledger row's marker can
+  open the same one, and a row has nowhere to inline an editor — so an inline second implementation
+  would be two editors for one thing, which is the drift this repo keeps rediscovering. The dialog
+  portals to `<body>`, which is load-bearing rather than tidy: a `position: fixed` overlay mounted
+  inside a table stacks against whatever ancestor established a containing block, not the viewport.
+
+- **The change-report callback must be a stable reference.** Each panel reports its record so the host
+  can patch the ledger row without refetching the page, and the host re-renders on that report. A fetch
+  effect that depends on the callback therefore refetches on every report and loops between loading and
+  loaded — silently, and forever. Hold the callback in a ref and depend on nothing but the id. Test it
+  with a deliberately *unstable* callback, since a stable `vi.fn()` passes against the broken version.
+
+### A stored convention is never a question for the user
+
+Amounts are stored with `amount > 0` meaning money *out* and displayed the other way round everywhere.
+Any form that collects an amount therefore takes a **magnitude plus a direction control**, derives the
+stored sign, and **shows the derived figure back** before saving — "Will be recorded as -$12.50" beside
+the amount box on manual entry, the running expected total on the purchase editor. Two rules fall out
+and both are load-bearing:
+
+- **Never ask for a signed number.** Getting it backwards inverts half of what people enter while
+  looking entirely plausible on the way in, and the mistake is invisible until a report is wrong.
+- **Echo the inference rather than trusting it.** A derived value the user can see is a value they can
+  correct; one they cannot is the app quietly deciding something on their behalf.
+
+Where the direction is a control on screen, a sign typed into the amount box is ignored in favour of the
+control — a stray "-" beside a toggle that already says "Received" is a typo, not a second opinion.
+(`signedExpectedTotal` differs deliberately: it edits a stored figure with no direction control beside
+it, so an explicit sign there is a real instruction.)
+
+### Let the accent say which action is actually the right one
+
+Where a dialog offers a terminal action beside its ordinary save, the accent moves to whichever is the
+right answer for the record as it currently stands — it is not fixed to one button. A reimbursement
+whose two sides balance accents **Complete**, because there is nothing left to decide; one with money
+still unaccounted for keeps the accent on **Save**, because closing it is a judgement the user may not
+want to make on this visit. The order stays put (Cancel · Complete · Save) so the buttons do not move
+under the cursor; only the emphasis changes.
+
+Where the terminal action is *possible but rarely what is wanted*, the emphasis is the discouragement —
+not a block. Completing a reimbursement nothing has been repaid against is a real outcome (sometimes
+nobody pays you back) that would be denied outright by greying the button, which was the first attempt
+here and is the same withheld-capability mistake this repo keeps recording. What makes it safe instead
+is that it is never the accented button, that the panel it opens states what it is really claiming — the
+*whole* amount recorded as spending, not "the rest" — and that it cannot complete without a category
+being chosen for the money. Two deliberate steps and honest copy do the work a disabled control was
+being asked to do.
+
+### Name what a reclassification will change, before the click
+
+Where an action moves money between categories and a *previous period's* figures move with it, the
+control says so where it is — not in a confirmation after the fact and not only in the Help topic.
+Settling a reimbursement is the case: a shortfall settles onto the original expense, so February stops
+saying one number and starts saying another. That is correct and deliberate, and it is also exactly the
+kind of change that reads as a bug when it is discovered later rather than announced beforehand. The
+sentence sits beside the button and changes with the direction of the residual, because a surplus does
+*not* touch the earlier month and saying so is equally part of the explanation.
+
+The same rule tells the surface what **not** to ask. Which side a residual settles against is decided by
+its sign, so it is never offered as a choice — the user has no way to answer it correctly and an answer
+that disagreed with the ledger would be a second truth. Only genuinely user-owned questions are asked,
+and only when they are live: *which* expense fell short, and only when there is more than one.
+
 ## Ownership and tag-driven reporting
 
 Ownership applies only to **accounts**. Categories and groups do not have owners; the dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through **tags**, applied at whichever level fits:
@@ -1172,6 +1288,28 @@ The app offers five theme choices from the Appearance section at the top of Sett
 Recharts is the visualization library. A few conventions keep charts consistent across the dashboard and detail panels.
 
 - **Themed tooltips.** Use the shared `CHART_TOOLTIP_CONTENT_STYLE`, `CHART_TOOLTIP_LABEL_STYLE`, and `CHART_TOOLTIP_ITEM_STYLE` constants from `frontend/src/lib/moneyDisplay.js` on every `<Tooltip>`. Recharts colors each item's value text using the data series color by default, which is invisible against the dark surface for darkly-themed accents; the shared `itemStyle` forces value text back to `var(--text)`.
+
+- **A placeholder name drops the noun its container already supplies.** An unnamed reimbursement is "Untitled reimbursement" standing alone — the editor dialog's title, where nothing else says what is being edited — and plain **"Untitled"** inside a list already headed *Reimbursements*, where repeating the noun on every row turns a list of records into a column of the same word. Two functions rather than one with a flag (`reimbursementDisplayLabel` / `reimbursementListLabel`), because the call site knows which it is and a boolean at the call site would not read as the reason. The ledger row's marker tooltip takes a third option: it omits the name entirely when there is none, rather than printing any placeholder.
+
+- **A footer offering Cancel and Save implies a pending decision; show one Close when there isn't one.** A completed reimbursement has nothing to settle, and with nothing typed its Cancel and Save do the same thing as each other — so it renders a single **Close** until one of its fields is actually edited, then **Cancel · Save**. Its fields stay editable throughout on purpose: a name is documentation rather than an accounting fact, and the server deliberately allows renaming after completion. The state is derived by comparing the form against the stored record rather than by a dirty flag, so typing and undoing settles back to Close. An **open** record keeps its full `Cancel · Complete · Save` row at all times, because Complete is a decision that may be about to be made.
+
+- **A review surface is offered where its rows live, not everywhere.** The Reimbursements report opens from the Transactions ledger and, on the Categories page, only while the reimbursable holding group or one of its leaves is selected — the one place there where "what is still owed back" is the question already being asked. The test keys on the group's `system_key`, never its name, since the group is the user's to rename (`isReimbursableSelection`).
+
+- **A row patch must carry every field the row renders from, and cannot restate what the server computed.** A saved split reconciles `split_parts` as well as `split_part_count`: the row carries its allocations inline for the ledger's hover, so patching only the count left the hover listing the *previous* split's categories and amounts beside an editor showing the current ones, until something refetched. The second half is the limit of patching at all — in a **category-scoped** list the rows are the server's expanded allocations, and a rewritten split can move them to another category or out of the list entirely. No patch can express that, so the controller also calls `onSplitSaved` and such a host refetches its scope (the Categories page and the category detail panel each bump a reload nonce folded into their paging key). A host that renders whole transactions needs neither; where an expanded list supplies no handler, the table drops the stale allocation rows rather than leaving them showing figures that are no longer true.
+
+- **A field that names the record gets a visible label, not a placeholder.** The reimbursement editor's counterparty field *is* the record's name — it is what the board, the row cards and the dialog heading all show — and it was labelled only by its placeholder, "Who owes it", which reads as a question rather than as a name and disappears the moment it is typed into. Once a record was named, nothing on screen identified which field held the name. It now carries a label above it, and the **dialog heading reads the form rather than the saved record**, so it follows the name as it is typed: that is the one place the connection between field and title can actually be seen.
+
+- **Split a work list by what the money *is*, not by what the app has stored about it.** The reimbursements report is two columns — *Expected* (records and untracked expenses together, newest first) and *Received* (unclaimed repayments) — replacing an earlier *Tracked* / *Not tracked yet* split. Whether a row happens to carry a record is a fact about storage, and making the reader settle it first was the source of nearly every confusion the feature produced ("is it tracked, does it need to be, why can't I link it"). A record shows its members nested beneath it, so *tracked* reads as **has something under it** rather than as a category to reason about. The nesting hangs off the **record**, not off an expense: a reimbursement may hold several expenses and one payment may be split across two records, so an expense→payments tree would misstate both — and each nested row shows *that record's claim*, never the transaction's whole amount, or a shared payment would count twice on screen.
+
+  **Drag is an accelerator over an operation that already works by clicking, never the only way.** A payment drags from the right column onto whatever it repays; the same pairing is reachable from the transaction panel's match picker, which is what keyboard and touch use and what remains usable in a long scrolling list. The drop applies the **same rules** as the click path (`dropRefusal` mirrors `matchCandidates`) — a second path that quietly does what the first refuses is worse than no second path — and a divided row hands off to the shared portion picker rather than assuming it whole. The dragged payload is component state, not `dataTransfer`, for the reason the category tree keeps its own: `dragover` cannot read `dataTransfer`, so the hover decision has nowhere else to come from.
+
+- **A list of things that are not records yet opens the thing, not an editor for the record.** The reimbursements report's *Not tracked yet* pile has no reimbursement to edit — that is what makes those rows untracked — so a row opens its **transaction's detail panel**, where the reimbursable section already decides what to offer from the row's sign, its portions and what is unclaimed. Nothing about that flow is restated in the report. The row carries only date, payee and amount, so the transaction is fetched by id on the way. (This was a dead control for the life of the feature: the click stored `{ linkId: null }` into state that only rendered for a truthy `linkId`. A click that stores state nothing renders looks identical to a styling problem from the outside, which is why the failure path here says so rather than falling silent.)
+
+- **Where a row's sign already decides its role, it should decide the offered action too.** The reimbursable panel's primary button is `Expect $333.00 back` on money out and `Match $250.00 to an expense` on money in, because those are different acts on different sides of the same debt — not one act ("track this") that happens to land either way. The cost of the single label was not cosmetic: a repayment tracked on its own became a record holding only a credit, and since a claim belongs to exactly one record, the expense could never be joined to it afterwards. The verb is also the reason the noun is avoidable in the common case — an expense is *reimbursable*, and only a record genuinely being named needs to be called a reimbursement.
+
+- **A button that commits names what it commits; a button that opens a chooser does not.** The reimbursement panel's track button is one control with two jobs: on a row with a single portion the click *is* the claim, so it reads `Track $375.00` (or `Track remaining $240.00` where part of the row is already claimed — "remaining" earns its place only then), and the informational line above it is dropped, since the two would state the same figure twice. On a row with several portions the same click only opens the picker, so it reads `Track a reimbursement…` and the line stays: naming an amount there would promise a claim the button does not make, and that is the case where the arithmetic matters most because a selection can overshoot it.
+
+- **A sentence that names the direction prints a magnitude, not a signed amount.** `-$375.00 still outstanding` reads as a double negative and, taken literally, asserts an over-repayment of $375 — the sign and the words are saying opposite things. Where prose already carries the direction ("outstanding", "extra", "awaiting reimbursement", "came back"), branch on the sign and render the magnitude: the direction belongs in exactly one place, and in a sentence that place is the words. This is **not** licence to strip a sign anywhere else — a ledger amount, a total, a chart value or a tooltip figure has nothing else stating direction, so it must show the true signed value (see *Accurate numbers*). The distinction is whether something other than the number is already saying which way the money went.
 
 - **Signed axis labels.** Use `formatSignedAxisTick` from `moneyDisplay.js` for any y-axis whose data can span both sides of zero (monthly trends, account balances, refund-heavy months in an expense category). It renders `-$1.5k` instead of the raw `$-1500` Recharts would otherwise emit, and pairs with `formatSignedMoneyAmount` for the tooltip body.
 

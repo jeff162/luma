@@ -16,11 +16,13 @@ import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import DocumentsPanel from './DocumentsPanel.jsx'
 import PurchasePanel from './PurchasePanel.jsx'
+import ReimbursementPanel from './ReimbursementPanel.jsx'
 import { purchaseRowSummary } from '../lib/purchaseLinks.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
+import { isSplitPartRow } from '../lib/splitRows.js'
 import CopyTransactionsButton from './CopyTransactionsButton.jsx'
 import TransactionListToolbar from './TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
@@ -129,8 +131,33 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   useEffect(() => {
     setDetailCategories(categories)
   }, [categories])
+  // Resync when the host hands over a different row — and, where that row is one *allocation* of a
+  // split, replace it with the transaction behind it.
+  //
+  // A category-scoped list expands splits, so the row it hands over has had the part's amount and
+  // category substituted in by the seam, while its id — and therefore everything this panel fetches by
+  // id: documents, purchase, reimbursement — still speaks for the whole transaction. Unresolved, the
+  // panel describes a part in its header and the transaction in its body, which is how a $10 allocation
+  // came to sit above a $250 receivable. It is fetched rather than reconstructed from the row because
+  // the transaction's own category is genuinely not in the payload, and because a field added to the
+  // seam's substitution list later would silently reintroduce this. Only part rows pay for the request;
+  // every other row opens straight off the object it was handed, as before.
+  //
+  // Setting `detailTxn` cannot re-trigger this — it keys on the `txn` prop, which is the host's — so
+  // there is no fetch loop. See lib/splitRows.js.
   useEffect(() => {
     setDetailTxn(txn)
+    if (!isSplitPartRow(txn)) return undefined
+    let cancelled = false
+    api.getTransactions({ ids: txn.id, limit: 1 })
+      .then(resp => {
+        const whole = resp?.transactions?.[0]
+        if (!cancelled && whole) setDetailTxn(whole)
+      })
+      // Left as handed over if the fetch fails: the header keeps the part's figures, which is wrong but
+      // still usable, and is better than a panel that refuses to describe the row at all.
+      .catch(() => {})
+    return () => { cancelled = true }
   }, [txn])
   // The transaction list defaults to the selected month but can widen to that bar's year or the whole
   // charted span (DetailRangeControl). `range` derives the fetch window + count/total; `rangeKey` keeps
@@ -300,6 +327,16 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   // the marker behind the panel without a refetch, and `null` removes it.
   const handlePurchaseChange = useCallback(purchase => {
     const patch = { purchase: purchaseRowSummary(purchase, txn.id) }
+    setDetailTxn(prev => (prev ? { ...prev, ...patch } : prev))
+    onReconcile?.(txn.id, patch)
+  }, [onReconcile, txn.id])
+
+  // Stable for the same reason the two above are. A *list* travels, because one row may have shares in
+  // several reimbursements — a charge split between two friends, a deposit repaying both. Reported
+  // as-is rather than reduced to a row summary: nothing in the ledger renders it yet, and inventing a
+  // projection before there is a marker to feed would be a second definition of the reading.
+  const handleReimbursementsChange = useCallback(reimbursements => {
+    const patch = { reimbursements: reimbursements || [] }
     setDetailTxn(prev => (prev ? { ...prev, ...patch } : prev))
     onReconcile?.(txn.id, patch)
   }, [onReconcile, txn.id])
@@ -565,6 +602,18 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 the section appears only where it has something to say. Placed beside Documents because
                 it answers the same question those do — what this transaction was actually part of. */}
             <PurchasePanel txnId={detailTxn.id} onPurchaseChange={handlePurchaseChange} />
+
+            {/* Renders only where there is unclaimed money in the Reimbursable group or a
+                reimbursement already tracked — so, like the two above, it appears where it has
+                something to say. Unlike them it also speaks for an *unclaimed* row, because money
+                allocated to that group is a receivable whether or not a repayment has been found, and
+                it lists rather than picks: one row can be a share of several reimbursements. */}
+            <ReimbursementPanel
+              txnId={detailTxn.id}
+              categories={detailCategories}
+              onAddCategory={handleAddCategory}
+              onReimbursementsChange={handleReimbursementsChange}
+            />
 
             <div style={{ display: 'grid', gap: 6 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

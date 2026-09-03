@@ -50,6 +50,39 @@ function signalDataMutated() {
   }, 250)
 }
 
+/*
+ * Single app-wide "the session is gone" signal, on the same footing as the mutation signal above: the
+ * *api layer* notices, so no call site has to.
+ *
+ * A 401 means the server no longer knows who is asking, which is never something the surface that
+ * happened to make the request can resolve. Left to the callers it surfaced as whatever error text each
+ * one renders — "Not authenticated" in red inside a report dialog, with nothing to act on — and every
+ * screen in the app had its own version of that. The shell listens and re-runs its identity bootstrap,
+ * which re-establishes a passwordless session or lands on the chooser / sign-in.
+ *
+ * **The auth endpoints are exempt.** A 401 from them is an *answer*, not a lapse — it is how the
+ * bootstrap discovers that nobody is signed in — and signalling on it would ask the shell to restart
+ * the very check that produced it.
+ *
+ * **Suppressed for a window after it fires.** A page holds several requests in flight, so one lapse
+ * produces a burst of 401s; and the bootstrap the signal triggers makes its own calls, which may 401
+ * again while it works. Without the window those would feed each other.
+ */
+export const SESSION_LOST_EVENT = 'luma:session-lost'
+
+const SESSION_LOST_QUIET_MS = 5000
+const AUTH_PATH_PREFIX = '/auth/'
+let sessionLostAt = 0
+
+function signalSessionLost(path) {
+  if (typeof window === 'undefined') return
+  if (path.startsWith(AUTH_PATH_PREFIX)) return
+  const now = Date.now()
+  if (now - sessionLostAt < SESSION_LOST_QUIET_MS) return
+  sessionLostAt = now
+  window.dispatchEvent(new CustomEvent(SESSION_LOST_EVENT))
+}
+
 // Build an Error from a non-OK response body. FastAPI `detail` may be a plain string or a structured
 // object ({code, message, ...}); surface a readable message either way and keep the raw object on
 // `error.detail` so callers can branch on `code` (e.g. the demo-data and restore-compatibility guards).
@@ -73,6 +106,7 @@ async function request(path, options = {}) {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
+    if (res.status === 401) signalSessionLost(path)
     throw buildResponseError(err, res.status)
   }
   const method = (fetchOptions.method || 'GET').toUpperCase()
@@ -508,6 +542,12 @@ export const api = {
     request(`/transactions/${id}/split`, { method: 'PUT', body: JSON.stringify({ parts }) }),
   deleteSplit:         (id)         => request(`/transactions/${id}/split`, { method: 'DELETE' }),
   getSplitSuggestion:  (id)         => request(`/transactions/${id}/split/suggestion`),
+  // Recording a transaction by hand — cash, a cheque, an account nothing syncs. `amount` is signed in
+  // the ledger's convention (positive is money out) like every other amount the API carries; the caller
+  // derives it from a direction the user picked (`lib/manualTransaction.js`) rather than asking them
+  // about a storage convention. Validation failures come back as a 400 whose detail names the box to
+  // fix; show it rather than composing your own.
+  createTransaction:   (body)       => request('/transactions', { method: 'POST', body: JSON.stringify(body) }),
   // Multi-payment purchases: several transactions that are one purchase (a deposit and a balance, an
   // instalment plan). Pure association — grouping payments never changes a category, an amount or a
   // total, so nothing here needs an undo beyond removing the link. `expected_total` is signed in the
@@ -522,6 +562,32 @@ export const api = {
   removePurchasePayment: (id, txnId) =>
     request(`/purchases/${id}/payments/${txnId}`, { method: 'DELETE' }),
   deletePurchase:      (id)         => request(`/purchases/${id}`, { method: 'DELETE' }),
+  // Reimbursable expenses: money that left as an expense and comes back later. Unlike a purchase this
+  // is *not* pure association — settling rewrites the target transaction's allocations — so the
+  // complete/reopen pair is the undo, and unlinking a completed reimbursement is refused rather than
+  // silently discarding the record that could reverse it. Completing a reimbursement that was repaid in
+  // full moves nothing and needs no category — that is the ordinary ending, not an edge case. Which
+  // transaction a residual settles against
+  // is decided by its sign on the server; `target_txn_id` only picks *which* candidate, and only when
+  // the role has more than one. Broken invariants come back as a 400 written for the user.
+  //
+  // A reimbursement covers a *share* of a transaction, so every write takes `claims` — `{txn_id,
+  // amount?, label?}` — rather than bare ids. An omitted amount claims whatever of the row is still
+  // unclaimed, which is the whole answer for a row that is only in one reimbursement; it is stated only
+  // where a row is divided between several.
+  getTransactionReimbursement: (txnId) => request(`/transactions/${txnId}/reimbursement`),
+  getOutstandingReimbursements: () => request('/reimbursements/outstanding'),
+  getReimbursement:    (id)         => request(`/reimbursements/${id}`),
+  createReimbursement: (body)       => request('/reimbursements', { method: 'POST', body: JSON.stringify(body) }),
+  updateReimbursement: (id, body)   => request(`/reimbursements/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  addReimbursementClaims: (id, claims) =>
+    request(`/reimbursements/${id}/transactions`, { method: 'POST', body: JSON.stringify({ claims }) }),
+  removeReimbursementTransaction: (id, txnId) =>
+    request(`/reimbursements/${id}/transactions/${txnId}`, { method: 'DELETE' }),
+  completeReimbursement: (id, body) =>
+    request(`/reimbursements/${id}/complete`, { method: 'POST', body: JSON.stringify(body) }),
+  reopenReimbursement: (id)         => request(`/reimbursements/${id}/complete`, { method: 'DELETE' }),
+  deleteReimbursement: (id)         => request(`/reimbursements/${id}`, { method: 'DELETE' }),
   // Trash (soft-delete) for transactions. Mirrors the account trash flow: trashed rows are
   // filtered out of every read until they're explicitly restored or the trash is emptied.
   trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),

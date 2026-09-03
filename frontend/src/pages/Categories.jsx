@@ -17,6 +17,7 @@ import {
 } from '../components/CategoryTreePrimitives.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
+import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
@@ -29,6 +30,12 @@ import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesCon
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
+import {
+  UNASSIGNED_CATEGORY_SYSTEM_KEY,
+  categoryCapabilities,
+  isReimbursableSelection,
+  showsCategoryControls,
+} from '../lib/categoryCapabilities.js'
 
 const SECTION_META = {
   income: { label: 'Income' },
@@ -48,7 +55,6 @@ const LEFT_PANEL_WIDTH_PREF_KEY = 'ui.categories.leftPanelWidth'
 const DEFAULT_LEFT_PANEL_WIDTH = 280
 const MIN_LEFT_PANEL_WIDTH = 200
 const MIN_RIGHT_PANEL_WIDTH = 360
-const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
 const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID = '__uncategorized_expense__'
 const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_NAME = 'Uncategorized'
 const SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID = '__uncategorized_income_group__'
@@ -110,10 +116,6 @@ function isSyntheticUncategorizedCategory(cat) {
 
 function isSyntheticUncategorizedIncomeGroup(cat) {
   return cat?.synthetic_kind === 'uncategorized_income_group'
-}
-
-function isSystemCategory(cat) {
-  return isProtectedSystemCategory(cat) || isSyntheticUncategorizedCategory(cat) || isSyntheticUncategorizedIncomeGroup(cat)
 }
 
 function buildSyntheticUncategorizedCategory(group, txnCount, options = {}) {
@@ -671,6 +673,7 @@ export default function Categories() {
   // Bumped to force the matching-transactions list to reload (e.g. after a rule the toast created
   // is applied to existing rows, which can change which transactions match the selected category).
   const [matchingReloadNonce, setMatchingReloadNonce] = useState(0)
+  const [reimbursementsOpen, setReimbursementsOpen] = useState(false)
   // Notice surface shared by the category-delete-skip path and the (controller-owned) bulk-edit flow's
   // sibling actions. The matching-list bulk edit itself is the shared controller, wired up below.
   const [bulkNotice, setBulkNotice] = useState('')
@@ -1331,7 +1334,7 @@ export default function Categories() {
 
   function getDragPayload(cat) {
     if (bulkSelectMode) return null
-    if (isSystemCategory(cat)) return null
+    if (!categoryCapabilities(cat).move) return null
     if (!cat.parent_id) {
       return {
         id: cat.id,
@@ -1516,7 +1519,7 @@ export default function Categories() {
       groupName: group?.name || '',
       categoryId: fullCat?.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? fullCat.id : null,
       categoryName: fullCat?.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? fullCat.name : '',
-      removableId: fullCat && !isSystemCategory(fullCat) ? fullCat.id : null,
+      removableId: fullCat && categoryCapabilities(fullCat).delete ? fullCat.id : null,
       removeInUse: !!usageSummary?.is_in_use,
       scope: group?.id ? 'group' : 'section',
       insertPosition,
@@ -1641,7 +1644,11 @@ export default function Categories() {
       (selected.parent_id === SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID ? getSyntheticIncomeGroup() : null)
     )
     : null
-  const selectedIsSystemCategory = isSystemCategory(selected)
+  const selectedCapabilities = categoryCapabilities(selected)
+  // The reimbursements review belongs beside the rows it is about, so it is offered from the holding
+  // group and its leaves — the one place on this page where "what is still owed back" is the question
+  // being asked. Elsewhere it would be a button with no relation to what is on screen.
+  const showReimbursements = isReimbursableSelection(selected, parentCategory)
   const selectedGroupType = normalizeCategoryType(selected?.category_type)
   const selectedCategories = selectedCategoryIds
     .map(id => flatCats.find(cat => cat.id === id))
@@ -2000,6 +2007,7 @@ export default function Categories() {
                       const groupCollapsed = categorySearchActive
                         ? !groupHasSearchMatch(group)
                         : !!collapsedGroups[group.id]
+                      const groupCapabilities = categoryCapabilities(group)
                       const visibleChildren = getVisibleChildrenForGroup(group)
                       const selectableChildren = getBulkMovableChildrenForGroup(group)
                       const showGroupFormBefore =
@@ -2028,12 +2036,12 @@ export default function Categories() {
                             cat={group}
                             isChild={false}
                             isSelected={selected?.id === group.id}
-                            draggable={!isSystemCategory(group)}
-                            renameDisabled={isSystemCategory(group)}
-                            allowSelectionWhenRenameDisabled={isSystemCategory(group)}
-                            showDelete={!isSystemCategory(group)}
-                            acceptDrop={!isSystemCategory(group)}
-                            nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
+                            draggable={groupCapabilities.move}
+                            renameDisabled={!groupCapabilities.rename}
+                            allowSelectionWhenRenameDisabled={!groupCapabilities.rename}
+                            showDelete={groupCapabilities.delete}
+                            acceptDrop={groupCapabilities.acceptDrop}
+                            nameStyle={groupCapabilities.systemMark ? { fontStyle: 'italic' } : null}
                             highlightQuery={categoryHighlightQuery}
                             bulkSelectMode={bulkSelectMode}
                             bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
@@ -2048,22 +2056,24 @@ export default function Categories() {
                             onOpenContextMenu={openContextMenu}
                             onDragStartRow={getDragPayload}
                           />
-                          {!groupCollapsed ? visibleChildren.map(child => (
+                          {!groupCollapsed ? visibleChildren.map(child => {
+                            const childCapabilities = categoryCapabilities(child)
+                            return (
                             <CategoryTreeRow
                               key={child.id}
                               cat={child}
                               isChild={true}
                               isSelected={selected?.id === child.id || selectedCategoryIds.includes(child.id)}
-                              draggable={!isSystemCategory(child)}
-                              renameDisabled={isSystemCategory(child)}
-                              allowSelectionWhenRenameDisabled={isSystemCategory(child)}
-                              showDelete={!isSystemCategory(child)}
-                              acceptDrop={!isSystemCategory(child)}
-                              nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
+                              draggable={childCapabilities.move}
+                              renameDisabled={!childCapabilities.rename}
+                              allowSelectionWhenRenameDisabled={!childCapabilities.rename}
+                              showDelete={childCapabilities.delete}
+                              acceptDrop={childCapabilities.acceptDrop}
+                              nameStyle={childCapabilities.systemMark ? { fontStyle: 'italic' } : null}
                               highlightQuery={categoryHighlightQuery}
                               bulkSelectMode={bulkSelectMode}
                               bulkChecked={selectedCategoryIdSet.has(child.id)}
-                              bulkSelectable={!isSystemCategory(child)}
+                              bulkSelectable={childCapabilities.bulkSelect}
                               onSelect={selectCategory}
                               onRename={handleRename}
                               onDelete={handleDelete}
@@ -2072,7 +2082,8 @@ export default function Categories() {
                               onOpenContextMenu={isSyntheticUncategorizedCategory(child) ? undefined : openContextMenu}
                               onDragStartRow={getDragPayload}
                             />
-                          )) : null}
+                            )
+                          }) : null}
 
                           {!groupCollapsed && inlineForm?.mode === 'category' && inlineForm.parentId === group.id ? (
                             <InlineAddForm
@@ -2255,7 +2266,7 @@ export default function Categories() {
                   <>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                       <CategoryMarker kind={selected.parent_id ? 'category' : 'group'} size={selected.parent_id ? 8 : 10} />
-                      <h2 style={{ fontSize: 16, fontWeight: 600, fontStyle: selectedIsSystemCategory ? 'italic' : 'normal' }}>{selected.name}</h2>
+                      <h2 style={{ fontSize: 16, fontWeight: 600, fontStyle: selectedCapabilities.systemMark ? 'italic' : 'normal' }}>{selected.name}</h2>
                     </div>
 
                     {selected.parent_id ? (
@@ -2271,7 +2282,7 @@ export default function Categories() {
                   </>
                 )}
 
-                {!isMultiCategorySelection && !selectedIsSystemCategory && (
+                {!isMultiCategorySelection && showsCategoryControls(selected) && (
                   <>
                     <div
                       style={{
@@ -2295,7 +2306,8 @@ export default function Categories() {
                               gap: 6,
                               fontSize: 12,
                               color: 'var(--muted)',
-                              cursor: 'pointer',
+                              cursor: selectedCapabilities.editExclusion ? 'pointer' : 'default',
+                              opacity: selectedCapabilities.editExclusion ? 1 : 0.6,
                               whiteSpace: 'nowrap',
                               userSelect: 'none',
                             }}
@@ -2303,10 +2315,22 @@ export default function Categories() {
                             <input
                               type="checkbox"
                               checked={!!selected.exclude_from_totals}
+                              disabled={!selectedCapabilities.editExclusion}
                               onChange={e => handleExcludeChange(selected.id, e.target.checked)}
-                              style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
+                              style={{
+                                accentColor: 'var(--accent)',
+                                width: 14,
+                                height: 14,
+                                cursor: selectedCapabilities.editExclusion ? 'pointer' : 'default',
+                              }}
                             />
                             Exclude from totals
+                            {/* The group holds money owed back, so the exclusion is what makes its
+                                periods read correctly and is not the user's to change. Said on the row
+                                rather than left to a refused click. */}
+                            {selectedCapabilities.editExclusion ? null : (
+                              <span style={{ fontStyle: 'italic' }}>- always, for this group</span>
+                            )}
                           </label>
                           <FeatureExplainer topic="exclude-from-totals" placement="bottom-left" />
                         </span>
@@ -2421,6 +2445,16 @@ export default function Categories() {
                       </div>
                       {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
                         server on demand to drop rows that no longer match the selected category. */}
+                      {showReimbursements ? (
+                        <Button
+                          variant="ghost"
+                          small
+                          onClick={() => setReimbursementsOpen(true)}
+                          title="What is still owed back, and what has come back against it"
+                        >
+                          Reimbursements
+                        </Button>
+                      ) : null}
                       <Button
                         variant="ghost"
                         small
@@ -2471,6 +2505,10 @@ export default function Categories() {
                       onAddCategory={addMatchingCategory}
                       onRowsChange={setPagedMatchingTxns}
                       onTrashed={() => setMatchingTxnsTotal(prev => Math.max(0, prev - 1))}
+                      // This list is category-scoped, so its rows are the server's *expanded*
+                      // allocations. A rewritten split changes which categories those parts are in and
+                      // for how much — which no row patch can restate — so the scope is fetched again.
+                      onSplitSaved={() => setMatchingReloadNonce(n => n + 1)}
                       scrollRef={matchingTxnsListRef}
                       fillHeight={true}
                       columnConfig={matchingTxnColumns}
@@ -2488,6 +2526,17 @@ export default function Categories() {
           </div>
         </div>
       </div>
+
+      {reimbursementsOpen && (
+        <ReimbursementsReportDialog
+          categories={flatCats}
+          onAddCategory={addMatchingCategory}
+          onClose={() => setReimbursementsOpen(false)}
+          // Completing or pairing from in here moves allocations between categories, so the list behind
+          // is refetched rather than patched — the change is not confined to the rows on screen.
+          onChanged={() => setMatchingReloadNonce(n => n + 1)}
+        />
+      )}
 
       {detailPanels.map((panel, index) => {
         if (panel.type === 'txn') {

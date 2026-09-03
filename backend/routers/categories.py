@@ -17,9 +17,25 @@ from backend.db.database import get_db, _seed_default_categories
 from backend.services.categorizer import DEFAULT_RULE_SEEDS, seed_default_rules
 from backend.json_utils import safe_json_dict
 from backend.services.txn_splits import txn_effective_sql
+from backend.services.excluded_categories import REIMBURSABLE_SYSTEM_KEY
 
 router = APIRouter()
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
+
+# The reimbursable holding group is machinery, not a label, and both of its guards are flat rather than
+# conditional on whether it currently holds anything. Deleting it never durably worked — seeding runs on
+# every start, so it returns at next launch (the behaviour `_ensure_transfers_group` documents for
+# `Transfers`) having left its leaves deactivated and orphaned out of the group the feature reads.
+# Clearing its `exclude_from_totals` is the likelier accident and the more damaging: every receivable
+# silently starts counting toward spending again, which is the exact overstatement the feature exists to
+# remove. Both refuse with an explanation rather than repairing silently, and the guards stop at the
+# group — leaves inside it are the user's to rename, delete and add, because `exclude_from_totals` is
+# NOT NULL so an existing parent always wins `COALESCE(parent, leaf)` and a leaf cannot opt itself back
+# into totals.
+REIMBURSABLE_GROUP_LOCKED = (
+    "The Reimbursable group is used to hold money owed back, so it cannot be %s. "
+    "The categories inside it can be renamed, removed or added to freely."
+)
 
 
 def _group_name_sort_key(name: str | None) -> tuple[str, str]:
@@ -539,6 +555,8 @@ def delete_category_preview(category_id: str):
             raise HTTPException(status_code=404, detail="Not found")
         if cat["system_key"] == UNASSIGNED_CATEGORY_SYSTEM_KEY:
             raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
+        if cat["system_key"] == REIMBURSABLE_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         impact = _collect_delete_impact(conn, affected_ids)
     return {
@@ -559,6 +577,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
             raise HTTPException(status_code=404, detail="Not found")
         if cat["system_key"] == UNASSIGNED_CATEGORY_SYSTEM_KEY:
             raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
+        if cat["system_key"] == REIMBURSABLE_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         placeholders = ",".join("?" for _ in affected_ids)
         replacement_category_id = body.replacement_category_id if body else None
@@ -867,6 +887,21 @@ def update_category(category_id: str, body: CategoryUpdate):
                 raise HTTPException(status_code=400, detail="The Unassigned group cannot be renamed")
             if body.parent_id is not None:
                 raise HTTPException(status_code=400, detail="The Unassigned group cannot be moved")
+        if cat["system_key"] == REIMBURSABLE_SYSTEM_KEY:
+            # Renaming and re-sorting stay open — the feature resolves the group by key, so what it is
+            # called is the user's business. Two things are not: the exclusion, and the group's place in
+            # the tree. Reparenting it turns the group into a *leaf*, and every lookup that finds it
+            # requires `parent_id IS NULL`, so the next write creates a second group while the
+            # outstanding balance stays stranded under the moved row — the report then reads zero with
+            # nothing having visibly gone wrong.
+            if body.exclude_from_totals is not None:
+                raise HTTPException(
+                    status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "counted toward spending totals"
+                )
+            if body.parent_id is not None:
+                raise HTTPException(
+                    status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "moved inside another group"
+                )
         # Kind for the uniqueness check is the row's kind *after* this edit: a rename keeps the
         # existing kind, while a parent_id change can move a row between leaf and group.
         resulting_parent_id = body.parent_id if body.parent_id is not None else cat["parent_id"]

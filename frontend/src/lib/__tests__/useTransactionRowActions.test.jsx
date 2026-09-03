@@ -106,3 +106,55 @@ describe('row menu rule action', () => {
     )
   })
 })
+
+
+/*
+ * A saved split has to reach the row it was saved from.
+ *
+ * The row carries its allocations inline (`split_parts`) for the ledger's hover, and the reconcile
+ * patched only how *many* there were. So after an edit the hover listed the previous split's categories
+ * and amounts — a $10/$240 division still shown beside an editor reading $140/$110 — and stayed wrong
+ * until something refetched the page. Both halves are asserted: the parts reach the row, and a list of
+ * expanded allocations asks its host to refetch, because a patch cannot restate figures the server
+ * computed.
+ */
+describe('saving a split', () => {
+  function controllerFor(handlers) {
+    let api = null
+    function Probe() {
+      api = useTransactionRowActions({ onOpenDetail: () => {}, ...handlers })
+      return null
+    }
+    // Router-wrapped for the same reason the fixture above is: the hook itself calls `useNavigate`.
+    render(<MemoryRouter><Probe /></MemoryRouter>)
+    return () => api
+  }
+
+  it('reconciles the allocations, not merely their count', () => {
+    const reconcileRow = vi.fn()
+    const get = controllerFor({ reconcileRow })
+    const parts = [
+      { category_id: 'c1', category_name: 'Entertainment', amount: 140, label: 'part 2' },
+      { category_id: 'c2', category_name: 'Hobbies', amount: 110, label: null },
+    ]
+    get().handleSplitSaved('t1', { is_split: true, parts })
+
+    const patch = reconcileRow.mock.calls[0][1]
+    expect(patch.split_parts).toEqual(parts)
+    expect(patch.split_part_count).toBe(2)
+  })
+
+  it('empties them when the split is removed', () => {
+    const reconcileRow = vi.fn()
+    const get = controllerFor({ reconcileRow })
+    get().handleSplitSaved('t1', { is_split: false, parts: [] })
+    expect(reconcileRow.mock.calls[0][1].split_parts).toEqual([])
+  })
+
+  it('tells the host, so a list of expanded allocations can refetch its scope', () => {
+    const onSplitSaved = vi.fn()
+    const get = controllerFor({ reconcileRow: vi.fn(), onSplitSaved })
+    get().handleSplitSaved('t1', { is_split: true, parts: [] })
+    expect(onSplitSaved).toHaveBeenCalledWith('t1', { is_split: true, parts: [] })
+  })
+})

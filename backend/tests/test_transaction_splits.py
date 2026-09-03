@@ -597,6 +597,67 @@ class SplitListContractTests(SplitFixtureMixin, unittest.TestCase):
             other = client.get("/api/transactions", params={"category_ids": leaves["Hardware Fixture"]}).json()
             self.assertEqual([r["amount"] for r in other["transactions"] if r["id"] == txn], [40.0])
 
+    def test_the_ledger_row_names_no_allocation(self):
+        # Unscoped the row *is* the purchase, so there is no part for it to be. The renderer reads this
+        # field to decide whether it is holding a whole split or one of its allocations.
+        with api_client() as (client, path):
+            _, txn = self._split_100(client, path)
+            row = next(r for r in client.get("/api/transactions").json()["transactions"] if r["id"] == txn)
+            self.assertIsNone(row["split_part_id"])
+
+    def test_an_expanded_row_names_the_allocation_it_came_from(self):
+        with api_client() as (client, path):
+            leaves, txn = self._split_100(client, path)
+            parts = client.get(f"/api/transactions/{txn}/split").json()["parts"]
+            by_category = {p["category_id"]: p["id"] for p in parts}
+
+            groceries = client.get("/api/transactions", params={
+                "category_ids": leaves["Groceries Fixture"],
+            }).json()["transactions"]
+            row = next(r for r in groceries if r["id"] == txn)
+            self.assertEqual(row["split_part_id"], by_category[leaves["Groceries Fixture"]])
+
+    def test_two_parts_in_one_category_are_told_apart_by_their_allocation(self):
+        # The case a list cannot render without this: the split rules allow two allocations to name the
+        # same category, so scoped to it the transaction comes back as two rows with one id — and two
+        # parts alike in category *and* amount are not distinguishable by value either. Only the part id
+        # separates them, which is what the ledger keys its rows by.
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=20.0)
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 10.0},
+                {"category_id": leaves["Groceries Fixture"], "amount": 10.0},
+            ]})
+            rows = [
+                r for r in client.get("/api/transactions", params={
+                    "category_ids": leaves["Groceries Fixture"],
+                }).json()["transactions"]
+                if r["id"] == txn
+            ]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({r["amount"] for r in rows}, {10.0})
+            self.assertEqual(len({r["split_part_id"] for r in rows}), 2)
+            self.assertEqual(
+                {r["split_part_id"] for r in rows},
+                {p["id"] for p in client.get(f"/api/transactions/{txn}/split").json()["parts"]},
+            )
+
+    def test_an_unsplit_row_names_no_allocation_even_when_the_source_is_expanded(self):
+        # The expanded source matches no part for it, so the field stays null and the row renders as the
+        # ordinary transaction it is.
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            plain = self._add_txn(path, account=account, amount=12.0, category=leaves["Groceries Fixture"])
+            row = next(
+                r for r in client.get("/api/transactions", params={
+                    "category_ids": leaves["Groceries Fixture"],
+                }).json()["transactions"]
+                if r["id"] == plain
+            )
+            self.assertIsNone(row["split_part_id"])
+            self.assertFalse(row["is_split"])
+
     def test_a_split_appears_once_per_matching_part_not_once_per_part(self):
         # Scoped to both of its categories the transaction is genuinely two allocation rows; the page
         # total must agree with that rather than counting the purchase twice at its full amount.
