@@ -205,6 +205,7 @@ their own runtime.)
 - **[docs/architecture.md](docs/architecture.md)** — application structure, data flow, and major subsystems
 - **[docs/data-model.md](docs/data-model.md)** — core entities, relationships, and the invariants that hold them together
 - **[docs/security-model.md](docs/security-model.md)** — what is defended and what deliberately is not, and why the design is shaped the way it is
+- **[docs/operations.md](docs/operations.md)** — running an instance: topologies, configuration, restore, and diagnosing
 - **[docs/ui-patterns.md](docs/ui-patterns.md)** — interaction patterns and shared UI behavior
 - **[docs/shared-components.md](docs/shared-components.md)** — which shared component to use for what
 - **[docs/building-a-connector.md](docs/building-a-connector.md)** — adding a data source

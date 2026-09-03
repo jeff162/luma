@@ -132,7 +132,7 @@ file **by phase number** (`db/database.py` migrations v18/v20, `services/provide
 6b. **App creds into the vault + the Connections-tab UI.** Move Plaid `client_id`/`secret`/`env` out of
    `.env`/Settings into the vaulted DB (**no migration** — the Configure card just writes them going
    forward; re-entering once is acceptable — decided 2026-08-01, see
-   [`optional-env-and-layered-config.md`](optional-env-and-layered-config.md)); per-provider data-source
+   [`../operations.md`](../operations.md)); per-provider data-source
    cards on the Accounts → Connections tab (Configure/Connect/Sync per card, config moves out of Settings);
    the Connect-bank HTTPS-availability gate; fix the deprecated "development mode" copy; and the explicit
    account connection columns/renames deferred from 6a. Teller, then SimpleFIN, follow on the seam.

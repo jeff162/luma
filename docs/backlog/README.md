@@ -241,17 +241,14 @@ than by feature.
   sectioned **back up all**, moves recipient management onto the Backup page, and a **restore flow that asks
   how to reconcile identities** (always preserves the current admin → no self-lockout, no silent perimeter
   overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh.
-- [deployment-topologies.md](deployment-topologies.md) — **Shape B steps 1–2 done (2026-08-19), step 3 in
-  progress from 2026-08-20; Shape A notes only.** All four build targets (Linux, Windows, macOS arm64 and
-  x64) now build and smoke green in CI, and the shutdown paths are answered in code; what remains is what CI
-  structurally cannot reach — Gatekeeper, the LaunchServices log path, and the Dock's Quit end to end. Also
-  records the Python 3.12–3.13 build ceiling (pydantic-core has no
-  3.14 wheels). How Luma is *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a
-  **single-user desktop** shape. The shell question is settled by passkeys — the browser-launcher wins
-  because `prf` needs a real browser, and the RP id being the *hostname* makes `localhost` (never
-  `127.0.0.1`) load-bearing, and makes mDNS + HTTPS a passkey precondition on the LAN rather than
-  polish. Also: the shared SPA-serving addition, and the portable-vs-installed rule for where the
-  databases live.
+- [deployment-topologies.md](deployment-topologies.md) — **reduced 2026-09-02 to what is genuinely
+  unbuilt.** The settled half — the shapes and what each binds to, the data directory, the shell decision
+  and every other rejected alternative — is in [`../operations.md`](../operations.md), with building in
+  [`../releasing.md`](../releasing.md) and the mechanism in `architecture.md`. What stays here: **Shape A**
+  (a LAN server) has requirements written down but nothing shipped — no Caddyfile, no systemd unit, no
+  install sequence — plus the mDNS name and the one empirical unknown (whether a `.local` name is accepted
+  as a WebAuthn RP id); and **Shape B step 3's remainder**, which is only what CI structurally cannot
+  reach and needs a Mac in front of somebody — the Dock lifecycle, Gatekeeper, and the log-file redirect.
 - [i18n-display-formatting.md](i18n-display-formatting.md) — **currency half shipped (2026-08-08); the
   date/number half deferred.** Tier-1 **formatting**, not translation. The ledger-currency setting and
   its display path landed (`lib/moneyDisplay.js`, `services/ledger_currency.py`); what remains is the
@@ -351,13 +348,12 @@ reintroducing X". Nothing here is pending.
   tracked shipped in 2026-07-30; what it held past that was a work log of what a lint cleanup had
   removed and what would have to be stitched back. The identity-perimeter substance is in
   [`../security-model.md`](../security-model.md); the forms themselves are in `Settings.jsx`.
-- [optional-env-and-layered-config.md](optional-env-and-layered-config.md) — **DONE (2026-08-18).**
-  `.env` is now optional: layered precedence (defaults < DB-backed settings < env override), the session
-  secret generated and stored in the control DB on first run, the blocking first-run setup screen and the
-  `.env`-writing endpoints removed, and the launchers no longer creating the file. The irreducible env
-  core is DB paths / ports / launcher knobs / the developer gate (the "two installations on one host"
-  case). Settings → Configuration reports every effective value and its layer. The doc keeps the
-  decisions and one deliberate follow-up (an mDNS service name, env-only like the ports).
+- ~~optional-env-and-layered-config.md~~ — **disposed 2026-09-02, file deleted.** `.env` is optional and
+  the layered precedence is settled. The operator's half — the layer order, the irreducible env core, the
+  permanent per-file overrides, the two-installations case, and every rejected alternative — is in
+  [`../operations.md`](../operations.md); the mechanism is in `architecture.md` → *Configuration layers*;
+  why app-level provider credentials left `.env` is in [`../security-model.md`](../security-model.md). Its
+  one unbuilt follow-up, the mDNS service name, is carried in `operations.md` → *Open*.
 
 ## Related (already tracked elsewhere)
 

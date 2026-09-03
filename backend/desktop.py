@@ -4,7 +4,7 @@
 """
 Desktop entry point: one command starts the server, opens the browser, and owns both lifetimes.
 
-This is the single-user shape from `docs/backlog/deployment-topologies.md` — the whole application in
+This is the single-user shape from `docs/operations.md` -> "Desktop" — the whole application in
 one process, reached through whatever browser the user already has. It exists instead of a native window
 shell because passkey vault slots need WebAuthn's `prf` extension, and a real browser is the only engine
 that reliably has it.

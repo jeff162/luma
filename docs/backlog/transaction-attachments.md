@@ -363,4 +363,4 @@ What is still open:
 - [`backup-restore-scope-and-secrets.md`](backup-restore-scope-and-secrets.md) — blocks decision 1
 - [`transaction-splits.md`](transaction-splits.md) — the phase-4 consumer
 - [`../building-a-connector.md`](../building-a-connector.md) — the adapter/capability pattern to copy
-- [`deployment-topologies.md`](deployment-topologies.md) — where a filesystem store would live
+- [`../operations.md`](../operations.md) — where a filesystem store would live

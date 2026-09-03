@@ -175,6 +175,23 @@ rehearsal for the real thing. The consequence is deliberate: **connecting a live
 requires a vault passphrase, even on a passwordless install.** "Store real bank credentials with zero
 secrets" is precisely what must be impossible.
 
+**One stored secret is readable back on request; the other never is, and the asymmetry is the point.**
+An app-level credential is one the operator *owns and can already read on the provider's dashboard*,
+and the only question a reveal answers — does what Luma holds match what the dashboard shows — is a real
+diagnostic nothing else can settle. A per-connection credential has no such counterpart: it is live bank
+access with no dashboard to compare against and no reason a human would ever read it. So there is a
+reveal for one and there must never be one for the other.
+
+Three properties keep that exception narrow, and a change that breaks any of them widens it:
+
+- It is a **separate call**, never a field on a status payload, so plaintext can only appear in a
+  response that explicitly asked for it.
+- It **reuses the same decryption path a sync takes**, so there is exactly one way a stored credential
+  becomes plaintext.
+- It takes **no second challenge when the vault is already unlocked** — an unlocked vault is this app's
+  authorization boundary and sync, disconnect and refresh all ride it, so re-prompting only here would
+  add friction without raising the bar.
+
 **The vault is only as strong as its weakest slot**, which is why the floor is an all-slots property and
 why a high-entropy recovery code does not compensate for a weak passphrase. A generated code adds a path;
 it does not raise the floor.
@@ -391,6 +408,13 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
 - **A relaxed passphrase for sandbox or test use.** See *Secret custody*. It would have introduced a
   plaintext credential path plus an encrypt-on-first-vault sweep to make it safe; neither is needed once
   nothing weak can exist.
+- **Keeping app-level provider credentials in a `.env` file.** Reversed from an earlier draft, then the
+  migration fallback retired too. The only things anyone *does* with an app credential are connect and
+  sync, and both already require an unlocked vault because the per-connection credential is under the
+  DEK — so vaulting it costs nothing in practice, while a file leaves a real secret plaintext on disk.
+  The bootstrap fallback was worse than the original arrangement: it also handed a **locked** vault an
+  unlock-free path to a secret, since the reveal deliberately skips the gate for a value that is not
+  encrypted at all. Re-entering a credential once is the whole of the setup.
 - **A "choose your security level" question.** With a sensible fixed floor there is nothing meaningful to
   dial, and it cuts against detecting facts rather than asking about them.
 - **The invite ceremony** (a 128-bit bearer code, expiry, single-use, revocable, the AEAD tag as
@@ -475,10 +499,12 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
   carries password hashes, which have no such wrapping, so the same reasoning does not simply carry over.
   → `backlog/backup-restore-scope-and-secrets.md`
 - **The three-radio topology UI has not collapsed to the single forward-looking question**, though the
-  per-request detection it needs exists. → `backlog/deployment-topologies.md`
+  per-request detection it needs exists. Standalone-vs-client-server is a *detected* fact, so only the
+  data-source declaration is a real question to put to anyone, and only when networked. No backlog item —
+  this topic owns it.
 - **An mDNS service name.** Env-only, alongside the ports. Not merely convenience: with HTTPS it is what
   makes passkeys reachable on a LAN at all. The open part is the default name when two installations share
-  a network. → `backlog/optional-env-and-layered-config.md`
+  a network. → [`operations.md`](operations.md) → *Open*
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one.
   → `backlog/vault-passphrase-recovery.md`
 - **In-app Help topics** (`data-and-backups`, `account-security`) predate the tempered read-only framing

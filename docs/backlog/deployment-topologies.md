@@ -1,300 +1,57 @@
-# Deployment topologies
+# Deployment topologies — the unfinished half
 
-**Status: Shape B steps 1–2 done (2026-08-19); step 3 in progress from 2026-08-20 — all four targets
-build and smoke-test green in CI, and the shutdown paths are answered in code; what remains is what CI
-cannot reach (Gatekeeper, the LaunchServices log path, and the Dock's Quit end to end). Shape A not started (notes only).** How Luma
-is *packaged and run* — distinct from the security model that governs *who may reach it*
-([`security-and-deployment-model.md`](security-and-deployment-model.md)). Two target shapes, one
-codebase. Transport-security (HTTP vs HTTPS) reasoning lives in the security doc's "Transport security"
-section and is only referenced here.
+**Status: what remains of the packaging/deployment work after the settled half was ingested
+2026-09-02.** How Luma is packaged and run is now split across three stable docs, and this file holds
+only what is genuinely unbuilt:
 
-## The two shapes (and the profile they map to)
+- [`../operations.md`](../operations.md) — the shapes, what each binds to, the data directory, restore
+  as a destructive operation, and every rejected alternative (the native-window options, universal2,
+  onefile in a `.app`, pyobjc, `%APPDATA%`).
+- [`../releasing.md`](../releasing.md) — building the artifacts, the two distribution forms, macOS
+  signing and the icon pipeline, CI and the release checklist.
+- [`../architecture.md`](../architecture.md) → *Packaged builds* — bundle/install roots, the launcher,
+  the shutdown signals, the macOS wrapper and the liveness watch.
+- [`../security-model.md`](../security-model.md) — why the host name is load-bearing, and the transport
+  policy each shape has to satisfy.
 
-| Shape | Who reaches it | Security profile | Transport |
-| --- | --- | --- | --- |
-| **A — LAN server**: headless box on the local network | multiple devices | Client-server (`network_private`), sign-in **on** | **HTTPS** (Caddy) — required once auth or an aggregator is in play |
-| **B — Single-user desktop app**: starts/stops with the app, loopback-only | one machine (a couple of profiles ok) | `local_private`, perimeter off | plain HTTP on loopback (no wire) |
+## Shape A — LAN server: not started
 
-They are the *same app*; they differ only in (a) how uvicorn is launched/bound, (b) whether a
-TLS-terminating front or a desktop launcher wraps it, (c) which security profile is active.
+The requirements are written down in [`../operations.md`](../operations.md) → *LAN server*. What does
+not exist is anything shipped: **no Caddyfile, no systemd unit, and no documented install sequence.**
+An operator following the requirements today is writing all three themselves.
 
-## Passkeys make the host name load-bearing in both shapes
+Two things belong to this item rather than to the doc:
 
-`_passkey_context` in `backend/routers/auth.py` derives the WebAuthn Relying Party id from the request
-hostname, and refuses two cases outright: a **bare IP address** (an RP id must be a domain, so no amount
-of serving fixes it) and a **non-loopback cleartext** request (WebAuthn requires a secure context). In
-both cases the answer is "use a passphrase on this host" — a silent capability loss rather than an
-error, which is exactly why it has to be designed for rather than discovered.
+- **The mDNS service name.** One `Setting(...)` row with `stored=False`; the open part is the default
+  name when two installations share a network. It is a prerequisite for passkeys over a LAN, not a
+  convenience — see the transport pairing in `operations.md`.
+- **Whether a `.local` name is accepted as a WebAuthn RP id.** It should be, since the RP id is set
+  *equal* to the host rather than as a registrable suffix of it, but this is the one thing to verify
+  empirically before building on it. Everything else about Shape A's passkey story depends on the
+  answer.
 
-That turns what looks like packaging trivia into a constraint on each shape:
+## Shape B — desktop: step 3's remainder
 
-- **Shape B:** bind loopback, but hand the browser `http://localhost:<port>` — **not**
-  `http://127.0.0.1:<port>`, which is an address and disables passkey vault slots with nothing visible
-  to explain why. The RP id is the host alone (ports are not part of it), so a dynamically chosen port
-  does not invalidate an already-registered passkey, and sessions survive it too because cookies are
-  not port-scoped.
-- **Shape A:** an address like `192.168.x.x` can never host passkeys however it is served, and a
-  hostname on its own still fails the secure-context check. **mDNS and HTTPS are therefore the pair
-  that makes passkeys reachable over the LAN** — neither is optional polish and neither works without
-  the other. The one thing to verify empirically before building on it is whether a `.local` name is
-  accepted as an RP id; it should be, since the RP id is set *equal* to the host rather than as a
-  registrable suffix of it.
+Steps 1 and 2 are done. Step 3 (per-OS user-data default and OS installers, macOS first) is built and
+green in CI on all four targets; what remains is **only what CI structurally cannot reach**, and none of
+it can be closed without a Mac in front of somebody:
 
-## Shared prerequisite: something must serve the built SPA
+- **The Dock lifecycle.** Whether the icon appears without the launch bounce; whether Quit and
+  Command-Q shut down cleanly *and* leave "Luma has stopped." in the log, which is the specific claim
+  the signal handling makes; and whether the two death-watches behave in both directions — a
+  force-quit wrapper stopping the server, and the server exiting quitting the wrapper.
+- **Gatekeeper.** A locally built bundle is never quarantined, so the refusal and the "Open Anyway"
+  path do not occur in CI at all. Only a browser-downloaded artifact carries the flag — and the
+  quarantine survives being unarchived through Finder but **not** through `unzip`, so testing with the
+  wrong tool tests nothing.
+- **The log-file redirect.** It fires for a LaunchServices start, and the smoke harness launches the
+  executable directly — deliberately, since that captures the output the redirect would otherwise
+  divert. So the redirect has never actually run.
 
-Settled and in place — `backend/spa.py`, described under *High-level shape* in
-[`architecture.md`](../architecture.md). A single uvicorn process is now self-sufficient, which is what
-both shapes were waiting on: Shape B needs nothing else, and Shape A can either use it or let Caddy
-serve `dist/` directly.
+**Windows and Linux installers are not in scope**; both platforms keep the portable zip. The
+consequence to remember is that the Windows user-data directory is unreachable in any released
+artifact, so no install has data under it — which stops being true the day an installer ships.
 
-## Shape A — LAN server + Caddy
-
-Well-trodden, nothing exotic:
-
-- **uvicorn** binds `127.0.0.1:8000` (not `0.0.0.0`) — only Caddy reaches it.
-- **Caddy** terminates TLS (internal CA, or a real cert via DNS challenge if a domain points at the box),
-  reverse-proxies `/api` → uvicorn, and serves `dist/`. Run uvicorn with `--proxy-headers` so
-  `request.url.scheme` is correct behind the proxy.
-- **systemd** unit keeps uvicorn alive across reboots.
-- Cookie hardening: `SESSION_COOKIE_SECURE=true` (see the security doc's transport section).
-- **mDNS name + HTTPS together**, per the passkey section above — this is the part that was previously
-  filed as convenience and is not.
-- SQLite is fine at household concurrency; no DB change needed.
-
-The mDNS plumbing is already scoped in
-[`optional-env-and-layered-config.md`](optional-env-and-layered-config.md) as one `Setting(...)` row
-with `stored=False`; the open question there is the default name when two installations share a network.
-
-## Shape B — Single-user desktop app
-
-Goal (user's words): one thing to run, instead of starting a backend and a frontend and then pointing a
-browser at them. A native window is explicitly *not* required — running in the browser is fine.
-
-### The build environment is pinned to Python 3.12–3.13
-
-Not a preference: `pydantic-core` (pinned exactly by `pydantic==2.8.2`) publishes no wheels for 3.14, so
-a 3.14 environment falls back to compiling it from source and fails somewhere that says nothing about
-the real cause. `cryptography` is fine — its wheels are `abi3` and forward-compatible — so pydantic is
-the whole of the constraint.
-
-Three things enforce it rather than describing it: `requires-python = ">=3.12,<3.14"` in
-`pyproject.toml`, a version-checked interpreter choice when either launcher builds the venv (named
-versions are tried first, so a machine whose default `python3` has moved on still gets a working
-environment), and the stated requirement in `README.md`. Lifting the ceiling is a dependency-bump
-project — upstream is ready, `pydantic-core` 2.48 ships cp314 — and it would move fastapi, pydantic and
-cryptography off their current pins, which changes the runtime under a live install. Not a packaging
-change.
-
-### The shell decision is settled by passkeys, not by packaging
-
-Every option shares the same crux — the backend is Python, so a Python runtime plus deps (including
-native ones like `cryptography`) ships as a self-contained bundle (PyInstaller). What separates them is
-which browser engine ends up rendering the app, and passkey vault slots need not just WebAuthn but the
-`prf` extension (CTAP2 `hmac-secret`), which is a much narrower guarantee.
-
-| Option | Engine | Passkey/PRF outlook | Verdict |
-| --- | --- | --- | --- |
-| **Launcher → default browser** | whatever browser the user already has | **works** — a real, current browser | **chosen** |
-| pywebview | OS webview, driven from Python | uncertain; WebKitGTK on Linux is the weakest of the three engines | rejected |
-| Tauri + Python sidecar | Rust shell, OS webview | same webview question, same Linux wrinkle | rejected |
-| Electron + Python sidecar | bundled Chromium | historically no platform-authenticator support at all | rejected |
-
-The earlier ranking here put pywebview first on packaging friction, before passkeys were a stated hard
-requirement. Under that requirement the ranking inverts: the launcher is the only option whose engine is
-a browser the user keeps updated themselves, and it is also the only one that avoids owning a webview
-dependency (WebKitGTK on Linux) or a second heavy runtime. Losing the "real window" is the whole cost,
-and it buys back the packaging story as well as the crypto one.
-
-The launcher exists as `backend/desktop.py` (its behavior and the reasoning behind the loopback-bind /
-localhost-URL split are in [`architecture.md`](../architecture.md)). Step 2 changes how it is *shipped*,
-not what it does: the same entry point becomes the PyInstaller entry point.
-
-### Distribution forms — the rule is per-form, not per-OS
-
-Where the databases live is decided by *how the app was distributed*, not by which OS it runs on. One
-branch, no platform matrix:
-
-- **Portable** (a zip: binary plus its data beside it) — `DATA_DIR` resolves next to the executable.
-  `runtime_config.anchor_relative` makes a relative setting mean "beside the executable" in a frozen
-  build, so the existing `DATA_DIR = "."` default already lands in the right place and the zip ships
-  **no** configuration file.
-- **Installed** (an OS installer) — `DATA_DIR` defaults to the per-OS user-data directory
-  (`%LOCALAPPDATA%\Luma`, `~/Library/Application Support/Luma`, `$XDG_DATA_HOME` or `~/.local/share` plus
-  `luma`). Because the portable form works off the plain default, telling the two apart needed a
-  build-time signal rather than anything the user configures. **Settled:** `LUMA_DIST_FORM` selects the
-  form at build time, `scripts/luma.spec` writes it into the bundle as a one-word file, and
-  `runtime_config.distribution_form()` reads it back — a bundled file rather than a generated module, so
-  the signal travels inside the artifact and a build cannot leave one behind in a checkout to change how
-  a developer's copy resolves. A missing or unrecognized declaration falls back to what the platform can
-  support, which is *installed* on macOS and portable elsewhere, and the spec refuses to build a
-  portable macOS artifact at all. The same signal moves the optional `.env`, which an installed build
-  has nowhere to keep beside the executable; it resolves from `user_data_dir()` rather than `data_dir()`
-  because that file is one of the things that may *set* `DATA_DIR`. Details in
-  [`architecture.md`](../architecture.md) under *Packaged builds*.
-
-  Windows uses `%LOCALAPPDATA%` (**settled 2026-08-26**; it was `%APPDATA%` as first written here). A
-  roaming profile synchronises at logon and logoff, usually over SMB, and a SQLite database diverged
-  across two machines resolves last-writer-wins on a binary file — silent loss, not a visible conflict.
-  Windows' own guidance keeps databases out of roaming, and `platformdirs` treats local as the default
-  for application data. The change cost nothing because it was made while the window was open: Windows
-  ships **portable** only, so `user_data_dir()` is unreachable in any released artifact and no install
-  had data under the old path. That stops being true the day a Windows installer ships.
-
-macOS only supports the installed form. A `.app` bundle cannot hold its own writable data: writing
-inside a notarized bundle invalidates the signature, and **App Translocation** mounts a quarantined app
-at a randomized read-only path, so "beside the executable" resolves somewhere that disappears. That is
-the same failure a PyInstaller *onefile* binary has anyway — it unpacks to a temp directory that is
-deleted on exit — which is why "default to the installation directory" cannot be the universal rule even
-though it is the intuitive one.
-
-Both forms rest on the same change, which is in place: `bundle_root` and `install_root` in
-`runtime_config.py`, described under *Packaged builds* in [`architecture.md`](../architecture.md). They
-are the same directory in a checkout, which is why nothing needed the distinction until there was a
-build to package.
-
-Whichever form is in play, Settings → Configuration already reports the effective value and the layer it
-came from, so the resolved data directory stays visible rather than inferred and hidden.
-
-### Sequencing
-
-1. **Serve the SPA from the backend, plus the launcher.** *Done.* No packaging involved — the feature
-   itself, working from a checkout. The design (three topologies, the client-route fallback, the
-   standalone run mode) is in [`architecture.md`](../architecture.md).
-
-2. **Frozen-aware roots, PyInstaller onefile, portable zip** for Windows and Linux. *Done.*
-   `scripts/luma.spec` and `scripts/build_desktop.py` build it, `scripts/release.py` gates and checksums
-   it, `backend/requirements-build.txt` carries the build-only dependency, and
-   `.github/workflows/release.yml` runs the whole thing per platform on a `v*` tag — **a matrix rather
-   than a loop, because PyInstaller cannot cross-build** — stopping at uploading artifacts, since
-   publishing is a person's decision. *Still unexercised:* the workflow on a real tag. No `v*` has been
-   cut.
-
-3. **Per-OS user-data default and OS installers**, macOS first. *In progress.* The platform-neutral
-   spine is in place — `distribution_form()`, `user_data_dir()`, `default_data_dir()`, the
-   `LUMA_DIST_FORM` build signal, `build_desktop.py --form`, and the `.env` relocation. All three OS
-   branches are exercised from one platform in `backend/tests/test_packaged_paths.py` by faking
-   `sys.frozen` and `sys.platform`; `scripts/smoke_artifact.py` runs in every build job, and on Linux
-   also against an installed-form artifact, so the per-OS directory is exercised for real rather than
-   first on macOS. All four targets — Linux, Windows, `macos-latest` (arm64), `macos-15-intel` (x64) —
-   build and smoke green, which settles the one thing that could not be reasoned out in advance:
-   PyInstaller puts `sys._MEIPASS` inside the `.app`, where `bundle_root()` looks for it.
-
-   The macOS Dock wrapper, the shutdown signal handling, the stale lockfile, browser-side liveness
-   detection, and TLS trust in a frozen build all landed in this step. Their mechanisms are under
-   *Packaged builds* in [`architecture.md`](../architecture.md) — including the two decisions worth not
-   revisiting: certificate verification goes through the **OS trust store** rather than a pinned CA
-   bundle shipped in the artifact, and a blanket api-layer **request timeout was rejected** (it catches a
-   stalled connection rather than a refused one, and would need a carve-out for every legitimately long
-   request — sync, import, backup, demo load — a list that breaks a feature whenever it is wrong; see
-   [`misc-followups.md`](misc-followups.md)).
-
-   **Building one platform on demand.** `workflow_dispatch` takes a `platform` choice and a `plan` job
-   turns it into the build matrix, so testing an artifact on a machine somebody is sitting at no longer
-   waits on all four; a tag push carries no inputs and still builds everything. The matrix has to be
-   **computed rather than filtered** — a job-level `if` cannot see the `matrix` context, and filtering an
-   `os` dimension while leaving `include` in place re-adds the very platforms it excluded, since an
-   include entry that cannot merge into a remaining combination is appended as a new one.
-
-   **What still needs a Mac.** No Swift toolchain and no Mac here, and two of these are beyond CI
-   whatever machine runs it:
-
-   - Whether the Dock icon appears without the launch bounce; whether Quit and Command-Q shut down
-     cleanly **and** leave "Luma has stopped." in the log, which is the specific claim the signal fix
-     makes; and whether the two death-watches behave — wrapper force-quit stopping the server, and the
-     server exiting quitting the wrapper.
-   - **Gatekeeper**, which CI structurally cannot reach: a locally built bundle is never quarantined, so
-     the refusal and the "Open Anyway" path do not occur at all. Only a browser-downloaded artifact
-     carries the flag — and the quarantine survives being unarchived through Finder but **not** through
-     `unzip`, so testing with the wrong tool tests nothing.
-   - **The log file**, for the same reason: it exists for a LaunchServices start, and the smoke harness
-     launches the executable directly — deliberately, since that captures the output the redirect would
-     otherwise divert. So the redirect has never fired.
-
-   Windows and Linux installers are **not** in this step's scope; both platforms keep the portable zip.
-
-### macOS specifics
-
-Four things that are decided rather than discoverable, and that a build has to get right the first time:
-
-- **Both architectures are wanted, and the Intel runner label has moved.** The `macos-13` image — the
-  last Intel one under that name — began deprecation on 22 September 2025 and was retired on 4 December
-  2025. The Intel label is now `macos-15-intel`, and GitHub has stated x86_64 support on Actions ends
-  when that image retires, around **August 2027**. So the matrix is `macos-latest` (arm64) plus
-  `macos-15-intel` (x64), with a known expiry on half of it. `_platform_tag()` in `build_desktop.py`
-  already names both correctly from `platform.machine()`.
-- **Two DMGs rather than one universal2 binary.** A universal2 build needs universal2 wheels for
-  `cryptography` and `pydantic-core`, which are not dependably published; the failure is an obscure link
-  error rather than a clear one. The cost is a "which one?" line in the README.
-- **A `.app` gets a onedir build, not onefile.** A onefile binary inside a bundle re-unpacks to a
-  temporary directory on every launch — slow, and the same vanishing-path problem in a different guise.
-- **No console when launched from Finder.** `backend/desktop.py` treats the printed URL as its contract
-  and the browser opener as a convenience on top; on macOS neither stdout nor stderr goes anywhere a
-  user will see, so a startup failure presents as a bouncing icon and nothing else. A log file in the
-  data directory is what replaces it. The URL itself is already recoverable — `luma-desktop.lock`
-  records the port.
-- **A Python process cannot be a macOS application.** Two failed attempts established the shape.
-  `console=True` makes PyInstaller write `LSBackgroundOnly=True`, so the app has no Dock icon, no sign
-  it is running, and nothing to quit — findable only through `ps`. Turning it off produced a Dock icon
-  that **bounced for minutes** and then offered only Force Quit, because LaunchServices expects a regular
-  application to check in with the window server and this one never does; the bounce is the launch
-  timeout, and the missing Quit is macOS knowing an Apple Event will not be answered. There is no
-  setting between the two.
-
-  The resolution is a small native wrapper (`macos/main.swift`) that *is* the application, with the
-  Python build as its child; `scripts/build_desktop.py` assembles the bundle around it and PyInstaller
-  emits a plain onedir tree. Rejected alternative: pyobjc inside the Python process, which would mean a
-  large macOS-only dependency plus moving uvicorn off the main thread — where it sits precisely so
-  Ctrl+C is clean — and would fork the one launcher all three platforms share. The wrapper confines
-  every macOS-specific concern to the macOS artifact instead.
-- **The application had no icon at all**, nor even a favicon. `assets/luma-icon.svg` is now the single
-  source, with `scripts/build_icons.py` deriving the committed `.icns`, `.ico` and favicons — full-bleed
-  for Windows and the browser, inset to Apple's 824-of-1024 grid for macOS, since an icon that fills its
-  canvas sits visibly larger than its neighbours in the Dock.
-- **The bundle has to be ad-hoc signed, and assembling it by hand loses that.** PyInstaller's `BUNDLE`
-  signs what it produces (`sign_binary(..., deep=True)`, ad-hoc when no identity is given). Building the
-  bundle around the native wrapper instead took that step with it, and the result was worse than a
-  warning: on Apple Silicon an unsigned binary does not merely go untrusted, it will not load, and a
-  quarantined bundle with no signature is reported as **"Luma is damaged and can't be opened"** — which
-  reads as a corrupt download rather than an unsigned one. `scripts/build_desktop.py` now runs
-  `codesign --force --deep --sign -` as the last step of assembly, since anything written afterwards
-  invalidates the seal. This is *not* notarization: Gatekeeper still asks for approval, and the
-  "Open Anyway" path in the README still applies. Invisible in CI, because a locally built artifact is
-  never quarantined.
-
-- **Quitting is answered twice over, in both directions.** In the app, "Shut down Luma" asks the server
-  to stop — not a macOS consolation prize but the answer on Windows and Linux too, where the alternative
-  was "find the terminal and press Ctrl+C"; see *Packaged builds* in
-  [`architecture.md`](../architecture.md) for how the capability is gated so a LAN deployment never
-  offers it. On macOS the wrapper adds Dock Quit and Command-Q, sending SIGTERM into that same path.
-
-  That SIGTERM needs the launcher to hold a handler of its own, or uvicorn re-raises it into `SIG_DFL`
-  and the process dies before it can clean up — after the clean shutdown, but before the lockfile is
-  released or anything is logged. The handlers are under *Packaged builds* in
-  [`architecture.md`](../architecture.md).
-
-  Neither process is left behind when the other goes first. The wrapper holds the write end of a pipe
-  whose read end is the child's stdin; a **zero-length** read there means every write end is closed,
-  which the kernel guarantees even under SIGKILL — the case a force-quit wrapper cannot clean up after
-  itself. In the other direction the wrapper's termination handler quits the app, so a server that
-  exited on its own does not leave a dead icon in the Dock. Only end-of-file counts: treating any
-  completed read as death would turn a stray byte into a shutdown, and the arrangement is declared by an
-  environment variable rather than inferred, since `something | luma` also hands over a pipe — one
-  already at EOF, which would exit instantly on startup.
-
-**The quarantine step has to be documented, and the familiar gesture is wrong.** Control-click → Open no
-longer bypasses Gatekeeper for unsigned applications on macOS 15 Sequoia. The path that works is to
-attempt to open, be refused, then allow it under System Settings → Privacy & Security → "Open Anyway" —
-or `xattr -dr com.apple.quarantine /Applications/Luma.app`. Documenting the old gesture would produce
-exactly the outcome this step is trying to avoid: a tester concluding the build is broken.
-
-Signing is deliberately **not** part of step 3's definition of done: unsigned artifacts carry the OS
-warning, and someone choosing to download one is choosing that. Notarization and code-signing certs can
-be revisited if the audience ever makes them worth their recurring cost.
-
-## Cross-refs
-
-- [`security-and-deployment-model.md`](security-and-deployment-model.md) — the security profiles these map
-  to, and the **transport-security policy** (HTTP-permitted-only-when-passwordless-and-no-aggregator, the
-  `SESSION_COOKIE_SECURE` gate, why browser-side crypto is not an escape hatch from TLS).
-- [`optional-env-and-layered-config.md`](optional-env-and-layered-config.md) — the layered config these
-  builds configure themselves through, and the mDNS follow-up Shape A depends on.
+**Signing is deliberately not part of done.** Unsigned artifacts carry the OS warning, and someone
+choosing to download one is choosing that. Notarization and code-signing certificates can be revisited
+if the audience ever makes them worth their recurring cost.

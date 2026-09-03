@@ -126,7 +126,15 @@ recovery and compromise response.
 
 ### B. Deployment, packaging & operations *(new)*
 
-One audience — someone installing, running, packaging, or diagnosing — currently reading four files.
+**[Written 2026-09-02 as [`operations.md`](operations.md) — and the open decision below is settled: B
+*is* two topics, and one of them already existed.]** [`releasing.md`](releasing.md) was already a
+question-organized maintainer doc owning building, the two distribution forms, macOS signing, CI and the
+release checklist. Duplicating that into a new file would have created exactly the drift these rules
+exist to prevent, so B became the **running** half only: the shapes, binds, data location, restore as a
+destructive operation, and diagnosis. The survey's "four files" also missed a third live topology —
+`docker-compose.yml` — which `operations.md` now covers.
+
+One audience — someone installing, running, packaging, or diagnosing — was reading four files.
 
 Topics: the two shapes and why topology is detected rather than chosen · what each server binds to and
 why · distribution forms (the rule is per-form, not per-OS) and the data-directory resolution · the
@@ -203,11 +211,11 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | --- | --- | --- |
 | `security-and-deployment-model.md` | ✅ Ingested 2026-09-02 | **A** (all), **B** (topology, transport) · **residual stub kept**: build-phase technical detail still awaiting relocation to architecture |
 | ~~`pre-auth-security-ui.md`~~ | ✅ Ingested 2026-09-02, deleted | **A** (identity/perimeter surfaces) |
-| `optional-env-and-layered-config.md` | Ingest | **B** (config layers, env core), **A** (session-secret bootstrap, `.env` provider retirement) |
+| ~~`optional-env-and-layered-config.md`~~ | ✅ Ingested 2026-09-02, deleted | **B** (config layers, env core), **A** (`.env` provider retirement); mechanism was already in architecture |
 | `list-virtualization.md` | Ingest | **C** (windowing rules, the unwindowed case and its obstacles) |
 | `i18n-display-formatting.md` | Split | data-model (one ledger currency; why currency is not `ui_preference` and a date format is), ui-patterns (formatting) · *open:* number/date half |
 | `account-type-as-rule-criterion.md` | Split | data-model (account type as rule scope, precedence, matcher identity) · *open:* filtering/search, the query grammar |
-| `deployment-topologies.md` | Split | **B** (nearly all), **A** (passkeys make the host name load-bearing) · *open:* Shape B step 3, Shape A |
+| `deployment-topologies.md` | ✅ Split 2026-09-02 (300 → 57) | **B** (nearly all), **A** (passkeys make the host name load-bearing), releasing (macOS/build detail) · *file keeps:* Shape A, Shape B step 3's remainder |
 | `backup-restore-scope-and-secrets.md` | Split | data-model (Backups), **A** (secrets custody, risk model, slot policy), **B** (restore semantics, identity reconciliation), **C** (streaming, memory) · *open:* sectioned artifact, `backup_recipient`, incremental chain |
 | `dashboard-reporting.md` | Split | ui-patterns (**charts** — the bulk), data-model (reporting semantics, cash-flow exclusion) · *open:* `cash_date`, trend bucketing, Trends-tab audit |
 | `transaction-attachments.md` | Split | data-model (documents), ui-patterns, **B** (documents phase of restore) · *open:* tiers 2–3 |
@@ -224,7 +232,7 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
 | `cleanup-pass.md` | Split | ui-patterns (tooltip migration, press-scoped labels), **D** (console cleanliness, dead code) |
 | `import-dedupe-followups.md` | Survey | data-model (dedupe tiers, the re-measurement method) |
 | `ofx-direct-connect.md` | Survey · **A-slice relocated 2026-09-02** | **A** (the threat-model consequence — the *rule* moved, the OFX-specific facts stayed and now point at it), building-a-connector |
-| `database-diagnostics.md` | Survey | **B** (diagnostics), data-model (the invariants a checker would assert) |
+| `database-diagnostics.md` | Survey · **B slot filled 2026-09-02** | **B** (what a structural check does *not* cover — recorded in B's *Obstacles*; the build itself is B's *Open*), data-model (the invariants a checker would assert) |
 | `vault-passphrase-recovery.md` | Split · **A-slice ingested 2026-09-02** | **A** (recovery, reset as compromise response — done; it completed 2026-09-01, so rule 8 no longer applied) · *file kept* for its two reversals and one owed test |
 | `reimbursable-expenses.md` | Survey | data-model, **E** |
 | `test-coverage-gaps.md` | Survey | **D** |
@@ -245,7 +253,8 @@ Disposition: **Ingest** (fully disposable) · **Split** (ingest the settled half
    **Done 2026-09-02** — settled in A and written up in [`../AGENTS.md`](../AGENTS.md) under
    *Documentation Consistency*, so it binds every future topic rather than living only as an example.
 2. ~~**A — Security model.**~~ **Done 2026-09-02** — [`security-model.md`](security-model.md).
-3. **B — Deployment & operations.** Mostly a merge of three files already written to a high standard.
+3. ~~**B — Deployment & operations.**~~ **Done 2026-09-02** — [`operations.md`](operations.md), the
+   running half; [`releasing.md`](releasing.md) keeps the building half.
 4. **ui-patterns charts topic.** Largest single body of homeless material outside A and B.
 5. **C — Scale & limits.**
 6. **E — Mechanism index.** Small; cheap once splits and multi-payment are ingested.
@@ -268,6 +277,8 @@ file that no longer exists, so the entry records the path rather than a project 
 | --- | --- | --- | --- |
 | `docs/backlog/security-and-deployment-model.md` | 2026-09-02 | **A** (`security-model.md`) — threat model, perimeter, custody, enrollment/rotation, transport, all rejected shapes | **Partly** — reduced 917 → ~250 lines. The build-phase log stays until its facts are relocated to `architecture.md`; that pass is the open decision below. Cited from code by phase number (`database.py`, `providers/config.py`, `routers/providers.py`) |
 | `docs/backlog/pre-auth-security-ui.md` | 2026-09-02 | **A** (identity & the network perimeter) | **No** — deleted. Past the shipped Settings forms it was a work log of what a lint cleanup had removed |
+| `docs/backlog/optional-env-and-layered-config.md` | 2026-09-02 | **B** (`operations.md`) — layer order, env core, per-file overrides, rejected alternatives; **A** — why app credentials left `.env` | **No** — deleted. The mechanism was already in `architecture.md` → *Configuration layers*; its one unbuilt follow-up (mDNS) moved to B's *Open* |
+| `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
 
 ## Open decisions
 
@@ -279,8 +290,11 @@ Expected to fall out of writing the sections they belong to, rather than needing
   thing keeping that file alive. Note that several code comments cite it **by phase number**
   (`database.py` migrations v18/v20, `providers/config.py`, `routers/providers.py`), so the pass has to
   repoint them rather than merely move the prose.
-- **Whether B splits into two topics** (packaging/distribution versus running/diagnosing). Decide when
-  writing it; the audiences overlap but the questions may not.
+- ~~**Whether B splits into two topics**~~ — **settled 2026-09-02: yes, and the packaging half already
+  existed.** `releasing.md` covers building and distributing to a standard that would only have been
+  damaged by a second copy, so B was written as the running half alone and links across. The audiences
+  do overlap; the questions do not, and the split falls on *do I need a build?* — nothing in
+  `operations.md` does, nothing in `releasing.md` is needed to run one.
 
 ## Costs the survey did not price
 

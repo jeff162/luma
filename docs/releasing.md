@@ -3,6 +3,10 @@
 Producing the downloadable artifacts, and cutting a release from them. This is maintainer territory:
 nothing here is needed to *use* Luma (see the README) or to *work on* it (see `CONTRIBUTING.md`).
 
+**This is the building half.** Running what comes out of it — the topologies, what each binds to, where
+the data lives, restore, and diagnosing — is [`operations.md`](operations.md). The split falls on *do I
+need a build?*: nothing there does, and nothing here is needed to run one.
+
 ## The two distribution forms
 
 `scripts/build_desktop.py` produces a single executable with the Python runtime, the backend and the
