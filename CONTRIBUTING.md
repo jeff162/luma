@@ -336,6 +336,9 @@ If you need to install or refresh the hook manually, run:
 That hook does not run the full frontend build or Playwright suite. It checks
 only staged files:
 
+- **every** staged file runs `scripts/check-personal-data.js` — a real account name or card
+  last-4 leaks the same from a doc or a fixture as from source, so this one is not scoped by
+  path
 - staged `frontend/*` files run `frontend/scripts/check-comments.js`
 - staged `backend/*.py` files run `backend/scripts/check_comments.py` (through
   `scripts/run_backend_comment_check.js`, which finds the right Python on each
@@ -364,7 +367,48 @@ reason makes it correct. `backend/tests/test_timestamp_guard.py` pins both
 halves; it is itself skipped by path, since a test for a lint rule has to
 contain the thing the rule forbids.
 
-You can run the same combined check manually from `frontend/`:
+### The personal-data guard
+
+`scripts/check-personal-data.js` keeps real account names, institutions and card last-4s belonging
+to whoever runs the repo out of tracked files — the rule in `docs/collaboration-notes.md` (what to
+keep out of UI copy, comments and fixtures), made enforceable rather than remembered.
+
+**Its term list is deliberately not in the repository.** A committed denylist would *be* the
+disclosure: one labelled, greppable place naming every bank and last-4 it exists to protect. The
+list therefore lives in `data/personal-data-terms.txt` (gitignored), and the script is the only
+public half. Three behaviours follow, and the middle one is the point:
+
+- **No list** → the check prints a notice and passes. That is correct on any clone that is not the
+  data owner's, and in CI.
+- **An empty list** → the check **fails**. An empty list passes everything, so silence there would be
+  indistinguishable from a clean run.
+- Every run prints the term count, so "checked nothing" is a visible line rather than a clean exit.
+
+Build or refresh the list from a database you **name explicitly**:
+
+```bash
+python3 scripts/refresh-personal-data-terms.py <path-to-the-real-database>
+python3 scripts/refresh-personal-data-terms.py --dry-run <path>   # print, write nothing
+```
+
+The path is an argument and never discovered from configuration. Reading whatever `.env` currently
+points at is the failure this design exists to avoid: with a test database configured, the refresh
+would harvest fabricated names, the guard would match nothing, and the whole chain would report
+success while checking for the wrong strings.
+
+Terms are merged, never replaced, so an entry added by hand after a leak is found in practice
+survives every later refresh. Only card last-4s and multi-word names are added outright — both are
+specific enough that a match is a real finding. Bare words out of account names are written as
+commented-out `# candidate:` lines to accept by hand, because the words in real account names
+include ones this repo uses legitimately ("Bridge" is SimpleFIN's own term), and a noisy guard is
+one that gets switched off. Declining a suggestion is remembered.
+
+When the guard fires, replace with fabricated values: `docs/collaboration-notes.md` names the
+vocabulary, and the repo already uses Fablecard / Harborline / Riverstone / Northgate with invented
+masks. `data/personal-data-allow.txt` (also untracked) takes path prefixes for a known leftover.
+
+You can run the same combined checks manually from `frontend/` — `npm run lint` is eslint plus both
+comment checks, the timestamp guard and the personal-data guard:
 
 ```bash
 cd frontend

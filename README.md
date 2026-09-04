@@ -2,59 +2,64 @@
 
 > Understand where the money actually went.
 
-Luma is a local-first personal finance tool. It collects transaction data from banks, cards and CSV exports, keeps it categorized without demanding constant re-work, and answers one question well: **what was spent, on what, and how does this period compare with the last one.** Luma exists because I was a long term Mint user and Monarch has some annoying issues and I had time so I decided to see if I could build a replacement.
+Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized with a minimal amount of attention, to answer the question: **what was spent, on what, and how does this period compare with others.** Luma exists because Mint is no longer and Monarch has some annoying issues. I had time so I decided to see if I could build a replacement.
 
 ## What Luma is not
 
-Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it just isn’t what I use the app for and so I had no reason to implement them:
+Two features sit at the centre of many personal finance apps, and Luma has neither. This isn’t a philosophical decision, it's just that I had no reason to implement them:
 
 - **No budgeting.** Nothing to allocate, no envelopes, no per-category targets, no alert when a category runs hot.
 
-- **No net worth tracking.** Luma holds transactions, not balances — no asset and liability rollup, no account values over time. 
+- **No net worth tracking.** Luma holds transactions, not balances — no asset and liability rollup, no account values over time.
 
-- **Investment accounts**. Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future and more complete support for Investment accounts may be added.
+Anyone whose main requirement is either of these will be better served by some other app, or they can spend the time to add them to Luma if that feels worthwhile.
 
-Anyone whose main requirement is either of those will be better served by some other app, or they can spend the time to add them to Luma if that feels worthwhile. 
+**Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
 ## What Luma is good at
 
-- **Showing where the money went** — spending by category, merchant, account or owner, with drill-down from any total to the individual transactions behind it, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
+- **Showing where money went** — spending by category, merchant, account or owner, with drill-down to the individual transactions, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
 
-- **Comparing periods** — the same breakdown across months or years, so a change in spending is visible rather than inferred. Year-over-year and trend comparisons are built in.
+- **Comparing periods** — the same breakdown across months or years, so a change in spending is visible. Year-over-year and trend comparisons are built in.
 
-- **Getting data in without ceremony** — a CSV from any bank, several files at once, or a connected data source. Column mapping is remembered per source, so the second import of the same export is a drop-and-go. Amazon order history can be imported to itemize Amazon spending down to the individual items in an order.
+- **Getting data in without ceremony** — a CSV file or a connected data source (e.g. SimpleFIN Bridge). Amazon order history can be imported via CSV files to itemize Amazon spending down to the individual items in an order.
 
-- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt is stored and viewable just the same; turning that one into searchable text, or any document into itemized lines, is opt-in rather than automatic.
+- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed just the same. Currently transaction detail is only extracted from plain text such as email receipts.
 
-- **Re-importing without fear.** Duplicate detection runs across every source, so overlapping exports, a re-downloaded statement, or the same card arriving from two places will not double-count. No pre-planning of import windows is needed.
+- **Re-importing just works.** Duplicate detection runs across every source, so overlapping exports, a re-downloaded statement, or the same card arriving from two places will not double-count. No pre-planning of import windows is needed.
 
-- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be created from a categorization already made rather than authored cold.
+- **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data in addition to being created as part of categorizing transactions.
 
 - **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule.
 
 - **Searching the history** — filter and search across the whole ledger, including exclusion filters and cross-cutting tags.
 
+- **Reimbursables** — pair expenses and income which don't represent spending to exclude them from the totals. Also allows for an expense to be created that expects future reimbursement and can generate reminders if it appears to be late.
+
 ## Also included
 
 - **Multiple owners** — track personal and shared finances across several people in one ledger, with
   owner as a reporting axis rather than a separate set of books.
+
 - **Backup and restore** — export the data anywhere, with optional encryption under a key of the
   user's choosing.
+
 - **Tasks** — a running list of what needs attention, such as transactions nothing has categorized.
-- **Accounts** — create, rename and merge accounts, whether they arrived from a file, a connection, or
-  by hand.
+
+- **Multiple users** — screen layout and preferences stored on a per-user basis.
+
 - **Runs locally or on the network** — a single-user desktop install, or a machine on the LAN that
   other devices reach, with a sign-in perimeter for the second case.
 
 ## How it works
 
-The first run creates a local user and offers a choice: load the demo data, import a CSV, or connect a data source. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
+The first run creates a local user and offers a choice: load the demo data, import a CSV, connect a data source or do none of the above. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
 
 Two things then drive everything: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags and rules all exist to make those two better, and each can be used or ignored depending on whether it is useful:
 
-- **Categories** group transactions for reporting — start from a curated starter set or build a tree from scratch.
+- **Categories** group transactions for reporting — start from a curated starter set or build a tree from scratch or from existing transaction data.
 
-- **Tags** are cross-cutting labels (*Essential Expenses*, *Kids*, *Personal Spending, Rental expenses*) that span accounts, owners and categories, and drive their own reports.
+- **Tags** are cross-cutting labels (*Essential Expenses*, *Kids*, *Personal Spending*, *Rental expenses*) that span accounts, owners and categories, and drive their own reports.
 
 - **Rules** pair matching criteria with actions: set the merchant name, assign a category or tag, or mark the transaction as part of a recurring series.
 
@@ -68,7 +73,7 @@ The same overview is available inside the application under **Help → How Luma 
 
 - **Curation compounds.** Effort spent categorizing should keep paying off on data that has not arrived yet, which is what rules are for.
 
-- **Correctable where it is visible.** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it.
+- **Correctable where it is visible.** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it or the editor which allows modifications.
 
 - **Reversible by default.** Destructive operations are rare, announced, and reversible where they exist at all.
 
@@ -80,7 +85,7 @@ Luma is local-first by design, and the data stays local:
 
 - **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how it is used.
 
-- **Connections happen only when the user asks** — the app reaches the network only for user driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
+- **Connections happen only when the user asks** — the app reaches the network only for user-driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
 
 - **Backups stay local** — exports are saved wherever the user wishes and can be encrypted if desired with a user supplied key.
 
@@ -90,15 +95,21 @@ What comes in, what stays and what leaves are all the user's decision. Luma is b
 
 Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
 
-- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the sensitive artifacts to protect. They should be kept off shared or cloud-synced locations; anything that leaves the machine should use the **encrypted backup** (protected with a user-supplied key).
+- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the sensitive artifacts to protect. They should be kept off shared or cloud-synced locations; consider using the **encrypted backup** (protected with a user-supplied key) for anything that leaves the machine if you feel it is sensitive data.
 
 - **The optional sign-in password is network-access control, not disk encryption.** It governs who on the local network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk.
 
-- **Data-source tokens are the one secret Luma encrypts at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — it may or may not be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources, and nothing else — the ledger itself is untouched by it.
+- **Data-source tokens are one of the secrets Luma encrypts at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — it may or may not be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources — the ledger itself is untouched by it.
 
-- **A household shares one vault, and each person opens it their own way.** A user requests access to the vault by setting a vault passphrase on an install that already has a vault password. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction. Vault passphrases are best kept in a password manager because a) they are complex and b) losing one means the vault needs to be rebuilt (transactions are not lost, just access to the data providers). **Vault settings** lists everyone who can open the vault, and access can be removed there. **Replace vault key** exists for when the concern is that a key was exposed, since removing access alone does not change the key someone could already read. A **passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need an HTTPS connection to a named host; a passphrase works everywhere.)
+- **A household shares one vault, and each person opens it their own way.** A user requests access to the vault by setting a vault passphrase on an install that already has a vault passphrase. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction.
 
-- **If a database or backup is lost or copied by someone else: The transactions it holds should be treated as exposed. The one action that helps is revoking every connected data source which stops the copied credentials, if they can be decrypted, from pulling anything new. Luma revokes the credentials for a Plaid account when the account is disconnected in the app but SimpleFIN tokens need to be revoked using the SimpleFIN Bridge web page. Revoke access for Luma and create a new token. Do this even though the credentials in the lost copy of the database are encrypted. They are protected only by the vault passphrase’s resistance to an offline attack and revoking makes that question moot. In addition the security key needs to be regenerated and the passphrase(s) changed because they will be used to protect the new security credentials and it is possible that the stolen ones get cracked. That would only be a problem if the person with the stolen database then accessed the new database but changing them avoids this issue entirely.**
+  - **Vault passphrases** are best kept in a password manager: they are complex, and losing every way in means the vault has to be rebuilt (transactions are not lost, just access to the data providers).
+  - **Vault settings** lists everyone who can open the vault, and access can be removed there.
+  - **Replace vault key** exists for when the concern is that a key was exposed, since removing access alone does not change the key someone could already read.
+  - **A passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need an HTTPS connection to a named host; a passphrase works everywhere.)
+  - **A recovery code** can also be generated. It is worth keeping somewhere the vault passphrase is not — stored together in one password manager, losing access to the manager loses both, and while the manager is available the code adds nothing the passphrase does not already do. Printed, or kept in separate secure storage, is what makes it useful to have. It is shown once, and using it issues a replacement.
+
+- **If a database or backup is lost or copied by someone else:** The transactions it holds should be treated as exposed. The one action that helps is revoking Luma's access at each of the connected data sources, which stops the copied credentials, if they can be decrypted, from pulling anything new. Luma revokes the credentials for a Plaid account when the account is disconnected in the app; SimpleFIN tokens need to be revoked using the SimpleFIN Bridge web page. Revoke the access token created for Luma and create a new one. Do this even though the credentials in the lost copy of the database are encrypted. They are protected only by the vault passphrase’s resistance to an offline attack and revoking makes that question moot. In addition, the vault key needs to be regenerated and the passphrase(s) changed because they will be used to protect the new credentials and it is possible that the stolen ones get cracked. Changing them avoids the issue of the person with the stolen database accessing the new database.
 
 - **Revoking works differently per provider, and the app says which applies.** Where a provider supports it (Plaid), **Disconnect** revokes the credential at the provider and the access genuinely ends. Some providers publish no way for another app to revoke a credential (SimpleFIN); there, Disconnect removes only Luma's copy, and revoking means signing in to the provider and doing it there. The disconnect confirmation states which of the two is about to happen, so a connection is never left live while appearing closed.
 
@@ -161,17 +172,15 @@ Luma starts a local server and opens in the default browser. **It listens on loo
 nothing off the machine can reach it. Launching it again while it is already running opens a new tab
 against the existing instance rather than starting a second copy.
 
-Nothing needs configuring first. Every setting has a working default, and the values that must persist
-— the session signing secret and the session cookie name — are generated on first run and kept in the
-control database. Everything relevant to everyday use is configured in the app under **Settings**,
-including data-source credentials, which are stored in the encrypted vault.
+Nothing needs configuring first. Every setting has a working default, and the values that must persist are generated on first run and kept in the
+control database. Everything relevant to everyday use is configured in the app under **Settings**.
 
 From there the first run is as described in *How it works* above. **Settings → Configuration** reports
 every effective setting and which layer supplied it.
 
 ## Running from source
 
-Running from a checkout needs Python 3.12 and Node.js 20+, and is the arrangement for working *on*
+Running from a checkout needs Python 3.12 or 3.13 and Node.js 20+, and is the arrangement for working *on*
 Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project
 conventions.
 
@@ -218,12 +227,12 @@ In the application itself, **Help → How Luma works** covers the same model fro
 
 ## Contributing
 
-Luma is early-stage and evolving quickly. Bug reports, feedback and pull requests are welcome — open an
+Luma is early-stage and evolving. Bug reports, feedback and pull requests are welcome — open an
 issue to discuss an idea or a defect, and see [CONTRIBUTING.md](CONTRIBUTING.md) before submitting
 changes. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Two things worth knowing before proposing a feature: Luma deliberately has **no budgeting and no net
-worth tracking** (see *What Luma is not* above), and much of the obvious work is already designed and
+worth tracking** (see *What Luma is not* above), and there is a set of projects already designed and
 queued in [docs/backlog/](docs/backlog/) — commenting on an existing plan is more useful than a new
 issue.
 
@@ -232,4 +241,3 @@ issue.
 This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
 
 See the [LICENSE](LICENSE) file for full details.
-

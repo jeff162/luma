@@ -1,6 +1,7 @@
 # ── Working storage ──────────────────────────────────────────────────────────
 # Local storage for files not to be committed (eg. db backups, private
-# keys, test scripts). Not created by the system.
+# keys, test scripts). The app never writes here; a developer tool may create it
+# (scripts/refresh-personal-data-terms.py keeps its term list in data/).
 data/
 
 # ── Environment & secrets ────────────────────────────────────────────────────
