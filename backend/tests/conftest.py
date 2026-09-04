@@ -19,6 +19,15 @@ Only a *fresh* build is served from the template. An existing database being re-
 against the default path, delegates to the real builder, so re-init semantics and anything that
 depends on the genuine migration walk are untouched. The migration tests build their databases by
 hand (raw connection + `run_migrations`) and never route through here at all.
+
+**Second concern, same file for the same reason: nothing in the suite may touch the configured
+databases.** A test that forgets to repoint a path does not fail — it silently borrows whatever the
+developer is running against, which is a real ledger and a real vault. That is invisible on the machine
+where the test is written and only shows up on a clean checkout, where the borrowed database does not
+exist and the failure names a missing table rather than the missing isolation. The guard below turns
+the first *open* of a configured path into a hard error, at the moment it happens and on the machine
+that can fix it. It refuses rather than redirecting to a throwaway: a redirect would make an
+unisolated test pass, which is how the leak stayed invisible in the first place.
 """
 
 import atexit
@@ -31,6 +40,41 @@ from backend.db import control_database, database
 
 _real_init_db = database.init_db
 _real_init_control_db = control_database.init_control_db
+
+# The configured paths as they stood before any test could repoint them. Captured rather than read
+# live, because the harnesses legitimately reassign `DB_PATH` / `CONTROL_DB_PATH` to their own temp
+# files, and it is the original values that must stay untouched.
+_AMBIENT_DATA_PATH = str(Path(database.DB_PATH))
+_AMBIENT_CONTROL_PATH = str(Path(control_database.CONTROL_DB_PATH))
+
+
+def _refuse_ambient(kind: str, path: str):
+    raise RuntimeError(
+        f"Test opened the configured {kind} database at {path}. Tests must never touch it — on a "
+        f"developer machine that file holds real data. Point the test at a temp file: "
+        f"`set_current_db_path(...)` plus `init_db(...)` for the data DB, and for the control DB "
+        f"reassign `control_database.CONTROL_DB_PATH` and call `init_control_db()`, restoring the "
+        f"original in teardown (see `backend/tests/_api_client.py`)."
+    )
+
+
+_real_get_db = database.get_db
+_real_get_control_db = control_database.get_control_db
+
+
+def _guarded_get_db(db_path: str | None = None):
+    resolved = database._normalize_db_path(db_path)
+    if resolved == _AMBIENT_DATA_PATH:
+        _refuse_ambient("data", resolved)
+    return _real_get_db(db_path)
+
+
+def _guarded_get_control_db():
+    resolved = str(Path(control_database.CONTROL_DB_PATH))
+    if resolved == _AMBIENT_CONTROL_PATH:
+        _refuse_ambient("control", resolved)
+    return _real_get_control_db()
+
 
 _template_dir = Path(tempfile.mkdtemp(prefix="luma-schema-template-"))
 atexit.register(shutil.rmtree, _template_dir, ignore_errors=True)
@@ -82,11 +126,13 @@ def _serve_from_template(kind: str, build, target: str) -> None:
 
 
 def _fast_init_db(db_path: str | None = None):
-    # No explicit path means the caller wants the configured default database; that is never a
-    # test's throwaway file, so it goes to the real builder untouched.
+    # No explicit path means the configured default database, which is never a test's throwaway file.
+    # Delegating lets the real builder resolve it, where the guard on `get_db` refuses it.
     if db_path is None:
         return _real_init_db(db_path)
     resolved = database._normalize_db_path(db_path)
+    if resolved == _AMBIENT_DATA_PATH:
+        _refuse_ambient("data", resolved)
     if not _is_fresh_build(resolved):
         return _real_init_db(db_path)
     _serve_from_template("data", lambda path: _real_init_db(str(path)), resolved)
@@ -96,6 +142,8 @@ def _fast_init_control_db():
     # The control DB's path is module state rather than an argument, so it is read at call time —
     # the API harness repoints it per test before calling.
     resolved = control_database.CONTROL_DB_PATH
+    if resolved and str(Path(resolved)) == _AMBIENT_CONTROL_PATH:
+        _refuse_ambient("control", resolved)
     if not resolved or not _is_fresh_build(resolved):
         return _real_init_control_db()
 
@@ -112,3 +160,8 @@ def _fast_init_control_db():
 
 database.init_db = _fast_init_db
 control_database.init_control_db = _fast_init_control_db
+
+# Patched at conftest import time for the same reason the fast path is: the application modules bind
+# these by `from ... import`, and pytest imports this file before any of them.
+database.get_db = _guarded_get_db
+control_database.get_control_db = _guarded_get_control_db

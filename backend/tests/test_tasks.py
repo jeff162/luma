@@ -19,21 +19,32 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 
+from backend.db import control_database
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.tasks import dismiss_task, get_tasks, restore_task
 
 
 class TasksFixtureTestCase(unittest.TestCase):
-    """One account, one category, and a private database — shared by the count and dismissal cases."""
+    """One account, one category, and a private pair of databases — shared by the count and dismissal
+    cases.
+
+    Both databases, not just the ledger: a task list built for a `Request` reaches the vault to decide
+    whether to nag about access, so a fixture that repoints only the data DB reads whatever control DB
+    the developer is running against.
+    """
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "tasks.db"
+        self._control_db_path = control_database.CONTROL_DB_PATH
+        control_database.CONTROL_DB_PATH = str(Path(self.tempdir.name) / "control.db")
+        control_database.init_control_db()
         init_db(str(self.db_path))
         self.account = self._insert_account()
         self.group = self._insert_category()
 
     def tearDown(self):
+        control_database.CONTROL_DB_PATH = self._control_db_path
         self.tempdir.cleanup()
 
     @contextmanager

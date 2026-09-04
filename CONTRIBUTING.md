@@ -161,7 +161,15 @@ running the suite locally under `unittest` silently skipped what CI would run. W
 pytest collects both.
 
 Tests use isolated SQLite files under `tempfile.TemporaryDirectory()`, so they never touch the live
-database and are safe to run with the backend still up. If a new dependency lands, re-run
+databases and are safe to run with the backend still up. **Both** databases have to be repointed, not
+just the ledger: anything built for a `Request` can reach the control DB, and the two paths are set
+separately — `set_current_db_path` for the data DB, the `control_database.CONTROL_DB_PATH` module
+attribute for the control one. `backend/tests/_api_client.py` does both and is the pattern to copy.
+
+Isolation is enforced rather than assumed. `backend/tests/conftest.py` refuses any open of a
+*configured* database path and names the fix in the error, because a test that skips the isolation
+does not fail on a machine where those databases exist — it silently reads the developer's own data,
+and only a clean checkout turns that into a visible failure. If a new dependency lands, re-run
 `start_backend.sh` once to refresh the venv first.
 
 For larger backend changes, also start the app and exercise the affected flow
