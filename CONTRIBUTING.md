@@ -63,6 +63,12 @@ npm install
 npm run dev
 ```
 
+`npm install` reports advisories against the build and test tooling — vite, vitest, esbuild and
+eslint's dependencies. These are devDependencies and none of them reaches a user: the product is a
+static bundle served by the backend, so the dev server and the test runner those advisories concern
+exist only on a developer machine. The runtime dependencies are the six in `dependencies`, and those
+are the ones an advisory has to be acted on for.
+
 No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the working directory). A
 repo-root `.env` is the override mechanism, and is useful for running against different databases (test v. prod) or different instances running on the same box:
 `BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
@@ -334,6 +340,12 @@ lands. `docs/backlog/lint-and-tooling.md` holds the two deferred linter projects
 
 Running `npm install` in `frontend/` installs the repo pre-commit hook via the
 frontend `postinstall` script.
+
+Because that runs unattended on a machine whose owner did not ask for it, it declines rather than
+insists: no git working directory means it skips and says so instead of failing the install, a
+`pre-commit` hook it did not write is left in place with the manual command printed, and
+`core.hooksPath` is honored when set. An install run with `--ignore-scripts` therefore leaves no hook
+at all — run the script by hand if the checks are wanted.
 
 If you need to install or refresh the hook manually, run:
 

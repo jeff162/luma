@@ -3,8 +3,8 @@
 
 /* eslint-disable react-refresh/only-export-components -- App component + notifyAccountsChanged broadcast helper live together as the app-level shell */
 
-import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
-import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef, Component, useMemo } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
@@ -19,6 +19,9 @@ import {
   watchBackendLiveness,
 } from './lib/backendLiveness.js'
 import { applyLedgerCurrency } from './lib/moneyDisplay.js'
+import { safeStartupRoute } from './lib/startupRoute.js'
+import AppRoutes, { RouteLoadingFallback } from './AppRoutes.jsx'
+import { ROUTE_PREFETCHERS } from './lib/routeChunks.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
 import DataLocationLine from './components/DataLocationLine.jsx'
@@ -256,52 +259,6 @@ const NAV_LINKS = [
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
 const DATA_PROVIDER_STARTUP_ROUTE = '/accounts'
-// Route chunks come from the same server as the data, and the browser's module loader is not something
-// `lib/api.js` can see — so without this a stopped backend breaks every not-yet-loaded page with the
-// liveness watch none the wiser. Reported and re-thrown unchanged: `lazy()` still needs the rejection,
-// and the prefetcher still discards it.
-function routeChunk(load) {
-  return () => load().catch(error => {
-    noteRequestFailure(error)
-    throw error
-  })
-}
-
-const loadDashboardPage = routeChunk(() => import('./pages/Dashboard.jsx'))
-const loadTransactionsPage = routeChunk(() => import('./pages/Transactions.jsx'))
-const loadCategoriesPage = routeChunk(() => import('./pages/Categories.jsx'))
-const loadRulesPage = routeChunk(() => import('./pages/Rules.jsx'))
-const loadAccountsPage = routeChunk(() => import('./pages/Accounts.jsx'))
-const loadSettingsPage = routeChunk(() => import('./pages/Settings.jsx'))
-const loadImportExportPage = routeChunk(() => import('./pages/ImportExport.jsx'))
-const loadImportRuleSuggestionsPage = routeChunk(() => import('./pages/ImportRuleSuggestions.jsx'))
-const loadTasksPage = routeChunk(() => import('./pages/Tasks.jsx'))
-const loadRecurringPage = routeChunk(() => import('./pages/Recurring.jsx'))
-const loadHelpPage = routeChunk(() => import('./pages/Help.jsx'))
-const Dashboard = lazy(loadDashboardPage)
-const Transactions = lazy(loadTransactionsPage)
-const Categories = lazy(loadCategoriesPage)
-const Rules = lazy(loadRulesPage)
-const Accounts = lazy(loadAccountsPage)
-const Settings = lazy(loadSettingsPage)
-const ImportExport = lazy(loadImportExportPage)
-const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
-const Tasks = lazy(loadTasksPage)
-const Recurring = lazy(loadRecurringPage)
-const Help = lazy(loadHelpPage)
-const ROUTE_PREFETCHERS = [
-  loadDashboardPage,
-  loadTransactionsPage,
-  loadCategoriesPage,
-  loadRulesPage,
-  loadAccountsPage,
-  loadSettingsPage,
-  loadImportExportPage,
-  loadImportRuleSuggestionsPage,
-  loadTasksPage,
-  loadHelpPage,
-]
-
 // Severity-to-color mapping for the nav Tasks badge. Mirrors the palette used by
 // `SEVERITY_COLORS` in Tasks.jsx so the badge in the nav reads as the same severity
 // the task cards on the page render with. Ordered by ascending urgency so that
@@ -494,19 +451,6 @@ function DataProviderInfoButton({ label = 'data providers' }) {
         </div>
       ) : null}
     </span>
-  )
-}
-
-function RouteLoadingFallback() {
-  return (
-    <div style={{
-      minHeight: '100%',
-      display: 'grid',
-      placeItems: 'center',
-      padding: 24,
-    }}>
-      <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading page...</div>
-    </div>
   )
 }
 
@@ -1167,7 +1111,7 @@ export default function App() {
       setBootPreferenceSubjectId(nextPreferenceSubjectId)
       setBootPreferences(prefResp?.preferences || {})
       const startupRoute = String(prefResp?.preferences?.[STARTUP_ROUTE_PREFERENCE_KEY] || '').trim()
-      const validStartupRoute = startupRoute && startupRoute.startsWith('/') ? startupRoute : ''
+      const validStartupRoute = safeStartupRoute(startupRoute)
       savedStartupRouteRef.current = validStartupRoute
       savedStartupRouteSubjectRef.current = nextPreferenceSubjectId
       if (forceFromRoot) {
@@ -2044,26 +1988,7 @@ export default function App() {
                         ) : null}
                         {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
                         <div style={s.content}>
-                          {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
-                    the initial bundle before the user ever visits it. */}
-                          <Suspense fallback={<RouteLoadingFallback />}>
-                            <Routes>
-                              <Route path="/" element={<Dashboard />} />
-                              <Route path="/transactions" element={<Transactions />} />
-                              <Route path="/categories" element={<Categories />} />
-                              <Route path="/rules" element={<Rules />} />
-                              <Route path="/accounts" element={<Accounts />} />
-                              <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
-                              <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                              <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                              <Route path="/import-export" element={<ImportExport />} />
-                              <Route path="/tasks" element={<Tasks />} />
-                              <Route path="/recurring" element={<Recurring />} />
-                              <Route path="/settings" element={<Settings />} />
-                              <Route path="/help" element={<Help />} />
-                              <Route path="/help/:topic" element={<Help />} />
-                            </Routes>
-                          </Suspense>
+                          <AppRoutes />
                         </div>
                       </div>
                     </div>

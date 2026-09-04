@@ -17,7 +17,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import TransactionDetail from '../TransactionDetail.jsx'
 import { api } from '../../lib/api.js'

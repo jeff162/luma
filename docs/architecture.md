@@ -58,7 +58,12 @@ The backend favors explicit SQL and feature-oriented router modules over a heavy
 
 ## Frontend structure
 
-- **`frontend/src/App.jsx`:** app shell, navigation, page routing, and route-level lazy loading for the main screens
+- **`frontend/src/App.jsx`:** app shell — navigation, bootstrap, and everything drawn around the page
+
+- **`frontend/src/AppRoutes.jsx`:** the route table, which path renders which page. Separate from the
+  shell because it is the app's navigation contract: on its own it can be mounted without the shell's
+  bootstrap, auth and preference state, which is what makes the table testable. `lib/routeChunks.js`
+  owns the lazy loaders it and the shell's idle prefetch share
 
 - **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import / Export
 
