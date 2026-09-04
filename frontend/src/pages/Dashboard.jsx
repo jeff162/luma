@@ -1852,6 +1852,9 @@ export default function Dashboard() {
       setTagModeLoading(false)
     })
     return () => { cancelled = true }
+    // `tagModeFetchKey` serializes the report's tag ids and every filter the loader reads, and is null
+    // whenever there is no active report — so it subsumes both `activeTagReport` and the loader's
+    // identity, which would otherwise refetch on any parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, tagModeFetchKey])
 
@@ -1861,6 +1864,10 @@ export default function Dashboard() {
   // notifies the user that something changed so they can rebuild the report deliberately.
   // The user can dismiss for the session (auto-fade or X) or suppress permanently for this
   // preset via "Don't remind me again", which sets dismissedMissingWarning on the record.
+  // Keyed on the report's tag *ids* as well as its identity: editing a saved report's tag set leaves the
+  // id and the suppression flag untouched, and without the set in the key the warning it should raise
+  // (or clear) waits for the next unrelated change to the tag list.
+  const activeReportTagsKey = (activeTagReport?.tagIds || []).join(',')
   useEffect(() => {
     if (!activeTagReport || availableTags.length === 0) {
       setMissingTagsToastReportId(null)
@@ -1877,8 +1884,10 @@ export default function Dashboard() {
     const knownIds = new Set(availableTags.map(t => t.id))
     const hasMissing = (activeTagReport.tagIds || []).some(id => !knownIds.has(id))
     setMissingTagsToastReportId(hasMissing ? activeTagReport.id : null)
+    // The three fields read above are keyed individually; the report object's identity churns on every
+    // parent render, so depending on it directly would re-run this on renders that changed nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTagReport?.id, activeTagReport?.dismissedMissingWarning, availableTags])
+  }, [activeTagReport?.id, activeTagReport?.dismissedMissingWarning, activeReportTagsKey, availableTags])
   const [detailTxns, setDetailTxns] = useState([])
   const [detailPeriods, setDetailPeriods] = useState([])
   const [categories, setCategories] = useState([])

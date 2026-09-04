@@ -215,6 +215,10 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
     timerRef.current = setTimeout(onDismiss, TIMEOUT_MS)
 
     return () => { clearTimeout(timerRef.current); clearInterval(intervalRef.current) }
+  // Mount-only: the countdown starts when the toast appears and must not restart when the parent
+  // re-renders. That captures the first `onDismiss`, which is safe because every caller passes a
+  // closer over nothing but a state setter — a callback that read changing state would need this
+  // effect to hold it in a ref instead.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

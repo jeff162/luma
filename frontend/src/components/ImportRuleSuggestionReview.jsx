@@ -1290,6 +1290,9 @@ export default function ImportRuleSuggestionReview({
       }
     })()
     return () => { cancelled = true }
+    // Keyed on which suggestion is open, deliberately not on its contents: the example is what the
+    // suggestion matched when the editor opened, and refetching it as the user edits the criteria would
+    // replace the reference they are editing against.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingSuggestionId])
 

@@ -41,5 +41,6 @@ export const ROUTE_PREFETCHERS = [
   loadImportExportPage,
   loadImportRuleSuggestionsPage,
   loadTasksPage,
+  loadRecurringPage,
   loadHelpPage,
 ]

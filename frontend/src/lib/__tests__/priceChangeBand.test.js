@@ -8,7 +8,7 @@
 // eight-charge series to one.
 
 import { describe, it, expect } from 'vitest'
-import { priceChangeBand } from '../../components/RecurringSignals.jsx'
+import { priceChangeBand } from '../recurringSignals.js'
 
 // A $4 subscription, band pinned at exactly its price, expressed the way the ledger stores it.
 const FIXED = { band_min: -4, band_max: -4, amount: -4.4 }

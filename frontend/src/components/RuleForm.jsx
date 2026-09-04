@@ -497,8 +497,12 @@ const RuleForm = forwardRef(function RuleForm({
   const trimmedClauses = (clauses.length ? clauses : []).map(c => c.trim()).filter(Boolean)
   const hasMerchantMatcher = trimmedClauses.length > 0
   const isMultiClause = trimmedClauses.length > 1
-  // Stable dependency key for effects that must re-run when any clause text changes.
-  const clausesKey = trimmedClauses.join(' ')
+  // Stable dependency key for effects that must re-run when any clause text changes. The separator
+  // has to be one a clause cannot contain: joined on a space, ["whole foods"] and ["whole", "foods"]
+  // key identically, and under a colliding key `buildDraftPayload` keeps its memoized value — so a
+  // re-partitioned clause list would save the *previous* shape. Written as an escape rather than a
+  // literal NUL byte, which is invisible in an editor and makes grep treat this file as binary.
+  const clausesKey = trimmedClauses.join('\u0000')
 
   function updateClauseAt(index, value) {
     setClauses(prev => {
