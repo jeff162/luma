@@ -1056,7 +1056,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Once the two accounts have been merged, the same pair is described as a <strong>possible
-          duplicate in this account</strong> instead &mdash; the merge settled the account question, so
+            duplicate in this account</strong> instead &mdash; the merge settled the account question, so
           the report stops calling it cross-account. The evidence and the three actions below are
           unchanged: a near-miss on text is not conclusive on its own, so such a pair stays in review
           rather than being removed automatically.
@@ -1186,7 +1186,7 @@ export const HELP_TOPICS = [
           restating them &mdash; which is why it asks for confirmation once transactions exist, and why
           changing it back undoes it just as cleanly. Where a connected data source reports that an
           account is held in a <em>different</em> currency, its transactions are <strong>not
-          imported</strong> &mdash; the account mapping screen marks it, and syncs say so rather than
+            imported</strong> &mdash; the account mapping screen marks it, and syncs say so rather than
           leaving the account mysteriously empty. Skipping such an account keeps it out of the way.
         </p>
       </>
@@ -1271,55 +1271,55 @@ export const HELP_TOPICS = [
           extension exports the Amazon order history as CSV files; {APP_NAME} reads the <strong>Orders</strong>{' '}
           file to create one transaction per order in an Amazon account, links
           it to the matching Amazon charge in the transaction ledger, and excludes it from totals so it is not
-          counted twice. 
+          counted twice.
         </p>
         <p><strong>Installation:</strong></p>
         <ul>
-         <li>
-          From a Chrome browser, open this page {' '}
-          <a href="https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi" target="_blank" rel="noreferrer">Chrome Web Store</a>{' '}
-          and install the extension in your browser. (details are on the{' '}
-          <a href="https://github.com/philipmulcahy/azad" target="_blank" rel="noreferrer">AZAD project page</a>).
-         </li><li>
-          The default install is all that is needed &mdash; <em>preview / premium features</em> do not have to be
-          enabled. 
-         </li><li>
-          After you install it, the first time you browse to Amazon.com and log in, it will be running on the
-          top of the page. Eventually it will finish and close. The tool is launched via the extension browser (or the tool icon if
-          pinned to the toobar). 
-         </li>
+          <li>
+            From a Chrome browser, open this page {' '}
+            <a href="https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi" target="_blank" rel="noreferrer">Chrome Web Store</a>{' '}
+            and install the extension in your browser. (details are on the{' '}
+            <a href="https://github.com/philipmulcahy/azad" target="_blank" rel="noreferrer">AZAD project page</a>).
+          </li><li>
+            The default install is all that is needed &mdash; <em>preview / premium features</em> do not have to be
+            enabled.
+          </li><li>
+            After you install it, the first time you browse to Amazon.com and log in, it will be running on the
+            top of the page. Eventually it will finish and close. The tool is launched via the extension browser (or the tool icon if
+            pinned to the toobar).
+          </li>
         </ul>
         <p><strong>Export each year — the Orders file:</strong></p>
         <ol>
           <li>
-            Sign in to Amazon, load the orders page and then open the AZAD extension. 
+            Sign in to Amazon, load the orders page and then open the AZAD extension.
             Check <strong>Show totals in csv downloads</strong>{' '}. If other fields are checked, their
             information will be captured as well.
           </li>
           <li>Select the <strong>Orders</strong> option and click the <strong>year</strong> you want.</li>
           <li>
             A tab may open with a Page Not Found error, something like <i>SORRY we couldn&apos;t find that page, Try searching or go to
-            Amazon&apos;s home page</i>. Just close this tab. The results are on the prior tab where the order page had been opened.
+              Amazon&apos;s home page</i>. Just close this tab. The results are on the prior tab where the order page had been opened.
           </li>
           <li>
             When the table finishes loading, change <strong>Show 10 entries</strong> to <strong>All</strong>,
             then click <strong>download spreadsheet (&apos;.csv&apos;)</strong>.
           </li>
           <li>
-            <em>Optional:</em> The AZAD extension can export both order data and item data. 
-            The <strong>Orders file</strong> provides transaction-level financial totals and 
+            <em>Optional:</em> The AZAD extension can export both order data and item data.
+            The <strong>Orders file</strong> provides transaction-level financial totals and
             the <strong>Items file</strong> adds the following additional detail:
             <p>
-             <ul>
-              <li><strong>Line-Item Granularity:</strong> Expands multi-item purchases into individual rows so products can be analyzed independently.</li>
-              <li><strong>Product Identifiers:</strong> The <strong>ASIN</strong> (Amazon Standard Identification Number) and direct <strong>Item URLs</strong>.</li>
-              <li><strong>Unit Pricing &amp; Quantities:</strong> Shows individual item prices (pre-tax/shipping) and item quantities rather than order totals.</li>
-              <li><strong>Subscription Status:</strong> Includes a <strong>Subscribe &amp; Save</strong> flag for recurring purchases.</li>
-              <li><strong>Categorization:</strong> Includes a <strong>Category</strong> field for item classification.</li>
-             </ul>
-             </p>
-             If this additional information is desired (the per-item pricing can be especially useful) select the <strong>Items</strong> report
-             and run the export again for the same year. Select all rows and save it under a
+              <ul>
+                <li><strong>Line-Item Granularity:</strong> Expands multi-item purchases into individual rows so products can be analyzed independently.</li>
+                <li><strong>Product Identifiers:</strong> The <strong>ASIN</strong> (Amazon Standard Identification Number) and direct <strong>Item URLs</strong>.</li>
+                <li><strong>Unit Pricing &amp; Quantities:</strong> Shows individual item prices (pre-tax/shipping) and item quantities rather than order totals.</li>
+                <li><strong>Subscription Status:</strong> Includes a <strong>Subscribe &amp; Save</strong> flag for recurring purchases.</li>
+                <li><strong>Categorization:</strong> Includes a <strong>Category</strong> field for item classification.</li>
+              </ul>
+            </p>
+            If this additional information is desired (the per-item pricing can be especially useful) select the <strong>Items</strong> report
+            and run the export again for the same year. Select all rows and save it under a
             different name. Import both files.
           </li>
           <li>Repeat for each year you want to bring in.</li>
@@ -1327,9 +1327,9 @@ export const HELP_TOPICS = [
         <p>
           Drop the files on the CSV importer or click on the CSV importer to browse to the files to load. It does not
           matter whether it is the csv importer on the <strong>Import</strong> tab or on the <strong>Amazon</strong> tab.
-          Provide any number of years at one time. The items and orders files are 
-          recognized by their columns and the files are recognized by the date ranges so 
-           upload order and file names do not matter. The tab then shows a
+          Provide any number of years at one time. The items and orders files are
+          recognized by their columns and the files are recognized by the date ranges so
+          upload order and file names do not matter. The tab then shows a
           <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> to import
           into, confirm the <strong>category</strong> used for categorizing the the matched card charges, and map each
           new <strong>payment card</strong> from the import to a payment account. <strong>Import</strong> lights up once every card has an account
@@ -1344,7 +1344,7 @@ export const HELP_TOPICS = [
           for recent purchases.
         </p>
         <p>
-          Re-importing is always safe: files are recognized by <em>content</em>. Orders are keyed using their Amazon 
+          Re-importing is always safe: files are recognized by <em>content</em>. Orders are keyed using their Amazon
           order id, so overlapping exports are handled correctly.
         </p>
       </>
@@ -1447,7 +1447,7 @@ export const HELP_TOPICS = [
             distinct purchases &mdash; the group won’t be flagged again. Merge works per row or in bulk on
             selected rows.
             A merged-away or discarded copy is recoverable from Settings → Trash’s <em>Duplicate
-            transactions</em> section, grouped by the file it came from.</li>
+              transactions</em> section, grouped by the file it came from.</li>
           <li><strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
             uses, in this import’s date range, that no order accounts for. Best-effort, but surfaced for a look:
             these count toward the import&rsquo;s needs-attention total so a stray one (say, a duplicate the
@@ -1495,7 +1495,7 @@ export const HELP_TOPICS = [
       <>
         <p>
           Each Amazon file card carries outcome pills &mdash; <strong>orders</strong>, <strong>items
-          matched</strong>, <strong>already enriched</strong>, <strong>no match</strong>,{' '}
+            matched</strong>, <strong>already enriched</strong>, <strong>no match</strong>,{' '}
           <strong>duplicates</strong>, <strong>payments</strong> &mdash; and clicking one opens the{' '}
           <strong>import detail report</strong> on that view. Every row shows the <strong>source file</strong> it
           came from, which is what makes file mix-ups diagnosable:
@@ -1583,7 +1583,7 @@ export const HELP_TOPICS = [
           <strong> Removed as duplicates</strong> list: it shows each removed row and which account the kept
           copy now lives on. So a Replace or merge done from another file never makes a transaction
           mysteriously disappear. Duplicate charge copies merged away on the <em>Amazon reconciliation
-          report</em> land here too &mdash; for those the kept copy is usually on the <em>same</em> account (a
+            report</em> land here too &mdash; for those the kept copy is usually on the <em>same</em> account (a
           doubled import of one charge), and the removed copy is restorable from Settings → Trash.
         </p>
       </>
@@ -1621,11 +1621,11 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          New transactions usually come in together -- a CSV, a series of CSV files, or a data connection.
-          Some get categorized automatically by rules along the way. It is worth looking the new ones over
-          before trusting them, to catch any mistakes. And now and then a transaction that matched a rule is
-          really an exception that belongs in a different category. So every imported or synced transaction
-          starts out flagged <strong>needs review</strong>, with a small <strong>R</strong> marker in its row.
+          New transactions usually come in batches -- a CSV, a series of CSV files, or a data connection.
+          Some get categorized automatically by rules along the way. It is worth looking over new transactions
+          before trusting them, to catch any mistakes. Sometimes a transaction that matched a rule is
+          an exception that belongs in a different category. As an aid, new transactions
+          start out flagged <strong>needs review</strong>, with a small <strong>R</strong> marker in its row.
         </p>
         <p>
           The flag is separate from whether a transaction is categorized. A rule-categorized transaction can
@@ -1642,15 +1642,13 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          On the Transactions page, the <strong>Needs review</strong> filter narrows the list to the flagged
-          transactions, the same way the uncategorized filter does. Sorting that list by amount deals with the
-          largest transactions first.
+          There is a <strong>Needs review</strong> filter on the Transactions page.
         </p>
         <p>
-          A long historical import flags a lot of transactions at once, and reviewing all of it is usually not
-          worth the trouble. Each imported file’s card on the Import / Export page shows a <strong>to
+          A long historical import flags a lot of transactions at once. If reviewing them is not of interest,
+          each imported file’s card on the Import / Export page shows a <strong>to
             review</strong> count and a <strong>Mark all reviewed</strong> button that clears the whole file in
-          one click. A data connection has no per-file card yet. Its transactions are cleared with
+          one click. A data connection has corresponding per-file card yet. Its transactions are cleared with
           the <strong>Needs review</strong> filter and a bulk <strong>Mark reviewed</strong> instead.
         </p>
       </>
@@ -1764,7 +1762,7 @@ export const HELP_TOPICS = [
       <>
         <p>
           A transaction records that money moved and where it went. It does not record <em>what was
-          bought</em>. For most rows that does not matter. For a car repair, a service invoice, or a
+            bought</em>. For most rows that does not matter. For a car repair, a service invoice, or a
           purchase with a warranty behind it, the useful detail exists only on paperwork
           that {APP_NAME} has never seen -- so it can be attached to the transaction it belongs to.
         </p>
