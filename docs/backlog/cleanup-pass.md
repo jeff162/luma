@@ -82,6 +82,17 @@ renders a `↻ Refresh` next to the bar only when a host passes one (shared half
 Nothing structural — a prop plus per-host one-liners. See the bulk-select section of `ui-patterns.md`
 for the in-place reconcile contract this complements.
 
+## 5. `category_owner_ids` — the client half
+
+The dead `category_owner_ids` query parameter was removed from `/summary/by-group` (it was declared and
+never read; its three sibling summary endpoints never had it). The client half is still there:
+`getGroupTotals` and `getCategoryTotals` in `frontend/src/lib/api.js` both take it as a **positional**
+argument, and all four call sites in `Dashboard.jsx` pass `undefined`. Nothing is sent, so this is tidying
+rather than a fix. It was left out of the backend change deliberately: removing a positional argument
+shifts every call site, and a miscount silently swaps `dateStart`/`ownerIds` — a change that wants the app
+in front of someone, not a lint run. `getCategoryTotals` is the clearer of the two, since
+`/summary/by-category` never declared the parameter at all.
+
 ## Schema leftovers to fold into the next migration
 
 *(Empty — `idx_recurring_override_pin` rode along with migration 46 on 2026-09-01. Kept as a heading

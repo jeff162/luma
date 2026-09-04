@@ -28,8 +28,9 @@ defense when the ordinary sense is what a reader arrives with: "each account bel
 owner" is true of the `owner` table and false of people, because a Shared account really does belong to
 two of them. Naming the set — "at most one of the defined owners" — is what makes it a claim about
 configuration rather than about households. The discipline already holds for the term where a collision
-would hurt most: login identities are consistently **member** or **profile**, never "user account",
-which would collide with a bank account.
+would hurt most: a login identity is a **user**, or a **member** where the household is what is meant —
+never an "account", which would collide with a bank account, and never a "profile", which on the import
+side is a saved data source.
 
 - Prefer explicit user choice over hidden inference when a decision changes meaning.
 

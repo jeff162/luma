@@ -212,7 +212,7 @@ class TrashFilterCoverageTests(unittest.TestCase):
         kwargs = dict(
             month="2026-04", date_start=None, date_end=None,
             account_id=None, account_ids=None,
-            tag_ids=None, owner_ids=None, category_owner_ids=None,
+            tag_ids=None, owner_ids=None,
         )
         with self._use_db_path():
             before = spending_by_group(**kwargs)

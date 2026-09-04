@@ -71,7 +71,7 @@ def _validate_provider(provider: str):
 
 
 def require_app_config(request: Request, provider: str) -> dict:
-    """Resolve the provider's app credential (vaulted DB or `.env` bootstrap). 409 when the provider is
+    """Resolve the provider's app credential from its saved row. 409 when the provider is
     unconfigured; 423 when its secret is vaulted but the vault is locked (resolve raises VaultLocked).
 
     A provider that declares `requires_app_config = False` has no such credential to resolve and gets an

@@ -63,5 +63,5 @@ Bigger than tier 1: a new parser *plus* a new UX path *plus* a change to dedupe.
 
 **OFX *Direct Connect*** — pulling from a bank over the protocol rather than importing a file it
 produced — is a provider adapter, not a file format, and is parked separately in
-[`ofx-direct-connect.md`](ofx-direct-connect.md) on both institution coverage and the security
-conditioning it breaks. Supporting OFX *files* neither depends on it nor advances it.
+[`ofx-direct-connect.md`](ofx-direct-connect.md) on institution coverage and on the disclosure a bank
+login owes the user. Supporting OFX *files* neither depends on it nor advances it.

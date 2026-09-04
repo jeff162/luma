@@ -602,8 +602,8 @@ and every alternative turned down — is in `security-model.md` → *Secret cust
 
 ### Provider connections (the aggregator seam)
 
-Data-source aggregators reach the app through **one provider-neutral seam** (security-and-deployment-model
-phase 6a), so adding a provider is an adapter, not a change to the connect/sync callers.
+Data-source aggregators reach the app through **one provider-neutral seam**, so adding a provider is an
+adapter, not a change to the connect/sync callers.
 
 **One sync writes to three stores, and which one a fact belongs in is decided by who may lose it**:
 durable *connection status* on `connection` / `connection_account` (cursor, last outcome + summary,
@@ -616,7 +616,7 @@ came of leaving it unstated, in `docs/data-model.md`.
 - **Storage.** A `connection` row (`backend/db/database.py`) is the durable credential boundary: a
   `provider` discriminator, the provider's `external_id` (Plaid's item_id), and the opaque
   per-connection credential vault-encrypted under the DEK (`credential_enc`; plaintext column always ''
-  — see the vault above). It **superseded `plaid_item`**, which was dropped in migration v20 (phase 6b-3).
+  — see the vault above). It **superseded `plaid_item`**, which was dropped in migration v20.
   Accounts link to their connection via an explicit `account.connection_id` FK (→ `connection.id`,
   `ON DELETE SET NULL` — a disconnected account keeps its rows but drops to `NULL`); `account.provider`
   records origin (`plaid`/`csv`/`manual`) and `account.external_account_id` (renamed from the old
@@ -800,7 +800,7 @@ came of leaving it unstated, in `docs/data-model.md`.
   to `(provider, external_id)`; for `provider='plaid'` it reuses the exact pre-6a AAD
   (`plaid_item|<item_id>|access_token`), so tokens written before the cutover decrypt unchanged — the
   migration re-keys nothing.
-- **App-level credentials (phase 6b-1).** The aggregator's *own* app secret (Plaid `client_id`/`secret`/
+- **App-level credentials.** The aggregator's *own* app secret (Plaid `client_id`/`secret`/
   `env` — one per provider, distinct from the per-bank connection credential) lives in the vaulted DB
   `provider_config` table: only `secret` is vault-encrypted (`secret_enc`, AAD `app_credential|<provider>|
   secret`); `client_id`/`env` are semi-public plaintext. `providers.config.resolve_app_config(user, provider)`
@@ -819,11 +819,12 @@ came of leaving it unstated, in `docs/data-model.md`.
   vault gate. App credentials ride the **credentials backup** (`provider_configs`) alongside connections.
   There is **no `.env` → DB migration** — the credential is re-entered once via the Configure card
   (decided 2026-08-01).
-- **Connections-tab UI (phase 6b-2).** `DataSourceConnections` (in `pages/Accounts.jsx`) renders the
+- **Connections-tab UI.** `DataSourceConnections` (in `pages/Accounts.jsx`) renders the
   Connections tab as one card **per provider** (driven by `GET /api/providers`): a mode badge, admin-only
   **Configure** (the app credential — moved off the Settings form entirely; that section now only points
   here), **Connect bank**, **Sync now**, and the linked accounts. It also hosts the **vault set-passphrase
-  / unlock** affordance (phase 3 deferred the vault UI to "ride the connection cards") — set/unlock post to
+  / unlock** affordance — the vault UI deliberately rides the connection cards rather than owning a
+  settings page of its own — set/unlock post to
   `/auth/vault/*` and refresh the session's vault flags. Everything here needing an open vault (connect,
   sync, deepen history, refresh accounts, disconnect, the app-secret reveal/save) goes through one gate,
   `lib/useVaultGate.js`: it raises the passphrase dialog and the action **resumes** when the unlock lands,

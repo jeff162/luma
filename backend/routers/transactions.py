@@ -2294,7 +2294,6 @@ def spending_by_group(
     exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
     exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
     exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
-    category_owner_ids: Optional[str] = Query(None, description="reserved for summary filter parity"),
 ):
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]

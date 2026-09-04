@@ -5,7 +5,7 @@ conditions under which a decision here has to be reopened. This is the **maintai
 written to be read before changing anything that touches credentials, the login perimeter, transport, or
 backups — including "I am only adding a provider".
 
-**Three other surfaces describe security, and this one does not restate them.**
+**Three other surfaces describe security, each written for a different reader.**
 
 | Surface | Audience | What it holds |
 | --- | --- | --- |
@@ -13,35 +13,39 @@ backups — including "I am only adding a provider".
 | `SECURITY.md` | someone reporting a vulnerability | reporting route, supported versions, what is in scope, and the deliberate design properties that are **not** vulnerabilities |
 | `architecture.md` → *Identity, access & deployment model* / *Token vault & transport security* | someone changing the code | the mechanism **as built** — tables, endpoints, constants, call order |
 
-What is missing from all three is the layer below: the premises each of them is downstream of. A reader
-of `architecture.md` learns that provider credentials are vault-encrypted and the ledger is not; they do
-not learn that the asymmetry is conditioned on a property of the credential that a future provider can
-break, or what has to be reopened when it does. That is this document.
+What this document records is the reasoning underneath: why provider credentials are encrypted while the
+ledger beside them is not, which risks are accepted rather than defended and what each one costs, what
+the perimeter assumes about the network it sits on, where each secret lives and who can reach it, and
+what recovery looks like when a passphrase is lost or a host is compromised. Its purpose is to put that
+reasoning in front of whoever changes the design next, so a premise is abandoned deliberately rather than
+by accident.
 
-**Nothing here is a summary of the mechanism.** Where a fact is about *how it works*, this document
-links to `architecture.md` rather than repeating it, because two copies of a mechanism drift and the
-copy that goes stale is the one nobody runs.
+Where a fact is about *how it works*, this document links to `architecture.md` rather than repeating it:
+two copies of a mechanism drift, and the copy that goes stale is the one nobody runs.
 
 ---
 
 ## What is defended, and what is deliberately not
 
-The whole model follows from one premise: **the deployment is your own machine or your own LAN box.**
+The whole model follows from one premise: **the machine it runs on and the network it answers on are
+controlled by the operator and closed to the public.** That is usually a personal machine or a box on a
+home LAN, but the premise is those properties rather than the address — a private cloud instance nobody
+else holds an account on or a route to satisfies it just as well, while a shared desktop or an instance
+published to the internet does not.
 
 - **The ledger is plaintext at rest, and that is accepted.** Transactions, categories, rules, tags,
   mappings and import history sit unencrypted in SQLite. Anyone with the database files or disk access
   can read them. Protecting the ledger at rest is explicitly not a goal: it would need pervasive field
   encryption or whole-database encryption, and both are out of scope.
-- **Whole-database file encryption is therefore redundant, not merely unimplemented.** The only secrets
-  worth protecting are already ciphertext at the field level, and their keys are never stored in a form
-  that can be opened without a live unlock secret. Encrypting the file would add a key-management story
-  and protect nothing that is not already protected.
-- **The login perimeter is network-access control, not disk encryption.** It governs who can reach a
-  *running* instance. It does nothing about files copied off the disk.
+- **The login perimeter is network-access control.** It governs who can reach a
+  *running* instance.
 - **The server is trusted, and the crypto runs server-side.** The unlock secret reaches the backend,
-  which derives the KEK, unseals the DEK and uses it. This defends **theft of the database files at
-  rest**. It does not defend a compromised *running* host — and that is the correct trade here, because
-  "someone owns the box you run this on" is a state in which the ledger is readable off disk anyway.
+  which derives the KEK, unseals the DEK and uses it. This defends **theft of the data at rest**. It does
+  not defend a compromised *running* host — and that is the correct trade here, because "someone owns the
+  box this runs on" is a state in which the ledger is readable off disk anyway. **What is given up is
+  more than the ledger, though:** while a user is unlocked the DEK sits in process memory, on a sliding
+  idle window sized for a working day, so an attacker on the box reaches the provider credentials too.
+  Nothing here defends that, and no passphrase floor can.
 - **The backend is assumed not to be public-internet facing.** If an operator exposes it, the app
   password becomes far more load-bearing than this model assumes. That is the operator's call, and the
   onboarding copy says so.
@@ -49,46 +53,31 @@ The whole model follows from one premise: **the deployment is your own machine o
 The property the vault does buy is narrow and worth stating exactly: **a leaked database is not a leaked
 credential.** No live unlock secret ⇒ no KEK ⇒ nothing opens.
 
-## Why the provider credential is the only thing encrypted
+## Why provider credentials are the only things encrypted
 
-A leaked credential outlasts and outreaches a leaked ledger, and both halves matter. The ledger a thief
-copies is a static snapshot; nothing done afterwards changes it. A credential keeps pulling **new** data
-until it is revoked — **duration**, the dimension that holds even in the best case — and it reaches
-whatever the provider exposes to it, which is not bounded by what was ever imported. Those are what earn
-it at-rest protection the ledger does not get.
+**The credential's reach is not known, and cannot be.** Luma only reads transaction data, but what the
+credential is *authorized* for is the provider's to decide and is not visible from here — it may, and often does, reach
+account and routing numbers, identity, or the ability to move money.
 
-How far past the ledger the second half goes is exactly what the next section's conditioning decides: a
-credential that is read-only and revocable stays close to "narrower than what is already plaintext on
-disk", and one that is neither does not. Do not read the duration argument as the whole case — it is the
-part that survives when every assumption below holds.
+**So every provider credential is treated as though it carries full account and identity access**, and
+protected accordingly with one unconditional passphrase floor.
 
 Exactly two columns are encrypted under the workspace DEK — the per-connection credential and the
-app-level provider secret. **The second is protected for breadth rather than duration**: an app-level
-secret is not scoped to one connection, so its loss reaches every connection made under it and the
-ability to authorize more. They are registered in `crypto_service.ENCRYPTED_COLUMNS`, and that registry
-is an invariant rather than a convenience: rotation, reset and the backup paths are all driven off it, so
+app-level provider secret. **The second is the wider of the two**: an app-level secret is not scoped to
+one connection, so its loss reaches every connection made under it and the ability to authorize more.
+They are registered in `crypto_service.ENCRYPTED_COLUMNS`, and that registry is an invariant rather than
+a convenience: rotation, reset and the backup paths are all driven off it, so
 **a third encrypted column that is not registered is silently unreachable by all three**. A test fails if
 one is added without being listed. Add the registration in the same change as the column.
 
-## The read-only / revocable conditioning
+## Revocation, in both directions
 
-The custody design above is conditioned on the per-connection credential being **read-only** and
-**revocable from inside the app**. Both clauses are load-bearing, and this is the single assumption most
-likely to be broken by future work.
-
-**The two clauses are independent, and the consequences of failing them are not symmetric.**
-
-| Clause that fails | What it changes | What it costs |
-| --- | --- | --- |
-| **not read-only** | the blast radius grows past the ledger — a credential that can move money, or reach account/routing numbers or identity, is no longer "narrower than what is already plaintext on disk" | **reopen this document.** The custody design's justification does not survive it |
-| **not revocable in-app** | the blast radius is unchanged; what changes is *who must act to stop it* | a **disclosure** obligation, not a redesign |
-
-A provider that fails only the second clause is an ordinary supported case, not a defect — one live
-provider is exactly this. What makes it safe is that the disconnect confirmation states which of the two
-things is about to happen, because **a user who believes access ended when it did not is worse off than
-one who knows to go and revoke it.** Adapters declare this as `revokes_on_disconnect` rather than the UI
-branching on a provider name, so a new provider inherits the disclosure by declaring its capability. See
-`building-a-connector.md` for the declaration rule.
+**Whether disconnect actually revokes is a per-provider fact the app has to state rather than hide.**
+Adapters declare `revokes_on_disconnect` and the disconnect confirmation reads it, because **a user who
+believes access ended when it did not is worse off than one who knows to go and revoke it.** A provider
+with no revocation call is an ordinary supported case — one live provider is exactly this — and the remedy
+is unremarkable once known: revoke the token at the provider, rotate the vault passphrase and key, then
+re-link.
 
 **The reverse direction — the user revokes at the provider — is not symmetric either.** Nothing announces
 it; Luma finds out only when a request is refused. A refused credential raises
@@ -97,24 +86,6 @@ than accumulating generic sync failures. This matters *more* for a provider with
 revocation normally happens through Luma the connection is simply gone, but where it happens elsewhere
 this refusal is the only notice there will ever be, and a connection left counting failures after a
 deliberate revocation reads as broken rather than as closed.
-
-**A credential that is the institution's own login fails both clauses**, which is the case to recognize
-before writing an adapter rather than after. It grants full web banking rather than scoped read access,
-and there is no revocation call, so disconnect would delete a local copy only. Two consequences follow
-immediately if such a provider is ever built: the disconnect confirmation must say what it does and does
-not do, and the passphrase floor applies unconditionally, since such a credential is never anything less
-than live bank access and there is no sandbox mode at which to ask later.
-(`backlog/ofx-direct-connect.md` is the worked example, parked on coverage rather than on this.)
-
-**When a provider publishes conformance guidance, read it before writing the adapter.** This was learned
-the expensive way: a published checklist was consulted after an adapter shipped, and six of its nine items
-were already satisfied — but those six were the ones the protocol forces on any working client. The three
-that were missed were the security-posture items, which reasoning from the protocol does not reach because
-they are about the *user's* exposure rather than about making a correct request. A failed single-use claim
-had to be reported as possible **interception** rather than as "generate a new one" (the reassuring reading
-of identical evidence); a 403 on a data call is a condition of its own rather than an outage; and displayed
-provider text must be bounded, since escaping covers injection and the live risk is volume. A conformance
-checklist is a list of what the protocol's authors know goes wrong.
 
 ## Identity and the network perimeter
 
@@ -129,27 +100,27 @@ has a password and another does not, anyone on the LAN picks the passwordless on
 ledger — the password would have protected only that person's *preferences*. A per-user perimeter over
 shared data is incoherent, so the optionality lives one level up.
 
-**Three concepts look related and have unrelated causes. Do not couple them.**
+**Three concepts look like one and are not. Do not couple them.**
 
-- *Multiple users* exist to scope **per-person UI preferences**. That is all they are for.
-- *Vault access grants* exist so each person can personally authorize their own data sources into the
-  shared vault.
-- *An app password* exists purely for **network-access control**.
+- *A user identity* scopes **per-person UI preferences** and carries that person's own **app-access
+  credential**. Those are its only two jobs; it confers nothing about the vault.
+- *A vault access grant* is what lets a person open the vault at all. The data sources themselves are
+  shared and visible to everyone; what the grant confers is the ability to **use** them — connect one,
+  sync it, refresh its accounts, disconnect it, reveal an app secret — because every one of those has to
+  decrypt a stored credential first. A user without a grant sees the same connections as everyone else
+  and can operate none of them.
+- *An app password* is **network-access control** — it establishes who is at the browser, never authority
+  over encrypted data.
 
 A trusting household can therefore be entirely passwordless and still need vault grants, so **no design
 may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
 passwordless install can hold vault-encrypted credentials, and an authenticated one can have no vault.
 
-**App access uses a password, never a passkey — and that is a decision, not an omission.** A passkey for
-*app access* would be security theater: the ledger sits unencrypted on disk, so anyone with disk access
-reads it regardless of how strong the login is. Passkeys are reserved for the vault, where they protect
-actual ciphertext.
-
-**One identity concept, in one table.** Two tables — a "profile" and an "account" — is the shape to avoid,
-and the reason is worth keeping: identities would change shape as the perimeter is toggled, which makes
-*disabling* sign-in protection a lossy reverse migration rather than a flag flip. With one table, enable
-and disable are both flag flips and nothing is re-keyed. See `architecture.md` for how each operation
-behaves.
+**A protection that can be switched off must not destroy the state needed to switch it back on.**
+Enabling and disabling sign-in are both flag flips: a user with no password is the same row as one with
+a password, holding a deliberately unusable sentinel, so disabling leaves hashes dormant rather than
+discarding them and re-enabling is never a migration. Anything else with an on state and an off state
+inherits this — the off path may not consume what the on path needs.
 
 ## Secret custody
 
@@ -406,6 +377,14 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
 - **Multi-tenant hosting.** Dropped as a target, and the drop is what licenses the trusted-server
   assumption everything else rests on. Reintroducing it invalidates server-side crypto, not just the
   provisioning UI.
+- **Whole-database file encryption** (SQLCipher and the like). Not redundant — it genuinely would protect
+  the ledger at rest — but the key has to be available *before* anyone can be asked for it: the app serves
+  its own sign-in screen out of the control database, so the file must be readable before there is a user
+  to prompt. That leaves two shapes and both are worse than what exists. A key sitting on the same disk
+  protects nothing against the theft-of-files case this model is built around, and a passphrase typed at
+  every process start makes unattended running impossible — which is exactly what a LAN box or a
+  double-clicked desktop launcher is for. The field-level vault sits where the trade works: its unlock
+  secret comes from a person who is already present, and only for the operations that need it.
 - **A `server_managed` custody mode, and a plaintext `off` mode.** `server_managed` let the server decrypt
   at rest, so it never delivered leaked-DB-≠-leaked-credentials. `off` had no legitimate case — plaintext
   live credentials are unacceptable, plaintext sandbox ones are pointless when a passphrase costs nothing
@@ -414,8 +393,8 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
 - **A relaxed passphrase for sandbox or test use.** See *Secret custody*. It would have introduced a
   plaintext credential path plus an encrypt-on-first-vault sweep to make it safe; neither is needed once
   nothing weak can exist.
-- **Keeping app-level provider credentials in a `.env` file.** Reversed from an earlier draft, then the
-  migration fallback retired too. The only things anyone *does* with an app credential are connect and
+- **Keeping app-level provider credentials in a `.env` file**, with a bootstrap fallback that read one
+  from there. The only things anyone *does* with an app credential are connect and
   sync, and both already require an unlocked vault because the per-connection credential is under the
   DEK — so vaulting it costs nothing in practice, while a file leaves a real secret plaintext on disk.
   The bootstrap fallback was worse than the original arrangement: it also handed a **locked** vault an
@@ -439,9 +418,6 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
   transport guarantee; deriving from it locks out a network-profile install that runs plain HTTP.
   Hardcoding it breaks the other topology. It stays an explicit environment value set at the deployment
   edge.
-- **Two identity tables** (profile and account). See *Identity and the network perimeter*: it makes
-  disabling the perimeter a lossy reverse migration.
-- **A passkey for app login.** Security theater over a plaintext ledger. Passkeys are for the vault.
 - **Verifying the WebAuthn assertion for a vault ceremony.** The vault is not an authentication decision.
   A wrong PRF output fails at the AEAD tag exactly as a wrong passphrase does, so the slot is
   self-verifying; checking a signature would mean storing credential public keys and running challenge
@@ -455,11 +431,11 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
   seals the live DEK into a slot of the caller's choosing with nothing "replaced". *"Only the first
   passphrase is safe"* misses a passkey-only member adding a first passphrase, which takes the same path
   to the same durable credential.
-- **Refusing the lost-passphrase reset while another member holds a slot.** Dropped: a slot row cannot
-  prove its holder is reachable, the admin gate already settles who may do this, and the compromise path
-  permitted the identical destruction — so it only stopped users who described their situation
-  accurately. It became a **redirect** (name the cheaper rungs, and report that a reset also ends every
-  other member's access) rather than a refusal.
+- **Refusing the lost-passphrase reset while another member holds a slot.** A slot row cannot prove its
+  holder is reachable, the admin gate already settles who may do this, and the compromise path permits
+  the identical destruction — so a refusal only stops the users who describe their situation accurately.
+  The gate is a **redirect** instead: name the cheaper rungs, and report that a reset also ends every
+  other member's access.
 - **Replace-and-forget as a way to discard a recovery code.** It leaves the "has a recovery code" flag
   true, so the app goes on offering that rung to somebody who deliberately has none — a phantom rung in a
   ladder whose whole value is being ordered by what the user can actually do. It also renders a fresh code
@@ -508,11 +484,17 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
   per-request detection it needs exists. Standalone-vs-client-server is a *detected* fact, so only the
   data-source declaration is a real question to put to anyone, and only when networked. No backlog item —
   this topic owns it.
+- **A passkey for app login**, reopened 2026-09-04 on convenience grounds. It was rejected as security
+  theater over a plaintext ledger, which answers whether it is a *stronger* credential and not whether it
+  is a better way to sign in; friction is what pushes a household into turning the perimeter off
+  entirely. Additive to the password, never a replacement, and it needs the assertion verification the
+  vault deliberately does without. → [`backlog/passkey-app-login.md`](backlog/passkey-app-login.md)
 - **An mDNS service name.** Env-only, alongside the ports. Not merely convenience: with HTTPS it is what
   makes passkeys reachable on a LAN at all. The open part is the default name when two installations share
   a network. → [`operations.md`](operations.md) → *Open*
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
   which is the ladder's first real rung and the only one nothing exercises end to end.
   → `backlog/test-coverage-gaps.md`
-- **In-app Help topics** (`data-and-backups`, `account-security`) predate the tempered read-only framing
-  and should be reconciled against it next time they are touched.
+- **In-app Help topics** (`data-and-backups`, `account-security`) predate the current custody framing —
+  every credential treated as though it carried full account and identity access — and may still describe
+  provider access as read-only. Reconcile them next time they are touched.

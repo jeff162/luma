@@ -144,7 +144,6 @@ class ReportSignFiltersTests(unittest.TestCase):
                 account_ids=None,
                 tag_ids=None,
                 owner_ids=None,
-                category_owner_ids=None,
             )
             category_rows = spending_by_category_in_group(
                 month="2026-04",
@@ -177,7 +176,7 @@ class ReportSignFiltersTests(unittest.TestCase):
         with self._use_db_path():
             group_rows = spending_by_group(
                 month="2026-04", date_start=None, date_end=None, account_id=None,
-                account_ids=None, tag_ids=None, owner_ids=None, category_owner_ids=None,
+                account_ids=None, tag_ids=None, owner_ids=None,
             )
             category_rows = spending_by_category_in_group(
                 month="2026-04", date_start=None, date_end=None, group_id=expense_group_id,
@@ -201,7 +200,6 @@ class ReportSignFiltersTests(unittest.TestCase):
                 account_ids=None,
                 tag_ids=None,
                 owner_ids=None,
-                category_owner_ids=None,
             )
             income_rows = spending_by_category_in_group(
                 month="2026-04",

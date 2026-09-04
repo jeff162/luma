@@ -245,7 +245,6 @@ class TransactionTagsTests(unittest.TestCase):
                 account_ids=None,
                 tag_ids=essential_tag_id,
                 owner_ids=None,
-                category_owner_ids=None,
             )
 
         self.assertEqual([txn["id"] for txn in ledger["transactions"]], [tagged_txn_id])
@@ -429,7 +428,7 @@ class TransactionTagsTests(unittest.TestCase):
             # Reporting agrees: the Essential total counts only B's amount.
             grouped = spending_by_group(
                 month="2026-04", date_start=None, date_end=None, account_id=None,
-                account_ids=None, tag_ids=essential_tag_id, owner_ids=None, category_owner_ids=None,
+                account_ids=None, tag_ids=essential_tag_id, owner_ids=None,
             )
             self.assertEqual(len(grouped), 1)
             self.assertEqual(grouped[0]["group_id"], group_id)

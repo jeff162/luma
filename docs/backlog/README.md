@@ -83,6 +83,12 @@ scale — rather than by feature.
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
   resuming next time rules are in focus.
+- [passkey-app-login.md](passkey-app-login.md) — **not started (2026-09-04).** Sign in with a passkey
+  *alongside* the app password, for convenience. Reverses an earlier rejection that answered a different
+  question — whether a passkey is a stronger credential, not whether it is a better way to log in — and
+  the argument for it is that friction is what pushes a household into turning the perimeter off. The
+  work is WebAuthn *authentication* (stored public keys, challenges, signature verification), which the
+  vault's passkeys deliberately do without, so little beyond the ceremony plumbing carries over.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
   the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
   per-detail-panel Refresh seam.
@@ -159,9 +165,9 @@ scale — rather than by feature.
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
   have abandoned the path), records that the protocol is being *retired* rather than held stable by
-  Quicken (its successor, EWC+, is closed to third parties), and flags the blocking consequence: an OFX
-  credential **is the bank login** — neither read-only nor revocable in-app — which breaks the
-  conditioning [security-and-deployment-model.md](security-and-deployment-model.md) rests on. Parked on
+  Quicken (its successor, EWC+, is closed to third parties), and flags the disclosure it owes: an OFX
+  credential **is the bank login** and cannot be revoked from inside the app, so both the connect and
+  disconnect flows have to say so. Parked on
   **coverage**: the bundled FI list matched none of the institutions actually in use here.
 
 ### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)

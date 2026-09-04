@@ -24,6 +24,29 @@ instruction and fix the drift rather than silently choosing the looser version.
   as an option rather than exploring it unprompted — the more so once a session has already run long,
   since a long investigation is itself a cost the user is paying.
 
+- **Ask what the user is doing, not only what each message says.** Across four exchanges the user
+  removed, one at a time, the two premises this profile's author had himself named as a documentation
+  section's entire foundation; each message was processed as a local fix, and the section was rewritten
+  four times before being deleted whole. Asking outright why it existed did not stop the rewriting, so
+  the user fell back to walking the document paragraph by paragraph — work that should never have been
+  theirs to do. **When a reply removes a premise, re-derive what still stands on it before editing
+  anything**: what rested on it may no longer stand. A question aimed at a whole section ("what does this
+  mean?", "is this needed?") is a question about whether it should exist, and a repeated objection to
+  already-revised text is never a request to say it better. "Can I articulate why this is here" always
+  passes for prose you wrote yourself; the test that discriminates is **what breaks if it is gone**.
+
+- **Before giving a claim structural weight, grep for it in the code.** The section that cost the day
+  above was built on a per-connection credential being read-only — given its own heading, a table, "both
+  clauses are load-bearing", and a trigger to reopen the document. `git log -S read_only -- backend`
+  returns nothing: the string has never existed in this codebase in any commit. It came from a
+  build-phase log, where it was an observation about the *first* provider's token, and became a premise
+  purely by being formatted like one. **An invariant a document asserts should be findable in the thing
+  it describes** — a capability flag, a constraint, a test, a gate. If nothing expresses it, it is an
+  observation and belongs in a sentence. The failure this guards against is not drift: nothing changed
+  underneath, and no amount of re-reading the document would have exposed it. Ten seconds of grep would
+  have. **Beware the diagnosis that locates a fault in events rather than in a choice** — "the foundation
+  moved" was offered here as the explanation and the history flatly contradicted it.
+
 - The user handles commits and pushes. Leave changes in the working tree and do not ask whether to
   commit at the end.
 
@@ -376,6 +399,19 @@ for what the *user* can act on.
 - **Figures from a live ledger are only comparable within a single run.** The user works in the app
   while a session is open, so rows get resolved, synced, or trashed between two scans. Re-derive every
   number a comparison depends on in the same pass rather than quoting an earlier run's totals.
+
+- **Verify a reference doc against the code, not by reading it.** The productive pass over `docs/` was
+  mechanical: every backticked constant checked against its real value, every cited path and bare filename
+  against `git ls-files`, every `GET|POST /path` against the `@router` decorators, and every threshold
+  stated in prose against the constant behind it. That found six defects in one document and zero in six
+  others, cheaply and with no round-trips. It finds **stale facts**; it cannot tell whether a document is
+  about the right things — that needs a reader who knows the decisions. State which of the two a pass
+  covered rather than reporting "the docs are in good shape".
+
+- **`docs/*.md` does not match `docs/backlog/*.md`.** A sweep glob that stops at the top level reported
+  every stale reference gone while six survived one directory down, in the file most likely to be read
+  cold by someone who was not there. Use `docs/**/*.md` or `git grep`, and re-run the search that produced
+  a clean result before reporting it as one.
 
 - **The pre-commit hook only sees *staged* files, so running it proves nothing about a new one.**
   `scripts/pre-commit.sh` reads `git diff --cached`, so an untracked file is invisible to it — and the

@@ -84,6 +84,23 @@ otherwise learn by branching on `provider`:
 Most have a default. `zero_amount_rows` deliberately does not, because its answer does not generalize
 between providers and a wrong inherited guess is silent.
 
+**Read-only is the one trait with no declaration, and it is on you to check it.** Every provider
+credential is already protected as though it carried full account and identity access, so the floor does
+not depend on the answer — but a floor is a default, not knowledge, and nothing in this seam expresses
+what a token actually reaches: there is no `read_only` capability, no test, and no gate, because what a
+token may do is the provider's to define and this codebase cannot see it. That makes it the one item on
+this page a person has to answer rather than declare. **Before writing an adapter, establish what the
+credential actually reaches**: is it scoped to transactions, or does the same token also expose account
+and routing numbers, identity, or the ability to move money? A credential that is the institution's own
+login is the clear failure, but a scoped aggregator token can widen too, by product authorization rather
+than by anything visible here.
+
+If the answer is anything past reading transactions, **stop and raise it.** Nothing in the code will
+catch it later, and what it changes is not a flag but what users have to be told: `security-model.md`
+accepts several risks priced on a leak meaning **disclosure**, and a credential that can act rather than
+only reveal makes each of them cost more. See `security-model.md` → *What is defended, and what is
+deliberately not*.
+
 ## Where the connection handle comes from
 
 `connect` returns an `external_id`, and `(provider, external_id)` is the unique key a connection is
@@ -292,6 +309,25 @@ duplicate detection reject genuine rows later.
 
 ## The published guide is not the contract
 
+**A provider's conformance checklist is a design input, and the items worth the reading are the ones the
+protocol does not force.** Where a provider publishes one — SimpleFIN does, on its protocol page — read it
+*before* writing the adapter. Most of its items are satisfied by any client that works at all, because the
+protocol will not function otherwise. The rest are about the **user's security posture**, which reasoning
+from the request and response shapes never reaches, and which is therefore the half that gets missed.
+Three kinds to look for, all of them present in SimpleFIN's list:
+
+* **What a failed claim on a single-use credential means.** The reassuring reading ("generate a new one")
+  and the alarming one (someone else spent it) rest on identical evidence, and only the alarming one is
+  safe to act on.
+* **Which refusals are conditions of their own** rather than an outage — a 403 on a data call says
+  something a 500 does not, and collapsing the two loses it.
+* **What provider-supplied text may do when displayed.** Framework escaping covers injection, so the live
+  risk is usually **volume** rather than markup, and the bound belongs at the adapter boundary rather than
+  at each consumer.
+
+Deviating from an item is allowed; deviating silently is not. `architecture.md` → *Provider connections
+(the aggregator seam)* records the one deliberate deviation here and the reason for it.
+
 **Where a live call and the provider's documentation disagree, the call is right.** Two of SimpleFIN's
 load-bearing facts appear nowhere in its developer guide, and both were invisible to a suite that mocks
 the HTTP layer:
@@ -473,6 +509,7 @@ Decisions owed on this topic, each naming the live backlog item that will feed i
   needs a mapping-free import path and a `FITID` rung in duplicate detection.
   → [`backlog/import-input-formats.md`](backlog/import-input-formats.md)
 - **OFX Direct Connect as a provider adapter** — a pull with no aggregator in the middle. Researched and
-  parked on institution coverage, and it is the standing counter-example to the read-only/revocable
-  conditioning: an OFX credential *is* the bank login. See `security-model.md` for that rule.
+  parked on institution coverage. It is the worked example of a credential that *is* the institution's
+  own login: nothing narrower than full web banking, and no revocation call, which is what the read-only
+  check above exists to catch before an adapter is written.
   → [`backlog/ofx-direct-connect.md`](backlog/ofx-direct-connect.md)

@@ -146,6 +146,16 @@ When working on the codebase:
 
 - Skip doc updates for trivial or localized changes that don't move the high-level model (bug fixes confined to one function, renames, dependency bumps, etc.).
 
+- **Cite a constant; never transcribe its value.** A number copied into prose — a schema version, a
+  payload version, a threshold, a timeout — is a second copy that nothing updates and no test guards, and
+  it goes stale at the next change to the real one. Name the constant (`CURRENT_VERSION`,
+  `BULK_CONFIRM_THRESHOLD`) and let the reader look. A verification pass over the docs found this to be
+  the *only* class of drift that had actually accumulated: one document said `CURRENT_VERSION = 30`
+  against a real 48 and gave the backup payload version as 12 against a real 14 — while contradicting
+  itself elsewhere with the right number — and the documents that cite constants rather than copying them
+  had drifted nowhere. Where the value genuinely has to appear (user-facing copy, a worked example), say
+  where the authoritative one lives in the same breath.
+
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
 
 ### Where rejections, obstacles and owed decisions go

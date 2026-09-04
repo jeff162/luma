@@ -41,8 +41,8 @@ caller owns and writes whether the pull succeeds or raises (`connection.provider
 
 **No revocation.** There is no call that invalidates an access URL, so `remove()` deletes Luma's copy and
 nothing more; only the user, at the Bridge, can actually revoke one. The disconnect confirmation has to
-say so — see `docs/security-model.md` -> "The read-only / revocable conditioning", whose custody model
-is conditioned on provider credentials being revocable in-app and is explicitly not, for this one.
+say so — see `docs/security-model.md` -> "Revocation, in both directions": a provider with no revocation
+call is a supported case, but one the user has to be told about, since the remedy is theirs to carry out.
 
 Because there is no cursor to store, the connection's `transactions_cursor` column carries this adapter's
 own JSON checkpoint instead. That column was always defined as an opaque provider resume token; a

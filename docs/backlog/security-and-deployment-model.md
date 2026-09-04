@@ -1,7 +1,7 @@
 # Security & deployment model — residual build-phase record
 
 **Ingested 2026-09-02 into [`../security-model.md`](../security-model.md).** Everything this file held
-about *why* the design is shaped as it is — the threat model and its read-only/revocable conditioning,
+about *why* the design is shaped as it is — the threat model and credential custody,
 the identity perimeter, secret custody, enrollment/revocation/rotation, the transport policy, and every
 rejected shape — now lives there, organized by the question a reader arrives with rather than by this
 project. The mechanism as built is in [`../architecture.md`](../architecture.md).
@@ -259,5 +259,5 @@ discussion now in `../security-model.md`:
   data-DB-ciphertext / control-DB-keys split is what reshapes a backup's contents; that file specs the
   explicit-scope Backup page, the coupled "accounts & secrets" backup, and restore-time identity
   reconciliation.
-- [`ofx-direct-connect.md`](ofx-direct-connect.md) — the worked example of a credential that fails both
-  halves of the read-only/revocable conditioning. Parked on coverage, not on this.
+- [`ofx-direct-connect.md`](ofx-direct-connect.md) — the worked example of a credential that is the
+  institution's own login and cannot be revoked in-app. Parked on coverage, not on this.
