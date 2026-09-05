@@ -38,9 +38,21 @@ const managedServers = externalBaseURL
 export default defineConfig({
   testDir: './tests/ui',
   testMatch: /.*\.(spec|test)\.[cm]?[jt]s$/,
-  timeout: 30_000,
+  // Has to leave room for the expect budget below plus the work around it: at 30s a single assertion
+  // spending its full 20 would blow the test timeout instead, turning a clear "waiting for X" into an
+  // opaque "test timeout exceeded". Move the two together.
+  timeout: 60_000,
   expect: {
-    timeout: 10_000,
+    // Longer than the backend's own `_BUSY_TIMEOUT_SECONDS` (15s, backend/db/database.py), and that
+    // relationship is the whole point rather than a round number. SQLite's WAL serializes writers, so
+    // the app is *designed* to wait up to fifteen seconds for a write lock and then succeed. An expect
+    // budget of ten therefore called a deliberately-absorbed wait a failure — the test was less patient
+    // than the thing it was testing, which is a bug in the test however rarely it fires.
+    //
+    // This is a ceiling on a hang, not a tolerance for slowness: a passing assertion still resolves in
+    // milliseconds, and nothing here asserts anything about latency. Raise the backend's busy timeout
+    // and this has to move with it.
+    timeout: 20_000,
   },
   outputDir: './test-results',
   globalSetup: './tests/globalSetup.js',

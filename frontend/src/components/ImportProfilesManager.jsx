@@ -851,14 +851,35 @@ export default function ImportProfilesManager({
     return clampFormPanelPosition({ x: desiredX, y: desiredY }, size)
   }, [])
 
+  // Every load here publishes into shared state — this panel's list *and*, through `onDataChange`, the
+  // import page's data-source card behind it. So a response that resolves after something newer has
+  // already published does not merely arrive late, it puts stale rows back on screen.
+  //
+  // The newer thing is usually a **mutation**: deleting a source republishes the list without it, and a
+  // load that was already in flight when the DELETE went out then reinstates the deleted row on the page
+  // behind this panel. In development StrictMode makes that collision routine rather than rare, because
+  // it runs the mount effect twice and two loads are in flight from the moment the panel opens.
+  //
+  // `dataGeneration` sequences the two kinds of write against each other: a load claims the current
+  // number, a mutation burns it, and a load publishes only if its number is still the newest. A plain
+  // `cancelled` flag (the pattern in SplitEditorDialog) would not do — that covers *unmount*, and the
+  // problem here is being overtaken while still mounted.
+  const dataGeneration = useRef(0)
+
+  function invalidateInFlightLoads() {
+    dataGeneration.current += 1
+  }
+
   const refreshManagerData = useCallback(async () => {
     // include_children: a source's single-account mapping keeps pointing at the account it was set to
     // even after that account is merged into a group, so a root-only list would render a live mapping
     // as an empty picker (and invite the user to "fix" it by re-pointing the source). The import
     // mapping grid fetches the same way, for the same reason.
+    const generation = ++dataGeneration.current
     const [p, a, b] = await Promise.all([
       api.getImportProfiles(), api.getAccounts({ include_children: true }), api.listBatches(),
     ])
+    if (generation !== dataGeneration.current) return
     setProfiles(p)
     setAccounts(a)
     setBatches(b)
@@ -942,8 +963,10 @@ export default function ImportProfilesManager({
       if (editId) {
         await api.updateImportProfile(editId, data)
         setEditId(null)
+        invalidateInFlightLoads()
       } else {
         const created = await api.createImportProfile(data)
+        invalidateInFlightLoads()
         setShowAdd(false)
         onProfileCreated?.({
           profileId: created?.id || '',
@@ -966,6 +989,7 @@ export default function ImportProfilesManager({
     try {
       await api.deleteImportProfile(id)
       setPendingDeleteProfile(null)
+      invalidateInFlightLoads()
       const nextProfiles = profiles.filter(p => p.id !== id)
       const nextBatches = batches.filter(batch => batch.profile_id !== id)
       setProfiles(nextProfiles)
@@ -987,6 +1011,7 @@ export default function ImportProfilesManager({
     setEditingNameId(null)
     setNameDraft('')
     if (!profile || !nextValue || nextValue === profile.name) return
+    invalidateInFlightLoads()
     setProfiles(prev => prev.map(item => (
       item.id === profileId
         ? { ...item, name: nextValue }
