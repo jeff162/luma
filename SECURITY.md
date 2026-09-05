@@ -93,9 +93,11 @@ Stated plainly, because it determines what is worth reporting and what a user sh
 - **After a leaked file, assume the vault secrets are recoverable and change them.** Nothing done
   afterwards protects the copy already taken — only revocation limits that. But whatever an offline
   attack against the copy yields (the passphrase, and through it the slot's private key and the DEK)
-  stays valid against **any future copy** until it is deliberately changed, and a leak that came from a
-  synced folder or a backup routine is rarely a one-time event. So the full response is, in order:
-  **revoke every credential**, then **change the vault passphrase**, then **replace the vault key**.
+  stays valid against **anything encrypted afterwards** until it is deliberately retired — including the
+  replacement credentials that revoking makes necessary. So the full response is, in order: **revoke
+  every credential**, then **change the vault passphrase**, then **replace the vault key**. That is one
+  response to one incident rather than a schedule; whether the exposure can recur is a property of how
+  the file escaped, and closing that path is a separate job from this one.
 - **Those last two are not interchangeable — they retire different artifacts.** A passphrase change
   re-wraps the slot under a new key but leaves the DEK unchanged, so a recovered *DEK* would still
   decrypt a future copy's ciphertext without any passphrase at all. A key replacement re-encrypts
