@@ -8,8 +8,7 @@ import App from './App.jsx'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {/* Opt into v7 router behavior now so routing and update scheduling do not change later during a router upgrade. */}
-    <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+    <BrowserRouter>
       <App />
     </BrowserRouter>
   </React.StrictMode>
