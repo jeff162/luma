@@ -417,8 +417,9 @@ Two things it moved that matter to the steps below:
 
 ## Release mechanics
 
-- **Test the Windows and Linux kits.** Only macOS has been exercised. Both are portable zips, so the
-  test is: unzip, run, confirm the databases land beside the executable and the app opens.
+- **Test the ARM64 / Raspberry Pi kit.** The Windows, Linux x64 and macOS kits have been exercised; the
+  ARM64 build was added afterwards and has never run anywhere. It is a portable zip, so the test is the
+  same one: unzip, run, confirm the databases land beside the executable and the app opens.
 - **Screenshots.** The README has none, and it is a dashboard-driven visual application whose whole job
   is letting someone decide quickly. This will cost more prospective users than any missing document.
   **Deliberately last, after every feature lands** — a feature that adds a dashboard frame or changes
@@ -428,7 +429,7 @@ Two things it moved that matter to the steps below:
   a log of what did, and plenty has landed that is named nowhere in it. Work out what needs an image
   from the app and the diff at the time of shooting.
 - **Cut the release.** `docs/releasing.md` has the checklist. Note that CI does **not** publish —
-  attaching the four artifacts and their `.sha256` files to a written release is a manual step, and
+  attaching the five artifacts and their `.sha256` files to a written release is a manual step, and
   nothing is downloadable until it happens.
 - **Enable Discussions**, or drop that entry from `.github/ISSUE_TEMPLATE/config.yml`, which currently
   links to a page that will 404.

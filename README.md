@@ -136,7 +136,8 @@ the [releases page](https://github.com/jeff162/luma/releases).
 | Platform | Download | Shape |
 | --- | --- | --- |
 | Windows | `luma-<version>-windows-x64.zip` | Portable |
-| Linux | `luma-<version>-linux-x64.zip` | Portable |
+| Linux (x86-64) | `luma-<version>-linux-x64.zip` | Portable |
+| Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.zip` | Portable |
 | macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
 | macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
 
@@ -206,6 +207,10 @@ the data directory (`DATA_DIR`, holding both databases), and the developer-optio
 
 Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux distributions). On a Pi,
 performance depends on the model, storage speed, and whether it runs directly or through Docker.
+
+The ARM64 download is **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no
+build. It is compiled on Ubuntu 22.04, so it needs glibc 2.35 or newer, which covers Raspberry Pi OS
+bookworm and everything after it. Running from source has neither restriction.
 
 Python 3.12 is what Luma is built and tested on, and 3.13 is expected to work. **3.14 is not
 supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies

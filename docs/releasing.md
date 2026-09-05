@@ -59,6 +59,22 @@ The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-in
 build that is not the platform's usual form. It runs on a machine with neither Python nor Node
 installed. Builds are unsigned, so Windows and macOS warn on first run.
 
+### Linux specifics
+
+Linux produces two portable zips, `luma-<version>-linux-x64.zip` and `luma-<version>-linux-arm64.zip`,
+and like macOS's pair they are not interchangeable. The ARM one covers 64-bit Raspberry Pi OS and other
+aarch64 distributions; a 32-bit Pi OS is a third architecture and is not built.
+
+**The runner's glibc is the artifact's floor.** PyInstaller bundles the Python runtime but not the C
+library, so the binary links against whatever the build machine has and refuses to start anywhere older.
+That is why the ARM job runs on `ubuntu-22.04-arm` rather than 24.04: 22.04 carries glibc 2.35, which
+Raspberry Pi OS bookworm (2.36) satisfies, where 24.04's 2.39 would not. The failure mode is a link
+error at launch that names a `GLIBC_` version, and nothing in the build notices it.
+
+The x64 job still runs on `ubuntu-latest` and therefore carries the higher floor. The asymmetry is
+deliberate rather than overlooked — lowering it is its own change with its own test, not a side effect
+of adding ARM.
+
 ### macOS specifics
 
 macOS produces `luma-<version>-macos-<arch>.dmg`: a `Luma.app` bundle beside a shortcut to
@@ -108,8 +124,8 @@ can be traced back to a commit. `--allow-dirty` skips the second for a throwaway
 
 ### What CI does, and the two things it deliberately does not
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`: tests first, then parallel builds on Linux,
-Windows and both macOS architectures, each uploading its artifact and checksum. `workflow_dispatch`
+Pushing a `v*` tag runs `.github/workflows/release.yml`: tests first, then parallel builds on both
+Linux architectures, Windows and both macOS architectures, each uploading its artifact and checksum. `workflow_dispatch`
 can build a single platform instead — for testing an artifact on a machine that is in front of
 somebody, the Intel Mac above all, which is otherwise only ever built blind.
 
@@ -153,6 +169,6 @@ cheapest runner, so macOS is not the first place it is ever exercised.
    fresh empty `[Unreleased]` above it. The release date enters here and nowhere else, which is why
    this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
    Update the link definitions at the foot of the file to match.
-5. Tag `vX.Y.Z` and push. CI builds all four artifacts.
-6. Write the GitHub Release and **attach the four artifacts and their `.sha256` files**. Nothing is
+5. Tag `vX.Y.Z` and push. CI builds all five artifacts.
+6. Write the GitHub Release and **attach the five artifacts and their `.sha256` files**. Nothing is
    downloadable until this happens.

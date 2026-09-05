@@ -15,12 +15,23 @@
 #   the user allows them explicitly. The README inside the disk image says how; certificates are a
 #   recurring cost and a separate decision from being able to build.
 #
+# Linux builds both architectures too, and the ARM one is built on **`ubuntu-22.04-arm` rather than
+# 24.04** on purpose. PyInstaller does not bundle glibc — the artifact links against whatever the build
+# machine has — so the runner's glibc becomes the *floor* every target machine must meet. 24.04 carries
+# glibc 2.39, which Raspberry Pi OS bookworm (2.36) does not satisfy, and the failure is a link error at
+# launch rather than anything the build notices. 22.04's 2.35 clears bookworm and everything newer.
+# 64-bit only: a 32-bit Pi OS is a different architecture again and is not built.
+#
+# That makes the two Linux artifacts asymmetric — the x64 one is built on `ubuntu-latest` and therefore
+# carries the higher floor. Deliberately left alone here rather than changed as a side effect of adding
+# ARM; moving it is its own decision, with its own test.
+#
 # macOS builds both architectures. `macos-13`, the last Intel image under that name, was retired in
 # December 2025; `macos-15-intel` replaces it and is the last x86_64 image GitHub plans to offer, until
 # roughly August 2027. Two images rather than one universal2 binary, because universal2 would need
 # universal2 wheels for `cryptography` and `pydantic-core` and those are not dependably published.
 #
-# A manual run can build a single platform instead of all four, which is for testing an artifact on a
+# A manual run can build a single platform instead of all five, which is for testing an artifact on a
 # machine that is in front of somebody — the Intel Mac above all, which is otherwise only ever built
 # blind. That is why the matrix comes from the `plan` job rather than being written out here: a
 # job-level `if` cannot see the `matrix` context, and filtering an `os` dimension while leaving
@@ -47,12 +58,13 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Platform to build. A tagged release always builds all four.
+        description: Platform to build. A tagged release always builds all five.
         type: choice
         default: all
         options:
           - all
           - ubuntu-latest
+          - ubuntu-22.04-arm
           - windows-latest
           - macos-latest
           - macos-15-intel
@@ -85,6 +97,7 @@ jobs:
           # smoke-tested as. macOS is installed-only: a `.app` cannot hold its own writable data.
           targets = [
               {"os": "ubuntu-latest", "form": "portable"},
+              {"os": "ubuntu-22.04-arm", "form": "portable"},
               {"os": "windows-latest", "form": "portable"},
               {"os": "macos-latest", "form": "installed"},
               {"os": "macos-15-intel", "form": "installed"},

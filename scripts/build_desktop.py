@@ -31,6 +31,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -322,8 +323,23 @@ def _package_zip(executable: Path, form: str) -> Path:
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.unlink(missing_ok=True)
 
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-        info = zipfile.ZipInfo(f"luma/{executable.name}")
+    # Named once so the hand-built entry below cannot drift from the archive it is written into.
+    compression = zipfile.ZIP_DEFLATED
+
+    with zipfile.ZipFile(archive, "w", compression) as bundle:
+        # A `ZipInfo` constructed by hand inherits **nothing** from the archive: its date defaults to
+        # the 1980 DOS epoch and its compression to ZIP_STORED, where `writestr` given a plain name
+        # takes the current time and the archive's own compression. Both defaults shipped, and neither
+        # is cosmetic — a binary dated 1980 reads as a broken download, and storing it uncompressed put
+        # the whole of the executable into the zip uncompressed, which is nearly the whole download.
+        #
+        # The date is the executable's own mtime rather than "now", so the archive reports when the
+        # program was actually built.
+        info = zipfile.ZipInfo(
+            f"luma/{executable.name}",
+            date_time=time.localtime(executable.stat().st_mtime)[:6],
+        )
+        info.compress_type = compression
         # The executable bit does not survive a plain `zipfile.write`, and a portable build whose binary
         # arrives without it is one chmod away from working with no indication of why.
         info.external_attr = 0o755 << 16
