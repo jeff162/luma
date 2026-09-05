@@ -113,6 +113,11 @@ Windows and both macOS architectures, each uploading its artifact and checksum. 
 can build a single platform instead — for testing an artifact on a machine that is in front of
 somebody, the Intel Mac above all, which is otherwise only ever built blind.
 
+"Tests first" is `.github/workflows/ci.yml`, *called* by the release workflow rather than copied into
+it — the same backend, unit, lint and browser lanes that gate every push and pull request. A release
+that was gated on a second transcription of those checks would drift from them silently, in the
+workflow nobody reads until a build has already shipped.
+
 Three deliberate omissions, all documented in the workflow header:
 
 - **No tagging.** A person decides what a release is; the workflow reacts to that decision.

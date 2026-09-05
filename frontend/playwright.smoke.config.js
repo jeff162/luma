@@ -16,9 +16,11 @@ import { AUTH_STATE_PATH } from './tests/authState.js'
 // app loads, routes, and draws. A rarely-run suite that fails for its own reasons gets ignored, and
 // then it is worse than nothing — so it stays small enough to trust.
 //
-// **When to run it:** after changing a build or runtime dependency, and before cutting a release. It is
-// out of CI for the same reason the rest of Playwright is: browsers, minutes, and a failure mode that
-// wants a person looking at it.
+// **When to run it:** after changing a build or runtime dependency, and before cutting a release. It
+// stays out of CI even though the rest of the Playwright suite now runs there
+// (`.github/workflows/ci.yml`), and the reason is the trigger rather than the cost: the bundle only
+// changes when the build does, so running this on every push would spend two minutes to re-answer a
+// question nothing has re-asked.
 //
 // A separate config because `webServer` is global to a config file: this one has to serve `vite build`
 // output through `vite preview`, where the main suite deliberately serves the dev server.

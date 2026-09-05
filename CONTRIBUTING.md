@@ -281,16 +281,19 @@ and which gaps are open on purpose.
 
 ### The four lanes, and the line that matters
 
-| Lane | Runs in | Launches the app? |
-| --- | --- | --- |
-| **pytest** (`scripts/run_tests.sh`) | Python, isolated temp SQLite | no |
-| **vitest** (`npm test`) | Node, with per-file jsdom opt-in | no |
-| **Playwright** (`npm run ui:test*`) | headless browsers, on an isolated throwaway stack | **yes** |
-| **Smoke** (`npm run ui:smoke`) | a headless browser, on the **built** app | **yes** |
+| Lane | Runs in | Launches the app? | In CI |
+| --- | --- | --- | --- |
+| **pytest** (`scripts/run_tests.sh`) | Python, isolated temp SQLite | no | yes |
+| **vitest** (`npm test`) | Node, with per-file jsdom opt-in | no | yes |
+| **Playwright** (`npm run ui:test*`) | headless browsers, on an isolated throwaway stack | **yes** | yes |
+| **Smoke** (`npm run ui:smoke`) | a headless browser, on the **built** app | **yes** | no — see below |
 
-All four are run the same way and by the same command — `scripts/check_backend_and_frontend.sh`.
-Nothing here is opt-in, because a lane that has to be remembered separately stops being run and then
-stops being maintained.
+The first three are run the same way and by the same command — `scripts/check_backend_and_frontend.sh`
+— and again on every push and pull request by `.github/workflows/ci.yml`, which the release workflow
+*calls* rather than restates, so a release is gated on the same definition an ordinary push is. Neither
+side is opt-in, because a lane that has to be remembered separately stops being run and then stops
+being maintained; the smoke lane is the deliberate exception, for the reason given under *The smoke
+lane* below.
 
 **The line that matters is headless versus headed**, not unit versus browser. A headless Playwright
 run is a test runner: it boots its own stack on its own ports, touches no real data, and reports a
@@ -318,8 +321,9 @@ a heading appears, and no console error, failed request or error boundary shows 
 shallow — behaviour belongs in the lane above, and a rarely-run suite that fails for its own reasons
 gets ignored, which is worse than not having one.
 
-**Run it when a build or runtime dependency changes, and before cutting a release.** It is out of CI
-for the same reasons the rest of Playwright is.
+**Run it when a build or runtime dependency changes, and before cutting a release.** It stays out of
+CI even though the rest of the Playwright suite now runs there: the bundle only changes when the build
+does, so a run on every push re-answers a question nothing has re-asked.
 
 **Match the check to the change.** A comment or documentation edit needs lint (which includes the
 comment-quality checks for both halves of the repo) and, for a touched Python file, a syntax check —

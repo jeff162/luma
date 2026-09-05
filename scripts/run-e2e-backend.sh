@@ -25,9 +25,27 @@ DATA_DIR=$E2E_DIR
 SESSION_SECRET=e2e-playwright-secret
 EOF
 
+# The interpreter is the repo venv where one exists and whatever python is on PATH otherwise. A
+# developer machine has the venv (scripts/start_backend.sh builds it) and must use it, because that is
+# where the backend's dependencies were installed. CI installs those requirements into the runner's own
+# interpreter and never builds a venv at all, so hard-coding the venv path made the browser suite the
+# one lane CI could not run — and a lane CI cannot run is a lane CI cannot gate on.
+#
+# The venv is preferred rather than merely accepted: a machine that has both will have the pinned
+# versions in the venv and whatever the system happens to carry outside it.
+E2E_PYTHON="$ROOT_DIR/backend/venv/bin/python"
+if [ ! -x "$E2E_PYTHON" ]; then
+  E2E_PYTHON="$(command -v python3 || command -v python || echo '')"
+fi
+if [ -z "$E2E_PYTHON" ]; then
+  echo "No Python found: no venv at $ROOT_DIR/backend/venv/bin/python and no python3 on PATH." >&2
+  echo "Run scripts/start_backend.sh once to bootstrap the venv, then try again." >&2
+  exit 1
+fi
+
 cd "$ROOT_DIR"
 # DB_PATH / CONTROL_DB_PATH are per-file overrides that outrank DATA_DIR, so a stale one exported in the
 # caller's shell would silently point this "isolated" stack at real data. Clear them explicitly.
 exec env -u DB_PATH -u CONTROL_DB_PATH \
   LUMA_ENV_FILE="$E2E_DIR/.env" \
-  "$ROOT_DIR/backend/venv/bin/python" -m uvicorn backend.main:app --host 127.0.0.1 --port "$PORT"
+  "$E2E_PYTHON" -m uvicorn backend.main:app --host 127.0.0.1 --port "$PORT"

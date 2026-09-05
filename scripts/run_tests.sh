@@ -7,7 +7,7 @@
 #   scripts/run_tests.sh backend.tests.test_suspect_duplicates.SuspectDuplicateTests.test_resolve_invalid_action
 #   scripts/run_tests.sh -v                                       # verbose listing of every test
 #
-# The runner is **pytest**, which is what CI runs (.github/workflows/release.yml). It used to be
+# The runner is **pytest**, which is what CI runs (.github/workflows/ci.yml). It used to be
 # `python -m unittest`, and the two do not collect the same tests: unittest finds `TestCase` classes
 # only, while pytest finds those *plus* plain `def test_` functions. Six modules are written in the
 # plain-function style, so 50-odd tests ran in CI and never locally — a test suite that passes on the
