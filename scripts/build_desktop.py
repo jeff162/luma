@@ -323,30 +323,35 @@ def _package_zip(executable: Path, form: str) -> Path:
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.unlink(missing_ok=True)
 
-    # Named once so the hand-built entry below cannot drift from the archive it is written into.
+    # Named once so no member can drift from the archive it is written into.
     compression = zipfile.ZIP_DEFLATED
+    # One timestamp for the whole archive. Every member is an output of this build, and the executable
+    # is the only one of the three whose own mtime means anything.
+    built_at = time.localtime(executable.stat().st_mtime)[:6]
 
     with zipfile.ZipFile(archive, "w", compression) as bundle:
-        # A `ZipInfo` constructed by hand inherits **nothing** from the archive: its date defaults to
-        # the 1980 DOS epoch and its compression to ZIP_STORED, where `writestr` given a plain name
-        # takes the current time and the archive's own compression. Both defaults shipped, and neither
-        # is cosmetic — a binary dated 1980 reads as a broken download, and storing it uncompressed put
-        # the whole of the executable into the zip uncompressed, which is nearly the whole download.
-        #
-        # The date is the executable's own mtime rather than "now", so the archive reports when the
-        # program was actually built.
-        info = zipfile.ZipInfo(
-            f"luma/{executable.name}",
-            date_time=time.localtime(executable.stat().st_mtime)[:6],
-        )
-        info.compress_type = compression
+        # Each member states its date, its compression and its mode, because `writestr` fills in a
+        # *different* set depending on what it is handed and neither set is right on its own. Given a
+        # plain name it supplies the current time, the archive's compression and a mode of 0o600; given
+        # a `ZipInfo` it supplies nothing at all, leaving the 1980 DOS epoch and ZIP_STORED. Both halves
+        # of that shipped as defects — the executable needs a `ZipInfo` to carry its mode bits and so
+        # went out dated 1980 and uncompressed, while the text files took 0o600 and extract unreadable
+        # to anyone but the user who unpacked them. Stating all three here removes the asymmetry rather
+        # than fixing each symptom.
+        def add(name: str, data: bytes | str, mode: int) -> None:
+            info = zipfile.ZipInfo(f"luma/{name}", date_time=built_at)
+            info.compress_type = compression
+            info.external_attr = mode << 16
+            bundle.writestr(info, data)
+
         # The executable bit does not survive a plain `zipfile.write`, and a portable build whose binary
-        # arrives without it is one chmod away from working with no indication of why.
-        info.external_attr = 0o755 << 16
-        bundle.writestr(info, executable.read_bytes())
-        readme = READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED
-        bundle.writestr("luma/README.txt", readme)
-        bundle.writestr("luma/LICENSE", LICENSE_FILE.read_text(encoding="utf-8"))
+        # arrives without it is one chmod away from working with no indication of why. Compressing it
+        # saves about 1% — PyInstaller has already compressed the archive inside it — so this is
+        # consistency rather than a size win; the win is that nothing here depends on which overload of
+        # `writestr` a future edit happens to use.
+        add(executable.name, executable.read_bytes(), 0o755)
+        add("README.txt", READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED, 0o644)
+        add("LICENSE", LICENSE_FILE.read_text(encoding="utf-8"), 0o644)
 
     return archive
 

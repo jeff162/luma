@@ -431,10 +431,6 @@ Two things it moved that matter to the steps below:
 - **Cut the release.** `docs/releasing.md` has the checklist. Note that CI does **not** publish —
   attaching the five artifacts and their `.sha256` files to a written release is a manual step, and
   nothing is downloadable until it happens.
-- **Enable Discussions**, or drop that entry from `.github/ISSUE_TEMPLATE/config.yml`, which currently
-  links to a page that will 404.
-- **Correct the README's compromise paragraph** — the "if a database or backup is lost" text still says
-  replacing the vault key helps, which `SECURITY.md` now correctly contradicts.
 
 ## Sequencing
 

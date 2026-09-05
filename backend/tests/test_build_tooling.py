@@ -109,6 +109,26 @@ def test_the_bundled_executable_keeps_its_date_and_its_compression(tmp_path):
     # The reason the entry is hand-built in the first place, and the thing a future edit here could
     # quietly drop while fixing something else.
     assert (entry.external_attr >> 16) & 0o777 == 0o755
-    # The members added by name were never affected, and are asserted so a change to how the archive is
-    # opened cannot silently take them with it.
-    assert readme.compress_type == zipfile.ZIP_DEFLATED
+
+
+def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
+    """`writestr` given a plain name supplies a mode of 0o600, so `README.txt` and `LICENSE` unpacked
+    to something readable only by whoever ran the unzip — a kit extracted into a shared location, or
+    by root, left the licence unreadable to the person meant to read it. They also carried the moment
+    the zip was written rather than the build's, which is a smaller thing but the same asymmetry."""
+    executable = tmp_path / "luma"
+    executable.write_bytes(b"MZ" + b"\0" * 1000)
+    built_at = datetime(2026, 3, 4, 5, 6, 8).timestamp()
+    os.utime(executable, (built_at, built_at))
+
+    with mock.patch.object(build_desktop, "DIST_DIR", tmp_path / "dist"):
+        archive = build_desktop._package_zip(executable, build_desktop.DIST_FORM_PORTABLE)
+
+    with zipfile.ZipFile(archive) as bundle:
+        members = {info.filename: info for info in bundle.infolist()}
+
+    assert set(members) == {"luma/luma", "luma/README.txt", "luma/LICENSE"}
+    for name in ("luma/README.txt", "luma/LICENSE"):
+        assert (members[name].external_attr >> 16) & 0o777 == 0o644, name
+    # One build, one date across every member — so a reader cannot tell them apart by age.
+    assert {info.date_time for info in members.values()} == {(2026, 3, 4, 5, 6, 8)}
