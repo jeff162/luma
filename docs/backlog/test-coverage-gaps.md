@@ -40,13 +40,25 @@ own browsers, so no system Chrome is needed.
 - **Isolation.** `scripts/run-e2e-backend.sh` points the backend at a wiped temp
   dir via `LUMA_ENV_FILE` (data, control, and tenant DBs all throwaway), so
   E2E never touches the real `luma-data.db` / `luma-control.db`.
-- **Seeding.** `frontend/tests/globalSetup.js` creates one local preference
-  profile so specs land past the "Getting Started" onboarding gate. A richer
-  demo dataset (owners/accounts/transactions) is a planned follow-up that will
-  double as this seed.
-- **Per-spec cleanliness.** Specs share one DB per run, so clear shared state in
-  a `beforeEach` (see `import-mapping-controls.spec.js`, which clears saved data
-  sources) — otherwise a sibling spec's residue bleeds in.
+- **Seeding.** `frontend/tests/globalSetup.js` signs in (creating an identity if
+  the stack has none — without a session every call, including the seed itself,
+  answers 401), loads the demo dataset, and writes the session to disk for the
+  specs to adopt via `use.storageState`. That last part is what makes a spec's
+  `request` fixture as authenticated as a click.
+- **Phases, not one flat run — and lanes are projects, not `--grep`.** One a11y
+  spec clears the demo data to drive the import screen, which is fatal beside
+  the specs reading that ledger, and `--grep` cannot separate them: Playwright
+  does not apply command-line filters to a dependency project. The config
+  sequences `app` → `demo-cleared` → `import` → `a11y` instead, and the npm
+  scripts pass `--project`. A spec needing an empty tenant belongs in one of the
+  last two phases. The chain is strict on purpose — no two phases run at once,
+  because `import` and `a11y` both clear the saved data sources and would
+  otherwise delete each other's.
+- **Per-spec cleanliness.** Specs within a phase share one DB, so clear shared
+  state in a `beforeEach` (see `import-mapping-controls.spec.js`, which clears
+  saved data sources) — otherwise a sibling spec's residue bleeds in. Specs
+  reading the demo baseline should leave it as they found it; where one must
+  mutate, restore it (see `categorize.spec.js`).
 - **Escape hatch.** Set `PLAYWRIGHT_BASE_URL` to run against an already-running
   stack instead of the managed one (skips the webServer + seed).
 
@@ -133,10 +145,14 @@ provides this baseline — owners, accounts, per-account import batches, rules,
 tags, and ~80 transactions — so these specs can build on it; use the
 `beforeEach`-clear pattern for any rule mutations so parallel specs don't collide.
 
-**Tier-1 status (done — for reference).** The other high-value flows the demo
-unblocked are built: tag inheritance, inline categorize, dashboard render, and
-the cross-account duplicate review (`transactions` / `categorize` / `dashboard` /
-`duplicates` specs). The five rule-collision flows above are what remains.
+**What is already covered (so these five are not re-derived).** The demo
+dataset's worked examples each have a spec: splits, reimbursables, attached
+documents, recurring signals, cash flow, and the rule-overlap check
+(`splits` / `reimbursements` / `documents` / `recurring` / `cash-flow` /
+`rule-overlaps`), alongside tag inheritance, inline categorize, dashboard
+render and cross-account duplicate review. The five rule-*collision* flows above
+are what remains — they need a rule set built for the collision, which the demo
+deliberately does not carry.
 
 ### Frontend component tests (jsdom) — buildable now
 

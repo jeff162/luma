@@ -33,8 +33,13 @@ fi
 
 cd "$ROOT_DIR"
 
+# The full run goes parallel; a filtered run does not. Spawning twenty workers to execute one test is
+# slower than executing it, and the whole point of naming a test is a fast answer. `-n auto` takes the
+# suite from minutes to well under one — safe because each xdist worker is its own *process*, which is
+# the isolation the suite already relies on: module-level state (`CONTROL_DB_PATH`, the conftest schema
+# template cache) is per-process, and every test builds its own temp database inside that.
 if [[ $# -eq 0 ]]; then
-  exec "$VENV_PYTHON" -m pytest backend/tests
+  exec "$VENV_PYTHON" -m pytest backend/tests -n auto
 fi
 
 # Translate each dotted test path into what pytest understands. The split point is the longest dotted

@@ -59,6 +59,7 @@ export default function ImportEvidenceColumnsSection({ options = [], checked = [
           >
             <input
               type="checkbox"
+              name={`evidence-column-${option.header}`}
               checked={checkedSet.has(option.header)}
               disabled={forcedSet.has(option.header)}
               onChange={() => toggle(option.header)}

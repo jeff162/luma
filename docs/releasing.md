@@ -140,12 +140,14 @@ cheapest runner, so macOS is not the first place it is ever exercised.
 
 ## Release checklist
 
-1. `release.py --set-version X.Y.Z`, commit.
-2. `release.py --check` — version declarations agree, tree clean.
-3. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
+1. `npm run ui:smoke` in `frontend/` — the built bundle loads and routes. Cheap, and the one check
+   nothing else in the pipeline performs (see `CONTRIBUTING.md` → *The smoke lane*).
+2. `release.py --set-version X.Y.Z`, commit.
+3. `release.py --check` — version declarations agree, tree clean.
+4. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
    fresh empty `[Unreleased]` above it. The release date enters here and nowhere else, which is why
    this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
    Update the link definitions at the foot of the file to match.
-4. Tag `vX.Y.Z` and push. CI builds all four artifacts.
-5. Write the GitHub Release and **attach the four artifacts and their `.sha256` files**. Nothing is
+5. Tag `vX.Y.Z` and push. CI builds all four artifacts.
+6. Write the GitHub Release and **attach the four artifacts and their `.sha256` files**. Nothing is
    downloadable until this happens.

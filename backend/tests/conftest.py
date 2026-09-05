@@ -28,6 +28,13 @@ exist and the failure names a missing table rather than the missing isolation. T
 the first *open* of a configured path into a hard error, at the moment it happens and on the machine
 that can fix it. It refuses rather than redirecting to a throwaway: a redirect would make an
 unisolated test pass, which is how the leak stayed invisible in the first place.
+
+**Third concern, same file for the same reason: nothing in the suite may sleep for a rate limiter.**
+The SimpleFIN adapter spaces its outbound requests a second apart, which is right against a real CDN
+and pure waiting against a mock. Only one test in the suite makes any assertion about that spacing,
+and it sets its own interval; every other test that reaches the transport was paying the full second
+per request for nothing. Neutralized below, with the shipped value re-exported so a test can still
+assert what actually ships.
 """
 
 import atexit
@@ -194,3 +201,20 @@ def _guarded_documents_dir():
 
 
 _documents.documents_dir = _guarded_documents_dir
+
+
+# The SimpleFIN adapter throttles its own outbound requests (see `_throttle`), which is correct against
+# the Bridge's CDN and meaningless against a mocked `urlopen` — no test in this suite makes a real
+# request. Left alone it cost the suite real seconds of `time.sleep`, spread across ten modules that
+# never mention the throttle at all.
+#
+# Patched at import time like the guards above, rather than as an autouse fixture, so it holds for the
+# `mock.patch.object` in `test_consecutive_requests_are_spaced_apart` too: that test sets its own small
+# interval to assert the spacing *mechanism*, and unittest restores whatever was here before it.
+#
+# The shipped value is re-exported rather than discarded — a speedup that quietly erased the guarantee
+# it was speeding up would be a bad trade, so `test_simplefin_adapter` asserts against this.
+from backend.services.providers import simplefin as _simplefin  # noqa: E402  (after the patches above)
+
+SHIPPED_SIMPLEFIN_REQUEST_INTERVAL_SECONDS = _simplefin._MIN_REQUEST_INTERVAL_SECONDS
+_simplefin._MIN_REQUEST_INTERVAL_SECONDS = 0.0

@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
 from unittest import mock
 
+from backend.tests.conftest import SHIPPED_SIMPLEFIN_REQUEST_INTERVAL_SECONDS
 from backend.services.providers import get_adapter
 from backend.services.providers.simplefin import (
     BUDGET_PAUSED,
@@ -490,6 +491,20 @@ class SimpleFinTransportTests(unittest.TestCase):
         for gap in gaps:
             self.assertGreaterEqual(round(gap, 3), 0.05,
                                     f"requests were {gap:.3f}s apart — the CDN limit is on rate, not count")
+
+    def test_the_shipped_interval_is_a_real_wait(self):
+        """The half of the throttle the test above cannot see.
+
+        `conftest` sets the interval to zero for the whole suite, because no test here makes a real
+        request and a second of `time.sleep` per mocked call cost the suite real minutes. That trade is
+        only safe while something still asserts what actually ships — otherwise the constant could drift
+        to zero in production and every test would go on passing, having been handed zero anyway.
+        """
+        self.assertGreaterEqual(
+            SHIPPED_SIMPLEFIN_REQUEST_INTERVAL_SECONDS, 1.0,
+            "the shipped request interval no longer spaces requests — the CDN in front of the Bridge "
+            "rejects a client that fires back-to-back, whatever the daily budget says",
+        )
 
     def test_a_429_becomes_a_rate_limit_pause_not_a_generic_failure(self):
         # The CDN's "too fast" is not the Bridge's "something is wrong", and the two must not read alike:

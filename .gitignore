@@ -41,6 +41,8 @@ frontend/dist/
 frontend/.vite/
 frontend/playwright-report/
 frontend/test-results/
+# The signed-in session global setup writes for the Playwright suites: per-run, per-machine.
+frontend/tests/.auth/
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store

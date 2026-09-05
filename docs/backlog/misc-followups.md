@@ -141,3 +141,4 @@ That is the concrete hole to look at first if this is picked up.
 data side is cheap. That would let the picker say "added here · also from Coffee Shops" and offer the
 two intents as separate actions ("remove my copy, keep the inherited one" vs "hide here"), and would
 let bulk add record a force-on without the ambiguity.
+

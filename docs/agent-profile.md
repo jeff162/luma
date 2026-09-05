@@ -152,14 +152,15 @@ instruction and fix the drift rather than silently choosing the looser version.
   answering — a complete list with a recommendation is worth more than a correct partial answer, even
   when the partial answer arrives sooner.
 
-- Never use a browser, launch the app, or run a browser-driven test (Playwright / E2E) to confirm
-  your own work — hard rule in `CLAUDE.md` / `AGENTS.md`. The browser is only for diagnosing a
-  specific reported bug you cannot localize any other way; it is never for re-checking UI work or a
-  refactor (the user inspects that), and "it makes me surer" is not a reason. "It's a bug," "it's a
-  big refactor," and "Playwright is a test, not a browser" are not exceptions — hand the check to the
-  user. (Unit tests you write and run are fine — the backend suite, and the frontend's vitest suite,
-  which runs in Node/jsdom rather than a browser. Run vitest after a UI change: it is the only thing
-  besides lint and a build that can catch a frontend regression without costing the user a round trip.)
+- Run the headless suites; ask before anything headed — hard rule in `CLAUDE.md` / `AGENTS.md`. The
+  Playwright lanes are ordinary tests: headless, on their own isolated stack, with results you can
+  read, so running them to check your own work is expected rather than an exception, as is a scripted
+  headless session for exploring or diagnosing. What waits for permission is the *headed* forms
+  (`--headed`, `--debug`, `ui:codegen`, a hand-driven `npm run dev`), because that is where the
+  trouble has been — long interactive sessions and a conclusion drawn from one screenshot. Ask for a
+  headed session when it would genuinely help rather than grinding on: something that cannot be
+  isolated another way, or an attempt or two that have already failed. Say what it would settle.
+  `scripts/check_backend_and_frontend.sh` runs the whole gate and is the habitual command.
 
 - If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
   the specific processes or ports launched for that session. Never use broad process-name kills.
@@ -297,12 +298,12 @@ for what the *user* can act on.
   brand is the technical fact, and avoid pronoun-heavy help copy where a cleaner impersonal phrasing
   will do.
 
-- **On surfaces you cannot verify yourself, work in small checkable steps.** Every defect in UI work
-  costs a full round trip through the user, because the hard rule puts the browser off limits. A
-  large single pass therefore front-loads the user with a pile of defects to find one at a time. The
-  same amount of code delivered in pieces the user can exercise as they land costs the same effort
-  and far less of theirs. Backend work does not have this constraint — tests close the loop — which
-  is exactly why the two halves of a change deserve different pacing.
+- **Work in small checkable steps on anything the tests do not reach.** The headless suites close the
+  loop on a lot of UI work now, so use them; what they cannot judge is whether a screen *looks* right,
+  and every defect of that kind costs a full round trip through the user. A large single pass
+  front-loads them with a pile of defects to find one at a time, where the same code delivered in
+  pieces they can exercise as it lands costs the same effort and far less of theirs. Write the spec
+  and run it before handing over — an unverified spec is a defect delivered with extra steps.
 
 - **Before reporting a change done, re-read the sentence that asked for it.** Reporting completion
   on a paraphrase, and worse, following it with proposals for further changes, reads as not having

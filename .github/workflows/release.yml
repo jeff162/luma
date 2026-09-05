@@ -81,8 +81,11 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # `-n auto` matches the local runner (scripts/run_tests.sh): one xdist worker per core, which on a
+      # hosted runner is a smaller win than on a workstation but still a win, and keeps the two paths
+      # running the suite the same way.
       - name: Backend tests
-        run: python -m pytest backend/tests
+        run: python -m pytest backend/tests -n auto
 
       - name: Frontend tests
         working-directory: frontend

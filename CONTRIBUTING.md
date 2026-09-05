@@ -145,7 +145,21 @@ The URL is printed on startup and is the reliable part; opening a browser is a c
 
 ## Useful checks
 
-Before committing, run the checks that match the changed files:
+The whole local gate is one command, and it is the one to reach for before committing:
+
+```bash
+scripts/check_backend_and_frontend.sh        # backend suite + frontend lint + vitest + browser suite
+scripts/check_backend_and_frontend.sh lint   # frontend lint only — seconds, no browser
+```
+
+The browser suite is *in* the default target on purpose. It is the only lane that exercises the app the
+way a user meets it, and a check that has to be remembered separately is one that stops being run and
+then stops being maintained. `lint` stays as the fast escape hatch for a tight edit loop.
+
+`npm run check` inside `frontend/` is the frontend half of the same gate (lint → vitest → browser
+suite), in cheapest-failure-first order.
+
+Everything below is the individual pieces, for running the check that matches the changed files:
 
 ```bash
 # frontend production build
@@ -225,29 +239,87 @@ runs against an isolated backend with throwaway databases, so it is unaffected
 by a local `.env`. If needed, `PLAYWRIGHT_BASE_URL` can override the target URL
 explicitly for one run.
 
+**The suite signs in once, in `tests/globalSetup.js`, and every spec inherits that session.** A
+pristine stack has no identities, and almost every endpoint answers 401 without one — including the
+demo-data load, which is scoped to the current identity. So the setup lists identities, creates one if
+the stack is empty, selects it (this is the step that establishes the session; creating does not), then
+seeds. The resulting cookie is written to `tests/.auth/state.json` and both configs point
+`use.storageState` at it.
+
+That last part is what a new spec needs to know: **the `request` fixture is a different context from
+the browser**, and without the shared state its API calls are unauthenticated while clicks in the same
+test are fine. The failure is quiet in the worst way — a helper that ignores a bad response leaves the
+API work undone, and the spec fails much later, somewhere else, waiting for UI that never arrives.
+
+**The run is ordered phases, not one flat pass, and the lanes are projects rather than `--grep`.**
+One spec in the a11y sweep clears the demo data so it can drive the import screen with the drop zone
+enabled; that wipe is harmless alone and fatal beside the dozen specs that read the demo ledger. The
+two therefore have to be *ordered*, not merely told apart — and a command-line filter cannot do the
+telling, because Playwright does not apply `--grep` to a dependency project, so a lane excluded on
+the command line runs anyway as somebody's dependency. The config's projects sequence it instead:
+
+    app  →  demo-cleared  →  import  →  a11y
+
+`app` holds everything that reads the demo ledger; `demo-cleared` is one setup spec that clears it
+once, at a point where nothing else is in flight; `import` and `a11y` both want the empty tenant that
+leaves behind. The npm scripts select projects (`--project app --project import` for the routine
+lane), which is why they no longer pass `--grep-invert`.
+
+The chain is deliberately a chain rather than a fan-out: **no two phases run at once.** `import` and
+`a11y` each clear the saved data sources to reach a known-empty manager, so run side by side they
+delete each other's — and the resulting failure is a spec that passes alone and fails in company,
+which is the expensive kind to diagnose.
+
+A new spec belongs in `app` unless it needs an empty tenant. Within a phase specs still run in
+parallel, so anything reading the demo baseline should leave it as it found it, and anything that
+must mutate should restore it (see `categorize.spec.js`).
+
 ## What is tested, what isn't, and why
 
 The section above is how to *run* the suites. This is what they cover, what they structurally cannot,
 and which gaps are open on purpose.
 
-### The three lanes, and the line that matters
+### The four lanes, and the line that matters
 
-| Lane | Runs in | Needs the app? |
+| Lane | Runs in | Launches the app? |
 | --- | --- | --- |
 | **pytest** (`scripts/run_tests.sh`) | Python, isolated temp SQLite | no |
 | **vitest** (`npm test`) | Node, with per-file jsdom opt-in | no |
-| **Playwright** (`npm run ui:test*`) | real browsers, driving a running app | **yes** |
+| **Playwright** (`npm run ui:test*`) | headless browsers, on an isolated throwaway stack | **yes** |
+| **Smoke** (`npm run ui:smoke`) | a headless browser, on the **built** app | **yes** |
 
-**The line falls between the first two and the third**, and it is worth stating plainly because
-"frontend tests" sounds like it should sit on the far side of it. **vitest is a unit runner** — no
-browser engine, no app, nothing rendered to a screen — so it belongs with pytest. Playwright is the
-only lane that launches anything.
+All four are run the same way and by the same command — `scripts/check_backend_and_frontend.sh`.
+Nothing here is opt-in, because a lane that has to be remembered separately stops being run and then
+stops being maintained.
 
-That line is load-bearing for **agent contributors**, who must not launch the app or run the
-browser-driven suite to check their own work (see `AGENTS.md` / `CLAUDE.md`, which state it as a hard
-rule). The corollary is the half that gets forgotten: **the unit lanes are expected**, and skipping
-vitest after a frontend change ships it behind nothing but lint and a build. The `test:` block in
-`frontend/vite.config.js` draws the same line in the config itself.
+**The line that matters is headless versus headed**, not unit versus browser. A headless Playwright
+run is a test runner: it boots its own stack on its own ports, touches no real data, and reports a
+structured result. A *headed* session is a person watching a screen, and it is where this has gone
+wrong before — long interactive sessions, dev servers left running, a conclusion drawn confidently
+from one screenshot.
+
+That line is load-bearing for **agent contributors**, whose hard rule (`AGENTS.md` / `CLAUDE.md`)
+sits exactly on it: run the headless suites freely, including to check your own work, and ask before
+anything headed — while saying what the headed session would settle. The corollary is the half that
+gets forgotten: **the unit lanes are expected too**, and skipping vitest after a frontend change
+ships it behind nothing but lint and a build.
+
+### The smoke lane, and the gap it closes
+
+The first three lanes share a blind spot: **none of them loads the bundle a user gets.** vitest runs
+modules through its own transform, the Playwright suite drives the *dev* server, and
+`scripts/smoke_artifact.py` launches the packaged artifact but only far enough to answer its health
+endpoint. Between them, a change to how the app is *built* — a bundler upgrade, a chunking rule, a
+`define` that stops being replaced — can blank every screen while all of them stay green.
+
+`npm run ui:smoke` (`playwright.smoke.config.js`) runs `vite build` and serves the result through
+`vite preview`, then asks only whether each route loads, routes and draws: the nav marks itself current,
+a heading appears, and no console error, failed request or error boundary shows up. Deliberately
+shallow — behaviour belongs in the lane above, and a rarely-run suite that fails for its own reasons
+gets ignored, which is worse than not having one.
+
+**Run it when a build or runtime dependency changes, and before cutting a release.** It is out of CI
+for the same reasons the rest of Playwright is.
 
 **Match the check to the change.** A comment or documentation edit needs lint (which includes the
 comment-quality checks for both halves of the repo) and, for a touched Python file, a syntax check —

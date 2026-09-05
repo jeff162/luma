@@ -115,6 +115,15 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': apiProxyTarget
       }
+    },
+    // `vite preview` serves the *built* bundle, and it does not inherit `server`. Without the same
+    // proxy every API call from a preview is a 404, so the one context that exercises what actually
+    // ships would be the one context the app cannot run in. Port and host are left to the caller
+    // (the smoke config passes them) so an ordinary `npm run preview` keeps Vite's own defaults.
+    preview: {
+      proxy: {
+        '/api': apiProxyTarget
+      }
     }
   }
 })

@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+import { AUTH_STATE_PATH } from './tests/authState.js'
+
 // Dedicated, hard-coded E2E ports kept clear of the usual dev ports (5174 / 8001) so the isolated
 // stack never collides with a running dev session. The harness boots its OWN backend (throwaway temp
 // DB, see scripts/run-e2e-backend.sh) + frontend, so `npm run ui:test` is self-contained and never
@@ -42,6 +44,48 @@ export default defineConfig({
   },
   outputDir: './test-results',
   globalSetup: './tests/globalSetup.js',
+  // Lanes are **projects, not `--grep`**, and that is load-bearing rather than a style choice.
+  //
+  // One spec in the a11y sweep clears the demo data so it can drive the import screen with the drop
+  // zone enabled (`a11y-import-export-audit.spec.js`). That wipe is fine on its own and fatal beside
+  // the dozen specs that read the demo ledger — so the two have to be *ordered*, not merely told apart.
+  //
+  // `--grep-invert @a11y` used to keep them apart and cannot do it once dependencies exist: Playwright
+  // does not apply command-line grep filters to a dependency project, so a lane excluded on the command
+  // line runs anyway as somebody's dependency, and the wipe lands in the middle of everything else.
+  // Selecting projects is the filter that survives that, so the npm scripts pass `--project`.
+  //
+  // The order is one-way by construction and the phases never overlap: `app` reads the demo ledger, a
+  // setup spec clears it, then the two lanes that want an empty tenant run one after the other. Within
+  // a phase specs still run in parallel as before.
+  //
+  // **`a11y` is chained behind `import` rather than beside it**, which costs a few seconds and buys the
+  // removal of a whole class of failure. Both lanes clear the saved data sources to reach a known-empty
+  // manager, and run side by side they delete each other's: a spec that has selected a source watches it
+  // vanish, the page drops the selection it no longer has (ImportExport.jsx, "drop a selected source
+  // that no longer exists"), and the next dropped file quietly takes the auto-detect path instead. The
+  // symptom is a spec that passes alone and fails in company, which is the expensive kind to chase.
+  projects: [
+    {
+      name: 'app',
+      testIgnore: /(a11y-.*|import-mapping-controls)\.spec\.js/,
+    },
+    {
+      name: 'demo-cleared',
+      testMatch: /demo-clear\.setup\.js/,
+      dependencies: ['app'],
+    },
+    {
+      name: 'import',
+      testMatch: /import-mapping-controls\.spec\.js/,
+      dependencies: ['demo-cleared'],
+    },
+    {
+      name: 'a11y',
+      testMatch: /a11y-.*\.spec\.js/,
+      dependencies: ['import'],
+    },
+  ],
   webServer: managedServers,
   reporter: [
     ['list'],
@@ -49,6 +93,9 @@ export default defineConfig({
   ],
   use: {
     baseURL,
+    // The session global setup established. Read for browser contexts *and* for the `request`
+    // fixture, so an API call from a spec is authenticated the same way a click is.
+    storageState: AUTH_STATE_PATH,
     headless: true,
     trace: lightweightMode ? 'off' : 'retain-on-failure',
     screenshot: 'only-on-failure',

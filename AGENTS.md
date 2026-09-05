@@ -6,20 +6,26 @@ The rules an agent most reliably talks itself out of "just this once." There is 
 enough. If a situation *feels* like it warrants an exception, that feeling **is the rule firing** —
 stop and follow the rule. Check these *before* acting, not after.
 
-1. **Never drive a browser, launch the app, or run the Playwright/E2E suite to check your own work.**
-   Confirming a change works, checking a page renders, or verifying a refactor didn't break something
-   by launching the app or running **Playwright / any browser-driven test** is prohibited — hand that
-   check to the user instead. *Not exceptions:* "it's a bug," "it's a big/critical refactor,"
-   "Playwright is a test suite, not a browser," "just one quick look." The browser is allowed **only**
-   to diagnose a specific bug the user reported that cannot be diagnosed another way — never to confirm
-   your own changes.
+1. **The browser is headless by default; a headed session needs explicit permission.**
+   The Playwright suites (`npm run ui:test*`, `npm run ui:smoke`) are ordinary tests, and running them
+   — including to check your own work — is expected rather than an exception: they run headless, boot
+   their own isolated stack on their own ports, and report results you can read. Driving a scripted
+   headless session to explore or diagnose is equally fine.
+
+   The **headed** forms are what have gone wrong before — long interactive sessions, dev servers left
+   running, conclusions drawn confidently from one screenshot — so `--headed`, `--debug`, `ui:codegen`
+   and a hand-driven `npm run dev` wait for explicit permission.
+
+   **Ask for that permission when it would genuinely help, rather than grinding.** A problem that
+   cannot be isolated any other way qualifies, and so does one where an attempt or two have already
+   failed and watching it happen is plainly the next step. Say what the headed session would settle,
+   then wait for the go.
 
    **Unit tests are fine and expected, and that includes the frontend's.** The **vitest** suite
    (`npm test`) runs in Node/jsdom — no browser engine, no app, nothing rendered to a screen — so it is a
    unit runner like the backend's, and leaving it unrun means shipping UI changes with nothing behind them
-   but lint and a build. What this rule forbids is the **Playwright** suite (`npm run ui:test*`) and
-   launching the app. The repo draws the same line itself — see the `test:` block in
-   `frontend/vite.config.js`.
+   but lint and a build. `scripts/check_backend_and_frontend.sh` runs the whole gate (backend, lint,
+   vitest, headless browser suite) and is the command to reach for.
 
 2. **A question or a bug report is not a build request.** When the user asks a question, reports what
    the app did, asks "is this right?", or muses about a direction — answer and, if useful, propose; do

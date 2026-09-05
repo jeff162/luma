@@ -948,6 +948,7 @@ export default function Rules() {
               value={cleanupWindow}
               onChange={e => setCleanupWindow(e.target.value)}
               aria-label="Clean up rules unused for"
+              name="rule-cleanup-window"
               style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}
             >
               <option value="">—</option>
