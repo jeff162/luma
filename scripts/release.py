@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Freeze a release: bump the version everywhere, gate the build, produce a checksummed artifact.
 
-The gate is the point. A version bump touches three files because npm and Python packaging each read
-their own manifest before any of our code runs, and the failure that creates is quiet — an artifact
-named for one version that reports another, with nothing malfunctioning to reveal it. So consistency is
-checked before anything is built rather than discovered afterwards, and `--set-version` exists so the
-three declarations are updated together instead of by hand.
+The gate is the point. A version bump touches four files because npm and Python packaging each read
+their own manifest before any of our code runs — and npm's lockfile repeats the number twice more — and
+the failure that creates is quiet: an artifact named for one version that reports another, with nothing
+malfunctioning to reveal it. So consistency is checked before anything is built rather than discovered
+afterwards, and `--set-version` exists so every declaration is updated together instead of by hand.
+`backend/version_sources.py` is the list of where they are.
 
 Deliberately not included:
 
@@ -19,7 +20,7 @@ Deliberately not included:
 Cross-building is impossible, so each platform's artifact is produced by running this on that platform
 and collecting the results.
 
-    python scripts/release.py --set-version 0.3.0    # rewrite the three declarations, then stop
+    python scripts/release.py --set-version 0.3.0    # rewrite every declaration, then stop
     python scripts/release.py --check                # verify the gates without building
     python scripts/release.py                        # gate, build, checksum
 """

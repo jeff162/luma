@@ -1,4 +1,4 @@
-"""One version, declared in the three places that each have to declare it.
+"""One version, declared in every place that has to declare it.
 
 `runtime_config.APP_VERSION` is authoritative — it is what the API reports and what the packaged
 artifact is named for. The two packaging manifests cannot derive it: npm reads `package.json` and Python
@@ -10,6 +10,7 @@ a release whose filename, whose API version, and whose Settings screen disagree,
 malfunctioning to reveal it.
 """
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -49,7 +50,7 @@ def test_nothing_else_hardcodes_a_version():
 
 @pytest.fixture
 def sandboxed_declarations(monkeypatch):
-    """Copies of the three real files, so the rewrite can be exercised without editing the repo."""
+    """Copies of the real files, so the rewrite can be exercised without editing the repo."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "backend").mkdir()
@@ -59,6 +60,7 @@ def sandboxed_declarations(monkeypatch):
             "RUNTIME_CONFIG": (version_sources.RUNTIME_CONFIG, root / "backend" / "runtime_config.py"),
             "PYPROJECT": (version_sources.PYPROJECT, root / "backend" / "pyproject.toml"),
             "PACKAGE_JSON": (version_sources.PACKAGE_JSON, root / "frontend" / "package.json"),
+            "PACKAGE_LOCK": (version_sources.PACKAGE_LOCK, root / "frontend" / "package-lock.json"),
         }
         for attribute, (real, copy) in copies.items():
             shutil.copyfile(real, copy)
@@ -72,11 +74,19 @@ def test_a_bump_rewrites_every_declaration(sandboxed_declarations):
     changed = version_sources.set_version("9.8.7")
 
     assert sorted(changed) == [
-        "backend/pyproject.toml", "backend/runtime_config.py", "frontend/package.json",
+        "backend/pyproject.toml", "backend/runtime_config.py",
+        "frontend/package-lock.json", "frontend/package.json",
     ]
     assert 'APP_VERSION = "9.8.7"' in sandboxed_declarations["RUNTIME_CONFIG"].read_text()
     assert 'version = "9.8.7"' in sandboxed_declarations["PYPROJECT"].read_text()
     assert '"version": "9.8.7"' in sandboxed_declarations["PACKAGE_JSON"].read_text()
+
+    # The lockfile declares it twice and both have to move: npm writes the root from `package.json`
+    # and the `packages[""]` entry from the same place, so one left behind is a file that disagrees
+    # with itself.
+    lock = json.loads(sandboxed_declarations["PACKAGE_LOCK"].read_text())
+    assert lock["version"] == "9.8.7"
+    assert lock["packages"][""]["version"] == "9.8.7"
 
 
 def test_a_bump_leaves_dependency_pins_alone(sandboxed_declarations):
@@ -89,6 +99,56 @@ def test_a_bump_leaves_dependency_pins_alone(sandboxed_declarations):
     assert "fastapi==0.115.0" in after
     assert after.count("9.8.7") == 1
     assert before.count("\n") == after.count("\n")
+
+
+def test_a_bump_leaves_the_lockfiles_dependency_versions_alone(sandboxed_declarations):
+    """The sharp case. Every one of the lockfile's hundreds of entries has a `"version"` of its own, so
+    a pattern loose enough to catch the app's two would rewrite the dependency tree into the app's
+    version — producing a lockfile that resolves nothing and a diff far too large to read."""
+    path = sandboxed_declarations["PACKAGE_LOCK"]
+    before = json.loads(path.read_text())
+    dependency_versions = {
+        name: entry.get("version")
+        for name, entry in before["packages"].items()
+        if name
+    }
+
+    version_sources.set_version("9.8.7")
+
+    after = json.loads(path.read_text())
+    assert {
+        name: entry.get("version") for name, entry in after["packages"].items() if name
+    } == dependency_versions
+    assert path.read_text().count("9.8.7") == 2
+    assert before.keys() == after.keys()
+
+
+def test_a_reordered_lockfile_fails_loudly(sandboxed_declarations):
+    """npm owns the lockfile's shape, so the anchor for the `packages[""]` declaration is an assumption
+    about a generated file. If that shape changes the bump must raise rather than substitute into
+    whatever sits at the anchor instead."""
+    path = sandboxed_declarations["PACKAGE_LOCK"]
+    document = json.loads(path.read_text())
+    entry = document["packages"][""]
+    document["packages"][""] = {
+        key: value for key, value in entry.items() if key != "version"
+    } | {"version": entry["version"]}
+    # Push the declaration well past the anchor's reach without changing what the file means.
+    path.write_text(json.dumps(document, indent=2) + "\n")
+
+    untouched = {
+        name: copy.read_text() for name, copy in sandboxed_declarations.items()
+        if name != "PACKAGE_LOCK"
+    }
+
+    with pytest.raises(ValueError):
+        version_sources.set_version("9.8.7")
+
+    # Nothing is written unless every substitution resolved: a bump that gave up halfway would leave
+    # the tree declaring two versions at once.
+    for name, before in untouched.items():
+        assert sandboxed_declarations[name].read_text() == before, f"{name} was rewritten anyway"
+    assert "9.8.7" not in path.read_text()
 
 
 def test_a_malformed_version_is_refused(sandboxed_declarations):

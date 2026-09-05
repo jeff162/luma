@@ -142,7 +142,10 @@ cheapest runner, so macOS is not the first place it is ever exercised.
 
 1. `release.py --set-version X.Y.Z`, commit.
 2. `release.py --check` — version declarations agree, tree clean.
-3. Tag `vX.Y.Z` and push. CI builds all four artifacts.
-4. Write the GitHub Release and **attach the four artifacts and their `.sha256` files**. Nothing is
+3. In `CHANGELOG.md`, rename the `## [Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` and open a
+   fresh empty `[Unreleased]` above it. The release date enters here and nowhere else, which is why
+   this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
+   Update the link definitions at the foot of the file to match.
+4. Tag `vX.Y.Z` and push. CI builds all four artifacts.
+5. Write the GitHub Release and **attach the four artifacts and their `.sha256` files**. Nothing is
    downloadable until this happens.
-5. Update `CHANGELOG.md` under a new version heading.
