@@ -47,6 +47,19 @@ instruction and fix the drift rather than silently choosing the looser version.
   have. **Beware the diagnosis that locates a fault in events rather than in a choice** — "the foundation
   moved" was offered here as the explanation and the history flatly contradicted it.
 
+- **Do not assert what has not been established — in prose, in a number, or in a diagnosis.** Three of
+  these landed in a single session and they are one habit rather than three. `SECURITY.md` told the
+  reader that "a leak that came from a synced folder or a backup routine is rarely a one-time event" —
+  a claim about frequency in the *reader's* circumstances, which nothing here can see, and it turned a
+  one-time response into what read as a standing chore. A comment in the packaging script said
+  compressing the executable saved nearly the whole download; the real binary measured **1%**, because
+  PyInstaller has already compressed the archive inside it. And a flaky browser suite was reported as
+  fixed by lowering the worker count, which had only moved a probability. Each was caught, and each had
+  the same shape: a confident sentence standing where a measurement or a condition belonged. **State
+  what makes the thing true instead** — "the recovered secret would otherwise protect the replacement
+  credentials" is the real reason *and* survives not knowing how the file escaped. Where a quantity is
+  the point, measure it before writing it down; the measurement is usually cheaper than the sentence.
+
 - The user handles commits and pushes. Leave changes in the working tree and do not ask whether to
   commit at the end.
 
@@ -356,6 +369,17 @@ for what the *user* can act on.
   reach is one the user does not spend a cycle finding. Land the sequence complete, then state the
   specific falsifiable claims to look for (for a shutdown fix: this exact line in this exact log), so
   one pass produces a usable answer rather than "it didn't seem to work".
+
+- **A portable kit can be built and opened here, and packaging defects live where no test looks.**
+  `backend/venv/bin/python scripts/build_desktop.py --form portable` produces a real Linux artifact in
+  about forty seconds (PyInstaller is in `backend/requirements-build.txt`), and reading the zip back
+  with `zipfile` is what exposed two defects the whole suite was green through: the executable went in
+  dated 1980 and uncompressed, and the text members extracted as mode 0o600. Neither was reachable from
+  tests of the code that *produces* the artifact, because both were properties of the artifact — and
+  CI's `smoke_artifact.py` does not look either, since it launches the binary and asserts where the
+  databases land. So when a change touches packaging, build one and inspect the output, then write the
+  assertion against the archive rather than against the call. The bullet above still holds for the
+  macOS `.app`, which cannot be produced or run here at all.
 
 - **Scope the test run to what the change can reach.** A change confined to a page, a component, or one
   backend module is verified by that module's tests plus lint and a build — running the whole 2,000-test

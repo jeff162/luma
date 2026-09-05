@@ -129,6 +129,13 @@ Linux architectures, Windows and both macOS architectures, each uploading its ar
 can build a single platform instead — for testing an artifact on a machine that is in front of
 somebody, the Intel Mac above all, which is otherwise only ever built blind.
 
+Each upload is named `luma-<system>-<arch>` — `luma-linux-arm64`, `luma-macos-x64` and so on — which is
+what GitHub names the wrapper zip a download produces. That is the `slug` column of the platform table
+rather than the runner label, because the labels name build infrastructure rather than targets:
+`macos-latest` and `macos-15-intel` are an arm64 and an x64 build named by image vintage, and the
+"latest" in a label reads as a version while meaning only that the image alias floats. The slugs match
+the `<system>-<arch>` tag already in the zip *inside* the wrapper, so the two agree.
+
 "Tests first" is `.github/workflows/ci.yml`, *called* by the release workflow rather than copied into
 it — the same backend, unit, lint and browser lanes that gate every push and pull request. A release
 that was gated on a second transcription of those checks would drift from them silently, in the
