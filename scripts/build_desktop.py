@@ -68,13 +68,13 @@ READ_ME_PORTABLE = """Luma - portable build
 Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
 Press Ctrl+C in the terminal window to stop it.
 
-Data lives in this folder, in luma-data.db and luma-control.db, and stays here when the application is
+Data lives in this folder, in luma-data.db and luma-control.db and the documents folder, and stays here when the application is
 closed. Moving or copying this whole folder moves the data with it.
 
 Options:
-  --no-browser    start without opening a browser, and just print the address
+  --no-browser    start without opening a browser, just print the address
 
-This build is unsigned, so the operating system will warn about it the first time it runs.
+This build is unsigned, so the operating system may warn about it the first time it runs.
 
 Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
 """
