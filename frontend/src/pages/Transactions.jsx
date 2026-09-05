@@ -922,12 +922,13 @@ export default function Transactions() {
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
         <PageHeader title="Transactions">
-          {/* The ledger is where someone notices a transaction is missing, so this is where adding one
-              belongs — beside the list it will appear in, not parked in Settings. */}
-          <Button variant="ghost" onClick={() => setAddingTransaction(true)}>Add transaction</Button>
+
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
               live; it lists only what is still open, so it empties as things are completed. */}
           <Button variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
+          {/* The ledger is where someone notices a transaction is missing, so this is where adding one
+              belongs — beside the list it will appear in, not parked in Settings. */}
+          <Button variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
         </PageHeader>
       </div>
 
