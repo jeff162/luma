@@ -26,7 +26,7 @@ changing the application.
 For the shortest local startup path, use the launcher scripts documented in
 [README.md](README.md).
 
-**Toolchain:** **Python 3.12 or 3.13**, and **Node.js 20 or newer**. The Python range has a ceiling as
+**Toolchain:** **Python 3.12 or 3.13**, and **Node.js 22.12 or newer**. The Python range has a ceiling as
 well as a floor — `backend/pyproject.toml` declares `requires-python = ">=3.12,<3.14"`, because the
 pinned `pydantic-core` publishes no wheels for 3.14 and a 3.14 environment falls back to compiling it
 from source, failing somewhere that says nothing about the real cause. [README.md](README.md) carries
@@ -63,11 +63,11 @@ npm install
 npm run dev
 ```
 
-`npm install` reports advisories against the build and test tooling — vite, vitest, esbuild and
-eslint's dependencies. These are devDependencies and none of them reaches a user: the product is a
-static bundle served by the backend, so the dev server and the test runner those advisories concern
-exist only on a developer machine. The runtime dependencies are the six in `dependencies`, and those
-are the ones an advisory has to be acted on for.
+When `npm install` reports advisories, the first question is which half of the tree they are in.
+Everything in `devDependencies` — vite, vitest, eslint and their trees — builds or tests the app and
+reaches no user: the product ships as a static bundle served by the backend, so a dev-server or
+test-runner advisory exists only on a developer machine. The six packages in `dependencies` are the
+ones that reach the browser, and an advisory there has to be acted on rather than explained.
 
 No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the working directory). A
 repo-root `.env` is the override mechanism, and is useful for running against different databases (test v. prod) or different instances running on the same box:

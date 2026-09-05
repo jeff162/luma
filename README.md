@@ -180,7 +180,7 @@ every effective setting and which layer supplied it.
 
 ## Running from source
 
-Running from a checkout needs Python 3.12 or 3.13 and Node.js 20+, and is the arrangement for working *on*
+Running from a checkout needs Python 3.12 or 3.13 and Node.js 22.12+, and is the arrangement for working *on*
 Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project
 conventions.
 
