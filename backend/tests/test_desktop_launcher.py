@@ -1,13 +1,14 @@
 """Launcher decisions that are invisible until they are wrong.
 
 Each of these is a case where the obvious implementation looks fine and fails somewhere the developer
-is not: opening a browser under WSL, a lockfile left behind by a killed process, a configured port that
-something else already holds, and a macOS bundle with no terminal to print to.
+is not: opening a browser under WSL or a Linux desktop, a lockfile left behind by a killed process, a
+configured port that something else already holds, and a macOS bundle with no terminal to print to.
 """
 
 import os
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -51,11 +52,61 @@ def test_wsl_falls_back_when_the_preferred_opener_is_absent():
     assert [call.args[0][0] for call in popen.call_args_list] == ["wslview", "explorer.exe"]
 
 
-def test_ordinary_platforms_use_the_generic_opener():
+def test_linux_calls_xdg_open_itself_so_the_child_cannot_write_to_the_console():
+    """The reason for not going through `webbrowser` here: it launches the generic openers via
+    `BackgroundBrowser`, which passes no streams to `Popen`, so the browser inherits the terminal and
+    prints its own startup chatter under Luma's startup line — where it reads as Luma failing."""
     with mock.patch.object(desktop, "_is_wsl", return_value=False), \
+         mock.patch("backend.desktop.sys.platform", "linux"), \
+         mock.patch.dict(os.environ, {}, clear=True), \
+         mock.patch("backend.desktop.subprocess.Popen") as popen, \
          mock.patch("backend.desktop.webbrowser.open") as generic:
         desktop._open_browser("http://localhost:8123")
 
+    assert generic.call_count == 0
+    assert popen.call_args.args[0] == ["xdg-open", "http://localhost:8123"]
+    assert popen.call_args.kwargs["stdout"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    # Without a session of its own the browser shares this terminal's foreground process group, and the
+    # Ctrl+C that stops the server closes the window the user is reading.
+    assert popen.call_args.kwargs["start_new_session"] is True
+
+
+def test_linux_falls_back_to_the_generic_opener_without_xdg_open():
+    with mock.patch.object(desktop, "_is_wsl", return_value=False), \
+         mock.patch("backend.desktop.sys.platform", "linux"), \
+         mock.patch.dict(os.environ, {}, clear=True), \
+         mock.patch("backend.desktop.subprocess.Popen", side_effect=FileNotFoundError), \
+         mock.patch("backend.desktop.webbrowser.open") as generic:
+        desktop._open_browser("http://localhost:8123")
+
+    assert generic.call_args.args[0] == "http://localhost:8123"
+
+
+def test_an_explicit_browser_preference_outranks_the_quieter_path():
+    """`BROWSER` names the browser to use and `webbrowser` is what honors it. A tidier console is not a
+    reason to ignore a choice somebody made deliberately."""
+    with mock.patch.object(desktop, "_is_wsl", return_value=False), \
+         mock.patch("backend.desktop.sys.platform", "linux"), \
+         mock.patch.dict(os.environ, {"BROWSER": "firefox"}), \
+         mock.patch("backend.desktop.subprocess.Popen") as popen, \
+         mock.patch("backend.desktop.webbrowser.open") as generic:
+        desktop._open_browser("http://localhost:8123")
+
+    assert popen.call_count == 0
+    assert generic.call_args.args[0] == "http://localhost:8123"
+
+
+def test_other_platforms_use_the_generic_opener():
+    """macOS and Windows have their own openers, and `webbrowser` already redirects the children it
+    starts there — this shortcut is for the one platform that does not."""
+    with mock.patch.object(desktop, "_is_wsl", return_value=False), \
+         mock.patch("backend.desktop.sys.platform", "darwin"), \
+         mock.patch("backend.desktop.subprocess.Popen") as popen, \
+         mock.patch("backend.desktop.webbrowser.open") as generic:
+        desktop._open_browser("http://localhost:8123")
+
+    assert popen.call_count == 0
     assert generic.call_args.args[0] == "http://localhost:8123"
 
 

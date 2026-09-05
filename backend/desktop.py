@@ -269,6 +269,28 @@ def _is_wsl() -> bool:
         return False
 
 
+def _spawn_opener(command: list[str]) -> bool:
+    """Hand the URL to `command` with the child's output discarded, reporting whether it started.
+
+    Discarding is the point. This console is the whole interface at startup — it carries the address and
+    the way to stop — so a child that inherits it is writing into Luma's UI under Luma's name. Browsers
+    and openers both do: GTK announces which accessibility modules it declined, and an opener with no
+    browser to hand it to reports each one it tried. Neither is Luma's to report, and neither is
+    actionable, but both appear directly beneath the startup line where a first-run user reads them as
+    something having gone wrong.
+    """
+    try:
+        # `start_new_session` for the reason `webbrowser` uses it on this path: without it the child
+        # stays in this terminal's foreground process group, and the Ctrl+C that stops Luma is delivered
+        # to the browser as well. Stopping the server must not close the window the user was reading.
+        subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        return True
+    except OSError:
+        return False
+
+
 def _open_browser(url: str) -> None:
     """Best effort, and deliberately silent about the outcome — see the module docstring.
 
@@ -276,15 +298,25 @@ def _open_browser(url: str) -> None:
     a WSL distribution does not have, printing a "not found" line for each before giving up, so the
     generic opener produces a wall of errors that reads as a crash while the server is running fine.
     Handing the URL to Windows is both quieter and what the user actually wants.
+
+    Elsewhere on Linux `xdg-open` is the right opener but the wrong caller: `webbrowser` launches the
+    generic ones through `BackgroundBrowser`, which passes no streams to `Popen` and so leaves the child
+    on this terminal. (Its browser-specific classes redirect to `DEVNULL` already, which is why the noise
+    depends on which opener a machine happens to resolve to.) Calling `xdg-open` directly gets the same
+    browser with the streams closed off, and `webbrowser` still stands behind it for anything without
+    one — macOS, a bare X session, a desktop that ships something else.
     """
     if _is_wsl():
         for opener in (["wslview"], ["explorer.exe"]):
-            try:
-                subprocess.Popen([*opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if _spawn_opener([*opener, url]):
                 return
-            except OSError:
-                continue
         return
+    # `BROWSER` is skipped over here on purpose: it is an explicit statement of which browser to use,
+    # `webbrowser` is what honors it, and a quieter console is not worth ignoring a preference someone
+    # set. The shortcut is for the default path, which is the one that resolves to `xdg-open` anyway.
+    if sys.platform.startswith("linux") and not os.environ.get("BROWSER"):
+        if _spawn_opener(["xdg-open", url]):
+            return
     webbrowser.open(url)
 
 

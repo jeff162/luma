@@ -55,10 +55,18 @@ directory records the port. It records a port and not a claim of liveness — it
 `/api/health` is what settles whether the recorded instance is actually there.
 
 **Opening the browser is a convenience; the printed URL is the contract.** No opener on any platform
-reports success usefully, so the outcome is never claimed. `--no-browser` skips the attempt. Under WSL
-the launcher takes its own path, because `xdg-open` there prints a failure for each Linux browser the
-distribution does not have and the resulting wall of errors reads as a crash while the server is
-running normally.
+reports success usefully, so the outcome is never claimed. `--no-browser` skips the attempt.
+
+**The launcher starts the opener itself on Linux, rather than through Python's `webbrowser`.** That
+console is the whole interface at startup — it carries the address and the way to stop — so anything a
+child process writes to it is read as Luma's, by someone who has just run an unsigned binary for the
+first time. `webbrowser` starts the generic openers without redirecting their streams, which puts the
+browser's own startup chatter directly under Luma's startup line; starting `xdg-open` directly discards
+it, and gives the child a session of its own so the Ctrl+C that stops the server does not also close the
+window being read. Under WSL the path is different again, because `xdg-open` there prints a failure for
+each Linux browser the distribution does not have and that wall of errors reads as a crash while the
+server runs normally. An explicit `BROWSER` in the environment defers to `webbrowser`, which is what
+honors it, and every non-Linux platform does too — their openers already redirect what they start.
 
 **Stopping it.** *Shut down Luma* in the navigation panel, the Dock's Quit or Command-Q on macOS,
 Ctrl+C, **closing the terminal a portable build was started from**, and a system shutdown all converge on
