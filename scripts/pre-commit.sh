@@ -30,6 +30,15 @@ if [ -n "$FILES" ]; then
   if [ $? -ne 0 ]; then STATUS=1; fi
 fi
 
+# Terminal text — the whole staged list rather than a bucket, because the files this watches are not
+# all under backend/ or frontend/, and the checker filters to its own set anyway. A character above
+# U+007F in a message a Windows console prints arrives as mojibake there (scripts/check_shipped_ascii.py).
+if [ -n "$FILES" ]; then
+  echo "Checking terminal text for non-ASCII..."
+  node scripts/run_shipped_ascii_check.js $FILES
+  if [ $? -ne 0 ]; then STATUS=1; fi
+fi
+
 # Frontend
 if [ -n "$FRONTEND_FILES" ]; then
   echo "Checking frontend comments..."

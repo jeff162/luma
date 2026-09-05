@@ -62,7 +62,7 @@ MINIMUM_MACOS = "11.0"
 # The line about where data lives is the reason there are two of these rather than one with a
 # substitution: it is the whole difference between the forms, and it is the thing someone reads this
 # file to find out.
-READ_ME_PORTABLE = """Luma — portable build
+READ_ME_PORTABLE = """Luma - portable build
 
 Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
 Press Ctrl+C in the terminal window to stop it.
@@ -78,7 +78,7 @@ This build is unsigned, so the operating system will warn about it the first tim
 Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
 """
 
-READ_ME_INSTALLED = """Luma — installed build
+READ_ME_INSTALLED = """Luma - installed build
 
 Run the `luma` executable. It starts the application, prints its address, and opens a browser at it.
 Press Ctrl+C in the terminal window to stop it.
@@ -98,7 +98,7 @@ Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file 
 # Gatekeeper is the reason this one is long. The gesture most people know for opening an unsigned
 # application — Control-click, then Open — stopped working in macOS 15, and someone who tries it and is
 # refused concludes the download is broken rather than unsigned.
-READ_ME_MACOS = f"""{DEFAULT_APP_NAME} — macOS
+READ_ME_MACOS = f"""{DEFAULT_APP_NAME} - macOS
 
 To install, drag {DEFAULT_APP_NAME} to the Applications folder.
 
@@ -118,13 +118,13 @@ the network: the server accepts connections from this machine only.
 
 Data lives in ~/Library/Application Support/{DEFAULT_APP_NAME}, and stays there when the application is
 replaced or deleted. Startup messages, including the address in use, are written to luma-desktop.log in
-that same folder — an application started from Finder has no terminal to print them to.
+that same folder; an application started from Finder has no terminal to print them to.
 
 To stop it, quit {DEFAULT_APP_NAME} from the Dock, or press Command-Q. Either shuts the server down
 cleanly. "Shut down {DEFAULT_APP_NAME}", at the bottom of the navigation panel inside the app, does the
 same thing from the browser.
 
-{DEFAULT_APP_NAME} runs no window of its own — the browser is its interface — so the Dock icon is the
+{DEFAULT_APP_NAME} runs no window of its own (the browser is its interface), so the Dock icon is the
 only thing on screen when it is running.
 
 Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
@@ -176,7 +176,7 @@ def _npm() -> str:
         found = shutil.which(candidate)
         if found:
             return found
-    raise SystemExit("npm was not found on PATH — needed to build the frontend bundle.")
+    raise SystemExit("npm was not found on PATH. It builds the frontend bundle.")
 
 
 def _build_frontend() -> None:
@@ -258,7 +258,7 @@ def _assemble_macos_app(server_tree: Path) -> Path:
 
     if not shutil.which("swiftc"):
         raise SystemExit(
-            "swiftc was not found on PATH — it builds the macOS application wrapper. "
+            "swiftc was not found on PATH. It builds the macOS application wrapper. "
             "Install the Xcode command line tools with: xcode-select --install"
         )
     _run(

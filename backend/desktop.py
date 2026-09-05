@@ -255,7 +255,7 @@ def _choose_port() -> int:
     if configured:
         print(
             f"Port {configured} is in use, so this instance is on {fallback}. "
-            "If a second Luma is holding it, stop one of them — they share the same databases."
+            "If a second Luma is holding it, stop one of them: they share the same databases."
         )
     return fallback
 
@@ -388,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     # the address is the whole of what the line is for, and how to stop a windowless build is documented
     # beside it (`READ_ME_MACOS` in `scripts/build_desktop.py`) and offered inside the app.
     if _has_console():
-        print(f"Luma is running at {url} — press Ctrl+C to stop.")
+        print(f"Luma is running at {url}. Press Ctrl+C to stop.")
     else:
         print(f"Luma is running at {url}")
     try:

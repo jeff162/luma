@@ -441,10 +441,17 @@ only staged files:
 - **every** staged file runs `scripts/check-personal-data.js` — a real account name or card
   last-4 leaks the same from a doc or a fixture as from source, so this one is not scoped by
   path
+- **every** staged file also runs `scripts/check_shipped_ascii.py` (through
+  `scripts/run_shipped_ascii_check.js`), which filters to the files it watches — see the ASCII
+  guard below
 - staged `frontend/*` files run `frontend/scripts/check-comments.js`
 - staged `backend/*.py` files run `backend/scripts/check_comments.py` (through
   `scripts/run_backend_comment_check.js`, which finds the right Python on each
   platform), then `scripts/check-backend-timestamps.js`
+
+Both Python-backed checks reach their interpreter through `scripts/python-runner.js`, which is where
+the `python3` / `python` / `py -3` fallback order lives. Getting that order wrong fails silently — the
+check looks like it passed — which is why it is in one place rather than copied per caller.
 
 ### The timestamp guard
 
@@ -509,8 +516,33 @@ When the guard fires, replace with fabricated values: `docs/collaboration-notes.
 vocabulary, and the repo already uses Fablecard / Harborline / Riverstone / Northgate with invented
 masks. `data/personal-data-allow.txt` (also untracked) takes path prefixes for a known leftover.
 
+### The ASCII guard
+
+`scripts/check_shipped_ascii.py` refuses a character above U+007F in **string literals** in the files
+whose text reaches a terminal: `scripts/build_desktop.py`, which writes the `README.txt` inside every
+downloadable kit, and `backend/desktop.py`, whose messages print on every launch and land in
+`luma-desktop.log`.
+
+The reason is Windows. A console there decodes with the machine's OEM code page — CP437 or CP850 on
+most installs — not UTF-8, so an em dash written as UTF-8 arrives as three bytes and renders as
+`ΓÇö`. The reader chooses the code page, so nothing on this side can fix it; 7-bit ASCII is the
+only range that renders the same under all of them. Rewrite with a hyphen, a semicolon, parentheses,
+or a sentence break.
+
+**Comments and docstrings are exempt** and never checked, because they do not leave the repository.
+So an em dash in prose about the code is fine; one inside a string is not.
+
+**The frontend is deliberately out of scope.** Its text is rendered by a browser, which knows the
+document's encoding. The line is "text that reaches a terminal or ships as a file someone opens
+outside a browser" — not a house style rule about punctuation, which is what this would become if the
+watched list grew by habit. Adding a file means answering that question for it; the list in the script
+records the answer beside each entry.
+
+It exists as a check rather than a note because two files drifted into it independently, one of them
+printing mojibake at every single startup for as long as it had been there.
+
 You can run the same combined checks manually from `frontend/` — `npm run lint` is eslint plus both
-comment checks, the timestamp guard and the personal-data guard:
+comment checks, the timestamp guard, the personal-data guard and the ASCII guard:
 
 ```bash
 cd frontend
