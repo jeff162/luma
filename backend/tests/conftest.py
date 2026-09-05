@@ -48,13 +48,21 @@ _AMBIENT_DATA_PATH = str(Path(database.DB_PATH))
 _AMBIENT_CONTROL_PATH = str(Path(control_database.CONTROL_DB_PATH))
 
 
+_ISOLATION_ADVICE = {
+    "data database": "`set_current_db_path(...)` plus `init_db(...)` against a temp file",
+    "control database": "reassign `control_database.CONTROL_DB_PATH` and call `init_control_db()`",
+    # The store follows `current_db_path()`, not the connection a test is holding — so passing a path to
+    # `get_db` is not enough on its own, and that is exactly how this one gets missed.
+    "document store": "`set_current_db_path(...)`, which is what the store reads to find its directory",
+}
+
+
 def _refuse_ambient(kind: str, path: str):
     raise RuntimeError(
-        f"Test opened the configured {kind} database at {path}. Tests must never touch it — on a "
-        f"developer machine that file holds real data. Point the test at a temp file: "
-        f"`set_current_db_path(...)` plus `init_db(...)` for the data DB, and for the control DB "
-        f"reassign `control_database.CONTROL_DB_PATH` and call `init_control_db()`, restoring the "
-        f"original in teardown (see `backend/tests/_api_client.py`)."
+        f"Test reached the configured {kind} at {path}. Tests must never touch it — on a "
+        f"developer machine it holds real data. Isolate it with "
+        f"{_ISOLATION_ADVICE.get(kind, 'a temporary path')}, restoring the original in teardown "
+        f"(see `backend/tests/_api_client.py`)."
     )
 
 
@@ -65,14 +73,14 @@ _real_get_control_db = control_database.get_control_db
 def _guarded_get_db(db_path: str | None = None):
     resolved = database._normalize_db_path(db_path)
     if resolved == _AMBIENT_DATA_PATH:
-        _refuse_ambient("data", resolved)
+        _refuse_ambient("data database", resolved)
     return _real_get_db(db_path)
 
 
 def _guarded_get_control_db():
     resolved = str(Path(control_database.CONTROL_DB_PATH))
     if resolved == _AMBIENT_CONTROL_PATH:
-        _refuse_ambient("control", resolved)
+        _refuse_ambient("control database", resolved)
     return _real_get_control_db()
 
 
@@ -132,7 +140,7 @@ def _fast_init_db(db_path: str | None = None):
         return _real_init_db(db_path)
     resolved = database._normalize_db_path(db_path)
     if resolved == _AMBIENT_DATA_PATH:
-        _refuse_ambient("data", resolved)
+        _refuse_ambient("data database", resolved)
     if not _is_fresh_build(resolved):
         return _real_init_db(db_path)
     _serve_from_template("data", lambda path: _real_init_db(str(path)), resolved)
@@ -143,7 +151,7 @@ def _fast_init_control_db():
     # the API harness repoints it per test before calling.
     resolved = control_database.CONTROL_DB_PATH
     if resolved and str(Path(resolved)) == _AMBIENT_CONTROL_PATH:
-        _refuse_ambient("control", resolved)
+        _refuse_ambient("control database", resolved)
     if not resolved or not _is_fresh_build(resolved):
         return _real_init_control_db()
 
@@ -165,3 +173,24 @@ control_database.init_control_db = _fast_init_control_db
 # these by `from ... import`, and pytest imports this file before any of them.
 database.get_db = _guarded_get_db
 control_database.get_control_db = _guarded_get_control_db
+
+
+# The document store is a third thing that lives in the data directory, and it is reached differently:
+# it puts files beside whatever `current_db_path()` resolves to, which is the context variable rather
+# than the connection a test happens to be holding. So a test can read and write its own temp ledger
+# while dropping attachments into the developer's real `documents/` — the databases look isolated and
+# the files are not. Guarded here rather than left to each test to remember.
+from backend.services import documents as _documents  # noqa: E402  (after the patches above)
+
+_AMBIENT_DOCUMENT_ROOT = _documents.documents_dir()
+_real_documents_dir = _documents.documents_dir
+
+
+def _guarded_documents_dir():
+    resolved = _real_documents_dir()
+    if resolved == _AMBIENT_DOCUMENT_ROOT:
+        _refuse_ambient("document store", str(resolved))
+    return resolved
+
+
+_documents.documents_dir = _guarded_documents_dir

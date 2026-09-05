@@ -142,6 +142,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         return {"skipped": True, "reason": "tenant already has accounts or transactions"}
 
     from backend.db.database import _seed_default_categories, SHARED_OWNER_ID
+    from backend.db.demo_examples import seed_all
     from backend.routers.import_export.core import run_import_core
 
     # An organized starter tree to map imported labels into: a file category that matches a starter leaf
@@ -194,9 +195,50 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         bank(base + 4, "Fiberlink", "Internet", 69.99, "checking")
         bank(base + 5, "CellOne Mobile", "Phone", 55.00, "checking")
         bank(base + 6, "Metro Water", "Water", 38.25, "checking")
+    # A gas bill with a real winter peak, carried back far enough to be seasonal rather than noisy. Two
+    # features need this shape and nothing else in the set provides it: the price-change signal's
+    # tightness test (which reads the whole prior history, so four flat summer bills must not make the
+    # series look fixed-price) and the range learning behind dismissing one of its warnings. It also
+    # gives year-over-year comparison a second year to compare against.
+    gas_by_month = [148.20, 132.75, 88.40, 61.30, 44.85, 39.10,
+                    41.60, 43.25, 58.90, 79.40, 104.60, 139.80]
+    for m in range(14):
+        # `m` counts back from this month, so the seasonal position follows the real calendar.
+        month_index = (today.month - 1 - m) % 12
+        bank(m * 30 + 8, "Northgate Gas", "Gas & Heating", gas_by_month[month_index], "checking")
+
+    # A subscription that stops two periods before the data ends. Two constraints decide those numbers
+    # and they pull against each other: the missed signal is judged against how fresh the *data* is
+    # rather than against today, so the series has to stop before the newest rows — but detection scores
+    # recency to zero at three periods without a charge, and an undetected series cannot be missed. A
+    # long run ending about two and a half months back sits in the gap, and reads as what it is: a
+    # subscription that was cancelled, or a payment method that quietly expired.
+    for m in range(2, 9):
+        bank(m * 30 + 12, "CloudVault Backup", "Software & Subscriptions", 9.99, "checking")
+
+    # The other bill from the same biller, and the reason its rule carries a floor rather than the water
+    # rule simply matching everything: told apart by size, nothing else about them differs.
+    bank(75, "Metro Water", "Home Repairs", 185.00, "checking")
+
+    # The newest water bill, arriving just past the ceiling on the rule that files these. It carries no
+    # category *because* of that: the range on a rule is a matching gate, so a bill that grows past it
+    # stops matching and quietly stops being categorized. Nothing else in the app notices, which is the
+    # whole reason the drift signal exists — and why this row must not be filed under Water here, since
+    # a row already carrying the rule's own category is by definition fine.
+    bank(4, "Metro Water", "", 63.40, "checking")
+
     bank(30, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
     bank(30, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
     bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
+
+    # The money coming back. Each is claimed by one of the reimbursements built after the import; until
+    # then they are ordinary inflows, which is exactly what they look like to someone who has not
+    # recorded the debt.
+    bank(27, "Expense reimbursement — Northwind Ltd", "Reimbursed Expenses", -388.00, "checking")
+    bank(26, "Sam Okafor — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(26, "Priya Raman — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(26, "Dana Whitfield — lunch", "Reimbursed Expenses", -24.00, "checking")
+    bank(22, "Sam Okafor — concert ticket", "Reimbursed Expenses", -35.00, "checking")
     # "Pet Care" isn't a starter leaf, so importing it here creates the leaf (under Unassigned).
     bank(20, "Petco", "Pet Care", 46.20, "checking")
     bank(48, "Chewy", "Pet Care", 61.85, "checking")
@@ -217,10 +259,13 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     def card(days_ago, payee, amount, acct="card"):
         card_rows.append((d(days_ago), payee, f"{-amount:.2f}", name_of[acct]))
 
-    for m in range(3):
+    # Six months rather than three so the price step below is judged against an established price. The
+    # newest charge is the one that moved: price change is measured against the occurrences *preceding*
+    # the latest, which is the only comparison a stored min/max band cannot make for itself.
+    for m in range(6):
         base = m * 30
-        card(base + 8, "Netflix", 15.99)        # rule → Streaming Services
-        card(base + 9, "FitClub", 40.00)        # no rule → uncategorized
+        card(base + 8, "Netflix", 15.99 if m else 17.99)   # rule → Streaming Services
+        card(base + 9, "FitClub", 40.00)                   # no rule → uncategorized
     grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
     grocery_amts = [182.40, 64.10, 121.75, 88.30]
     for i in range(12):
@@ -237,6 +282,14 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for i in range(8):
         card(5 + i * 8, "Amazon", online_amts[i])                # Amazon → rule
     card(15, "Amazon Refund", -45.00)                            # refund (income); "amazon" → rule
+
+    # Rows the worked examples further down build on. They import as ordinary transactions; what makes
+    # them examples is what is done to them afterwards.
+    card(33, "Warehouse Club", 214.60)          # split across two categories
+    card(41, "Northgate Hotel", 388.00)         # work expense, repaid in full a fortnight later
+    card(41, "Sky Harbor Parking", 64.00)       # part of the same trip, attached receipt
+    card(26, "Lakeside Taverna", 96.00)         # lunch for four, repaid the same day
+    card(30, "Riverstone Amphitheater", 105.00) # three tickets, two of them owed back
     card(45, "Quarterly Dividend", -52.40, "brokerage")          # uncategorized income
     card(26, "Annual Membership", 96.00)                         # cross-account duplicate, leg B
 
@@ -311,8 +364,13 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
                 conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (groups[n], tid))
         return tid
 
-    add_tag(ESSENTIAL_TAG, "#16a34a", 0, leaf_names=("Groceries", "Rent & Mortgage", "Gas"), group_names=("Utilities",))
-    add_tag(DISCRETIONARY_TAG, "#f59e0b", 1, leaf_names=("Dining Out", "Coffee & Drinks"), group_names=("Entertainment", "Shopping"))
+    tag_ids = {}
+    tag_ids[ESSENTIAL_TAG] = add_tag(ESSENTIAL_TAG, "#16a34a", 0, leaf_names=("Groceries", "Rent & Mortgage", "Gas"), group_names=("Utilities",))
+    tag_ids[DISCRETIONARY_TAG] = add_tag(DISCRETIONARY_TAG, "#f59e0b", 1, leaf_names=("Dining Out", "Coffee & Drinks"), group_names=("Entertainment", "Shopping"))
+
+    # --- The features that are done *to* a transaction rather than imported with it ---
+    _groups, leaves = _category_lookup(conn)
+    examples = seed_all(conn, leaves, tag_ids)
 
     # Mark demo-loaded LAST — after the imports, so the import-block guard never trips during the build.
     conn.execute(
@@ -336,4 +394,5 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "transactions": txn_count,
         "suspects_flagged": suspects_flagged,
         "tags": [ESSENTIAL_TAG, DISCRETIONARY_TAG],
+        **examples,
     }

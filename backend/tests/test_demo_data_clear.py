@@ -81,7 +81,7 @@ class DemoDataClearTests(unittest.TestCase):
             }
 
     def test_status_reflects_marker(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             self.assertFalse(is_demo_data_loaded(conn))
             load_demo_data(conn, scope_id="demo-profile")
             self.assertTrue(is_demo_data_loaded(conn))
@@ -103,7 +103,7 @@ class DemoDataClearTests(unittest.TestCase):
             self.assertTrue(conn.execute("SELECT 1 FROM account WHERE id = 'a1'").fetchone())
 
     def test_clear_with_marker_wipes_and_reseeds_skeleton(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         loaded = self._counts()
         self.assertGreater(loaded["accounts"], 0)
@@ -127,7 +127,7 @@ class DemoDataClearTests(unittest.TestCase):
         # A document attached to a demo transaction is the case the wipe alone does not finish: the row
         # goes with its transaction via ON DELETE CASCADE, but files are outside that transaction and
         # would survive it as orphans nothing references. The sweep after the commit is what closes it.
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
             txn_id = conn.execute("SELECT id FROM txn LIMIT 1").fetchone()["id"]
 
@@ -154,12 +154,12 @@ class DemoDataClearTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM document").fetchone()[0], 0)
 
     def test_clear_is_repeatable_after_reload(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         with self._use_db_path():
             clear_demo_data_endpoint()
         # A fresh demo load works again, and clears again — the lifecycle is closed.
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             summary = load_demo_data(conn, scope_id="demo-profile")
         self.assertFalse(summary["skipped"])
         with self._use_db_path():
@@ -169,14 +169,14 @@ class DemoDataClearTests(unittest.TestCase):
         with self._use_db_path():
             # Empty tenant: not loaded, but loadable (the "Load demo data" offer shows).
             self.assertEqual(demo_data_status(), {"loaded": False, "loadable": True})
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         with self._use_db_path():
             # Loaded → no longer loadable (tenant has data).
             self.assertEqual(demo_data_status(), {"loaded": True, "loadable": False})
 
     def test_restore_blocked_while_demo_loaded(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
@@ -189,7 +189,7 @@ class DemoDataClearTests(unittest.TestCase):
         # connection is what `is_demo_loadable` treats as disqualifying — so without the gate it is the one
         # way to reach a demo tenant that owns a live data source, whose synced rows the demo clear would
         # then erase as though they were demo data.
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
@@ -201,7 +201,7 @@ class DemoDataClearTests(unittest.TestCase):
         self.assertEqual(ctx.exception.detail.get("code"), "demo_data_loaded")
 
     def test_sync_blocked_while_demo_loaded(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
@@ -210,7 +210,7 @@ class DemoDataClearTests(unittest.TestCase):
         self.assertEqual(ctx.exception.detail.get("code"), "demo_data_loaded")
 
     def test_import_blocked_while_demo_loaded(self):
-        with get_db(str(self.db_path)) as conn:
+        with self._use_db_path(), get_db(str(self.db_path)) as conn:
             load_demo_data(conn, scope_id="demo-profile")
         cfg = {
             "column_map": {"date": "Date", "amount": "Amount", "description": "Description"},

@@ -172,10 +172,16 @@ just the ledger: anything built for a `Request` can reach the control DB, and th
 separately — `set_current_db_path` for the data DB, the `control_database.CONTROL_DB_PATH` module
 attribute for the control one. `backend/tests/_api_client.py` does both and is the pattern to copy.
 
+A third store follows the same rule and is reached differently: **attached documents** live in a
+`documents/` directory beside the data database, found through `current_db_path()` rather than through
+whichever connection a test is holding. Passing a path to `get_db` is therefore not enough on its own —
+without `set_current_db_path` a test reads its own temp ledger while writing files into the developer's
+real document store, which looks isolated and is not.
+
 Isolation is enforced rather than assumed. `backend/tests/conftest.py` refuses any open of a
-*configured* database path and names the fix in the error, because a test that skips the isolation
-does not fail on a machine where those databases exist — it silently reads the developer's own data,
-and only a clean checkout turns that into a visible failure. If a new dependency lands, re-run
+*configured* database path or the configured document store, and names the fix in the error, because a
+test that skips the isolation does not fail on a machine where those exist — it silently reads the
+developer's own data, and only a clean checkout turns that into a visible failure. If a new dependency lands, re-run
 `start_backend.sh` once to refresh the venv first.
 
 For larger backend changes, also start the app and exercise the affected flow
