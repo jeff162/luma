@@ -17,7 +17,6 @@ from backend.services import duplicate_detection
 
 from backend.services.duplicate_detection import (
     DedupeContext,
-    DedupeVerdict,
     duplicate_amount_key as _duplicate_amount_key,
     evaluate_duplicate,
     row_match_texts,

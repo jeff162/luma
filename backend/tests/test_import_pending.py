@@ -14,7 +14,6 @@ import io
 import json
 import tempfile
 import unittest
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
 

@@ -58,9 +58,30 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from backend import app_config, runtime_config, spa
+from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
+
+
+def _not_authenticated(reason: str, request: Request) -> JSONResponse:
+    """Reject a request as unauthenticated, recording *which* check rejected it.
+
+    The response body stays one opaque message on purpose: which of the three checks below fired is
+    not a caller's business, and answering it would tell an unauthenticated caller whether a user id
+    exists. The reason is logged instead, because two of the three **clear the session** — a user who
+    was signed out mid-session otherwise has no trace to point at, and neither does anyone asked why.
+
+    Whether the request *carried* a session cookie is logged alongside it, because the reason alone
+    cannot separate the two cases that matter most. `SessionMiddleware` answers a cookie whose
+    signature does not verify with ``scope["session"] = {}`` — byte-identical, from here, to a request
+    that sent no cookie at all — so "no user_id" spans both a session that was never established (or
+    was cleared, which deletes the cookie) and one signed under a *different* secret than this process
+    verifies with. Presence alone separates them; the value is never logged, since it is the session.
+    """
+    carried = "with" if config.session_cookie_name in request.cookies else "without"
+    log_warning(f"[auth] rejected {request.url.path} ({carried} a session cookie): {reason}")
+    return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
@@ -94,15 +115,19 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 
         user_id = session.get("user_id")
         if not user_id:
-            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            return _not_authenticated("no user_id on the session", request)
         if auth_required() and session.get("pwless"):
             session.clear()
-            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            return _not_authenticated(
+                "passwordless session, but the perimeter is on", request
+            )
 
         user = get_user_by_id(user_id)
         if not user:
             session.clear()
-            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            return _not_authenticated(
+                f"session user_id {user_id!r} is not in the control database", request
+            )
 
         token = set_current_db_path(user["db_path"])
         request.state.user = user

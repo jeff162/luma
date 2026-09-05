@@ -193,7 +193,7 @@ class MultiClauseMatchTests(unittest.TestCase):
 
     def test_delete_reconcile_reverts_only_and_matches(self):
         both = self._txn("Amazon Prime Video")
-        one = self._txn("Amazon Fresh")
+        _one = self._txn("Amazon Fresh")
         created = self._rule(["amazon", "prime"], self.cat_b)
         self._recategorize()
         self.assertEqual(self._cat(both), self.cat_b)

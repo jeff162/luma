@@ -47,7 +47,6 @@ from backend.services.reimbursements import (
     unclaimed_amounts,
 )
 from backend.services.txn_splits import (
-    SPLIT_CATEGORY_SOURCE,
     SplitValidationError,
     clear_split,
     get_split_parts_map,

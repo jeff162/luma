@@ -44,7 +44,6 @@ from backend.services.reimbursements import (
     ReimbursementError,
     add_claims,
     create_reimbursement,
-    default_reminder_days,
     due_reminders,
     get_reimbursement,
     move_claim,
@@ -884,7 +883,7 @@ class SharesOfOneTransactionTests(ReimbursementTestCase):
         # The report used to sum a row's receivable parts into one figure, so a charge split between two
         # people looked like a single $500 debt and could only ever be tracked as one.
         with self._db() as conn:
-            charge = self._three_way_charge(conn)
+            _charge = self._three_way_charge(conn)
             report = outstanding(conn)
         [row] = report["loose"]
         self.assertEqual(row["unclaimed"], 500.0)
@@ -948,7 +947,7 @@ class SharesOfOneTransactionTests(ReimbursementTestCase):
         with self._db() as conn:
             charge = self._three_way_charge(conn)
             deposit = self._split_deposit(conn, 250.0, 200.0, 150.0)
-            dana = create_reimbursement(conn, [
+            _dana = create_reimbursement(conn, [
                 {"txn_id": charge, "amount": 250.0}, {"txn_id": deposit, "amount": -250.0},
             ], counterparty="Dana")
             rowan = create_reimbursement(conn, [

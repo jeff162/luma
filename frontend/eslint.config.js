@@ -91,17 +91,37 @@ export default [
       // intentionally don't care about; the surrounding code handles the absent value.
       'no-empty': ['error', { allowEmptyCatch: true }],
 
-      // The headline rules.
+      // The headline rules. `exhaustive-deps` is an error rather than a warn because the tree is
+      // currently clean of it — promoting a rule with nothing left to clear costs nothing and turns
+      // it into a real gate, which a warn in a zero-warning tree is not (the next stale-closure bug
+      // would land as noise nobody is watching for).
       'react-hooks/rules-of-hooks': 'error',
-      'react-hooks/exhaustive-deps': 'warn',
+      'react-hooks/exhaustive-deps': 'error',
+
+      // A component defined inside another component's render is a new type every render, so React
+      // unmounts the subtree and throws away its DOM and state. `allowAsProps` is on because the
+      // render-prop form is a library API rather than the mistake: Recharts' Sankey takes `link` /
+      // `node` as functions returning an element, and rewriting those to satisfy the rule would be
+      // restructuring correct markup. Clean at zero hits with that option.
+      'react/no-unstable-nested-components': ['error', { allowAsProps: true }],
 
       // Catches non-component exports from .jsx modules that would break Vite HMR.
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
 
+      // Measured and left off deliberately, both pure-formatting rules whose hits are all harmless:
+      // `jsx-no-useless-fragment` (4 hits) flags fragments that wrap a single child, and its autofix
+      // dedents the parent without reindenting the children — so taking it means either misleading
+      // markup or a ~150-line reindent of files nothing else in the change touches. `no-array-index-key`
+      // (31 hits) is a genuine bug class only in reorderable lists; the rest are static renders where
+      // the index is a stable key, so it needs per-site judgment rather than a sweep.
+      'react/jsx-no-useless-fragment': 'off',
+      'react/no-array-index-key': 'off',
+
       // Accessibility (label association only — not the full jsx-a11y recommended set).
       // `control-has-associated-label` is OFF on purpose: this codebase uses placeholder-only inputs
-      // widely, which it counts as unlabeled (89 hits) while the browser counts the placeholder as
-      // the accessible name (≈1 hit) — so it floods and can't isolate the real runtime issue. Revisit
+      // widely, which it counts as unlabeled (101 hits, re-measured — it was 89 when this was written,
+      // so it grows with the UI) while the browser counts the placeholder as the accessible name
+      // (≈1 hit) — so it floods and can't isolate the real runtime issue. Revisit
       // only as part of a dedicated a11y sweep. `label-has-associated-control` catches the smaller,
       // genuinely-broken class (a <label> wired to no control / with no text) and is kept as a warn.
       // The autofill-oriented "needs id/name" console warnings are not a11y rules; left for later.

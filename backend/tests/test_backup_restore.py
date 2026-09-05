@@ -55,7 +55,7 @@ from backend.routers.import_export.backup import (
     write_backup_archive,
 )
 from backend.routers.import_export.backup import _zip_json_bytes, read_payload_bytes
-from backend.services.documents import document_file_path, documents_dir, write_document_file
+from backend.services.documents import document_file_path, write_document_file
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).

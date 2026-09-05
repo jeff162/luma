@@ -101,7 +101,7 @@ def test_the_bundled_executable_keeps_its_date_and_its_compression(tmp_path):
 
     with zipfile.ZipFile(archive) as bundle:
         entry = bundle.getinfo("luma/luma")
-        readme = bundle.getinfo("luma/README.txt")
+        _readme = bundle.getinfo("luma/README.txt")
 
     assert entry.date_time == (2026, 3, 4, 5, 6, 8)
     assert entry.compress_type == zipfile.ZIP_DEFLATED

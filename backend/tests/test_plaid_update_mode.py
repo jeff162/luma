@@ -97,7 +97,7 @@ class RepairEndpointTests(unittest.TestCase):
             with mock.patch.object(plaid_service, "create_link_token", return_value="link-1") as create:
                 r = client.get(f"/api/plaid/link-token?connection_id={connection_id}")
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["mode"], "update")
+            self.assertEqual(r.json().get("mode"), "update", r.text)
             # The stored credential is what Link is handed, decrypted from the vault on the way past.
             self.assertEqual(create.call_args[0][2], "access-1")
 
@@ -106,7 +106,7 @@ class RepairEndpointTests(unittest.TestCase):
             self._connected(client)
             with mock.patch.object(plaid_service, "create_link_token", return_value="link-1") as create:
                 r = client.get("/api/plaid/link-token")
-            self.assertEqual(r.json()["mode"], "create")
+            self.assertEqual(r.json().get("mode"), "create", r.text)
             self.assertIsNone(create.call_args[0][2])
 
     def test_a_repair_keeps_the_same_connection_and_clears_the_badge(self):
@@ -118,7 +118,7 @@ class RepairEndpointTests(unittest.TestCase):
                 r = client.post("/api/plaid/repair", json={"connection_id": connection_id})
 
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["connection_id"], connection_id)
+            self.assertEqual(r.json().get("connection_id"), connection_id, r.text)
             row = self._row(connection_id)
             self.assertEqual(row["external_id"], "item-1", "update mode must not change the handle")
             self.assertEqual(row["reauth_required"], 0)
@@ -140,7 +140,7 @@ class RepairEndpointTests(unittest.TestCase):
                                    side_effect=RuntimeError("ITEM_LOGIN_REQUIRED")):
                 r = client.post("/api/plaid/repair", json={"connection_id": connection_id})
 
-            self.assertEqual(r.status_code, 502)
+            self.assertEqual(r.status_code, 502, r.text)
             self.assertEqual(self._row(connection_id)["reauth_required"], 1)
 
     def test_a_repair_refuses_while_the_vault_is_locked(self):
@@ -149,7 +149,7 @@ class RepairEndpointTests(unittest.TestCase):
             connection_id = self._connected(client)
             client.post("/api/auth/vault/lock")
             r = client.post("/api/plaid/repair", json={"connection_id": connection_id})
-            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.status_code, 423, r.text)
             self.assertEqual(r.json()["detail"]["code"], "vault_locked")
 
 

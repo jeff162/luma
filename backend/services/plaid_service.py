@@ -9,7 +9,6 @@ the database and routers rely on: stable field names, string dates, and full
 pagination before control returns to the caller.
 """
 
-import uuid
 from datetime import date, timedelta
 
 import plaid

@@ -348,6 +348,23 @@ for what the *user* can act on.
 
 ## Verification And Tests
 
+- **Never pipe a test or build run into `tail`, `head`, or a filtering `grep`. Redirect to a file and
+  read the file.** A run that fails unexpectedly is the only evidence that failure will produce, and a
+  pipe throws all of it away before anyone can look. This was learned the expensive way and immediately:
+  minutes after adding a diagnostic log line to the auth middleware *specifically* so an intermittent
+  401 could be identified, a routine `pytest … | tail -2` hit that exact failure and discarded the line
+  it had just been built to capture — then five re-runs were spent trying to make it happen again. The
+  reasoning that led there is the part to distrust: the run was framed as a green-check, where only the
+  last line matters, and that framing is wrong for **any** suite with a known intermittent, where every
+  run is also a capture opportunity. Cheap and unconditional:
+
+  ```bash
+  ./scripts/check_backend_and_frontend.sh backend > /tmp/run.log 2>&1; tail -5 /tmp/run.log
+  ```
+
+  The same shape applies to a long build, a Playwright run, and anything whose interesting output is in
+  the middle. Filter the *file*, never the stream.
+
 - **A flaky test is not fixed by lowering concurrency.** Capping Playwright's worker count made a
   failure stop reproducing, and that is evidence of nothing: a knob that changes timing changes a race's
   *probability* without touching its cause. Six clean runs at the original setting then showed the

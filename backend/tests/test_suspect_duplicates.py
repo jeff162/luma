@@ -1496,7 +1496,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         account_c = self._insert_account("Account C")
         batch = self._insert_batch()
 
-        canonical_ab = self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.00, merchant_name="X")
+        _canonical_ab = self._insert_txn(account_id=account_a, date="2025-10-01", amount=-10.00, merchant_name="X")
         suspect_ab   = self._insert_txn(account_id=account_b, date="2025-10-01", amount=-10.00, merchant_name="X", batch_id=batch)
         # An unrelated suspect involving account C, sharing endpoint A but NOT the (A, B) pair.
         canonical_ac = self._insert_txn(account_id=account_a, date="2025-10-02", amount=-20.00, merchant_name="Y")
@@ -1704,7 +1704,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         # "distinct" decision was correctly invalidated by the intervening merge.
         account_a = self._insert_account("Account A")
         account_b = self._insert_account("Account B")
-        first_batch = self._insert_batch(filename="first.csv")
+        _first_batch = self._insert_batch(filename="first.csv")
         second_batch = self._insert_batch(filename="second.csv")
 
         # Establish the distinct assertion.

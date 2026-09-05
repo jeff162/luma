@@ -753,7 +753,7 @@ def move_claim(conn: sqlite3.Connection, link_id: str, txn_id: str, from_link_id
     """
     if link_id == from_link_id:
         raise ReimbursementError("That portion is already part of this reimbursement.")
-    target = _require_open(_load(conn, link_id), "move a transaction into")
+    _require_open(_load(conn, link_id), "move a transaction into")
     source = _require_open(_load(conn, from_link_id), "move a transaction out of")
     claims = _read_claims(get_link(conn, from_link_id).get("metadata"))
     claim = claims.get(txn_id)

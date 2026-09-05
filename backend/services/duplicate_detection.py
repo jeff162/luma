@@ -124,7 +124,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
-from typing import Any, Callable, Iterable, NamedTuple, Optional
+from typing import Callable, Iterable, NamedTuple, Optional
 
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.connection_mapping import provider_account_label

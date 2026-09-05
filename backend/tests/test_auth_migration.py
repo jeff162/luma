@@ -138,7 +138,7 @@ class IdentityModelTests(unittest.TestCase):
     def test_enable_with_admin_claims_and_forces_others(self):
         mark = cdb.create_local_identity("Mark")
         sam = cdb.create_local_identity("Sam")
-        guest = cdb.create_local_identity("Guest")
+        _guest = cdb.create_local_identity("Guest")
 
         admin = cdb.enable_auth_with_admin(
             mark["id"], "password123", initial_passwords={sam["id"]: "sam-password"}

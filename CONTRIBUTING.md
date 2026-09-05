@@ -410,13 +410,81 @@ most cases: the **rule of three** — do not centralize two copies that may stil
 **divergence risk**, since a forced abstraction that leaks is worse than the duplication it replaced.
 The output is "do it / leave it", not raw hits. A deliberate *leave* is a result worth recording.
 
+### A known flaky failure, and the one thing to capture
+
+**Any test driving the full-stack `api_client()` harness can intermittently fail with a `401` where a
+success code is expected (first seen 2026-09-05, unresolved).** Observed so far in
+`test_plaid_update_mode.py`, `test_vault_endpoints.py` and `test_credentials_backup.py` — the common
+factor is the harness, not the feature under test, so a new sighting in a fourth file is the same bug
+rather than a new one. It ran at roughly **one full-suite run in three** when first measured, once
+taking six sibling tests down with it, and has since gone twenty-plus runs without appearing: do not
+expect to summon it on demand, and do not read a green run as evidence it is gone.
+
+**What is established.** The failure is a session that authenticated successfully and then stopped:
+the harness asserts that its own `select-identity` call returned 200, so the session *was* established,
+and the rejection observed in practice is **`no user_id on the session`** — the cookie reached the
+middleware carrying no identity at all. Note the ordering trap that follows: the other two rejection
+paths call `session.clear()`, so a `no user_id` line can be the *downstream* of an earlier rejection in
+the same test. Read every `[auth] rejected` line in the failure, not just the last one.
+
+**If it reappears, read the log line before re-running. That is the diagnosis.** The three rejection
+paths in `TenantSessionMiddleware` deliberately return an identical body — which check refused a
+request is not a caller's business — so the response itself says nothing. Each one logs its reason
+instead, and pytest surfaces it under *Captured log call* even under `-n auto`.
+
+A corollary worth taking seriously, because it has already cost time here: **do not pipe the suite into
+`tail` or `grep`.** A run that fails intermittently is the only evidence that failure will ever produce,
+and a pipe discards it before anyone can look — as does hitting *re-run* on a red CI job before opening
+its log. Redirect to a file and filter the file:
+
+```bash
+./scripts/check_backend_and_frontend.sh backend > /tmp/run.log 2>&1; tail -5 /tmp/run.log
+```
+
+The line to look for:
+
+```text
+WARNING  uvicorn.error:app_logging.py:32 [auth] rejected /api/plaid/repair (with a session cookie): no user_id on the session
+```
+
+**Read the parenthesis first — it carries more than the reason does.** `SessionMiddleware` answers a
+cookie whose signature does not verify with an empty session, which is indistinguishable from no cookie
+at all by the time the request reaches this check, so *"no user_id"* alone spans two unrelated bugs. The
+cookie flag splits them:
+
+| log line | meaning |
+| --- | --- |
+| *without* a cookie · `no user_id` | the session was never established, or an earlier request cleared it (a clear also deletes the cookie) |
+| *with* a cookie · `no user_id` | **the cookie failed signature verification** — this process is verifying with a different `session_secret` than the one that signed it |
+| *with* a cookie · `passwordless session, but the perimeter is on` | something set `auth_enabled` in the control database this request read |
+| *with* a cookie · `session user_id … is not in the control database` | the request read a **different** control database than the harness seeded — `CONTROL_DB_PATH` is a module global that both `api_client()` and `test_transport.py`'s `_isolated_stack()` repoint and restore, and that pattern only holds while no two are live at once in a process |
+
+**If it is the signature-verification row, the prime suspect is process-wide state the harness cannot
+repoint.**
+`app_config.resolve()` runs once at *module import*, and its `session_secret` is passed to
+`SessionMiddleware` as a constructor argument, so the signing key is fixed for the life of the worker
+process — while `api_client()` hands every test a fresh temp control database, each with its own stored
+secret. The first test to import `backend.main` in a worker therefore decides the key every later test's
+cookies are signed and verified with. That is consistent as long as nothing re-resolves configuration
+or re-adds the middleware, which is the assumption worth testing first.
+
+Ruled out already, so nobody spends the afternoon twice: cross-file interleaving inside a worker
+(`--dist loadfile` made it *more* frequent, not less), the conftest schema-template cache (`mkdtemp`,
+so per-process), the suite reaching the real databases (conftest refuses the ambient paths outright),
+and a transient locked-database read masquerading as a deleted user (`get_user_by_id` does not swallow
+exceptions, so a busy database surfaces as a 500, not a 401).
+
+It behaves as timing-sensitive rather than order-dependent — merely adding `-v` suppressed it. So do
+not "fix" it by lowering the worker count: that moves a probability rather than a cause, which is a
+lesson this repo has already paid for once.
+
 ### Where the open gaps are listed
 
 `docs/backlog/test-coverage-gaps.md` is a **running checklist** of tests that are wanted and not yet
 built — HTTP-contract tests behind direct-call unit tests, the rule-collision UI flows, component
 coverage for the shared interactive surfaces, and the parity guard above. Delete an entry when its test
-lands. `docs/backlog/lint-and-tooling.md` holds the two deferred linter projects, and
-`docs/backlog/refactor-audits.md` carries the audit's standing candidate list.
+lands. `docs/backlog/lint-and-tooling.md` holds the remaining vitest-matcher item (both linter projects
+landed 2026-09-05), and `docs/backlog/refactor-audits.md` carries the audit's standing candidate list.
 
 ## Hooks and lint
 
@@ -453,6 +521,16 @@ Both Python-backed checks reach their interpreter through `scripts/python-runner
 the `python3` / `python` / `py -3` fallback order lives. Getting that order wrong fails silently — the
 check looks like it passed — which is why it is in one place rather than copied per caller.
 
+**ruff is the one backend check the hook does not run.** It is wired into `npm run lint` (so it gates
+CI and any manual run) rather than into the staged-file hook, for two reasons: it is the only check
+with an install prerequisite — an optional dev dependency, where every other check needs nothing a
+checkout does not already have — and it is whole-tree rather than per-file, which is the wrong shape
+for a hook that exists to be fast on a handful of staged paths. It reaches its executable through
+`scripts/run_ruff.js`, which is separate from `python-runner.js` because ruff is a binary rather than a
+`.py` file, and because `python -m ruff` exits 1 both for "found lint errors" and for "no such module" —
+so each candidate is probed with `--version` before it is trusted, rather than the fallback chain
+reading a real failure as a missing interpreter.
+
 ### The timestamp guard
 
 Stored timestamps are naive UTC and must come from `utcnow_iso()` in
@@ -475,6 +553,15 @@ why is a rubber stamp. The marker applies to its own line only, and it exempts
 reason makes it correct. `backend/tests/test_timestamp_guard.py` pins both
 halves; it is itself skipped by path, since a test for a lint rule has to
 contain the thing the rule forbids.
+
+**ruff's `DTZ003`/`DTZ005` cover the same two calls, and both guards are kept on purpose.** The
+overlap is not an oversight waiting to be tidied: this guard runs in the pre-commit hook with no
+install prerequisite and understands the per-line `# local-time:` exemption above, while ruff runs
+whole-tree in `npm run lint` and would need a `# noqa` for each of those legitimate cases. Retiring
+this one would put a Python dependency into a hook that currently needs nothing, and trade a marker
+that demands a reason for one that does not. The rest of the `DTZ` family is deliberately *not*
+selected — 56 of its other hits are `date.today()`, and a local calendar date is usually the right
+thing in a ledger.
 
 ### The personal-data guard
 
@@ -542,7 +629,7 @@ It exists as a check rather than a note because two files drifted into it indepe
 printing mojibake at every single startup for as long as it had been there.
 
 You can run the same combined checks manually from `frontend/` — `npm run lint` is eslint plus both
-comment checks, the timestamp guard, the personal-data guard and the ASCII guard:
+comment checks, ruff, the timestamp guard, the personal-data guard and the ASCII guard:
 
 ```bash
 cd frontend

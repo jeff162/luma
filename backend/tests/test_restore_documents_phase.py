@@ -179,7 +179,7 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
                 self._restore_without_documents(zf, staged)
             # Half-written, as an interrupted phase would leave it.
             write_document_file(self.present_document, self.document_bytes[:5])
-            with get_db() as conn:
+            with get_db():
                 pending_before = restore_state_status()["documents_pending"]
 
             resume_restore_documents()

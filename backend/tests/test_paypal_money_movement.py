@@ -132,7 +132,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
     async def test_proposals_flag_money_movement_types_first(self):
         result = await self._import()
         self.assertTrue(result["is_paypal"])
-        with self._use_db_path(), get_db() as conn:
+        with self._use_db_path(), get_db():
             data = get_money_movement_types(result["batch_id"])
         by_type = {p["type"]: p for p in data["proposals"]}
         self.assertTrue(by_type["Account Hold for Open Authorization"]["money_movement"])
@@ -402,7 +402,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path():
             apply_money_movement_rules(result["batch_id"], MoneyMovementRulesRequest(add=["Account Hold for Open Authorization"]))
         # The proposal for that type now reports it's already ruled.
-        with self._use_db_path(), get_db() as conn:
+        with self._use_db_path(), get_db():
             proposals = {p["type"]: p for p in get_money_movement_types(result["batch_id"])["proposals"]}
         self.assertTrue(proposals["Account Hold for Open Authorization"]["already_ruled"])
         self.assertFalse(proposals["General Currency Conversion"]["already_ruled"])

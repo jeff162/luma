@@ -39,8 +39,7 @@ import uuid
 import os
 import re
 from contextlib import nullcontext
-from datetime import datetime, date, timedelta
-from difflib import SequenceMatcher
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,7 +52,6 @@ from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
-from backend.db.control_database import auth_required
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
@@ -74,27 +72,18 @@ from backend.services.import_evidence import (
     EVIDENCE_ROLE_DESCRIPTIVE,
 )
 from backend.services.duplicate_detection import (
-    GENERIC_DUPLICATE_TEXT_TOKENS,
-    are_distinct_checks,
     build_dedupe_context,
-    collect_duplicate_match_texts,
     DEFAULT_TERMINAL_WINDOW_DAYS,
     compute_import_coverage_window,
     evaluate_duplicate,
-    find_cross_account_transfer_candidates,
-    find_ledger_payment_match,
     get_effective_account_row,
     list_unified_batch_duplicates,
     mark_import_suspects,
     record_account_pair_distinct,
     unresolved_account_pairs,
-    match_terminal_day_candidate,
     MIN_TERMINAL_WINDOW_DAYS,
-    normalize_evidence_text,
-    parse_import_evidence,
     sweep_import_suspects,
     refresh_unexplained_coverage_candidates,
-    tokenize_duplicate_match_text,
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
@@ -1982,7 +1971,7 @@ def save_batch_snapshot(conn, batch_id: str, snapshot: dict) -> None:
 
 def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
     for batch_id in [str(value or "").strip() for value in (batch_ids or []) if str(value or "").strip()]:
-        deleted_active_account_rows = conn.execute(
+        conn.execute(
             """
             DELETE FROM import_batch_account
             WHERE batch_id = ?
@@ -1995,8 +1984,8 @@ def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
               )
             """,
             (batch_id,),
-        ).rowcount
-        cleared_skipped_account_rows = conn.execute(
+        )
+        conn.execute(
             """
             UPDATE import_batch_account
             SET account_id = NULL
@@ -2010,7 +1999,7 @@ def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
               )
             """,
             (batch_id,),
-        ).rowcount
+        )
 
         batch = conn.execute(
             "SELECT row_count, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
@@ -3429,7 +3418,6 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             )
             duplicate_existing = verdict.matched if verdict.hard_reject else None
             duplicate_reason = verdict.reason if verdict.hard_reject else ""
-            terminal_day_reconciled = verdict.terminal_day_reconciled
             if duplicate_existing:
                 deduped += 1
                 duplicate_rows.append({

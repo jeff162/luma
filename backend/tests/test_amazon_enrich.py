@@ -1879,7 +1879,7 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             reconciliation_attention_count(conn, batch_id)
             cached_epoch = conn.execute("SELECT recon_epoch FROM import_batch WHERE id = ?", (batch_id,)).fetchone()["recon_epoch"]
-        unrelated = self._add_card_charge(5.00, name="Grocery Store")
+        _unrelated = self._add_card_charge(5.00, name="Grocery Store")
         with self._use_db_path(), get_db() as conn:
             reconciliation_attention_count(conn, batch_id)
             new_epoch = conn.execute("SELECT recon_epoch FROM import_batch WHERE id = ?", (batch_id,)).fetchone()["recon_epoch"]

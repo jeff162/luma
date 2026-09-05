@@ -48,8 +48,13 @@ def api_client():
         with TestClient(app) as client:
             # Establish a perimeter-off identity so the tenant middleware resolves a session (and routes
             # to the temp data DB). Every data endpoint runs as this selected identity.
-            identity = client.post("/api/auth/identities", json={"name": "Tester"}).json()["identity"]
-            client.post("/api/auth/select-identity", json={"user_id": identity["id"]})
+            created = client.post("/api/auth/identities", json={"name": "Tester"})
+            assert created.status_code == 200, f"identity creation failed: {created.text}"
+            identity = created.json()["identity"]
+            # Checked rather than fired and forgotten: a select that does not take leaves a session with
+            # no `user_id`, and every later request in the test 401s somewhere far away from the cause.
+            selected = client.post("/api/auth/select-identity", json={"user_id": identity["id"]})
+            assert selected.status_code == 200, f"identity selection failed: {selected.text}"
             yield client, data_path
     finally:
         (
