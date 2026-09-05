@@ -73,7 +73,7 @@ branch state from the injected snapshot.
   verification)
 - `docs/architecture.md` — structure, data flow, cross-subsystem contracts
 - `docs/data-model.md` — field semantics & invariants (what each field may and may not mean)
-- `docs/security-model.md` — what is defended and what deliberately is not; the read-only/revocable
+- `docs/security-model.md` — what is defended and what deliberately is not; the revocation
   conditioning a new provider can break, secret custody, transport per topology, recovery &
   compromise response (the *mechanism* stays in `architecture.md`)
 - `docs/operations.md` — running an instance: the three topologies and what each binds to, where the

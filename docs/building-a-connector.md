@@ -10,25 +10,27 @@ This document is the checklist of those facts. **None of the failures below anno
 each one produces a plausible-looking result, so a test that does not already know what to look for
 will not find it.
 
-> Scope note: "connector" here means any **data source** that produces transactions — a provider
-> connection (a `ProviderAdapter`) *or* a file importer. The two do not share a base class, so some
-> declarations live on the adapter class and some in a registry (`services/source_capabilities.py`).
+> Scope note: "connector" here means any **data source** that produces transactions. There are three
+> shapes — a provider connection (a `ProviderAdapter`), a file importer, and a marketplace importer —
+> and they do not share a base class, so some declarations live on the adapter class and some in a
+> registry (`services/source_capabilities.py`).
 
 **Which sections apply.** Most of the material below came from building
 provider adapters, so the connection sections are the longer ones — but the rules that survived turned
-out to be about *sources*, not about connections, and a file importer hits several of them unchanged.
+out to be about *sources*, not about connections, and the other two shapes hit several of them unchanged.
 
-| Section | Connection | File importer |
-| --- | --- | --- |
-| The adapter interface · Capability declarations · Where the connection handle comes from | ✅ | — |
-| Adding a file importer | — | ✅ |
-| Transaction ids must be globally unique | ✅ | — (a file carries no identity between imports; dedupe keys on content) |
-| Zero-amount rows | ✅ | ✅ |
-| Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) |
-| Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) |
-| The published guide is not the contract · Request budgets · Pages and commits | ✅ | — |
-| Coverage claims | ✅ | ✅ (an import writes `import_batch_account`; the over-claim rule is the same) |
-| Reporting what was refused | ✅ | ✅ |
+| Section | Connection | File importer | Marketplace importer |
+| --- | --- | --- | --- |
+| The adapter interface · Capability declarations · Where the connection handle comes from | ✅ | — | — |
+| Adding a file importer | — | ✅ | partly (the downstream rules; not the CSV parse seam) |
+| Adding a marketplace importer | — | — | ✅ |
+| Transaction ids must be globally unique | ✅ | — (a file carries no identity between imports; dedupe keys on content) | — (an order id joins a vendor's own files; it is not a ledger identity) |
+| Zero-amount rows | ✅ | ✅ | ✅ (and the one current source that answers `keep` for reason 2) |
+| Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) | ✅ |
+| Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) | ✅ (the one-currency rule) |
+| The published guide is not the contract · Request budgets · Pages and commits | ✅ | — | — |
+| Coverage claims | ✅ | ✅ (an import writes `import_batch_account`; the over-claim rule is the same) | ✅ (per file card, not per account) |
+| Reporting what was refused | ✅ | ✅ | ✅ |
 
 ---
 
@@ -38,6 +40,7 @@ out to be about *sources*, not about connections, and a file importer hits sever
 * [Capability declarations](#capability-declarations)
 * [Where the connection handle comes from](#where-the-connection-handle-comes-from)
 * [Adding a file importer](#adding-a-file-importer)
+* [Adding a marketplace importer](#adding-a-marketplace-importer)
 * [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
 * [Zero-amount rows](#zero-amount-rows)
 * [Dates a source does not have](#dates-a-source-does-not-have)
@@ -47,6 +50,8 @@ out to be about *sources*, not about connections, and a file importer hits sever
 * [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
 * [Coverage claims](#coverage-claims)
 * [Reporting what was refused](#reporting-what-was-refused)
+* [Considered and rejected](#considered-and-rejected)
+* [Obstacles](#obstacles)
 * [Open](#open)
 
 ---
@@ -83,23 +88,6 @@ otherwise learn by branching on `provider`:
 
 Most have a default. `zero_amount_rows` deliberately does not, because its answer does not generalize
 between providers and a wrong inherited guess is silent.
-
-**Read-only is the one trait with no declaration, and it is on you to check it.** Every provider
-credential is already protected as though it carried full account and identity access, so the floor does
-not depend on the answer — but a floor is a default, not knowledge, and nothing in this seam expresses
-what a token actually reaches: there is no `read_only` capability, no test, and no gate, because what a
-token may do is the provider's to define and this codebase cannot see it. That makes it the one item on
-this page a person has to answer rather than declare. **Before writing an adapter, establish what the
-credential actually reaches**: is it scoped to transactions, or does the same token also expose account
-and routing numbers, identity, or the ability to move money? A credential that is the institution's own
-login is the clear failure, but a scoped aggregator token can widen too, by product authorization rather
-than by anything visible here.
-
-If the answer is anything past reading transactions, **stop and raise it.** Nothing in the code will
-catch it later, and what it changes is not a flag but what users have to be told: `security-model.md`
-accepts several risks priced on a leak meaning **disclosure**, and a credential that can act rather than
-only reveal makes each of them cost more. See `security-model.md` → *What is defended, and what is
-deliberately not*.
 
 ## Where the connection handle comes from
 
@@ -214,6 +202,61 @@ source registers by name in `services/source_capabilities.py` and every consumer
 accessor. [Zero-amount rows](#zero-amount-rows) is the worked example, and it has **no default** for the
 same reason there: the answer does not generalize between sources, so a source nobody has thought about
 must fail loudly rather than inherit another's.
+
+## Adding a marketplace importer
+
+A **marketplace** source is a shopping venue whose purchases arrive itemized from the venue itself,
+while the money already arrived through an ordinary account. It reads like a file importer and is not
+one, and the difference is the whole design: a file importer **maps rows onto an account**, adding money
+to the ledger. A marketplace importer **adds detail behind money that is already there** — one
+transaction per order in a dedicated marketplace account, and then a reach back into the ledger to find
+the card charge that paid for it, recategorize it into an excluded category, and link the two so the
+basket is itemized without being counted twice.
+
+That inverts the question a file importer asks. The interesting failure is not a misparsed row; it is an
+order that lands in the ledger next to the charge that already paid for it, doubling the spend under a
+plausible-looking pair of rows.
+
+**The prerequisite is the paying instrument, and it is worth checking before anything else.** The link
+only exists because the vendor's export names the card that paid — an order's compound payments string
+carries a network and a last-4, which resolves through a user-maintained funding-source map to the
+account the charge landed on. A vendor whose export omits it can still create order rows, but nothing
+can find their charges, so every order double-counts until the user excludes each one by hand. **Establish
+that the export names the instrument before designing anything else**; if it does not, the honest shape
+is a different feature, not a thinner version of this one.
+
+Three more questions are specific to this shape, and none is answered elsewhere in this document:
+
+* **What funds an order that moved no cash.** Points and gift-card balances are redeemed at spend time
+  with nothing leaving an account, and the export routinely gives no dollar figure for them. Such an
+  order is recorded **excluded** rather than as spending — counting it invents money the ledger never
+  saw, and dropping it makes reconciliation report an order whose charge was not found.
+* **What joins the vendor's files, and whether it survives a re-export.** A vendor typically exports
+  orders and items separately, joined on an order id. That id is a *within-vendor* key, not a ledger
+  identity — see [Transaction ids](#transaction-ids-must-be-globally-unique) for why it is not one. The
+  key that has to be stable is the **content hash** of each file, since that is what makes a re-import
+  recognize itself rather than land as a second copy.
+* **Refunds and returns.** A partly refunded order is one net figure against one charge; a separately
+  refunded one is a second ledger row the reconciliation has to not mistake for a duplicate.
+
+**What still binds, from the rest of this page.** A marketplace source states a zero-amount policy like
+any other, registered by name in `_NON_ADAPTER_SOURCE_POLICY` rather than as a class attribute, since it
+is a code path with no class to hold one — and with no default, for the reason given under
+[Zero-amount rows](#zero-amount-rows). Per-item detail folded into an order row's evidence is subject to
+the same [descriptive-vs-categorical](#adding-a-file-importer) classification, and misclassifying it is
+just as silent. Refusals report through the same writers as everything else, so
+[Reporting what was refused](#reporting-what-was-refused) applies unchanged.
+
+**What does not bind is the CSV parse seam.** Export formats differ per vendor with nothing in common to
+dispatch on, so the parser is bespoke rather than a format registered behind the seam that
+[Adding a file importer](#adding-a-file-importer) describes. Keep the vendor's own front end thin over a
+reusable `rows → orders` core, so a later paste path or combined-file export is another front end rather
+than a second parser.
+
+The five pieces a new vendor needs, in build order — the account-type marker, the parser and its
+client-side sniff, the shared `txn_link` ledger substrate, the dedicated import UI, and the
+funding-source map — are in [`architecture.md`](architecture.md) → *Marketplace accounts — the extension
+pattern*, which is the implementation contract; this section is the design questions to settle first.
 
 ## Transaction ids must be globally unique
 
@@ -499,6 +542,43 @@ would keep the card list clean at the price of making the refusals invisible and
 duplicates behave differently on the same card. **This is expected to be revisited once the effect is
 visible in practice; it is not settled.**
 
+## Considered and rejected
+
+- **A `read_only` capability declaration**, alongside the others, so a source could state what its
+  credential reaches. There is nothing to state: what a credential is authorized for is the provider's
+  to define and is not visible from here, and the passphrase floor is unconditional precisely because
+  the reach is unknowable — every credential is already protected as though it carried full account and
+  identity access. A declaration would therefore gate nothing, and asking an adapter author to
+  investigate the scope produces a finding that changes no code path.
+  See [`security-model.md`](security-model.md) → *Why provider credentials are the only things encrypted*.
+- **Per-item rows for a marketplace order** — one ledger row per line item instead of one per order.
+  Tried and abandoned; it brings a visible parent/child hierarchy, a double-count risk, and tree
+  handling in editing, undo and import, to solve what is really a reporting problem. An order that spans
+  categories is one row with `txn_split` allocations instead.
+  See [`data-model.md`](data-model.md) → *Transaction links and Amazon order import*.
+- **A vendor-neutral marketplace abstraction before a second vendor exists.** The order engine's names
+  are deliberately still the first vendor's. Generalizing from one instance guesses at the shape; the
+  second vendor is what reveals which parts were the pattern and which were that vendor's export.
+- **Per-account scoping of the `external_transaction_id` lookups**, as the fix for a provider whose ids
+  are unique only within an account. That trades a ledger invariant for one provider's convenience.
+  Namespace at the adapter boundary, which is the layer that knows.
+
+## Obstacles
+
+- **The CSV parse seam is duplicated, and extracting it has to come before a second file format.**
+  `preview.py` and `core.py` each build their own reader, so preview and run agree by construction today
+  and would agree only by discipline afterwards — and a preview that reads different rows than the
+  import is worse than none, because it is trusted. This is an ordering constraint, not a preference.
+  See [Adding a file importer](#adding-a-file-importer).
+- **A marketplace vendor whose export does not name the paying instrument cannot be linked at all**, only
+  created — which makes every order double-count. No amount of matching effort recovers it, because
+  amount and date alone match coincidental charges on any account. The check belongs before the design,
+  not after the parser.
+- **The connect question for a provider with an unstable handle must be asked before the provider call**,
+  because a claim or exchange is single-use. By the time the new handle is known the authorization is
+  spent, so the server has to absorb a stale answer rather than refuse it.
+  See [Where the connection handle comes from](#where-the-connection-handle-comes-from).
+
 ## Open
 
 Decisions owed on this topic, each naming the live backlog item that will feed it.
@@ -509,7 +589,7 @@ Decisions owed on this topic, each naming the live backlog item that will feed i
   needs a mapping-free import path and a `FITID` rung in duplicate detection.
   → [`backlog/import-input-formats.md`](backlog/import-input-formats.md)
 - **OFX Direct Connect as a provider adapter** — a pull with no aggregator in the middle. Researched and
-  parked on institution coverage. It is the worked example of a credential that *is* the institution's
-  own login: nothing narrower than full web banking, and no revocation call, which is what the read-only
-  check above exists to catch before an adapter is written.
+  parked on institution coverage. It would declare `revokes_on_disconnect = False` with no provider-side
+  remove call to build one from, so what disconnect does and does not do is a disclosure question to
+  settle before an adapter is written.
   → [`backlog/ofx-direct-connect.md`](backlog/ofx-direct-connect.md)
