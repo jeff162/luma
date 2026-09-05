@@ -208,9 +208,12 @@ the data directory (`DATA_DIR`, holding both databases), and the developer-optio
 Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux distributions). On a Pi,
 performance depends on the model, storage speed, and whether it runs directly or through Docker.
 
-The ARM64 download is **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no
-build. It is compiled on Ubuntu 22.04, so it needs glibc 2.35 or newer, which covers Raspberry Pi OS
-bookworm and everything after it. Running from source has neither restriction.
+Each Linux download carries a minimum glibc, because the build links against the C library of the
+machine that produced it. The ARM64 one is compiled on Ubuntu 22.04 and needs **glibc 2.35 or newer**,
+which covers Raspberry Pi OS bookworm and everything after it; the x86-64 one is compiled on Ubuntu
+24.04 and needs **glibc 2.39 or newer**, so it wants Ubuntu 24.04, Debian 13 or a comparably recent
+distribution. The ARM64 download is also **64-bit only** — a 32-bit Raspberry Pi OS is a different
+architecture and has no build. Running from source has none of these restrictions.
 
 Python 3.12 is what Luma is built and tested on, and 3.13 is expected to work. **3.14 is not
 supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies

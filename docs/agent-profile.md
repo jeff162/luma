@@ -335,6 +335,18 @@ for what the *user* can act on.
 
 ## Verification And Tests
 
+- **A flaky test is not fixed by lowering concurrency.** Capping Playwright's worker count made a
+  failure stop reproducing, and that is evidence of nothing: a knob that changes timing changes a race's
+  *probability* without touching its cause. Six clean runs at the original setting then showed the
+  correlation was spurious. The user's objection is the test to apply to any mitigation before accepting
+  it — "that by itself is not a deterministic change." What the failure actually was: a fixed wrong
+  relationship between two constants, `expect.timeout` at 10s against the backend's
+  `_BUSY_TIMEOUT_SECONDS` of 15s, so a spec gave up partway through a wait the app is designed to absorb
+  and then succeed after. SQLite's WAL serializes writers, so that wait is by design and the test was
+  less patient than the thing it tested. Look for a rule the two sides disagree on before reaching for a
+  setting that makes the symptom rarer — and where a timeout genuinely is the fix, name the other number
+  it has to stay above, in a comment, so the pair moves together.
+
 - **Where the only verification path is the user's own machine, batch the whole change set before
   handing it over, and exhaust what can be checked here first.** The macOS artifact is the live case:
   the agent may not drive the app at all, and the user's loop is build → download → install → run,
@@ -346,9 +358,10 @@ for what the *user* can act on.
   one pass produces a usable answer rather than "it didn't seem to work".
 
 - **Scope the test run to what the change can reach.** A change confined to a page, a component, or one
-  backend module is verified by that module's tests plus lint and a build — running the whole ~1,700-test
-  backend suite for a frontend change or a self-contained helper spends nearly two minutes to re-prove
-  code the diff cannot touch. Reach for the full suite when the change is to something shared: a
+  backend module is verified by that module's tests plus lint and a build — running the whole 2,000-test
+  backend suite for a frontend change or a self-contained helper re-proves code the diff cannot touch.
+  It costs about half a minute now that the runner passes `-n auto` rather than the two minutes it used
+  to, so the argument is noise rather than time, but it is the same argument. Reach for the full suite when the change is to something shared: a
   migration, the row source a query selects from, a resolver, an invariant several subsystems read. The
   frontend's vitest suite is cheap enough (~10s) to run whole after any UI change.
 
