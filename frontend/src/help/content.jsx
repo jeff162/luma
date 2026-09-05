@@ -103,64 +103,64 @@ export const HELP_TOPICS = [
         </p>
         <p>
           To get started:
-          <ol>
-            <li>
-              Load transactions - Use the Import/Export page or connect a Data source. If there are
-              several files to be imported, import them all at once before moving on. If files come from
-              different sources accounts in the various input files can be mapped so they match. If this
-              is not done during the import process, it can be done later on the Accounts page. If files do
-              come from different data sources consider creating saved profiles for them so the import settings
-              get applied automatically on subsequent files from the same source.
-            </li>
-            <li>
-              Account Owners - Create the account owner(s) and assign them to accounts. This isn&apos;t
-              necessary if accounts will not be assigned owners. If more than one owner is
-              created, <strong>shared</strong> becomes available as a choice.
-            </li>
-            <li>
-              Tags - Give some thought as to what kind of reports to generate for and what tags
-              might support them. Tags can be created and applied later but it is slightly
-              easier to bake them into the rules up front.
-            </li>
-            <li>
-              Create Categories and Rules - if categories are of interest there is a fork in the road here.
-              <ol type="a">
-                <li>
-                  If the imported data was curated and contains useful
-                  transaction categorization the next step is to use
-                  the <strong>Group imported categories</strong> and <strong>Generate rules</strong> buttons
-                  on the Import/Export page to bring in the categories
-                  and rules from the prior system.
-                </li>
-                <li>
-                  <p>
-                    If not but categories are of interest, the built in set of seed categories and rules can be loaded
-                    via the <strong>Add starter categories</strong> button on the Categories page and/or
-                    the <strong>Starter rules</strong> button on the Rules page (this button also brings in categories).
-                  </p>
-                  <p>
-                    It is also fine not to load the system categories or rules. It may be useful to define some groups and
-                    categories up front, just to give some thought as to how the transactions might be organized, but this
-                    can also be done when categorizing uncategorized transactions. It is rarely a good idea to generate
-                    rules manually as it is easier to create them as part of categorizing transactions.
-                  </p>
-                </li>
-              </ol>
-            </li>
-            <li>
-              Categorize uncategorized transactions - if categories are of interest the transaction page can
-              filter so only uncategorized transactions are displayed. Assigning a transaction to a category triggers
-              a <strong>Create Rule</strong> toast which offers to create a rule from the categorization. The form
-              offers the opportunity to edit the conditions and actions of the rule and when saving, the rule can be
-              applied to all matching transactions.
-            </li>
-            <li>
-              Use the <strong>Dashboard</strong> page to dig into categories to see if things look right. If there are
-              uncategorized transactions the transaction report can be sorted by amount which is useful for categorizing
-              the largest transactions first. Merchant is also useful to sort by.
-            </li>
-          </ol>
         </p>
+        <ol>
+          <li>
+            Load transactions - Use the Import/Export page or connect a Data source. If there are
+            several files to be imported, import them all at once before moving on. If files come from
+            different sources accounts in the various input files can be mapped so they match. If this
+            is not done during the import process, it can be done later on the Accounts page. If files do
+            come from different data sources consider creating saved profiles for them so the import settings
+            get applied automatically on subsequent files from the same source.
+          </li>
+          <li>
+            Account Owners - Create the account owner(s) and assign them to accounts. This isn&apos;t
+            necessary if accounts will not be assigned owners. If more than one owner is
+            created, <strong>shared</strong> becomes available as a choice.
+          </li>
+          <li>
+            Tags - Give some thought as to what kind of reports to generate for and what tags
+            might support them. Tags can be created and applied later but it is slightly
+            easier to bake them into the rules up front.
+          </li>
+          <li>
+            Create Categories and Rules - if categories are of interest there is a fork in the road here.
+            <ol type="a">
+              <li>
+                If the imported data was curated and contains useful
+                transaction categorization the next step is to use
+                the <strong>Group imported categories</strong> and <strong>Generate rules</strong> buttons
+                on the Import/Export page to bring in the categories
+                and rules from the prior system.
+              </li>
+              <li>
+                <p>
+                  If not but categories are of interest, the built in set of seed categories and rules can be loaded
+                  via the <strong>Add starter categories</strong> button on the Categories page and/or
+                  the <strong>Starter rules</strong> button on the Rules page (this button also brings in categories).
+                </p>
+                <p>
+                  It is also fine not to load the system categories or rules. It may be useful to define some groups and
+                  categories up front, just to give some thought as to how the transactions might be organized, but this
+                  can also be done when categorizing uncategorized transactions. It is rarely a good idea to generate
+                  rules manually as it is easier to create them as part of categorizing transactions.
+                </p>
+              </li>
+            </ol>
+          </li>
+          <li>
+            Categorize uncategorized transactions - if categories are of interest the transaction page can
+            filter so only uncategorized transactions are displayed. Assigning a transaction to a category triggers
+            a <strong>Create Rule</strong> toast which offers to create a rule from the categorization. The form
+            offers the opportunity to edit the conditions and actions of the rule and when saving, the rule can be
+            applied to all matching transactions.
+          </li>
+          <li>
+            Use the <strong>Dashboard</strong> page to dig into categories to see if things look right. If there are
+            uncategorized transactions the transaction report can be sorted by amount which is useful for categorizing
+            the largest transactions first. Merchant is also useful to sort by.
+          </li>
+        </ol>
       </>
     ),
   },
@@ -198,12 +198,10 @@ export const HELP_TOPICS = [
             <strong>Categories and groups.</strong> Transactions can be assigned to categories, and categories
             are collected into groups, purely<sup>*</sup> to drive reports and to select related transactions.
             The system contains a seed set of rules and categories which can be used if none are defined.
+            <p>----------</p>
             <p>
-              ----------
-              <p>
-                <sup>*</sup>The one exception is that a group can be marked <strong>Exclude from totals</strong> (see link
-                above) which may be useful even if categories are not being used more generally.
-              </p>
+              <sup>*</sup>The one exception is that a group can be marked <strong>Exclude from totals</strong> (see link
+              above) which may be useful even if categories are not being used more generally.
             </p>
           </li>
           <li>
@@ -230,27 +228,27 @@ export const HELP_TOPICS = [
         <h4>How rules come into being</h4>
         <p>
           There are three main ways rules get created:
-          <ol>
-            <li>
-              If data comes from another tool where the transactions have already been carefully categorized, indicate
-              that an import&apos;s data is clean and the categories are preserved and imported for use; the <strong>Generate
-                rules</strong> action studies these curated transactions and proposes rules that would
-              reproduce the same categorization on future, uncategorized data -- which get reviewed before
-              anything takes effect.
-            </li>
-            <li>
-              When a transaction is categorized, {APP_NAME} offers to
-              turn that action into a rule -- give it conditions and actions, apply it to other matching
-              transactions, and save it. From then on it runs automatically against newly imported data
-              (Categorizing imported data can be controlled when importing a file and there is
-              a <em>run categorization</em> button to trigger a pass on demand).
-            </li>
-            <li>
-              When a transaction is marked as part of a recurring series the way that happens is through the
-              Rules editor so the Rules editor is launched filled out with whatever information is available.
-            </li>
-          </ol>
         </p>
+        <ol>
+          <li>
+            If data comes from another tool where the transactions have already been carefully categorized, indicate
+            that an import&apos;s data is clean and the categories are preserved and imported for use; the <strong>Generate
+              rules</strong> action studies these curated transactions and proposes rules that would
+            reproduce the same categorization on future, uncategorized data -- which get reviewed before
+            anything takes effect.
+          </li>
+          <li>
+            When a transaction is categorized, {APP_NAME} offers to
+            turn that action into a rule -- give it conditions and actions, apply it to other matching
+            transactions, and save it. From then on it runs automatically against newly imported data
+            (Categorizing imported data can be controlled when importing a file and there is
+            a <em>run categorization</em> button to trigger a pass on demand).
+          </li>
+          <li>
+            When a transaction is marked as part of a recurring series the way that happens is through the
+            Rules editor so the Rules editor is launched filled out with whatever information is available.
+          </li>
+        </ol>
         <p>
           If starting fresh with no curated data, there is a small <strong>starter
             set</strong> of common categories and rules that can be added via buttons on the Rules and Category pages.
@@ -1309,15 +1307,13 @@ export const HELP_TOPICS = [
             <em>Optional:</em> The AZAD extension can export both order data and item data.
             The <strong>Orders file</strong> provides transaction-level financial totals and
             the <strong>Items file</strong> adds the following additional detail:
-            <p>
-              <ul>
-                <li><strong>Line-Item Granularity:</strong> Expands multi-item purchases into individual rows so products can be analyzed independently.</li>
-                <li><strong>Product Identifiers:</strong> The <strong>ASIN</strong> (Amazon Standard Identification Number) and direct <strong>Item URLs</strong>.</li>
-                <li><strong>Unit Pricing &amp; Quantities:</strong> Shows individual item prices (pre-tax/shipping) and item quantities rather than order totals.</li>
-                <li><strong>Subscription Status:</strong> Includes a <strong>Subscribe &amp; Save</strong> flag for recurring purchases.</li>
-                <li><strong>Categorization:</strong> Includes a <strong>Category</strong> field for item classification.</li>
-              </ul>
-            </p>
+            <ul>
+              <li><strong>Line-Item Granularity:</strong> Expands multi-item purchases into individual rows so products can be analyzed independently.</li>
+              <li><strong>Product Identifiers:</strong> The <strong>ASIN</strong> (Amazon Standard Identification Number) and direct <strong>Item URLs</strong>.</li>
+              <li><strong>Unit Pricing &amp; Quantities:</strong> Shows individual item prices (pre-tax/shipping) and item quantities rather than order totals.</li>
+              <li><strong>Subscription Status:</strong> Includes a <strong>Subscribe &amp; Save</strong> flag for recurring purchases.</li>
+              <li><strong>Categorization:</strong> Includes a <strong>Category</strong> field for item classification.</li>
+            </ul>
             If this additional information is desired (the per-item pricing can be especially useful) select the <strong>Items</strong> report
             and run the export again for the same year. Select all rows and save it under a
             different name. Import both files.
@@ -1675,20 +1671,20 @@ export const HELP_TOPICS = [
           re-categorization of the file. The imported rows are already categorized -- that is the
           input; the goal is to capture the <em>pattern</em> so future imports categorize themselves.
           That said, two things on this screen do still change the underlying rows.
-          <ol type="a">
-            <li>
-              Accepting a suggestion applies its rule to exactly the rows that generated it. The
-              category value usually does not move (the rule came from those rows), but it hands them
-              from the file’s categorization to the rule’s -- so an edit made to the rule first (a
-              tweaked category, added tags, a rename) lands on those rows too, and they shift from
-              import-locked to rule-governed (see{' '}
-              <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>).
-            </li>
-            <li>
-              Resolving a conflict has various options to re-categorize rows.
-            </li>
-          </ol>
         </p>
+        <ol type="a">
+          <li>
+            Accepting a suggestion applies its rule to exactly the rows that generated it. The
+            category value usually does not move (the rule came from those rows), but it hands them
+            from the file’s categorization to the rule’s -- so an edit made to the rule first (a
+            tweaked category, added tags, a rename) lands on those rows too, and they shift from
+            import-locked to rule-governed (see{' '}
+            <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>).
+          </li>
+          <li>
+            Resolving a conflict has various options to re-categorize rows.
+          </li>
+        </ol>
         <p>Available actions for each suggested rule:</p>
         <ul>
           <li><strong>Save</strong> it (optionally after editing its keyword, category, owner/account

@@ -77,6 +77,7 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: 'node',
       include: ['src/**/*.test.{js,jsx}'],
+      setupFiles: ['./vitest.setup.js'],
     },
     define: {
       // No literal fallback on purpose. A stale hardcoded version is worse than a failed build: it ships

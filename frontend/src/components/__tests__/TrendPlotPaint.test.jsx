@@ -20,7 +20,7 @@
  * the page's configuration the right one.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts'
 import { trendPlotLayout } from '../../lib/trendPlotLayout.js'
@@ -99,11 +99,16 @@ describe('the trend plot’s first paint', () => {
     cleanup()
     // jsdom has no ResizeObserver; a stub that never reports is precisely the un-measured state.
     globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
+    // Recharts warns that it was handed a zero width and height, which is the state under test rather
+    // than a fault — asserted below so silencing it cannot hide the case going away.
+    const unmeasured = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { container } = render(
       <div style={{ width: 900, height: HEIGHT }}>
         <ResponsiveContainer width="100%" height="100%">{plot({ width: 900 })}</ResponsiveContainer>
       </div>,
     )
     expect(bars(container)).toHaveLength(0)
+    expect(unmeasured).toHaveBeenCalledWith(expect.stringContaining('should be greater than 0'))
+    unmeasured.mockRestore()
   })
 })

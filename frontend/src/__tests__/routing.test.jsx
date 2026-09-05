@@ -13,7 +13,7 @@
  * (`navigate(-1)`, and a route pushed then left) are exercised here rather than only in the browser.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate, useParams } from 'react-router-dom'
 
@@ -104,6 +104,16 @@ describe('the parameterized routes', () => {
 })
 
 describe('paths the table does not claim', () => {
+  // React Router warns on a location nothing matched, which is the observation these two cases are
+  // making — so the warning is expected output, not noise to fix. Silenced here rather than globally,
+  // so an unexpected one elsewhere still reaches the console.
+  let routerWarning
+  beforeEach(() => { routerWarning = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => {
+    expect(routerWarning).toHaveBeenCalledWith(expect.stringContaining('No routes matched'))
+    routerWarning.mockRestore()
+  })
+
   // There is no catch-all route: an unmatched path renders an empty content area rather than a "not
   // found" page. Pinned because it is a deliberate absence, and because a router upgrade that started
   // rendering something there should be noticed.

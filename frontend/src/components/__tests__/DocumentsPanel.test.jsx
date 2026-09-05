@@ -13,7 +13,7 @@
 
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DocumentsPanel from '../DocumentsPanel.jsx'
 import { api } from '../../lib/api.js'
@@ -45,16 +45,20 @@ const PHOTO = {
 
 function pasteInto(element, flavours) {
   // `userEvent.paste` carries only plain text, so the multi-flavour clipboard this feature depends on
-  // has to be dispatched directly.
-  const event = new Event('paste', { bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'clipboardData', {
-    value: { files: [], getData: type => flavours[type] || '' },
+  // has to be dispatched directly. A raw `dispatchEvent` is outside React's batching — `fireEvent` and
+  // `userEvent` wrap theirs — so the state it sets would land after the test moved on. `act` puts it
+  // back inside the render the assertions are about.
+  act(() => {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', {
+      value: { files: [], getData: type => flavours[type] || '' },
+    })
+    element.dispatchEvent(event)
+    // The textarea would receive the plain flavour itself; jsdom does not do that for a synthetic event.
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    setValue.call(element, flavours['text/plain'] || '')
+    element.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  element.dispatchEvent(event)
-  // The textarea would receive the plain flavour itself; jsdom does not do that for a synthetic event.
-  const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-  setValue.call(element, flavours['text/plain'] || '')
-  element.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 function pdfFile(name = 'invoice.pdf') {
@@ -100,9 +104,11 @@ describe('DocumentsPanel', () => {
     const zone = await screen.findByText(/Drop a receipt/)
 
     const file = pdfFile('dropped.pdf')
-    const event = new Event('drop', { bubbles: true, cancelable: true })
-    Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
-    zone.closest('[role="button"]').dispatchEvent(event)
+    act(() => {
+      const event = new Event('drop', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+      zone.closest('[role="button"]').dispatchEvent(event)
+    })
 
     await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
   })
@@ -114,9 +120,11 @@ describe('DocumentsPanel', () => {
     const box = await screen.findByPlaceholderText(/paste a receipt here/i)
 
     const file = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'blob', { type: 'image/jpeg' })
-    const event = new Event('paste', { bubbles: true, cancelable: true })
-    Object.defineProperty(event, 'clipboardData', { value: { files: [file] } })
-    box.dispatchEvent(event)
+    act(() => {
+      const event = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', { value: { files: [file] } })
+      box.dispatchEvent(event)
+    })
 
     await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
     // A pasted image has no useful name of its own; without this every paste lands as "blob".

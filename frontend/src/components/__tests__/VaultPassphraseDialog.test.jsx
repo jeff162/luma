@@ -77,9 +77,12 @@ describe('a passkey as the proof of the current passphrase', () => {
     await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), STRONG)
   }
 
+  // `findBy` rather than `getBy` in these two: the dialog fetches the stranded-backup list on mount, and
+  // a case with nothing else to await would finish before that resolves — settling its state outside the
+  // render the assertions ran against.
   it('is offered while changing, and the current-passphrase field says so', async () => {
     renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
-    expect(screen.getByText('Use a passkey')).toBeTruthy()
+    expect(await screen.findByText('Use a passkey')).toBeTruthy()
     expect(screen.getByPlaceholderText('Current passphrase (or use a passkey)')).toBeTruthy()
   })
 
@@ -113,6 +116,9 @@ describe('a passkey as the proof of the current passphrase', () => {
 
   it('is not offered when there is no passkey to use', async () => {
     renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() })
+    // Awaiting a field that is present is what makes the absence below an assertion about the settled
+    // dialog rather than about whichever render happened to be on screen first.
+    await screen.findByPlaceholderText('New passphrase')
     expect(screen.queryByText('Use a passkey')).toBeNull()
   })
 })
