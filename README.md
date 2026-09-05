@@ -18,23 +18,37 @@ Anyone whose main requirement is either of these will be better served by some o
 
 ## What Luma is good at
 
+- **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. An import needs no planning and no arithmetic about which dates are already covered, overlapping files sort themselves out, and a categorization made once is carried forward instead of being made again.
+
+- **Structure if it's wanted** — categories, tags and rules are not the point, examining spending is. They exist so that a question about a period can be answered without going through it row by row, and the work put into building rules keeps paying off on transactions that have not arrived yet.
+
+- **Surfacing potential exceptions** — a subscription that quietly went up, a bill that has not turned up, a charge that no longer matches the rule that used to catch it. Noticing these is what the reports and the recurring detection are for, rather than waiting to be asked the right question.
+
+- **Staying out of the way** — if something needs changing, it can usually be changed right there: a category, a merchant name, whether a transaction counts towards a total at all. Reports can be useful for cleaning the data as well as actual reporting.
+
+## Feature highlights
+
 - **Showing where money went** — spending by category, merchant, account or owner, with drill-down to the individual transactions, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
 
 - **Comparing periods** — the same breakdown across months or years, so a change in spending is visible. Year-over-year and trend comparisons are built in.
 
-- **Getting data in without ceremony** — a CSV file or a connected data source (e.g. SimpleFIN Bridge). Amazon order history can be imported via CSV files to itemize Amazon spending down to the individual items in an order.
+- **Analyzing cash flow** — a cash-flow view sits alongside the spending and income views and nets the two. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to; a run of months is drawn as money in against money out with the net over the top. Anything on either can be drilled into to reach the transactions behind it.
 
-- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed just the same. Currently transaction detail is only extracted from plain text such as email receipts.
+- **Getting data in without ceremony** — a CSV file or a connected data source (e.g. SimpleFIN Bridge). Amazon order history can be imported via CSV files to itemize Amazon spending down to the individual items in an order. Other input formats can be added as the need arises.
+
+- **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
 
 - **Re-importing just works.** Duplicate detection runs across every source, so overlapping exports, a re-downloaded statement, or the same card arriving from two places will not double-count. No pre-planning of import windows is needed.
 
 - **Staying categorized over time** — rules apply categories, merchant renames and tags to matching transactions as they arrive, and can be "learned" from already categorized data in addition to being created as part of categorizing transactions.
 
-- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule.
+- **Splitting a transaction across categories** — a single charge that was part one thing and part another can be divided between them, and every report counts each part where it belongs rather than filing the whole amount under one category. Each part can be labelled with what it covered, and a charge matched to an imported Amazon order is offered a split already filled in from the item prices.
+
+- **Finding what repeats** — subscriptions, bills, taxes and paychecks are detected as recurring series automatically, and anything the detector misses can be declared with a rule. The Recurring page also reports what looks off about them: a charge that has not turned up, a price that has moved, a series that has only just appeared, and a bill that has drifted outside the amount range its rule matches on. Each one can be dismissed once it has been looked at, and a separate tab lists what is expected next.
 
 - **Searching the history** — filter and search across the whole ledger, including exclusion filters and cross-cutting tags.
 
-- **Reimbursables** — pair expenses and income which don't represent spending to exclude them from the totals. Also allows for an expense to be created that expects future reimbursement and can generate reminders if it appears to be late.
+- **Reimbursables** — money that goes out and is expected back but is excluded from spending or income. The part that is owed is held in its own excluded category rather than counted as spending, and the repayment lands there too instead of arriving as income, so each month reports what it really spent and what is still outstanding is a running total. A repayment sometimes does not match the original purchase — tickets bought for one price and sold on for another — and what is left over gets categorized as either a real cost or gain. An expense can also be recorded before any repayment exists. Reimbursables can have reminders to alert if they are not completed within the expected timeframe.
 
 ## Also included
 

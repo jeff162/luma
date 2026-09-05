@@ -50,6 +50,16 @@ column.
 - **Open UX question.** Drilling into an attributed node shows purchases dated *outside* the displayed
   period ("the purchases this period's payments covered"), which breaks the invariant that a drill-through
   stays inside the period. Whether that is acceptable is what decides whether this phase is worth building.
+- **It changes what the three frames *are*, which is a documentation problem as much as a code one.**
+  Today spending, income and cash flow are three readings of one population over one set of dates, and
+  both `data-model.md` → *Reporting assumptions* → *Cash flow* and the README's feature list describe them
+  that way. On a second date column they stop being that: a March purchase paid in April lands in March's
+  spending and April's cash flow, so the frames no longer reconcile against each other and cash flow
+  answers *when money moved* rather than presenting the same rows a different way. Any wording that
+  describes cash flow as sitting alongside the other two goes stale the moment this ships — the honest
+  version is that the user picks which question is being asked. Worth knowing before the phase starts,
+  because it argues for surfacing the basis in the UI rather than treating it as a column swap behind
+  three unchanged view names.
 - **Name.** `cash_date`, from the accounting sense of *cash basis* versus *accrual basis*. Recorded with
   its reasoning because the term is jargon that only pays off for a reader who already has that frame —
   `settled_date` or `cleared_date` would carry the same meaning in plainer banking language, and the
