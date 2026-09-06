@@ -20,6 +20,7 @@ import {
   FloatingPanel,
   FloatingPanelHeader,
   OverlayBackdrop,
+  Tooltip,
 } from '../ui.jsx'
 import { DataSourcePill } from './importPresentational.jsx'
 import { formatImportBatchTimestamp } from '../../lib/importExport/importDraft.js'
@@ -474,28 +475,30 @@ export function PossibleAccountMatchChooserDialog({
             against the intent that opened the dialog, since the way in is pressing `+New`. The accent has
             a better home on the selected radio, which is what the user is actually manipulating. */}
         <div style={{ display: 'grid', gap: 8 }}>
-          <Button
-            variant="ghost"
-            disabled={needsAccount}
-            title={needsAccount ? 'Choose which account above this one is' : undefined}
-            onClick={() => onSelect?.('map_existing', selectedId)}
-          >
-            Map to existing account
-          </Button>
+          <Tooltip content={needsAccount ? 'Choose which account above this one is' : ''}>
+            <Button
+              variant="ghost"
+              disabled={needsAccount}
+              onClick={() => onSelect?.('map_existing', selectedId)}
+            >
+              Map to existing account
+            </Button>
+          </Tooltip>
           {/* Grouping here is a shortcut, not a distinct concept: it is the same end state as creating
               the account and then merging it on the Accounts page, in one step instead of two. A fourth
               choice — create a separate account but dedupe it against the existing one — was removed.
               It had no analogue anywhere else in the app and asserted the two were the same physical
               account while deliberately keeping them apart; "Map to existing account" says that
               properly. Don't reintroduce it. */}
-          <Button
-            variant="ghost"
-            disabled={needsAccount}
-            title={needsAccount ? 'Choose which account above to group the new one under' : undefined}
-            onClick={() => onSelect?.('group_with_existing', selectedId)}
-          >
-            Create new account and group with existing
-          </Button>
+          <Tooltip content={needsAccount ? 'Choose which account above to group the new one under' : ''}>
+            <Button
+              variant="ghost"
+              disabled={needsAccount}
+              onClick={() => onSelect?.('group_with_existing', selectedId)}
+            >
+              Create new account and group with existing
+            </Button>
+          </Tooltip>
           <Button variant="ghost" onClick={() => onSelect?.('keep_separate')}>
             {candidates.length === 1 ? 'Keep separate' : 'Keep separate from all of these'}
           </Button>

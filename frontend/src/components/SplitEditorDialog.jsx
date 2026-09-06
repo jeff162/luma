@@ -27,7 +27,7 @@ import { api } from '../lib/api.js'
 import { formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
-import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input } from './ui.jsx'
+import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input, Tooltip } from './ui.jsx'
 
 // Money reconciles at the cent, and amounts arrive as text the user is mid-way through typing, so the
 // remaining figure is compared against a half-cent rather than zero.
@@ -449,15 +449,16 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
                 title="Put the previous amount back"
               >Undo</Button>
             ) : (
-              <Button
-                variant="ghost"
-                style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
-                onClick={addRemainderToSelected}
-                disabled={!selectedKey}
-                title={selectedKey
-                  ? 'Add what is left over to the highlighted amount'
-                  : 'Click an amount above to choose where the remainder goes'}
-              >Add remainder to selected</Button>
+              <Tooltip content={selectedKey
+                ? 'Add what is left over to the highlighted amount'
+                : 'Click an amount above to choose where the remainder goes'}>
+                <Button
+                  variant="ghost"
+                  style={{ ...COMPACT_ACTION_BTN_STYLE, visibility: balanced ? 'hidden' : 'visible' }}
+                  onClick={addRemainderToSelected}
+                  disabled={!selectedKey}
+                >Add remainder to selected</Button>
+              </Tooltip>
             )}
           </div>
 

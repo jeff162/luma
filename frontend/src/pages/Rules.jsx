@@ -811,48 +811,50 @@ export default function Rules() {
             pendingCount={recategorizePendingCount}
             onRun={async () => { await runRecategorize(); loadRules() }}
           />
-          <Button
-            small
-            variant="ghost"
-            onClick={() => navigate('/import-export/rule-suggestions', { state: { backTo: '/rules', backLabel: 'Rules' } })}
-            disabled={!hasImportedRuleSuggestionWork}
-            title={hasImportedRuleSuggestionWork
-              ? 'Review rules suggested from your imported transactions'
-              : 'Mark a categorized import as clean to generate rule suggestions'}
-            style={hasImportedRuleSuggestionWork
-              ? {
-                background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
-                border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
-                boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
-              }
-              : {
-                background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
-                border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                boxShadow: 'none',
-              }}
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <span>Generate rules from imported data</span>
-              <ActionCountBadge count={importedRuleSuggestionCount} />
-            </span>
-          </Button>
+          <Tooltip content={hasImportedRuleSuggestionWork
+            ? 'Review rules suggested from your imported transactions'
+            : 'Mark a categorized import as clean to generate rule suggestions'}>
+            <Button
+              small
+              variant="ghost"
+              onClick={() => navigate('/import-export/rule-suggestions', { state: { backTo: '/rules', backLabel: 'Rules' } })}
+              disabled={!hasImportedRuleSuggestionWork}
+              style={hasImportedRuleSuggestionWork
+                ? {
+                  background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
+                  border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
+                  boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
+                }
+                : {
+                  background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
+                  color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
+                  border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
+                  boxShadow: 'none',
+                }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span>Generate rules from imported data</span>
+                <ActionCountBadge count={importedRuleSuggestionCount} />
+              </span>
+            </Button>
+          </Tooltip>
           {/* Sits beside "Generate rules" because it is the same shape of thing — analyse the rule set,
               present findings, let the user act — rather than in the toolbar below, which is search,
               filter and sort. Gated only on there being a pair to compare, deliberately *not* on any rule
               carrying amount bounds: the nesting half of the check is about merchant matchers and is just
               as useful without them. */}
-          <Button
-            small
-            variant="ghost"
-            disabled={rules.length < 2}
-            onClick={() => setOverlapsOpen(true)}
-            title={rules.length < 2
-              ? 'Nothing to compare until there are two rules'
-              : 'Find rules that could both claim the same transaction'}
-          >
-            Check overlaps
-          </Button>
+          <Tooltip content={rules.length < 2
+            ? 'Nothing to compare until there are two rules'
+            : 'Find rules that could both claim the same transaction'}>
+            <Button
+              small
+              variant="ghost"
+              disabled={rules.length < 2}
+              onClick={() => setOverlapsOpen(true)}
+            >
+              Check overlaps
+            </Button>
+          </Tooltip>
           {/* Empty-state-only, like the Categories starter offer: a head start shown only while there
               are no rules yet. Once any rule exists it's gone (add more via "Add rule"). */}
           {!loading && rules.length === 0 ? (

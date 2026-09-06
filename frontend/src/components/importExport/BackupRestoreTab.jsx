@@ -507,7 +507,6 @@ export function BackupRestoreTab() {
             <Button
               variant={restoreIsCredentials ? 'ghost' : 'danger'}
               disabled={restoreBlocked}
-              title={demoLoaded ? demoRestoreMessage : undefined}
               onClick={requestRestore}
             >
               {restoring

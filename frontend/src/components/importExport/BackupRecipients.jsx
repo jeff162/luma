@@ -23,7 +23,7 @@ import { useState, useEffect, useRef, useId } from 'react'
 import { api, saveBlob } from '../../lib/api.js'
 import {
   Card, Button, COMPACT_ACTION_BTN_STYLE, Spinner, Input, AppDialog, AppConfirmDialog,
-  getFormControlStyle,
+  Tooltip, getFormControlStyle,
 } from '../ui.jsx'
 import { useTransientTextEdit } from '../../lib/uiInteractions.js'
 import TransientTextInput from '../TransientTextInput.jsx'
@@ -439,13 +439,14 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
       actions={<>
         <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
         {generated ? (
-          <Button
-            onClick={addRecipient}
-            disabled={!savedAcknowledged || saving || !label.trim()}
-            title={savedAcknowledged ? undefined : 'Download or copy the private key first'}
-          >
-            {saving ? 'Adding…' : 'Create key'}
-          </Button>
+          <Tooltip content={savedAcknowledged ? '' : 'Download or copy the private key first'}>
+            <Button
+              onClick={addRecipient}
+              disabled={!savedAcknowledged || saving || !label.trim()}
+            >
+              {saving ? 'Adding…' : 'Create key'}
+            </Button>
+          </Tooltip>
         ) : (
           <Button onClick={generate} disabled={generating || nameTaken || !label.trim() || !passphraseReady}>
             {generating ? 'Generating…' : 'Generate'}

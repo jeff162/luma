@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip } from '../components/ui.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
@@ -1826,20 +1826,21 @@ export default function Categories() {
             {addingStarter ? 'Adding…' : 'Add starter categories'}
           </Button>
         ) : null}
-        <Button
-          small
-          variant="ghost"
-          onClick={openImportedCategoryWorkspace}
-          disabled={importedCategoryWork.total === 0}
-          title={importedCategoryWork.total === 0
-            ? 'No imported categories are waiting to be grouped'
-            : 'Sort imported categories into reporting groups'}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <span>Group imported categories</span>
-            <ActionCountBadge count={importedCategoryWork.pending} tone="warning" />
-          </span>
-        </Button>
+        <Tooltip content={importedCategoryWork.total === 0
+          ? 'No imported categories are waiting to be grouped'
+          : 'Sort imported categories into reporting groups'}>
+          <Button
+            small
+            variant="ghost"
+            onClick={openImportedCategoryWorkspace}
+            disabled={importedCategoryWork.total === 0}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span>Group imported categories</span>
+              <ActionCountBadge count={importedCategoryWork.pending} tone="warning" />
+            </span>
+          </Button>
+        </Tooltip>
       </PageHeader>
       <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>

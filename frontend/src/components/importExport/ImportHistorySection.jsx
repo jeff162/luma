@@ -10,7 +10,7 @@
 // ImportTab and arrive as props.
 
 import TransientTextInput from '../TransientTextInput.jsx'
-import { Button, Card, EmptyState } from '../ui.jsx'
+import { Button, Card, EmptyState, Tooltip } from '../ui.jsx'
 import { ActionCountBadge, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { SourceAccountChip } from './SourceAccountChip.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
@@ -94,42 +94,44 @@ export function ImportHistorySection({
                 </button>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Button
-                  small
-                  variant="ghost"
-                  onClick={openSystemCategoryWorkspace}
-                  disabled={totalSystemCategoryWorkspaceCount === 0}
-                  title={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span>Group imported categories</span>
-                    <ActionCountBadge count={pendingSystemCategoryCount} tone="warning" />
-                  </span>
-                </Button>
-                <Button
-                  small
-                  variant="ghost"
-                  onClick={() => openRuleSuggestionReview()}
-                  disabled={!hasSystemRuleSuggestionWork}
-                  title={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}
-                  style={hasSystemRuleSuggestionWork
-                    ? {
-                      background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
-                      border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
-                      boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
-                    }
-                    : {
-                      background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                      color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
-                      border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                      boxShadow: 'none',
-                    }}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span>Generate rules</span>
-                    <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
-                  </span>
-                </Button>
+                <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
+                  <Button
+                    small
+                    variant="ghost"
+                    onClick={openSystemCategoryWorkspace}
+                    disabled={totalSystemCategoryWorkspaceCount === 0}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span>Group imported categories</span>
+                      <ActionCountBadge count={pendingSystemCategoryCount} tone="warning" />
+                    </span>
+                  </Button>
+                </Tooltip>
+                <Tooltip content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
+                  <Button
+                    small
+                    variant="ghost"
+                    onClick={() => openRuleSuggestionReview()}
+                    disabled={!hasSystemRuleSuggestionWork}
+                    style={hasSystemRuleSuggestionWork
+                      ? {
+                        background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
+                        border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
+                        boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
+                      }
+                      : {
+                        background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
+                        color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
+                        border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
+                        boxShadow: 'none',
+                      }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span>Generate rules</span>
+                      <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
+                    </span>
+                  </Button>
+                </Tooltip>
               </div>
             </div>
           </div>

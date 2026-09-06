@@ -37,7 +37,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api.js'
-import { Button, Card } from '../ui.jsx'
+import { Button, Card, Tooltip } from '../ui.jsx'
 import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { LastSyncSummary, LastSyncedLine } from './ConnectionStatus.jsx'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
@@ -128,12 +128,13 @@ export function DataConnectionsPanel({ style, onOpenSyncLog }) {
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Button small onClick={() => syncAll(connected)} disabled={syncing}
-            title={syncing
-              ? 'A sync is already running'
-              : `Pull new and changed transactions for all ${allConnections.length} connection${allConnections.length === 1 ? '' : 's'}`}>
-            {syncing ? 'Syncing…' : '↻ Sync now'}
-          </Button>
+          <Tooltip content={syncing
+            ? 'A sync is already running'
+            : `Pull new and changed transactions for all ${allConnections.length} connection${allConnections.length === 1 ? '' : 's'}`}>
+            <Button small onClick={() => syncAll(connected)} disabled={syncing}>
+              {syncing ? 'Syncing…' : '↻ Sync now'}
+            </Button>
+          </Tooltip>
           {/* Setting a connection up is a different job on a different page, and this is the only pointer
               to it from here — without it the card would be a dead end for anyone wanting a second bank. */}
           <Button variant="ghost" small onClick={() => navigate('/accounts?tab=connections')}

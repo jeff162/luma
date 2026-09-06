@@ -692,10 +692,11 @@ export function AmazonReconciliationDialog({
       if (entry.kind !== 'unmatched') return null
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <Button small variant="ghost" disabled={busy || !paymentUnmatched.length} onClick={() => setLinkTarget(entry)}
-            title={paymentUnmatched.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
-            Link charges…
-          </Button>
+          <Tooltip content={paymentUnmatched.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
+            <Button small variant="ghost" disabled={busy || !paymentUnmatched.length} onClick={() => setLinkTarget(entry)}>
+              Link charges…
+            </Button>
+          </Tooltip>
           <SplitAction order={entry.order} busy={busy} onOpen={openSplit} />
           {entry.reviewed ? (
             <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this order to the attention count">Undo review</Button>
