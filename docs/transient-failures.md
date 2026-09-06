@@ -21,9 +21,9 @@ name of the failing test is not a reliable way to tell them apart.
 
 ## 1. A valid session cookie is rejected as having no `user_id`
 
-**Status: instrumented, waiting on a recurrence. The instrumentation is itself covered
-(`backend/tests/test_auth_rejection_diagnostics.py`), because a diagnostic for a 1-in-11 failure that is
-silently broken costs another eleven runs to discover.**
+**Status: recurred; the leading hypothesis is disproved and the next instrument is chosen. The
+instrumentation is itself covered (`backend/tests/test_auth_rejection_diagnostics.py`), because a
+diagnostic for a 1-in-11 failure that is silently broken costs another eleven runs to discover.**
 
 ### Symptom
 
@@ -60,7 +60,37 @@ From a preserved Playwright trace (`retain-on-failure` keeps trace, video and sc
 
 A payload that decodes but is discarded means **signature verification failed**: `SessionMiddleware`
 answers a cookie it cannot verify with `session = {}`, which is indistinguishable downstream from having
-sent nothing. So the cookie was signed with a different key than the process verifying it holds.
+sent nothing.
+
+### The secret cannot differ, so a key mismatch is not the cause
+
+The inference drawn from that used to be "the cookie was signed with a different key than the process
+verifying it holds", and the open question was how two keys could arise in one process. They cannot, and
+no amount of arranging the processes will produce them: **the harness pins the secret to a literal
+constant.** `scripts/run-e2e-backend.sh` writes the isolated env file it then launches against —
+
+```sh
+DATA_DIR=$E2E_DIR
+SESSION_SECRET=e2e-playwright-secret
+```
+
+— and that value is not in `PLACEHOLDER_SESSION_SECRETS` (`runtime_config.py`), so `_reject_placeholder_secret`
+passes it through and it is used verbatim. Every process, in every run, signs and verifies with the same
+string. Generation, storage, and persistence never enter it.
+
+Three things follow, and the third is the reason this section exists rather than a note:
+
+- A stale `tests/.auth/state.json` from an earlier run would verify perfectly well, so cookie staleness is
+  not a candidate either. (`globalSetup` re-mints it every run regardless — there is no reuse path.)
+- `session_cookie_name` is a digest of the control-DB path and stored on first run, so it is constant
+  across runs and distinct from a dev stack's. Not a candidate.
+- **The instrument this entry used to propose — a fingerprint of the session secret logged at startup, to
+  compare two runs — can only ever print the same value.** Do not build it.
+
+**No trace survives for the second occurrence** — a re-run of `npm run ui:test` clears `test-results/`
+on startup, which is worth knowing before re-running anything: the gate's own `data/check-logs/` entry is
+kept (failed runs are never pruned; see the `.failed` marker), but Playwright's trace, video and
+screenshot are not.
 
 ### Ruled out, with the evidence for each
 
@@ -74,11 +104,27 @@ sent nothing. So the cookie was signed with a different key than the process ver
   deliberately. Nothing under `frontend/tests/ui/` references `auth_enabled` or sign-in protection, and
   that path logs a different reason.
 
-### What does not add up yet
+### Where it fires, which is the surviving lead
 
-`reuseExistingServer: false` gives a fresh backend per run, `globalSetup` mints the session by talking to
-*that* server, and the secret is read once at import. The signing key and the verifying key should be the
-same object in the same process. How they diverge is the open question.
+The second recorded occurrence (`data/check-logs/20260906-093646-545354/frontend-check.log`, lines 83-84)
+was **two** rejections rather than a burst of thirty, and their position is the fact worth having:
+
+```
+✓ 15 [demo-cleared] › demo-clear.setup.js   (47ms)
+✓ 16 [import] › ...falls back to a temporary draft
+  [auth] rejected /api/import-export/preview       (signed cookie, session keys: -)
+  [auth] rejected /api/import-export/profiles/{id} (signed cookie, session keys: -)
+✘ 17 [import] › ...applies it without asking
+```
+
+Both occurrences sit at the same seam: the `demo-cleared` → `import` **phase transition**, where ten
+parallel workers finish one project and adopt `storageState` for the next at once. The `clear` call
+beside it stays ruled out on its own code (tenant data tables only) — what the two occurrences have in
+common is the boundary, not the wipe.
+
+With the secret constant, `signed cookie, session keys: -` narrows to a cookie that reaches the server
+**altered or substituted** — a genuine `BadSignature` — or a second cookie under the same name. Expiry is
+out (no `max_age` against a run under a minute), and Starlette never signs an empty session.
 
 ### What the next occurrence will say
 
@@ -91,10 +137,11 @@ The rejection line now carries two more facts, and neither is the session itself
 
 `signed cookie, session keys: -` confirms the reading above without needing a trace.
 
-**The instrument to add after that, and not before:** a short non-reversible fingerprint of the session
-secret logged at startup, so two runs can be compared and a divergence caught directly. It is deliberately
-not added yet — it only makes sense once the fields above confirm the failure mode, and adding it now
-would be building on the guess rather than on the answer.
+**The instrument to add next** follows the value rather than the key: the raw cookie's **length and a
+short non-reversible digest**, plus whether the `Cookie` header carried the session name more than once.
+Neither reveals the session. It splits the two survivors in one line — a digest matching the known-good
+cookie means verification itself is failing and the fault is below the app, while a different one means
+something replaced or truncated the value, and the phase boundary says where to look.
 
 ---
 
