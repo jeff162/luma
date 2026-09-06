@@ -259,8 +259,22 @@ def _summary_uncategorized_name_sql(level: str) -> str:
     )
 
 
+# **A leaf's type is inherited when it does not carry one of its own**, and every resolver of "is this
+# income?" has to agree about that or a bucket gets selected by one rule and signed by another. A leaf
+# with `category_type IS NULL` under an income group is the ordinary case, not an anomaly — the group
+# skeleton carries the type and most leaves never set one — so reading the leaf's own column alone made
+# the category level the sole dissenter among five resolvers (`_resolve_category_is_income`, the
+# `view=income` scope clause, `by-tag-signature`'s per-row sign, and the group level here all
+# COALESCE). The `view=income` drill therefore *listed* such a category's rows while the pie beside it
+# signed them as expense, so received income read as a large negative, and a group's total stopped
+# equalling the sum of its own slices.
+#
+# The precedence differs by level and both directions are deliberate: a category bucket prefers its own
+# type and falls back to its group, while a group bucket is the group, so the group's type wins over any
+# one child's. Callers must join `category p ON p.id = c.parent_id` for either.
 def _summary_uncategorized_type_sql(level: str) -> str:
-    base_column = "c.category_type" if level == "category" else "COALESCE(p.category_type, c.category_type)"
+    base_column = ("COALESCE(c.category_type, p.category_type)" if level == "category"
+                   else "COALESCE(p.category_type, c.category_type)")
     return (
         "CASE "
         "WHEN t.category_id IS NULL AND t.amount < 0 THEN 'income' "
@@ -2417,6 +2431,7 @@ def spending_by_category_in_group(
                 COUNT(DISTINCT t.id)                AS count
             FROM   {_expanded} t
             LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category p ON p.id = c.parent_id
             {where}
             -- GROUP BY the sentinel *expression*, not the `category_id` alias: the row source carries a
             -- real `category_id` column, and SQLite binds a bare name in GROUP BY to that column rather

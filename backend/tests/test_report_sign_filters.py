@@ -19,6 +19,7 @@ from backend.routers.transactions import (
     UNCATEGORIZED_EXPENSE_CATEGORY_ID,
     UNCATEGORIZED_INCOME_CATEGORY_ID,
     monthly_trend,
+    spending_by_category,
     spending_by_category_in_group,
     spending_by_group,
 )
@@ -103,6 +104,106 @@ class ReportSignFiltersTests(unittest.TestCase):
                     """,
                     (txn_id, account_id, SHARED_OWNER_ID, amount, date),
                 )
+
+    # --- A leaf whose `category_type` is NULL takes its group's -------------------------------
+    #
+    # This is the ordinary shape, not an edge case: the seeded skeleton types the groups and most
+    # leaves never set one of their own. Reading the leaf column alone made the category-level bucket
+    # the sole resolver that did not inherit, so an income leaf was *selected* as income by every
+    # filter and then *signed* as an expense — received income read as a large negative, and a group
+    # stopped equalling the sum of its own slices.
+
+    def _by_category(self, **overrides):
+        kwargs = dict(
+            month="2026-04", date_start=None, date_end=None, account_id=None, account_ids=None,
+            tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
+            exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
+            exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+            exclude_income=False, exclude_expense=False,
+        )
+        kwargs.update(overrides)
+        return spending_by_category(**kwargs)
+
+    def _by_category_in_group(self, group_id):
+        return spending_by_category_in_group(
+            month="2026-04", date_start=None, date_end=None, group_id=group_id,
+            account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
+            category_ids=None, group_ids=None, payees=None,
+            exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
+            exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+        )
+
+    def test_untyped_income_leaf_reads_positive_not_negative(self):
+        account_id = self._insert_account("Checking")
+        income_group_id = self._insert_category(name="Income Fixture", parent_id=None, category_type="income")
+        untyped_id = self._insert_category(name="Interest Fixture", parent_id=income_group_id, category_type=None)
+        self._insert_transaction(account_id=account_id, category_id=untyped_id, amount=-250.0, date="2026-04-08")
+
+        with self._use_db_path():
+            category_rows = self._by_category()
+            in_group_rows = self._by_category_in_group(income_group_id)
+
+        row = next(r for r in category_rows if r["category_id"] == untyped_id)
+        self.assertEqual(row["category_type"], "income")
+        self.assertEqual(row["total"], 250.0)
+        self.assertEqual(in_group_rows[0]["category_id"], untyped_id)
+        self.assertEqual(in_group_rows[0]["total"], 250.0)
+
+    def test_a_return_in_an_untyped_income_leaf_still_reads_negative(self):
+        # Inheritance decides the bucket's direction; it must not flatten a reverse. A month whose
+        # returns outweigh the income received nets negative, exactly as a typed leaf would.
+        account_id = self._insert_account("Checking")
+        income_group_id = self._insert_category(name="Income Fixture", parent_id=None, category_type="income")
+        untyped_id = self._insert_category(name="Interest Fixture", parent_id=income_group_id, category_type=None)
+        self._insert_transaction(account_id=account_id, category_id=untyped_id, amount=-40.0, date="2026-04-08")
+        self._insert_transaction(account_id=account_id, category_id=untyped_id, amount=100.0, date="2026-04-19")
+
+        with self._use_db_path():
+            rows = self._by_category()
+
+        row = next(r for r in rows if r["category_id"] == untyped_id)
+        self.assertEqual(row["count"], 2)
+        self.assertEqual(row["total"], -60.0)
+
+    def test_group_total_equals_the_sum_of_its_category_slices(self):
+        # The reconciliation the "Spending by" modes promise. It is what actually broke: the group
+        # negated the whole branch while the untyped leaf inside it did not, so the two disagreed by
+        # twice that leaf's value — and the mixed tree here is the real shape, some leaves typed and
+        # some not.
+        account_id = self._insert_account("Checking")
+        income_group_id = self._insert_category(name="Income Fixture", parent_id=None, category_type="income")
+        typed_id = self._insert_category(name="Salary Fixture", parent_id=income_group_id, category_type="income")
+        untyped_id = self._insert_category(name="Interest Fixture", parent_id=income_group_id, category_type=None)
+        self._insert_transaction(account_id=account_id, category_id=typed_id, amount=-3000.0, date="2026-04-01")
+        self._insert_transaction(account_id=account_id, category_id=untyped_id, amount=-250.0, date="2026-04-08")
+
+        with self._use_db_path():
+            group_rows = spending_by_group(
+                month="2026-04", date_start=None, date_end=None,
+                account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
+            )
+            in_group_rows = self._by_category_in_group(income_group_id)
+
+        group_row = next(r for r in group_rows if r["group_id"] == income_group_id)
+        self.assertEqual(group_row["total"], 3250.0)
+        self.assertEqual(sum(r["total"] for r in in_group_rows), group_row["total"])
+        self.assertEqual(sum(r["count"] for r in in_group_rows), group_row["count"])
+
+    def test_an_untyped_leaf_under_an_expense_group_stays_an_expense(self):
+        # The inheritance is not "NULL means income": a leaf parked under an expense group takes that,
+        # so its credits read negative. Guards the COALESCE against being read as a special case for
+        # income rather than a general fallback.
+        account_id = self._insert_account("Checking")
+        expense_group_id = self._insert_category(name="Shopping Fixture", parent_id=None, category_type="expense")
+        untyped_id = self._insert_category(name="Parked Fixture", parent_id=expense_group_id, category_type=None)
+        self._insert_transaction(account_id=account_id, category_id=untyped_id, amount=-80.0, date="2026-04-08")
+
+        with self._use_db_path():
+            rows = self._by_category()
+
+        row = next(r for r in rows if r["category_id"] == untyped_id)
+        self.assertEqual(row["category_type"], "expense")
+        self.assertEqual(row["total"], -80.0)
 
     def test_income_category_monthly_trend_keeps_both_credits_and_debits(self):
         account_id = self._insert_account("Checking")
