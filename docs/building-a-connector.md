@@ -578,6 +578,16 @@ visible in practice; it is not settled.**
   because a claim or exchange is single-use. By the time the new handle is known the authorization is
   spent, so the server has to absorb a stale answer rather than refuse it.
   See [Where the connection handle comes from](#where-the-connection-handle-comes-from).
+- **A provider's list of environments is the provider's, and it changes without telling anyone.** The
+  offered set, the accepted set, and the set the client library can actually reach are three separate
+  places, and nothing fails when they disagree: an environment map keyed by name resolves an unknown one
+  through its default, so a withdrawn environment stays selectable, stores cleanly, badges as a distinct
+  mode, and silently points every call at whichever environment the default happens to be — which is the
+  test one, because that is the safe default for the case this is not. The adapter's own map cannot be
+  what decides — it is per-provider and knows only its own names. The shared config layer owns both which
+  names are offered and what a retired one now means, and resolves it on read
+  (`providers/config.py` → `VALID_ENVS`, `RETIRED_ENVS`), so the adapter's default is left as the
+  fail-toward-test backstop it should be rather than the thing quietly answering the question.
 
 ## Open
 

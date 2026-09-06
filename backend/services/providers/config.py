@@ -20,7 +20,23 @@ from backend.db.database import get_db
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
 
-VALID_ENVS = {"sandbox", "development", "production"}
+# Plaid retired its `development` environment; the dashboard now issues one sandbox and one production
+# key and nothing else, so there is no third mode left to offer. Accepting it was not merely dead — the
+# Plaid client's own environment map has only the two, so a stored `development` fell through its default
+# and pointed every call at *sandbox* while the UI badged it as a distinct third thing. A row written
+# before the option was withdrawn is read as the sandbox it has been behaving as all along (`_read_env`),
+# rather than left to be resolved by a fallback three layers away that says nothing about it.
+VALID_ENVS = {"sandbox", "production"}
+
+RETIRED_ENVS = {"development": "sandbox"}
+
+
+def _read_env(stored: str | None) -> str:
+    """The environment a stored row means today. Every read goes through this, so the retired value
+    resolves once, here, instead of differently in each caller that happens to think about it."""
+    env = (stored or "").strip() or "sandbox"
+    return RETIRED_ENVS.get(env, env)
+
 
 def _row(conn, provider: str):
     return conn.execute(
@@ -63,7 +79,7 @@ def get_provider_config_status(provider: str) -> dict:
             "configured": True,
             "source":     "vault",
             "client_id":  row["client_id"],
-            "env":        row["env"],
+            "env":        _read_env(row["env"]),
             "has_secret": bool(row["secret_enc"] or row["secret"]),
         }
     return {"provider": provider, "configured": False, "source": None,
@@ -344,7 +360,7 @@ def resolve_app_config(user: dict, provider: str) -> dict | None:
         row = _row(conn, provider)
     if row and (row["secret_enc"] or row["secret"] or row["client_id"]):
         secret = crypto_service.decrypt_app_credential(user, provider, row["secret"], row["secret_enc"])
-        return {"client_id": row["client_id"], "secret": secret, "env": row["env"]}
+        return {"client_id": row["client_id"], "secret": secret, "env": _read_env(row["env"])}
     return None
 
 
@@ -356,7 +372,7 @@ def set_provider_config(user: dict, provider: str, *, client_id=None, secret=Non
     if env is not None:
         normalized_env = (env or "sandbox").strip() or "sandbox"
         if normalized_env not in VALID_ENVS:
-            raise ValueError("env must be sandbox, development, or production")
+            raise ValueError("env must be sandbox or production")
 
     with get_db() as conn:
         row = _row(conn, provider)

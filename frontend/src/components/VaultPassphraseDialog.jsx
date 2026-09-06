@@ -16,7 +16,7 @@
 // one, so a component module was the wrong home for it in both directions.
 
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, AppDialog } from './ui.jsx'
+import { Button, Input, AppDialog, Tooltip } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
@@ -89,6 +89,11 @@ function useStrandedBackups(active) {
   return backups
 }
 
+// Said in four places — the note under the confirm field, the hover on each control the mismatch
+// disables, and the submit-time refusal that still has to catch the stretch the note stays quiet for.
+// One string, so a user who reads it twice reads the same sentence twice.
+const MISMATCH = 'The passphrases do not match.'
+
 export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPasskey }) {
   // mode: 'set' (mint/replace the workspace vault) | 'unlock' (open it for this session)
   //     | 'change' (rewrap the DEK under a new passphrase)
@@ -121,6 +126,19 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // advisory meter feel like the passphrase had been accepted.
   const blocked = busy || (setting && (!passphrase || !!shortfall))
 
+  // What is still wrong with the new passphrase, in the words of the condition that is unmet. One
+  // expression feeds all three places it is needed — the note under the confirm field and the hover on
+  // each control it disables — so a control can never be greyed for a reason the screen does not give.
+  const newPassphraseIssue = !passphrase ? 'Enter a new passphrase.'
+    : shortfall ? shortfall
+      : !confirm ? 'Re-enter the new passphrase to confirm it.'
+        : passphrase !== confirm ? MISMATCH : ''
+  // Shown from the first character typed into the confirm field until the two agree — deliberately
+  // including the stretch where what has been typed is still a correct prefix. Staying silent there
+  // reads as "so far so good" and leaves someone who stopped a character short with a greyed button
+  // and nothing to explain it, which is the whole complaint this answers.
+  const mismatch = setting && !!confirm && passphrase !== confirm
+
   // Offered wherever a passkey can actually answer the question being asked, and only where a usable one
   // exists. That is three of the modes, for two different reasons:
   //
@@ -145,7 +163,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   // In 'change' the passkey submits the whole operation — proof and replacement together — so it has to
   // hold the new passphrase to the same floor and the same confirm-field check as the button beside it.
   // In the other two it carries nothing.
-  const passkeyBlocked = changing && (!passphrase || !!shortfall || passphrase !== confirm)
+  const passkeyBlocked = changing && !!newPassphraseIssue
 
   // A refusal leaves the dialog open on the passphrase, which is the fallback the user still has.
   const { busy: passkeyBusy, unlock: unlockByPasskey, label: passkeyLabel } = useVaultPasskeyUnlock({
@@ -158,12 +176,12 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
   })
 
   function onPasskey() {
-    if (changing && passphrase !== confirm) { setError('The passphrases do not match.'); return }
+    if (changing && passphrase !== confirm) { setError(MISMATCH); return }
     unlockByPasskey()
   }
 
   async function submit() {
-    if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
+    if (setting && passphrase !== confirm) { setError(MISMATCH); return }
     if (!passphrase) { setError('Enter a passphrase.'); return }
     if (changing && !current) { setError('Enter your current passphrase.'); return }
     setBusy(true)
@@ -203,18 +221,22 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           {/* Ordered and toned exactly as the Connections tab's vault strip does it, so the primary way
               in does not change depending on which surface asked. */}
           {canUsePasskey ? (
-            <Button small onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
-              {passkeyLabel}
-            </Button>
+            <Tooltip content={passkeyBlocked ? newPassphraseIssue : ''} align="right">
+              <Button small onClick={onPasskey} disabled={busy || passkeyBusy || passkeyBlocked}>
+                {passkeyLabel}
+              </Button>
+            </Tooltip>
           ) : null}
-          <Button small variant={canUsePasskey ? 'ghost' : 'primary'}
-            onClick={submit} disabled={blocked || passkeyBusy}>
-            {busy ? 'Working…'
-              : changing ? 'Change passphrase'
-                : requesting ? 'Request access'
-                  : confirming ? 'Confirm'
-                    : setting ? 'Set passphrase' : 'Unlock'}
-          </Button>
+          <Tooltip content={blocked && !busy ? newPassphraseIssue : ''} align="right">
+            <Button small variant={canUsePasskey ? 'ghost' : 'primary'}
+              onClick={submit} disabled={blocked || passkeyBusy}>
+              {busy ? 'Working…'
+                : changing ? 'Change passphrase'
+                  : requesting ? 'Request access'
+                    : confirming ? 'Confirm'
+                      : setting ? 'Set passphrase' : 'Unlock'}
+            </Button>
+          </Tooltip>
         </>
       }
     >
@@ -244,6 +266,9 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
             // button would refuse — a passphrase under the floor stays un-submittable either way.
             onKeyDown={onEnter(() => { if (!blocked) submit() })}
             {...SENSITIVE_FIELD_PROPS} />
+        ) : null}
+        {mismatch ? (
+          <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{MISMATCH}</div>
         ) : null}
         {/* The consequence a passphrase change has that nothing else on screen would reveal: the same DEK
             is rewrapped, so stored ciphertext is untouched, but any credentials backup already written

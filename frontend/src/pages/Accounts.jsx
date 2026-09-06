@@ -390,21 +390,24 @@ function controlStyle(extra = {}) {
 // so connecting/syncing needs the vault unlocked, and — on a networked bind — HTTPS. Only Plaid ships an
 // adapter today; the layout is provider-generic for further providers later.
 
+// The badge marks the environment worth *remarking on*, which is never the expected one. Sandbox earns it
+// because it is the state that makes a working app look broken — the user's real accounts are absent and
+// every balance is invented, and nothing else on the card would say why. Production is the steady state,
+// and it used to wear a red live-money tone: an alarm colour on the one configuration that is correct,
+// which both misreads as an error and spends the colour this UI reserves for actual failures. So
+// Production renders nothing at all, and so does a provider with no test mode to be in (`env` null) —
+// a badge there would imply a sandbox/production distinction it does not have. Anything unrecognized
+// still renders, since a value we cannot place is exactly the one not to hide.
 function EnvBadge({ env }) {
-  // Sandbox = muted; Production = a live-money warning tone; anything else = neutral.
-  const tone = env === 'production'
-    ? { bg: 'rgba(220, 38, 38, 0.14)', text: '#dc2626', border: 'rgba(220, 38, 38, 0.4)' }
-    : env === 'sandbox'
-      ? { bg: 'var(--surface2)', text: 'var(--muted)', border: 'var(--border)' }
-      : { bg: 'rgba(37, 99, 235, 0.14)', text: '#2563eb', border: 'rgba(37, 99, 235, 0.4)' }
+  if (!env || env === 'production') return null
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center',
-      background: tone.bg, color: tone.text, border: `1px solid ${tone.border}`,
+      background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)',
       borderRadius: 99, padding: '2px 9px', fontSize: 11, fontWeight: 600, textTransform: 'capitalize',
       whiteSpace: 'nowrap',
     }}>
-      {env || 'sandbox'}
+      {env}
     </span>
   )
 }
@@ -518,7 +521,6 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
           <span style={{ color: 'var(--muted)' }}>Environment</span>
           <Select value={env} onChange={setEnv} options={[
             { value: 'sandbox', label: 'Sandbox' },
-            { value: 'development', label: 'Development' },
             { value: 'production', label: 'Production' },
           ]} />
         </div>
@@ -1499,9 +1501,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                     ⚠ {s.review} to review
                   </StatusPill>
                 ) : null}
-                {/* No badge for a provider with no test mode: an empty or invented one would imply a
-                    sandbox/production distinction it does not have. */}
-                {p.env ? <EnvBadge env={p.env} /> : null}
+                <EnvBadge env={p.env} />
               </span>
             }
             // No provider-level "Sync now" here any more. The routine pull lives where new data arrives

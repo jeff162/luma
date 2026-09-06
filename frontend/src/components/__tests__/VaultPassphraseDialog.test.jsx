@@ -315,3 +315,53 @@ describe('unlocking with a passkey', () => {
     expect(screen.queryByText(/could not|cannot|failed/i)).toBeNull()
   })
 })
+
+describe('telling the user why the new passphrase is not accepted yet', () => {
+  const STRONG = 'a-strong-vault-passphrase'
+
+  it('says nothing until the confirm field has been typed into', async () => {
+    renderDialog({ mode: 'change', onSubmit: vi.fn() })
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    expect(screen.queryByText('The passphrases do not match.')).toBeNull()
+  })
+
+  it('reports the mismatch while the confirm field is still only a prefix', async () => {
+    // The case the note exists for. Suppressing it while what has been typed still agrees reads as "so
+    // far so good", and someone who stops one character short is then left with a greyed control and
+    // nothing on screen accounting for it.
+    renderDialog({ mode: 'change', onSubmit: vi.fn() })
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    await userEvent.type(screen.getByPlaceholderText('Confirm new passphrase'), STRONG.slice(0, -1))
+    expect(screen.getByText('The passphrases do not match.')).toBeTruthy()
+  })
+
+  it('clears the note once the two agree', async () => {
+    renderDialog({ mode: 'change', onSubmit: vi.fn() })
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    const confirm = screen.getByPlaceholderText('Confirm new passphrase')
+    await userEvent.type(confirm, STRONG.slice(0, -1))
+    await userEvent.type(confirm, STRONG.slice(-1))
+    expect(screen.queryByText('The passphrases do not match.')).toBeNull()
+  })
+
+  it('explains on hover why the passkey button is greyed out', async () => {
+    // A disabled control is inert to pointer events, so the reason hangs off the wrapper around it —
+    // which is what makes hovering the greyed button answer the question at all.
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), STRONG)
+    await userEvent.hover(screen.getByText('Use a passkey').closest('button').parentElement)
+    expect((await screen.findByRole('tooltip')).textContent)
+      .toBe('Re-enter the new passphrase to confirm it.')
+  })
+
+  it('names the floor, not the mismatch, while the passphrase is still too short', async () => {
+    // Both are unmet at that point; reporting the one the user has to fix first is what keeps the hint
+    // from sending them to the wrong field.
+    renderDialog({ mode: 'change', onUnlockedByPasskey: vi.fn() }, withPasskey({ id: 'pk1' }))
+    await userEvent.type(screen.getByPlaceholderText('New passphrase'), 'short')
+    // Asserted on the hint itself: the floor message is also printed under the field, so matching by
+    // text alone would pass without the hover having produced anything.
+    await userEvent.hover(screen.getByText('Use a passkey').closest('button').parentElement)
+    expect((await screen.findByRole('tooltip')).textContent).toMatch(/characters/i)
+  })
+})

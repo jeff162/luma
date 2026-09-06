@@ -428,6 +428,18 @@ Delete rather than offering one that refuses.
 This governs **rendering only**. The backend refuses the same operations independently, since that is
 what holds across every entry point; the table exists so the screen agrees with it.
 
+**A control that is disabled by an unmet condition says which one, on hover.** Greying a control states
+that something is wrong without saying what, and the user is left to find the unmet condition by
+elimination — worst where the cause is invisible on screen, as when a confirm field one character short
+greys the button beside two fields that both look filled in. The reason belongs on the shared `Tooltip`
+rather than a native `title`: setting the DOM `disabled` attribute is what makes a control genuinely
+inert, pointer events included, so its own `title` never opens — the hint has to hang off a wrapper
+around it. Derive the reason and the disabling condition from **one expression**, so a control can never
+be greyed for a reason the screen does not give; where several conditions are unmet at once, name the one
+the user has to fix first, or the hint sends them to the wrong field. Note this is a different string
+from the `title` an *enabled* button carries, which says what the action does — the two are not
+interchangeable and a control may want both.
+
 ## Section toggles
 
 Settings uses collapsible top-level sections.
@@ -462,6 +474,16 @@ to survive it, or collapsing quietly costs the user something:
 
 The counterpart is what a collapsed header should *not* carry: context that answers no question and asks
 for nothing (a mode badge, a provider's environment) can sit last or be dropped entirely.
+
+**A mode badge marks the exceptional state, never the expected one.** A provider's environment badge shows
+for Sandbox and renders nothing for Production, because only one of the two answers a question the user
+would otherwise be left with — sandbox is the state that makes a working app look broken, with the real
+accounts absent and every balance invented, and nothing else on the card would say why. Badging the normal
+case instead costs twice: it spends the alarm colour this UI reserves for real failures on the one
+configuration that is correct, so the badge reads as an error and the colour stops meaning anything. The
+same reasoning already drops the badge for a source with no test mode at all — an invented or empty one
+would imply a distinction it does not have — which makes the general rule visible: the question is not
+"what mode is this in" but "is there something here the user needs told".
 
 **Two badges must not describe the same thing at two levels of usefulness.** A connection needing to be
 reconnected is also, technically, a failing connection — but showing "1 failing" beside "reconnect needed"
