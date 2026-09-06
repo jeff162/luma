@@ -2,7 +2,7 @@
 // sitting beside it.
 
 import { describe, expect, it } from 'vitest'
-import { connectionAccountsLabel, providerSummaryLine, relinkCandidates } from '../connectionSummary.js'
+import { connectionAccountsLabel, providerSummaryLine, connectionProviderLabel, providerConnectionStates, relinkCandidates, syncFreshness, syncNavLabel } from '../connectionSummary.js'
 
 describe('providerSummaryLine', () => {
   it('reports a running sync instead of the freshness it supersedes', () => {
@@ -89,5 +89,158 @@ describe('connectionAccountsLabel', () => {
     // stray separator would read as a name that failed to load.
     expect(connectionAccountsLabel([])).toBeNull()
     expect(connectionAccountsLabel(['', '  ', null])).toBeNull()
+  })
+})
+
+describe('syncFreshness', () => {
+  const at = t => ({ last_synced_at: t })
+
+  it('reports the connection furthest behind, not the most recent one', () => {
+    // The whole reason a standing indicator exists: one connection synced minutes ago must not let the
+    // control claim everything is current while another has not synced in a month.
+    const f = syncFreshness([
+      { provider: 'plaid', connections: [at('2026-09-05T07:40:00Z')] },
+      { provider: 'simplefin', connections: [at('2026-08-04T20:12:00Z')] },
+    ])
+    expect(f.lastSynced).toBe('2026-08-04T20:12:00Z')
+    expect(f.connectionCount).toBe(2)
+  })
+
+  it('keeps a never-synced connection out of the oldest date and counts it separately', () => {
+    // Folding it in would replace a readable date with "never" the first time a connection was added,
+    // which says less than the date plus the count does.
+    const f = syncFreshness([
+      { provider: 'plaid', connections: [at('2026-09-05T07:40:00Z'), at(null)] },
+    ])
+    expect(f.lastSynced).toBe('2026-09-05T07:40:00Z')
+    expect(f.neverSynced).toBe(1)
+    expect(f.connectionCount).toBe(2)
+  })
+
+  it('applies the same oldest-wins rule within a provider', () => {
+    const f = syncFreshness([
+      { provider: 'simplefin', connections: [at('2026-09-05T07:40:00Z'), at('2026-09-01T09:00:00Z')] },
+    ])
+    expect(f.byProvider).toEqual([
+      { provider: 'simplefin', connectionCount: 2, lastSynced: '2026-09-01T09:00:00Z', neverSynced: 0 },
+    ])
+  })
+
+  it('ignores a configured provider with nothing connected', () => {
+    // It has no freshness to report, and listing it would put a permanent "never synced" line in the
+    // tooltip for a provider the user has not set up.
+    const f = syncFreshness([
+      { provider: 'plaid', connections: [] },
+      { provider: 'simplefin', connections: [at('2026-09-05T07:40:00Z')] },
+    ])
+    expect(f.byProvider.map(p => p.provider)).toEqual(['simplefin'])
+    expect(f.connectionCount).toBe(1)
+  })
+
+  it('says nothing rather than guessing when nothing has ever synced', () => {
+    const f = syncFreshness([{ provider: 'plaid', connections: [at(null), at(null)] }])
+    expect(f.lastSynced).toBeNull()
+    expect(f.neverSynced).toBe(2)
+  })
+
+  it('reports an empty install as having nothing to sync', () => {
+    expect(syncFreshness([])).toEqual({
+      connectionCount: 0, lastSynced: null, neverSynced: 0, byProvider: [],
+    })
+    expect(syncFreshness().connectionCount).toBe(0)
+  })
+})
+
+describe('syncNavLabel', () => {
+  it('reports a running sync instead of the freshness it supersedes', () => {
+    // Same precedence as the provider card's own line: nobody wants to be told how stale the data was
+    // while the pull fixing it is running.
+    expect(syncNavLabel({ driving: true, relativeLabel: '3d ago' })).toBe('Syncing…')
+    expect(syncNavLabel({ driving: true, added: 142, relativeLabel: '3d ago' })).toBe('Syncing — 142 imported')
+  })
+
+  it('keeps naming the finished run until its summary has been seen', () => {
+    // The row is the way back to the panel at this point, so it must not read as an invitation to start
+    // a second pull.
+    expect(syncNavLabel({ finished: true, relativeLabel: 'just now' })).toBe('Sync finished')
+  })
+
+  it('reports freshness only when nothing is happening', () => {
+    expect(syncNavLabel({ relativeLabel: '2h ago' })).toBe('Sync · 2h ago')
+  })
+
+  it('says a connection has never synced rather than falling silent', () => {
+    // "No date" is the finding, not an absence of one.
+    expect(syncNavLabel({})).toBe('Sync · never run')
+    expect(syncNavLabel()).toBe('Sync · never run')
+  })
+})
+
+describe('connectionProviderLabel', () => {
+  it('uses the product name the user signed up to, not the ledger\'s short form', () => {
+    // The transaction-origin label in `importSourceFields.js` says "SimpleFIN" because it sits in a dense
+    // row. On a surface where the provider is being set up, the full name is what was matched against.
+    expect(connectionProviderLabel('simplefin')).toBe('SimpleFIN Bridge')
+    expect(connectionProviderLabel('plaid')).toBe('Plaid')
+  })
+
+  it('names an unknown provider rather than leaving the label blank', () => {
+    expect(connectionProviderLabel('northgate')).toBe('Northgate')
+    expect(connectionProviderLabel('')).toBe('Provider')
+    expect(connectionProviderLabel()).toBe('Provider')
+  })
+
+  it('is case-insensitive, since the key arrives from the server', () => {
+    expect(connectionProviderLabel('SimpleFIN')).toBe('SimpleFIN Bridge')
+  })
+})
+
+describe('providerConnectionStates', () => {
+  const conn = (over = {}) => ({ id: 'c1', last_synced_at: '2026-09-05T07:40:00Z', ...over })
+
+  it('reports a connection needing reconnection only as that, never also as failing', () => {
+    // Both pills would name one connection, and only one of them says something the user can act on.
+    const p = { connections: [conn({ reauth_required: true, consecutive_sync_failures: 4 })] }
+    const s = providerConnectionStates(p)
+    expect(s.reauth).toHaveLength(1)
+    expect(s.failing).toHaveLength(0)
+  })
+
+  it('still counts a plain failure that is not a reconnection', () => {
+    const p = { connections: [conn({ consecutive_sync_failures: 2 })] }
+    expect(providerConnectionStates(p).failing).toHaveLength(1)
+  })
+
+  it('takes the oldest successful pull, so one healthy connection cannot mask a stale one', () => {
+    const p = { connections: [
+      conn({ id: 'a', last_synced_at: '2026-09-05T07:40:00Z' }),
+      conn({ id: 'b', last_synced_at: '2026-08-04T20:12:00Z' }),
+    ] }
+    const s = providerConnectionStates(p)
+    expect(s.lastSynced).toBe('2026-08-04T20:12:00Z')
+    expect(s.allSynced).toBe(true)
+  })
+
+  it('says not every connection has synced when one never has', () => {
+    const p = { connections: [conn({ id: 'a' }), conn({ id: 'b', last_synced_at: null })] }
+    expect(providerConnectionStates(p).allSynced).toBe(false)
+  })
+
+  it('totals the caller\'s per-connection mapping and review counts', () => {
+    // Passed in rather than read here: they come from other endpoints, and taking them as arguments is
+    // what makes the rule above testable without a server.
+    const p = { connections: [conn({ id: 'a' }), conn({ id: 'b' })] }
+    const s = providerConnectionStates(p, {
+      unmappedByConnection: { a: 2, b: 1 },
+      reviewByConnection: { a: { suspects: 3 }, b: { suspects: 0 } },
+    })
+    expect(s.unmapped).toBe(3)
+    expect(s.review).toBe(3)
+  })
+
+  it('is safe on a provider with nothing connected', () => {
+    const s = providerConnectionStates({ connections: [] })
+    expect(s).toMatchObject({ unmapped: 0, review: 0, lastSynced: null, allSynced: false })
+    expect(providerConnectionStates().connections).toEqual([])
   })
 })

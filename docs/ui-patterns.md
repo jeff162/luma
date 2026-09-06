@@ -231,6 +231,135 @@ though it ends in an action.
 
 **Separating views must not cost the connection between them — and the way to keep it is usually to bring the detail to the user, not the user to the detail.** Acting on a finding first *switched* to the series view with that series' drill-down open, which was worse in both directions: it took the user out of the list of findings they were working through, and the series list carries its own filter, which can exclude the very series being opened — leaving a drill-down describing a card that is nowhere on screen. A docked detail panel belongs to the *page*, not to one view, so it opens in place under whichever view is showing. Where a shared panel can be opened from more than one view, mark the row that opened it (the findings row highlights the way a series card does): the panel's own title does not say which of several rows it belongs to.
 
+**What an action produces belongs where the action is taken.** The stronger form of the rule above, and
+the one that decides *which page* a surface lives on rather than how two views on one page relate: a
+record of what an operation did is part of that operation, so putting it on another page means going
+somewhere else to see the effect of what was just done. The connection sync log was the case — it sat in
+Settings, deep-linked from the connection cards, because a read-only diagnostic *looked* administrative;
+but it is read minutes after a sync that brought in less than expected, which is the moment the user is
+still standing where they pressed the button. It belongs with the connection work product, not with the
+install's configuration — so it now opens from the Data connections card on Import / Export
+(`components/connections/ConnectionSyncLogDialog.jsx`), beside the sync it describes and the cards that
+sync writes to; a connection card links to it with `?connection=<id>`, which opens it scoped to that one.
+
+**But "belongs with" is not "permanently on screen."** Standing it under the import history was the same
+mistake as Settings in the other direction: a diagnostic nobody needs most of the time occupied a
+screenful of a page people visit to import files. It is read on the specific occasion that a sync brought
+in less than expected, so it lives behind a button and opens as a report (`AppDialog`, the shape
+`ReimbursementsReportDialog` uses). It is deliberately *not* one of the detached minimize-to-nav viewers:
+those are for reports kept open while working elsewhere, and this one is opened, read and dismissed with
+no state worth carrying across a navigation.
+
+The corollary is about Settings specifically. **Settings is a permanent home for a few things and a
+temporary one for a lot** — the configuration surfaces, About, and whatever genuinely describes the
+install belong there for good; anything parked there because it was administrative-shaped, or because
+nowhere else had a slot yet, is on loan. A diagnostic, a log, or a maintenance action that describes one
+subsystem should be read as owing a debt back to that subsystem's own surface, and a new one should not
+be added to Settings simply because it is the page with room.
+
+**A recurring app-wide action can live in the navigation pane, as one control with several states — never
+as a second control beside a transient one.** The sync affordance is the case. Syncing was reachable only
+from the Accounts page's Connections tab, which made the routine operation a detour through a
+configuration surface; the pane meanwhile already carried a *stashed-run* pill that appeared only while a
+sync was minimized. Adding a permanent "Sync now" next to that pill would have put two sync things in the
+nav that could disagree about whether anything was running. So there is one row
+(`components/SyncNavItem.jsx`), and it reads its own status: idle it offers to sync and says how current
+the data is, running it reports what has arrived, and once the run ends it restores the summary. Three
+properties make it work. It is **permanent** — a control that appears and disappears is one nobody learns
+to reach for, so it earns attention through its state rather than through its presence, and it hides only
+when the action is impossible (no data connections at all). It is **styled as a nav row, not a chip**,
+unlike the stashed-report pills beside it, because it belongs to the pane rather than being parked in it.
+And it **starts the whole run**, not one provider's — which is why `SyncStatusContext` separates opening a
+run (`beginRun`, once for the set) from driving one provider (`driveProvider`): per-provider setup run
+twice in a tick races itself, since each call reads a `syncState` ref only as fresh as the last render and
+each would conclude the other was not running and replace its roster.
+
+**An app-wide action taken outside the page that owns it needs that page's gates lifted with it.** Sync is
+vault-gated, and the gate's dialog was mounted inside the Connections tab — so the prompt could only
+suspend an action started on that tab, and would unmount underneath a pending one anywhere else. The gate,
+its flags and its dialog now live at App level (`contexts/VaultGateContext.jsx`) beside the sync state,
+and the page keeps only what is genuinely its own: the vault *strip* (configuration), the
+change-passphrase dialog (nothing waits on it), and the strip's own passkey button (whose refusal is a
+page notice rather than an inline dialog error). The flags are **derived from `currentUser` rather than
+fetched**, since the session already carries them and a second polled copy could only disagree; staleness
+is answered where it surfaces, by the gate's `force` option and each call site's 423 retry, not by
+keeping a fresher cache.
+
+**Timestamps are absolute by default, and relative only where the question is staleness.** An absolute
+timestamp is true whenever it is drawn and orders itself against its neighbours, which is why it stays the
+rule for any timestamp sitting in a list beside other timestamps (the sync log's rows, an import card's
+date). The exception is a single standing figure in narrow chrome, where the reader wants "how stale is
+this?" rather than "when exactly?" and the pane has no room for `9/5/2026, 07:40 AM` regardless. Two
+conditions make the exception safe, and both are required: the absolute value goes on **hover**, so the
+exact moment is never actually lost, and the label **re-renders as it ages** (`lib/useRelativeTimestamp.js`),
+because the drift a render-time label accumulates on a page left open is the real objection to relative
+labels and not a hypothetical one. That hook steps its own interval down with the value's age and stops
+entirely once the label has settled into a date, so an idle app is not woken every minute to redraw
+"3d ago".
+
+**Configuration and operation are different surfaces, and a routine action must not be reached through a
+configuration one.** The connections work is the reference. Everything about a data connection lived on
+one tab of the Accounts page — connecting a bank, mapping its accounts, *and* syncing it — while the
+Accounts page's other tabs are all configuration. So the routine act of pulling new transactions was a
+detour through a setup screen, and the record of what a sync had done was somewhere else again (Settings).
+The split now runs along what the user is doing rather than along what the data is:
+
+- **Accounts → Connections keeps configuration**: the vault strip, the provider credential, connect,
+  reconnect, disconnect, the account mapping, and the new-connection history depth. Plaid Link in
+  particular *cannot* move — its handler closure lives in that component, so navigating away mid-connect
+  silently loses the in-flight connection, which is what the modal scrim exists to prevent.
+- **Import / Export → Import gains the operations**: one **Sync now** covering every connected provider,
+  fetch-more-history, refresh-accounts, remove-synced-transactions, and the sync log — in a card that
+  **shares a row with the file importer**, over the import history both routes land in. They are peers
+  rather than one being a subsection of the other, because a sync and a dropped file are the same intent
+  and produce the same artifact (an `import_batch` card).
+
+  **One sync control per surface, not one per row.** The first cut gave each provider *and* each
+  connection its own button, which at three connections under two providers put five on a page that also
+  has one in the navigation pane — and they were not five different actions in any way a user cares
+  about. "Bring in everything new" is a single intent and gets a single control. Syncing one connection
+  is a different question — *did the thing I just configured work?* — which is why that one survives, on
+  the Accounts card where the configuring happens, and nowhere else. The corollary for the card's density:
+  sharing a row with the importer means it has to stay short, so each connection is one line (who, how
+  stale, anything asking to be acted on, a menu) and the per-account breakdown of a pull lives on the
+  import cards below, where those rows actually landed.
+
+Three things make the split hold rather than merely relocate the problem. **The two halves share their
+implementation, not just their vocabulary** — the actions are one hook (`lib/useConnectionOperations.js`),
+the status rendering one module (`components/connections/ConnectionStatus.jsx`), the derived states one
+tested function (`providerConnectionStates`). Two surfaces describing one connection must not be able to
+describe it differently, and a confirmation for a destructive action written twice will eventually promise
+two different things. **Neither half goes silent about the other**: the configuration card keeps a
+compact last-synced line and its own small per-connection sync — because the changes made there (a
+mapping, a reconnect) are only really confirmed by data arriving, and the effect of an action belongs
+where the action was taken — and its ⋯ menu carries one pointer to the operational half rather than
+repeating it. **And what was discovered by one half but fixed by the other becomes a Task**: reconnect
+needed, connections failing, and accounts with no destination are raised in `routers/tasks.py`, so the
+nav badge finds a user who visits neither page. They are deliberately not dismissible — unlike a backlog
+count they do not fall on their own, and hiding one hides a connection that has stopped importing.
+
+**A list can be the card's point and still belong behind an expander.** When the connection cards' height
+was first raised, the recorded conclusion was that the accounts list "is the card's useful content, so it
+should stay visible rather than move behind an expander." Living with it overturned that: at seven accounts
+the list *was* the card, fifteen rows of reference material wrapped around three rows of state, and the
+things a user actually returns to the card for — is it working, when did it last run, what still needs a
+destination — were buried under it. Both surfaces now collapse it (`Accounts (7)` on the configuration card,
+`Connections (3)` on the Import panel) with the actionable counts hoisted onto the summary line, which is
+the rule that makes collapsing safe. The general lesson is that "this is the important content" argues for
+making it *reachable and summarised*, not for making it permanently occupy the viewport — and that a
+density judgement made before anyone has lived with the surface is worth re-testing rather than inheriting.
+
+**A control that speaks for many things reports the one furthest behind.** The nav item's freshness is the
+**oldest** `last_synced_at` across every connection, which is the same rule `providerSummary` already
+applies to the connections under one provider card, one level down. Taking the newest would let a
+connection synced two minutes ago report the whole app as current while another had not synced in a month
+— exactly the state a standing freshness indicator exists to reveal. It is also **derived rather than
+stored**: a remembered "last pressed" timestamp would be a second answer that can disagree with the first,
+since a sync that ran and failed moves it though nothing arrived. A connection that has *never* synced is
+kept out of the oldest date and counted separately, so adding one does not replace a readable date with
+"never"; the count travels to the tooltip, which also breaks the headline down per provider so a stale
+figure can be traced to the connection responsible for it.
+
 ### Horizontal sizing of data regions
 
 Two different surfaces respond to a narrowing pane in two different, deliberate ways, and the choice follows from what the region *is*:
@@ -960,7 +1089,9 @@ CSV import has a few special rules:
   - **File cards order by data recency, not import time.** Each marketplace file is its own card (per-file batching; see `architecture.md` → Amazon order import contract), and the vendor's cards are sorted by the **newest transaction each covers**, descending (`byMarketplaceCardRecency`, on the `newest_txn_date` `list_batches` exposes) — so a one-shot historical drop of many years reads the way it would have if each file had been imported as its purchases happened, instead of by import time (which ties for a single drop). The collapsed vendor row's "Last used" stays the most-recent *import* time, not the newest transaction.
   - **Open question — a second marketplace vendor.** With only Amazon there is a single "Amazon" tab. When a second vendor (AliExpress, Temu, …) lands, the intended shape is one **"Marketplaces"** tab that hosts the vendors as either stacked sections or inner subtabs that flip between them, with the last-viewed vendor remembered (session-scoped, like the outer Import / Export tab). Choose the section-vs-subtab form when the second vendor actually arrives — noted here so the tab name and structure are a deliberate decision, not an accident of there being one vendor today.
 
-- **A connection card says what the last sync *did*, not only whether it failed** — and it says it in the *same form* the Import/Export history card uses, because the two answer the same question and a user reads them minutes apart. `Last sync` + an outcome pill (`Sync failed` / `Synced · check the log` / `Synced · more history to fetch` / a muted `Synced`) + the row total, then a row of **`SourceAccountChip`s** — the component extracted from the import card so the two cannot drift, carrying the ✓ / − / ✕ vocabulary that already distinguishes "got rows" / "got none" / "skipped". Chips are driven from the accounts the connection *offers*, not from what landed, so **an account that received nothing still appears**; that is the row the whole thing exists for, and any breakdown built from imported rows structurally cannot contain it. A chip's number is rows **seen** for that account — `added` plus the two no-destination buckets — which is what an import card's chip has always meant, so `✕ Some Account 35` reads the same on both. Feeding it `added` alone let the *shared* component mean two different things on the two surfaces: a skipped account showed a bare `✕` here and a counted one there, leaving the connection card unable to say how much data a skipped account was turning away, and leaving a reader to mistake the count of `✕` chips for the "No destination" total when the two happened to agree. Only the two no-destination buckets join `added`, never the whole `skipped` total — they arise solely for accounts with no local account, so the routine already-held and zero-amount skips cannot flip a mapped account's `−` into a `✓`. **One `OutcomeChip` remains**, for rows reported already-imported on a first import, and it deep-links to the sync log. A second one totalling rows with no destination was removed: those counts now ride on the `✕` chips themselves, per account, which is both more informative and unambiguous — a lone total sitting beside a row of `✕` chips reads as a count *of* them whenever the two happen to agree, which is exactly how it was misread. The pill's wording names the effect on the user's data rather than the mechanism (`incomplete` reads as "more history to fetch", not "budget paused"), and the outcome is decided server-side by `sync_outcome` (`services/providers/config.py`) at sync time and stored on the connection — so the card survives the sync log being cleared, and the card and the log still cannot disagree about one call because both are written from the same recorded facts. Below it, a **"Connected accounts"** heading separates the local accounts from the sync's per-account outcome above — without it the two read as one confusing run of names — and each carries the same `↗` detail launcher the Accounts tab uses, on the same handler.
+- **A connection card says what the last sync *did*, not only whether it failed** — and it says it in the *same form* the Import/Export history card uses, because the two answer the same question and a user reads them minutes apart. `Last sync` + an outcome pill (`Failed` / `Success · check the log` / `Success · more history to fetch` / a muted `Success`) + the row total, then a row of **`SourceAccountChip`s** — the component extracted from the import card so the two cannot drift, carrying the ✓ / − / ✕ vocabulary that already distinguishes "got rows" / "got none" / "skipped". Chips are driven from the accounts the connection *offers*, not from what landed, so **an account that received nothing still appears**; that is the row the whole thing exists for, and any breakdown built from imported rows structurally cannot contain it. A chip's number is rows **seen** for that account — `added` plus the two no-destination buckets — which is what an import card's chip has always meant, so `✕ Some Account 35` reads the same on both. Feeding it `added` alone let the *shared* component mean two different things on the two surfaces: a skipped account showed a bare `✕` here and a counted one there, leaving the connection card unable to say how much data a skipped account was turning away, and leaving a reader to mistake the count of `✕` chips for the "No destination" total when the two happened to agree. Only the two no-destination buckets join `added`, never the whole `skipped` total — they arise solely for accounts with no local account, so the routine already-held and zero-amount skips cannot flip a mapped account's `−` into a `✓`. **One `OutcomeChip` remains**, for rows reported already-imported on a first import, and it deep-links to the sync log. A second one totalling rows with no destination was removed: those counts now ride on the `✕` chips themselves, per account, which is both more informative and unambiguous — a lone total sitting beside a row of `✕` chips reads as a count *of* them whenever the two happen to agree, which is exactly how it was misread. The pill's wording names the effect on the user's data rather than the mechanism (`incomplete` reads as "more history to fetch", not "budget paused"), and the outcome is decided server-side by `sync_outcome` (`services/providers/config.py`) at sync time and stored on the connection — so the card survives the sync log being cleared, and the card and the log still cannot disagree about one call because both are written from the same recorded facts. The labels name the **result rather than the action**: rendered straight after the words "Last sync", `Synced` and `Sync failed` said the verb twice and left the reader hunting for a time where a status actually was.
+
+**Where the two halves of that now live, after the configuration/operation split.** The per-account chips are the sync's own work product, so they sit with the sync: on the Import / Export connections card, behind a per-connection disclosure (short by default, since that card shares a row with the file importer), and on the import card the sync wrote, which renders the identical chips. The Accounts configuration card keeps only the outcome and the row total, plus a **relative last-synced line** beside the connection name (`LastSyncedLine`, absolute time on hover) — because "Success" alone cannot distinguish a check made thirty seconds ago from one made last week, which is exactly the question the Sync button next to it raises. Carrying the chips there as well had the card showing **two lists of the same accounts** — the provider's and the local ones — which needed a heading to tell them apart and made a seven-account connection about fifteen rows tall. The local-account list stays (it is configuration: what this connection feeds), and so does the list of provider accounts with no destination, which is the one place a skipped account is visible at all. With one list left, the heading that separated them is gone too.
 
 - **A reload keeps what is on screen; a spinner replaces only what is not there yet.** `{loading ? <Spinner/> : rows}` is the wrong shape for anything that reloads: content → spinner → content moves everything below it twice, which is the most disruptive jitter the app produces. The right shape was already in the codebase (`AccountDetail`, `TransactionDetail`, `CategoryDetail`) and is now the rule — `{loading && rows.length === 0 ? <Spinner/> : rows}`, so the spinner is a *first-load* affordance and a refresh holds the previous list until the new one lands. It composes with `useBusyIndicator` for whatever inline "refreshing" hint remains, and it is strictly better than delaying the swap, because it removes the layout change rather than deferring it.
 
@@ -972,7 +1103,7 @@ CSV import has a few special rules:
 
 - **The sync log filters itself, by connection, with multi-select pills.** Opening it from a connection card deep-links to that connection, but the log is also reached directly from Settings — so the scope is adjustable *there*, rather than by going back to Accounts → Connections to click a different card. One pill per connection **that has rows in the log** (never the configured list: a pill that filters to nothing is a dead end, and the log's denormalized `provider`/`institution` keep a disconnected connection named and filterable long after its connection row is gone). Pills are multi-select because a diagnostic log has a use radio cannot express — *everything except the chatty one* — and **no pill pressed means no filter**, never "match nothing". Each pill carries its row count, which is **rows in the buffer, not syncs ever run**: `connection_sync_log` is a ring buffer capped at `_SYNC_LOG_RETENTION`, so the number is a count of what clicking would show, which is the only meaning a filter's count should have. Two rules follow from it being a *filter's* count: it is computed **unfiltered** server-side and shipped beside the rows (counting the filtered set would collapse every unselected pill to zero the moment the first was clicked), and the pill row **replaces** the old "Showing only X" banner rather than joining it — two controls for one filter can disagree, and the banner could only ever report what the deep link had chosen. Filtering stays server-side: the buffer is bounded but its rows are not small (a deep walk records one entry per request, up to ~3.4 KB a row), so a filtered view has no reason to ship the whole thing. Anything that exports the visible list follows the same selection — **Copy for support** names the connections it covers, or a support reader assumes it is everything.
 
-- **The sync log row splits "what happened to my data" from "what the sync machinery did".** Settings → **Connection sync log** puts the first in an always-visible half and the second behind a per-row **Details** toggle, collapsed always — including on an error row, since what that owes the reader is the error, which sits above the fold. The visible half is an interpreted status line, the counts, the coverage line, where the rows were filed, the error, and bank-level warnings; Details holds the checkpoint/cursor fingerprints and the advisories (what the provider said about our own *request*, which nobody can act on — the log is still their only home, just not their only visible one). The failure this corrects is a routine budget-paused walk rendering as a wall of alarming output because every line carried equal weight.
+- **The sync log row splits "what happened to my data" from "what the sync machinery did".** The **connection sync log** puts the first in an always-visible half and the second behind a per-row **Details** toggle, collapsed always — including on an error row, since what that owes the reader is the error, which sits above the fold. The visible half is an interpreted status line, the counts, the coverage line, where the rows were filed, the error, and bank-level warnings; Details holds the checkpoint/cursor fingerprints and the advisories (what the provider said about our own *request*, which nobody can act on — the log is still their only home, just not their only visible one). The failure this corrects is a routine budget-paused walk rendering as a wall of alarming output because every line carried equal weight.
 
   **A consumable's level is always-visible, not filed under Details.** For a metered provider the allowance line is the reason the row looks the way it does — a pull that stopped early and one that had nothing left to fetch are indistinguishable without it — so the row states what is left, which buckets ran dry, and when the next request becomes available ("6 of 22 shared requests left · 2 accounts out of allowance · next request in ~1 hr"). Counts are **floored, never rounded up**: this is a spendable figure, and claiming a request the server has not granted is the error that costs a disabled token. Status wording follows from the same honesty — a budget pause "resumes once it refills", not "on the next sync", because a bucket refilling at one token an hour does not care that a sync ran ten minutes later. Which bucket paid for each request, and how far each account reached, sit under Details as the follow-up questions only a stuck connection asks.
 

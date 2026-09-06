@@ -78,9 +78,33 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     that sent no cookie at all — so "no user_id" spans both a session that was never established (or
     was cleared, which deletes the cookie) and one signed under a *different* secret than this process
     verifies with. Presence alone separates them; the value is never logged, since it is the session.
+
+    Presence turned out not to be enough. A real occurrence logged "with a session cookie: no user_id"
+    on four requests inside one second, and that single line is produced by three different situations
+    that want three different fixes: a cookie whose signature did not verify (session decodes to ``{}``),
+    a client still holding a *cleared* cookie (Starlette writes the literal ``null`` when a session is
+    emptied, and a request carrying it looks identical here), and a session that verified perfectly well
+    but was written without a ``user_id``. Two more facts separate all three, and neither is the session:
+
+    * ``keys`` — the session's field *names*, never their values. Empty means the session did not decode
+      or was cleared; non-empty without ``user_id`` means something wrote a session that never had one.
+    * ``cookie`` — whether the value is absent, empty, or Starlette's cleared marker. A property of the
+      value rather than the value itself, so nothing signed or secret is written to the log.
     """
-    carried = "with" if config.session_cookie_name in request.cookies else "without"
-    log_warning(f"[auth] rejected {request.url.path} ({carried} a session cookie): {reason}")
+    raw = request.cookies.get(config.session_cookie_name)
+    if raw is None:
+        cookie_state = "no cookie"
+    elif raw == "" or raw == "null":
+        # Starlette empties the cookie rather than only expiring it, so a client that has not yet dropped
+        # it keeps sending this — which is a *cleared session*, not a failed signature.
+        cookie_state = "cleared cookie"
+    else:
+        cookie_state = "signed cookie"
+    # `.keys()` only: the session is the value, and this line exists to be pasted into a bug report.
+    keys = ",".join(sorted(request.session.keys())) or "-"
+    log_warning(
+        f"[auth] rejected {request.url.path} ({cookie_state}, session keys: {keys}): {reason}"
+    )
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
 

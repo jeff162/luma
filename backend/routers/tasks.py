@@ -36,6 +36,7 @@ from backend.db.control_database import (
 from backend import transport
 from backend.services import crypto_service
 from backend.services.preferences import get_preferences, set_preference
+from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_signals import compute_signals
 from backend.services.reimbursements import due_reminders
 
@@ -116,6 +117,82 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "link_label":  "Review vault access",
         "severity":    SEVERITY_INFO,
     }
+
+
+def _connection_tasks(conn) -> list[dict]:
+    """A data connection that has stopped working, or is silently skipping an account.
+
+    These exist because the connections UI is now deliberately split in two: what a connection *is* is
+    configured on the Accounts page, and what it has been *doing* lives with the imports on Import /
+    Export. Both surfaces show these states, but a user only sees them by visiting one — and the whole
+    point of these three is that they are discovered by a sync and cost the user data until acted on. The
+    nav badge is the surface that finds the user instead, which is what the Tasks page is for.
+
+    Three separate tasks rather than one "connections need attention", because the remedies are different
+    pages' worth of different work and a merged count could not link anywhere useful.
+
+    Deliberately *not* dismissible. Each is a broken state with a concrete fix rather than a backlog of
+    work to get through, so "not now" is the wrong affordance: unlike an uncategorized-transactions count,
+    these do not go down on their own and hiding one hides a connection that has stopped importing.
+    """
+    tasks = []
+    rows = conn.execute(
+        "SELECT provider, institution, reauth_required, consecutive_sync_failures FROM connection"
+    ).fetchall()
+
+    reauth = [r for r in rows if r["reauth_required"]]
+    if reauth:
+        names = ", ".join(r["institution"] or r["provider"] for r in reauth)
+        tasks.append({
+            "id":          "connections_need_reauth",
+            "title":       "A data connection needs reconnecting"
+                           if len(reauth) == 1 else "Data connections need reconnecting",
+            "description": f"{names} no longer accepts the stored credential, so syncing has stopped and "
+                           "no new transactions are arriving. Reconnecting restores it in place, keeping "
+                           "the accounts, their mapping and the history already fetched.",
+            "count":       len(reauth),
+            "link":        "/accounts?tab=connections",
+            "link_label":  "Reconnect",
+            "severity":    SEVERITY_WARNING,
+        })
+
+    # A connection needing reconnection is also failing, and is reported only as the former: two entries
+    # would name one problem twice and only one of them says what to do. Same rule the cards apply.
+    failing = [r for r in rows
+               if (r["consecutive_sync_failures"] or 0) > 0 and not r["reauth_required"]]
+    if failing:
+        names = ", ".join(r["institution"] or r["provider"] for r in failing)
+        tasks.append({
+            "id":          "connections_failing",
+            "title":       "A data connection is failing to sync"
+                           if len(failing) == 1 else "Data connections are failing to sync",
+            "description": f"The last sync of {names} did not complete. The sync log says what the "
+                           "provider reported, which is the difference between a bank being briefly "
+                           "unavailable and something that needs fixing.",
+            "count":       len(failing),
+            "link":        "/import-export",
+            "link_label":  "Open the sync log",
+            "severity":    SEVERITY_WARNING,
+        })
+
+    # Counted in provider accounts rather than connections: the number the user acts on is how many
+    # accounts still need a destination, which is what the mapping dialog presents.
+    unmapped = unmapped_count(conn)
+    if unmapped:
+        tasks.append({
+            "id":          "connection_accounts_unmapped",
+            "title":       "An account from a data connection has no destination"
+                           if unmapped == 1 else "Accounts from a data connection have no destination",
+            "description": f"{unmapped} account{'' if unmapped == 1 else 's'} offered by a connected bank "
+                           f"{'has' if unmapped == 1 else 'have'} nowhere to import into, so every sync "
+                           f"skips {'it' if unmapped == 1 else 'them'} — silently, since a skipped "
+                           "account appears nowhere else in the app.",
+            "count":       unmapped,
+            "link":        "/accounts?tab=connections",
+            "link_label":  "Choose destinations",
+            "severity":    SEVERITY_WARNING,
+        })
+    return tasks
 
 
 def _build_tasks(request: Request | None) -> list[dict]:
@@ -257,6 +334,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
 
         tasks.extend(_recurring_signal_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
+        tasks.extend(_connection_tasks(conn))
 
     return tasks
 

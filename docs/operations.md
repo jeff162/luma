@@ -219,7 +219,7 @@ What exists today, and what each actually tells you:
 | `GET /api/health` | is a server listening and answering on this port |
 | Settings → Configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
-| The connection sync log | what a data source did, and why a sync failed |
+| The connection sync log (Import / Export → Import → Data connections → **Sync log**) | what a data source did, and why a sync failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing

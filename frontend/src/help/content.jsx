@@ -2200,7 +2200,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Three of them are worth knowing about. <strong>Data directory</strong> is where both database
-          files live &mdash; the one setting to change to move an installation&rsquo;s data, or to run a
+          files live &mdash; change to move an installation&rsquo;s data, possibly to run a
           second installation on the same machine. The two database rows beneath it are shown for
           confirmation and follow it automatically. <strong>Backend port</strong> and{' '}
           <strong>frontend port</strong> are read before the server binds. Everything else sits under{' '}

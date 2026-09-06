@@ -13,6 +13,13 @@ risk should be taken while the code is open rather than deferred to keep a scope
 rule-range signal and the Tasks dismissal both arrived that way. State what was added past the named
 scope so it can be scoped back; do not ask permission to stay inside the line.
 
+**It carries no deadline, and nothing here is a schedule.** A minimum is a list of what must be true
+before the repository is public, not a claim about when that happens or a queue other work has to wait
+behind. So new work is never "competing with the release" and never needs placing before or after it:
+take it on its own merits and build it when it is right. Written down 2026-09-05 because the question
+kept being re-asked — treating this file as a deadline is the misreading it most reliably invites, and
+re-raising it is itself the thing to stop doing.
+
 "Public" here means three things happening together: a tagged release with downloadable kits attached,
 the repository visibility flipped, and the README describing what actually exists on that day.
 

@@ -23,21 +23,30 @@ category-owner → tag migration — so this entry is still unwritten.
 tags and pointing at the Help-page topic for users who want the model
 explained.
 
-## Denser layout for the Connections tab
+## Import / Export still needs a reachability pass
 
-**Context.** At seven-plus connections the tab is a long stack of tall cards. Moving each card's
-five action buttons behind a single "⋯" (see `ui-patterns.md`) removed the button noise, but the
-card *height* is a separate problem the menu doesn't touch — institution name, badges, and one row
-per account, per connection.
+**Context (2026-09-05).** The connections work put a Data connections card on the Import tab beside the
+CSV importer, which is right, but the page was already carrying four unrelated things and now carries a
+fifth. The split that fixed the connections tab — configuration on one surface, operation on another —
+has an obvious second application here that was deliberately **not** taken in the same pass.
 
-**Why deferred (2026-08-07).** Raised as a possible follow-on right after the menu change and
-deliberately not bundled with it: the menu may well have solved enough of the density complaint on
-its own, and rebuilding the card layout before knowing that would be speculative.
+**Decided, not yet done.** The user's call on each, from that session:
 
-**Suggested approach when picked up.** Confirm the density still reads as a problem *after* living
-with the "⋯" change. If it does, a one-row-per-connection layout (institution + accounts inline +
-the existing badges + "⋯") would roughly halve the page height; the accounts list is the card's
-useful content, so it should stay visible rather than move behind an expander.
+- **Backup / Restore should move to Settings.** It is install administration: it acts on the whole
+  database, restore is destructive and gated, and it has nothing to do with transactions arriving.
+  Settings is the permanent home for what describes the install, and moving it there costs no
+  navigation slot — which matters, since the pane is at ten entries plus the sync control.
+- **Export stays put for now.** It is a data operation on the ledger rather than admin, and its pairing
+  with Import is at least defensible. Revisit only if the page is still crowded afterwards.
+- **The page rename comes last, and that ordering is the point.** "Import / Export" is already wrong (it
+  carries Backup/Restore and Amazon) and gets wronger with connections on it — but the right name is
+  downstream of what is left on the page, so naming it before Backup/Restore leaves would be guessing.
+- **The import history's own organization** is a separate, already-designed job:
+  [`import-history-windowing.md`](import-history-windowing.md). It is the half of the page that gets
+  worse as the top gets denser, so it pairs naturally with this.
+
+**Why deferred.** The connections split was already touching the two largest files in the repo. Bundling
+a second page reorganization into it would have made one change nobody could review.
 
 ## SimpleFIN's window limit rose to 90 days — and became a silent cap
 
@@ -66,30 +75,6 @@ literal 90 would trip the cap on every request; (2) validate the returned range 
 one before recording any coverage, so a cap becomes a visible short-fetch rather than a false claim.
 Worth doing only if the request saving matters — 45 days already reaches further back than the Bridge's
 upstreams actually hold.
-
-## Timestamps are always absolute, never relative — is that right?
-
-**Raised 2026-08-17, not decided.** `formatTimestamp` (`frontend/src/lib/utils.js`) is a bare
-`toLocaleString` with numeric date + 2-digit time, so every timestamp it renders looks the same at one
-minute old and one year old:
-
-```
-1 connection · last synced 8/17/2026, 02:52 PM
-```
-
-It never becomes "2 hours ago" or "3 days ago". The user asked whether it switched to a relative form
-under 24h and to a date beyond — it does not, and the question is a fair one, because the thing a reader
-usually wants from a *freshness* line is staleness, which an absolute stamp makes them compute.
-
-**The trade.** Absolute is unambiguous and stable — it never changes under the reader, and it is the right
-form for an audit or a support paste. Relative answers the question actually being asked but goes stale on
-screen and reads badly past a few days. The common resolution is a hybrid: relative under ~24h, absolute
-beyond, with the full stamp on the `title` either way.
-
-**Why it was left alone.** `formatTimestamp` has callers beyond the connection card, and some of them
-(diagnostics, log rows, export metadata) want the absolute form unconditionally. Changing the shared
-function would change all of them at once. If picked up: survey the call sites first, and expect the
-answer to be a *second* formatter for freshness lines rather than a change to this one.
 
 ## A request that stalls mid-interaction still hangs
 

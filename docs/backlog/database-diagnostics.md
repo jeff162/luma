@@ -56,7 +56,7 @@ Start with the structural half, which is small and unambiguous:
 - **Before a destructive restore.** The restore path already verifies the *backup's* `content_sha256`
   before wiping, but never looks at what it is about to overwrite. Checking the target first turns
   "restore onto a corrupt database" into a stated refusal rather than a second corrupt database.
-- **A Settings diagnostic**, next to the connection sync log — the existing home for "what is the system
+- **A Settings diagnostic** — the existing home for "what is the system
   doing" panels, and a natural place to report WAL/checkpoint state alongside.
 
 Then, as a separate and much larger project, an **invariant checker** over the semantic cases above.

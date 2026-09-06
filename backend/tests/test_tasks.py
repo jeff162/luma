@@ -413,3 +413,99 @@ class ReimbursementTaskTests(TasksFixtureTestCase):
         self.assertEqual({t["count"] for t in tasks}, {1})
         # Each links to its own owner's rows, so the screen and the badge cannot disagree.
         self.assertTrue(all("owner_ids=" in t["link"] for t in tasks))
+
+
+class ConnectionTaskTests(TasksFixtureTestCase):
+    """The three connection states the nav badge exists to surface.
+
+    They matter because the connections UI is split across two pages — what a connection *is* is
+    configured on Accounts, what it has been *doing* lives with the imports — so a user who visits
+    neither would otherwise never learn that a bank stopped importing. Each is a broken state with a
+    concrete remedy, which is why none of them is dismissible and why they link to different pages.
+    """
+
+    def _insert_connection(self, *, institution, reauth=0, failures=0) -> str:
+        connection_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO connection
+                      (id, provider, external_id, institution, reauth_required, consecutive_sync_failures)
+                    VALUES (?, 'fixture', ?, ?, ?, ?)
+                    """,
+                    (connection_id, f"ext_{connection_id}", institution, reauth, failures),
+                )
+        return connection_id
+
+    def _insert_provider_account(self, connection_id, *, mapping_mode=None):
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO connection_account
+                      (connection_id, external_account_id, mapping_mode)
+                    VALUES (?, ?, ?)
+                    """,
+                    (connection_id, str(uuid.uuid4()), mapping_mode),
+                )
+
+    def _task(self, task_id):
+        with self._use_db_path():
+            result = get_tasks()
+        return next((t for t in result["tasks"] if t["id"] == task_id), None)
+
+    def test_a_connection_needing_reauth_is_reported_and_names_the_bank(self):
+        self._insert_connection(institution="Harborline Savings", reauth=1)
+        task = self._task("connections_need_reauth")
+        self.assertIsNotNone(task)
+        self.assertEqual(task["count"], 1)
+        # Naming it is the point: with several connected, "a connection" leaves the user hunting.
+        self.assertIn("Harborline Savings", task["description"])
+        # The remedy is a re-authorization, which lives with the configuration.
+        self.assertEqual(task["link"], "/accounts?tab=connections")
+
+    def test_a_reauth_connection_is_not_also_counted_as_failing(self):
+        # Two entries would name one problem twice, and only one of them says what to do. Same rule the
+        # connection cards apply to their own pills.
+        self._insert_connection(institution="Harborline Savings", reauth=1, failures=4)
+        self.assertIsNone(self._task("connections_failing"))
+        self.assertIsNotNone(self._task("connections_need_reauth"))
+
+    def test_a_plain_failure_is_reported_and_points_at_the_log(self):
+        self._insert_connection(institution="Riverstone Credit Union", failures=2)
+        task = self._task("connections_failing")
+        self.assertIsNotNone(task)
+        # The log is what separates a bank being briefly unavailable from something needing a fix, and it
+        # now lives with the imports rather than in Settings.
+        self.assertEqual(task["link"], "/import-export")
+
+    def test_unmapped_provider_accounts_are_counted_in_accounts_not_connections(self):
+        # The number the user acts on is how many accounts still need a destination — that is what the
+        # mapping dialog presents, and one connection can offer several.
+        connection = self._insert_connection(institution="Northgate Bank")
+        self._insert_provider_account(connection, mapping_mode=None)
+        self._insert_provider_account(connection, mapping_mode=None)
+        self._insert_provider_account(connection, mapping_mode="skip")
+        task = self._task("connection_accounts_unmapped")
+        self.assertIsNotNone(task)
+        self.assertEqual(task["count"], 2)
+
+    def test_a_healthy_connection_raises_nothing(self):
+        # A fresh install with a working connection must not be greeted with warnings.
+        connection = self._insert_connection(institution="Northgate Bank")
+        self._insert_provider_account(connection, mapping_mode="skip")
+        for task_id in ("connections_need_reauth", "connections_failing", "connection_accounts_unmapped"):
+            self.assertIsNone(self._task(task_id), task_id)
+
+    def test_none_of_them_can_be_dismissed(self):
+        # Unlike a backlog count, these do not go down on their own: dismissing one hides a connection
+        # that has stopped importing.
+        self._insert_connection(institution="Harborline Savings", reauth=1, failures=1)
+        connection = self._insert_connection(institution="Northgate Bank")
+        self._insert_provider_account(connection, mapping_mode=None)
+        with self._use_db_path():
+            result = get_tasks()
+        for task in result["tasks"]:
+            if task["id"].startswith("connection"):
+                self.assertIsNone(task.get("dismiss_key"), task["id"])

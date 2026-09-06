@@ -29,13 +29,16 @@
 //   - **There is no cancel, and the panel offers no way out but Minimize while a sync is live.** Closing
 //     would discard the panel outright — no pill, no handle, nothing to restore short of a page reload —
 //     which is the wrong thing to sit beside a live readout. Once the run ends the only action is Close.
+//
+// The navigation pane's side of this lives in `components/SyncNavItem.jsx`. It used to be a pill exported
+// from here, appearing only while a run was stashed; it is now a permanent control that *starts* syncs as
+// well as restoring them, which is why it sits with the components rather than with this state.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useDetachedReportViewer } from '../lib/useDetachedReportViewer.js'
-import { MinimizedReportPill } from '../components/MinimizedReportPill.jsx'
 import { SyncStatusPanel } from '../components/SyncStatusPanel.jsx'
-import { addToRoster, foldLiveProgress, foldResponse, rosterAdded } from '../lib/syncRoster.js'
+import { addToRoster, foldLiveProgress, foldResponse } from '../lib/syncRoster.js'
 
 // ~3 min at the cadence below — comfortably covers a cursor provider's historical backfill.
 const MAX_POLLS = 45
@@ -61,11 +64,22 @@ export function useSyncStatus() {
   return ctx
 }
 
-// Every connection the app knows about, flattened, with whatever a running sync has committed. Read from
-// the providers listing rather than from the sync call, because the sync call is still in flight — and
+// The providers listing, which is this context's one source for "what connections exist and what are they
+// doing". Read from here rather than from the sync call, because the sync call is still in flight — and
 // because a client that did not start the sync (another tab, this one after a reload) has no call to read.
-async function loadConnections() {
+//
+// The **raw payload is kept as well as the flattened rows**, and that is the whole reason these are two
+// functions. The rows below are a projection for the panel and drop everything the panel does not draw,
+// `last_synced_at` included — so the navigation pane's freshness figure, which needs exactly that field,
+// used to fetch this same endpoint a second time on every app load, milliseconds after this one. Two
+// identical requests for one answer. Consumers that need more than the projection read `providers` off
+// the context instead.
+async function fetchProviders() {
   const { providers = [] } = await api.getProviders().catch(() => ({ providers: [] }))
+  return providers
+}
+
+function connectionRows(providers) {
   const rows = []
   for (const p of providers) {
     for (const c of p.connections || []) {
@@ -84,10 +98,19 @@ async function loadConnections() {
 const runningOf = rows => rows.filter(r => r.syncing)
 
 export function SyncStatusProvider({ children }) {
+  // The listing every consumer shares, refreshed by whichever read happens to run — the boot check below,
+  // the observer's ticks during a sync, a run's own seed, and once more when a run ends. Null until the
+  // first read lands, which is what lets a consumer tell "no connections" apart from "not asked yet".
+  const [providers, setProviders] = useState(null)
+  const readConnections = useCallback(async () => {
+    const payload = await fetchProviders()
+    setProviders(payload)
+    return connectionRows(payload)
+  }, [])
   // The panel envelope. `open` seeds it; the loop below layers live updates through `setViewer`, which is
   // the extension point the hook documents for exactly this.
   const { viewer, setViewer, open, close, minimize, restore } = useDetachedReportViewer(
-    async () => ({ running: runningOf(await loadConnections()) }),
+    async () => ({ running: runningOf(await readConnections()) }),
   )
   // The run roster the panel renders — see the helpers above.
   const [runConnections, setRunConnections] = useState([])
@@ -134,7 +157,7 @@ export function SyncStatusProvider({ children }) {
     if (!anyDriving && !watching) return undefined
     let alive = true
     const tick = async () => {
-      const rows = await loadConnections()
+      const rows = await readConnections()
       if (!alive) return
       const running = runningOf(rows)
       if (running.length) {
@@ -153,38 +176,62 @@ export function SyncStatusProvider({ children }) {
     const id = setInterval(tick, PROGRESS_INTERVAL_MS)
     tick()
     return () => { alive = false; clearInterval(id) }
-  }, [anyDriving, watching, setViewer])
+  }, [anyDriving, watching, readConnections, setViewer])
 
   // A sync already running when this tab loaded — started in another tab, or here before a reload. Adopted
   // rather than ignored: the panel state is in memory by design, so without this a reload mid-backfill
   // leaves the user with no indication that anything is happening.
   useEffect(() => {
     let alive = true
-    loadConnections().then(rows => {
+    readConnections().then(rows => {
       if (!alive || !runningOf(rows).length) return
       lastRunningAtRef.current = Date.now()
       setWatching(true)
       open({ adopted: true })
     }).catch(() => {})
     return () => { alive = false }
-  }, [open])
+  }, [open, readConnections])
 
-  // The driver, lifted out of the Accounts page. Each call drains the pages available right now; between
-  // calls we wait for the provider to make more available. Running totals are surfaced on
-  // `syncState[provider]` so a connection card can show "Importing history… N so far".
-  const runSync = useCallback(async (provider, { days, connectionId, fullHistory = false } = {}) => {
-    // A sync starting while *another* is still going joins that run; one starting into an idle app begins
-    // a new one, and the previous run's results stop being reported. Sequential syncs therefore each show
-    // their own outcome, while genuinely concurrent ones are still listed together.
-    //
-    // `p !== provider` is load-bearing. Callers mark their own provider as syncing before handing over —
-    // `refreshConnectionAccounts` does a provider round trip first and wants the button to read "Syncing…"
-    // across it — so a check that did not exclude the provider being started would find *itself* already
-    // running, conclude it was joining an existing run, and carry the previous one's results forward. That
-    // is exactly what left a finished Plaid result sitting in the panel through the next SimpleFIN sync.
-    const joining = Object.entries(syncStateRef.current).some(([p, s]) => p !== provider && s?.syncing)
-    setRunProviders(prev => (joining ? [...new Set([...prev, provider])] : [provider]))
-    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+  // One more read when a run ends, because the observer above stops the moment nothing is syncing and its
+  // last tick therefore saw the run mid-flight. `last_synced_at` moves exactly once per sync — at the end —
+  // so without this the freshness a consumer shows would stay at the value it had *before* the sync that
+  // just refreshed it, which is the one moment it is most obviously wrong.
+  const wasBusyRef = useRef(false)
+  useEffect(() => {
+    const busy = anyDriving || watching
+    if (wasBusyRef.current && !busy) readConnections().catch(() => {})
+    wasBusyRef.current = busy
+  }, [anyDriving, watching, readConnections])
+
+  // Open a run the panel will report on, for one or more providers starting **together**.
+  //
+  // Separated from the driver below because a run and a provider are not the same unit of work. One
+  // control can start every provider at once (the navigation pane's sync item does), and the setup has to
+  // happen once for the whole set: done per provider it would race itself, since `syncStateRef` is only
+  // as fresh as the last render and two providers started in the same tick would each conclude the other
+  // was not running yet, each declare a fresh run, and each replace the other's roster.
+  //
+  // A sync starting while *another* is still going joins that run; one starting into an idle app begins
+  // a new one, and the previous run's results stop being reported. Sequential syncs therefore each show
+  // their own outcome, while genuinely concurrent ones are still listed together.
+  //
+  // Excluding the providers *being started* from the "is anything already running?" test is load-bearing.
+  // Callers mark their own provider as syncing before handing over — `refreshConnectionAccounts` does a
+  // provider round trip first and wants the button to read "Syncing…" across it — so a check that did not
+  // exclude them would find *itself* already running, conclude it was joining an existing run, and carry
+  // the previous one's results forward. That is exactly what left a finished Plaid result sitting in the
+  // panel through the next SimpleFIN sync.
+  // Named `startingProviders` rather than `providers`, which is the listing this context now holds — one
+  // of the two would silently shadow the other in here, and they mean different things.
+  const beginRun = useCallback((startingProviders, { connectionId } = {}) => {
+    const starting = new Set(startingProviders)
+    const joining = Object.entries(syncStateRef.current).some(([p, s]) => !starting.has(p) && s?.syncing)
+    setRunProviders(prev => (joining ? [...new Set([...prev, ...startingProviders])] : [...startingProviders]))
+    setSyncState(prev => {
+      const next = { ...prev }
+      for (const p of startingProviders) next[p] = { syncing: true, result: null }
+      return next
+    })
     // The roster follows the same rule: a joining sync adds its connections to the run on screen, a fresh
     // one replaces it. Cleared synchronously so the previous run's rows are gone before the seed lands.
     const token = joining ? runTokenRef.current : ++runTokenRef.current
@@ -192,17 +239,24 @@ export function SyncStatusProvider({ children }) {
     // Seeded from the listing rather than discovered as connections start reporting, so the panel shows
     // the whole run from the first frame and neither grows nor shrinks as it proceeds. The scope mirrors
     // the backend's `_connections_in_scope` exactly: one connection when the caller named one, otherwise
-    // every connection of the provider. Deliberately not awaited — a sync must not wait on its own
-    // readout — and guarded by the token so a listing that lands after a later run started is dropped.
-    loadConnections().then(rows => {
+    // every connection of the providers starting. Deliberately not awaited — a sync must not wait on its
+    // own readout — and guarded by the token so a listing that lands after a later run started is dropped.
+    readConnections().then(rows => {
       if (token !== runTokenRef.current) return
       setRunConnections(prev => addToRoster(prev, rows.filter(
-        r => r.provider === provider && (!connectionId || r.connectionId === connectionId),
+        r => starting.has(r.provider) && (!connectionId || r.connectionId === connectionId),
       )))
     }).catch(() => {})
     // Only seeds the panel; re-opening mid-sync would reset the envelope and blank the progress the
     // observer has been filling in.
-    if (!viewerRef.current) open({ provider })
+    if (!viewerRef.current) open({ provider: startingProviders[0] })
+  }, [open, readConnections])
+
+  // The driver for one provider, lifted out of the Accounts page. Each call drains the pages available
+  // right now; between calls we wait for the provider to make more available. Running totals are surfaced
+  // on `syncState[provider]` so a connection card can show "Importing history… N so far". Assumes the run
+  // it belongs to has already been opened by `beginRun`.
+  const driveProvider = useCallback(async (provider, { days, connectionId, fullHistory = false } = {}) => {
     const totals = { added: 0, updated: 0, removed: 0, skipped: 0 }
     try {
       for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
@@ -236,12 +290,37 @@ export function SyncStatusProvider({ children }) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       throw err
     }
-  }, [open])
+  }, [])
+
+  const runSync = useCallback(async (provider, opts = {}) => {
+    beginRun([provider], opts)
+    return driveProvider(provider, opts)
+  }, [beginRun, driveProvider])
+
+  // Every provider with something to sync, as one run — what a single app-wide control needs, since
+  // "sync" from the navigation pane means "bring in everything new", not "bring in Plaid".
+  //
+  // Failures are collected rather than raised. `Promise.all` would reject on the first provider to fail
+  // and leave the others running with nobody awaiting them, so a bank being down would both abandon the
+  // run's reporting and hide the fact that the other provider imported fine. The caller gets every
+  // failure and decides what to say; each provider's own `syncState` slot has already recorded its
+  // outcome either way, so the cards and the panel are correct regardless of what the caller does.
+  const runSyncAll = useCallback(async (providers, opts = {}) => {
+    const list = [...new Set(providers)].filter(Boolean)
+    if (!list.length) return { failures: [] }
+    beginRun(list, opts)
+    const settled = await Promise.allSettled(list.map(p => driveProvider(p, opts)))
+    return {
+      failures: settled
+        .map((r, i) => (r.status === 'rejected' ? { provider: list[i], error: r.reason } : null))
+        .filter(Boolean),
+    }
+  }, [beginRun, driveProvider])
 
   const value = useMemo(
-    () => ({ syncState, setSyncState, runProviders, runConnections, watching, runSync,
-              viewer, open, close, minimize, restore }),
-    [syncState, runProviders, runConnections, watching, runSync,
+    () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching,
+              runSync, runSyncAll, viewer, open, close, minimize, restore }),
+    [providers, syncState, runProviders, runConnections, watching, runSync, runSyncAll,
       viewer, open, close, minimize, restore],
   )
   return <SyncStatusContext.Provider value={value}>{children}</SyncStatusContext.Provider>
@@ -259,33 +338,6 @@ export function SyncStatusRenderer() {
       watching={watching}
       onClose={close}
       onMinimize={minimize}
-    />
-  )
-}
-
-export function MinimizedSyncNavItem() {
-  const { viewer, syncState, runProviders, runConnections, watching, restore } = useSyncStatus()
-  if (!viewer || !viewer.minimized) return null
-  // Counted off the roster, which holds its figures through the gaps between the driver's calls — the pill
-  // used to read whatever was running at that instant, so a stashed sync's count dropped to zero and back
-  // every few seconds.
-  const added = runConnections.reduce((n, e) => n + rosterAdded(e), 0)
-  // Between pressing Sync and the backend reporting a connection as running — and again between every pair
-  // of the driver's calls — nothing is running while this tab knows perfectly well that a sync is being
-  // driven. Reading that off `syncState` keeps a stashed pill from claiming the sync had already finished.
-  const driving = runProviders.some(p => syncState[p]?.syncing) || watching
-  // The label carries the status, not just a name — the whole point of stashing it is to glance at the
-  // chip rather than restore the panel to find out whether anything is still happening.
-  const label = driving ? (added ? `Syncing — ${added} imported` : 'Syncing…') : 'Sync finished'
-  return (
-    <MinimizedReportPill
-      label={label}
-      tone={driving ? 'var(--accent)' : 'var(--success)'}
-      icon={driving ? '↻' : '✓'}
-      title={driving
-        ? `${runConnections.length} connection(s) syncing — ${added} transaction(s) imported so far`
-        : 'The sync has finished — restore for the summary'}
-      onRestore={restore}
     />
   )
 }

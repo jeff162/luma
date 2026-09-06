@@ -346,7 +346,41 @@ for what the *user* can act on.
   recorded rationale is a decision, while an exception nobody wrote down is indistinguishable from a
   gap, including to the next agent who audits it.
 
+- **Never describe intended design as though it were built.** Writing a doc or a code comment in the same
+  pass as the code makes it easy to record the design you *meant* to ship rather than the one that is
+  there. It happened cleanly on 2026-09-05: a comment and a `ui-patterns.md` paragraph both stated that
+  the Accounts connection card "keeps a compact last-synced line", which was the plan and was load-bearing
+  for the argument that neither half of a split surface goes silent about the other. The line had never
+  been added. The user found it by looking at the screen and asking why a status word sat where a time
+  should be — and the doc, being confident and specific, would have kept the next reader from checking.
+
+  The check is cheap and mechanical: before writing that a surface *does* something, grep for the thing.
+  A claim about rendered UI is verifiable in seconds and is exactly the kind that survives unexamined
+  because it reads as authoritative. Prose describing intent ("this is why X sits here") is safe; prose
+  asserting behaviour ("X shows Y") needs the same standard as a test assertion.
+
 ## Verification And Tests
+
+- **Every test failure is investigated when it happens, before anything else — including before
+  re-running it.** The question that feels natural, *"was that caused by my change?"*, is the wrong one
+  and it is what turns a failure into a lost signal: the answer is moot, because a failure has to be
+  fixed regardless of which change surfaced it. Treat a red run as *information that exists right now and
+  will not exist in a minute*. Preserve it first — the full output, the artifacts, whatever the run
+  produced — and only then form a theory. Re-running to see whether the failure follows the current
+  change set is legitimate and often useful, but it is a **second** step, never the first, because a
+  green re-run destroys the state that would have explained the red one.
+
+  Identifying the root cause is not required. Preserving enough to dig into it later is. "Passed on a
+  re-run, probably a known flake" is not an investigation — it is the report of one that did not happen,
+  and it hands the next reader a fact that was true and no longer checkable.
+
+  The gate now writes every run whole to `data/check-logs/` and prints the path on its last line
+  (`scripts/check_backend_and_frontend.sh`), so preserving a failure costs nothing and forgetting to is
+  no longer possible. Read that directory *before* re-running, and check the failure against
+  [`transient-failures.md`](transient-failures.md) — the known intermittents each surface in several
+  unrelated specs, so the failing test's name is not how you tell them apart. This rule is stated first because it is
+  the one that has been broken twice, and the piping rule below is only the mechanism by which it was
+  broken the second time.
 
 - **Never pipe a test or build run into `tail`, `head`, or a filtering `grep`. Redirect to a file and
   read the file.** A run that fails unexpectedly is the only evidence that failure will produce, and a
@@ -364,6 +398,15 @@ for what the *user* can act on.
 
   The same shape applies to a long build, a Playwright run, and anything whose interesting output is in
   the middle. Filter the *file*, never the stream.
+
+  **Written down once was not enough.** This rule was added to this file and broken again within three
+  hours, on the same intermittent test, by an agent that had read `CLAUDE.md` and `AGENTS.md` but never
+  opened *this* document — so the failure was not the wording, it was that nothing structural enforced
+  it. Hence the gate's own logging above, which is the version that does not depend on anyone having
+  read this paragraph. Two lessons generalize: a rule that lives only in prose is a rule that holds only
+  for the agent who happened to read the prose, so prefer making the right thing automatic; and the docs
+  named in `CLAUDE.md` are a **list to work through**, not a menu to sample from — this one is where the
+  operational footguns live, which makes skipping it the most expensive omission available.
 
 - **A flaky test is not fixed by lowering concurrency.** Capping Playwright's worker count made a
   failure stop reproducing, and that is evidence of nothing: a knob that changes timing changes a race's

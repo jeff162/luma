@@ -139,11 +139,17 @@ export function ImportUploadStage({
             style={{
               border: `2px dashed ${dropEnabled ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'}`,
               borderRadius: 12,
-              padding: '48px 32px',
+              // Sized to sit *beside* the data-connections card rather than to fill a page on its own.
+              // The generous original padding is what pushed the two below each other on an ordinary
+              // window: the two ways data arrives are peers, so neither may be so tall that the layout
+              // has to stack them. There is still deliberate breathing room — a drop target that reads
+              // as a drop target — just not a screenful of it.
+              padding: '28px 24px',
               textAlign: 'center',
               cursor: demoLoaded ? 'not-allowed' : (dropEnabled ? 'pointer' : 'default'),
               background: dropEnabled ? 'var(--surface2)' : 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
-              marginBottom: 24,
+              // Nothing follows this inside the stage, and the row that hosts it owns the gap below.
+              marginBottom: 0,
               opacity: dropEnabled ? 1 : 0.72,
             }}
             onMouseEnter={e => {
@@ -262,7 +268,7 @@ export function ImportUploadStage({
                 </div>
               </div>
             ) : null}
-            <div style={{ fontSize: 32, marginBottom: 12 }}>{chooserOpen ? '🧭' : '📂'}</div>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>{chooserOpen ? '🧭' : '📂'}</div>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
               {demoLoaded
                 ? 'Imports are disabled while demo data is loaded'

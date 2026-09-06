@@ -838,14 +838,30 @@ came of leaving it unstated, in `docs/data-model.md`.
 - **Connections-tab UI.** `DataSourceConnections` (in `pages/Accounts.jsx`) renders the
   Connections tab as one card **per provider** (driven by `GET /api/providers`): a mode badge, admin-only
   **Configure** (the app credential — moved off the Settings form entirely; that section now only points
-  here), **Connect bank**, **Sync now**, and the linked accounts. It also hosts the **vault set-passphrase
-  / unlock** affordance — the vault UI deliberately rides the connection cards rather than owning a
+  here), **Connect bank**, a small per-connection **Sync** for checking what was just configured, and the
+  linked accounts. The tab is **configuration only**; the operational half (routine sync, fetch more
+  history, refresh accounts, remove synced transactions, and the sync log) lives on Import / Export in
+  `components/connections/DataConnectionsPanel.jsx`, with the actions shared through
+  `lib/useConnectionOperations.js` and the status rendering through `components/connections/ConnectionStatus.jsx`
+  so the two surfaces cannot describe one connection differently. See `ui-patterns.md` for why the split
+  runs where it does. It also hosts the **vault set-passphrase
+  / unlock** *strip* — the vault UI deliberately rides the connection cards rather than owning a
   settings page of its own — set/unlock post to
-  `/auth/vault/*` and refresh the session's vault flags. Everything here needing an open vault (connect,
+  `/auth/vault/*` and refresh the session's vault flags. Everything needing an open vault (connect,
   sync, deepen history, refresh accounts, disconnect, the app-secret reveal/save) goes through one gate,
   `lib/useVaultGate.js`: it raises the passphrase dialog and the action **resumes** when the unlock lands,
   so a locked vault costs a passphrase rather than a passphrase plus a repeated gesture, and a `423` is
   handled as that same gate arriving late rather than surfaced as a failure (see `ui-patterns.md`).
+  **The gate is hosted at App level** (`contexts/VaultGateContext.jsx`) rather than by this tab, because
+  the navigation pane's sync control starts gated work too and a prompt mounted under one route cannot
+  suspend an action taken anywhere else; its flags are derived from `currentUser` rather than separately
+  fetched. The tab keeps the strip, the change-passphrase dialog, and the strip's own passkey button.
+- **Sync is reachable app-wide.** `components/SyncNavItem.jsx` is a permanent row in the navigation pane
+  that starts a sync of *every* provider (`runSyncAll`), reports a run in progress, and restores the
+  finished run's panel — one control with three states rather than the transient stashed-run pill it
+  replaced. Its freshness figure is derived from the connections' own `last_synced_at` (`syncFreshness`
+  in `lib/connectionSummary.js`, the oldest across all of them) rather than stored anywhere. See
+  `ui-patterns.md` for the reasoning behind all three properties.
   **Connect** additionally requires — on a networked (non-loopback) bind — real HTTPS
   (`transport.is_https` from `/auth/status`), so a bank secret never crosses the wire in cleartext; that
   one is a refusal, since no dialog on the page can resolve it. Each card lists its **connections** (from

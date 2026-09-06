@@ -115,7 +115,30 @@ class AttachAndServeTests(DocumentsApiTestCase):
         second = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")
 
         listed = list_transaction_documents("txn-repair")["documents"]
-        self.assertEqual([d["id"] for d in listed], [first["document"]["id"], second["document"]["id"]])
+        expected = [first["document"]["id"], second["document"]["id"]]
+        actual = [d["id"] for d in listed]
+        if actual != expected:
+            # Diagnostics for a known intermittent (~1 in 11 full-suite runs; never in 60 runs of this
+            # file alone, so it needs the parallel suite). The listing orders by `created_at, rowid`, and
+            # this table is two rows old in a per-test temp database — so rowid is 1 and 2, the tiebreaker
+            # cannot be what failed, and the inversion has to be in `created_at` itself. Both are dumped
+            # because the three candidate explanations are told apart by nothing else: equal timestamps
+            # (a tie the rowid should then have settled), an inverted pair (the wall clock moved backwards
+            # mid-run), or rowids that are not what a fresh table should hold. Delete this block with the
+            # fix; a bare assertEqual here reports only that the order was wrong, which is what left the
+            # cause unknown for as long as it has been.
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT rowid AS rid, id, created_at FROM document WHERE txn_id = 'txn-repair' "
+                    "ORDER BY rid"
+                ).fetchall()
+            detail = "; ".join(
+                f"rowid={r['rid']} id={r['id']} created_at={r['created_at']!r}" for r in rows
+            )
+            self.fail(
+                f"documents listed out of attach order: expected {expected}, got {actual} — "
+                f"rows by rowid: {detail}"
+            )
 
     def test_the_same_file_twice_is_reported_rather_than_stored_twice(self):
         # Dropping a receipt twice is ordinary when nothing visibly happened fast enough. Two identical

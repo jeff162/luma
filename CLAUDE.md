@@ -71,6 +71,9 @@ branch state from the injected snapshot.
 - `docs/agent-profile.md` — distilled cross-session agent habits & operational footguns
   (the shared replacement for private agent memory: collaboration defaults, investigation,
   verification)
+- `docs/transient-failures.md` — the register of intermittent test failures that are instrumented but
+  not yet understood; **check it before concluding anything about a red run**, since these fire in
+  several different specs and the failing test's name does not identify which one it is
 - `docs/architecture.md` — structure, data flow, cross-subsystem contracts
 - `docs/data-model.md` — field semantics & invariants (what each field may and may not mean)
 - `docs/security-model.md` — what is defended and what deliberately is not; the revocation

@@ -45,8 +45,9 @@ import {
 import {
   SyncStatusProvider,
   SyncStatusRenderer,
-  MinimizedSyncNavItem,
 } from './contexts/SyncStatusContext.jsx'
+import { VaultGateProvider, VaultGateRenderer } from './contexts/VaultGateContext.jsx'
+import { SyncNavItem } from './components/SyncNavItem.jsx'
 import {
   ImportedCategoryWorkspaceProvider,
   ImportedCategoryWorkspaceRenderer,
@@ -1753,6 +1754,7 @@ export default function App() {
                   <AmazonReconciliationViewerProvider>
                   <AmazonImportDetailViewerProvider>
                   <ImportedCategoryWorkspaceProvider>
+                  <VaultGateProvider>
                   <SyncStatusProvider>
                     <ThemeController />
                     <UnifiedDuplicatesViewerRenderer />
@@ -1760,6 +1762,7 @@ export default function App() {
                     <AmazonImportDetailViewerRenderer />
                     <ImportedCategoryWorkspaceRenderer />
                     <SyncStatusRenderer />
+                    <VaultGateRenderer />
                     <style>{GLOBAL_SCROLLBAR_STYLES}</style>
                     {pendingShutdown ? (
                       <AppConfirmDialog
@@ -1831,11 +1834,13 @@ export default function App() {
                             )}
                           </NavLink>
                         ))}
+                        {/* Permanent, so it belongs with the pages rather than among the stashed-report
+                            pills below it — see components/SyncNavItem.jsx. */}
+                        <SyncNavItem style={s.link} activeStyle={activeStyle} />
                         <MinimizedDuplicatesNavItem />
                         <MinimizedAmazonReconciliationNavItem />
                         <MinimizedAmazonImportDetailNavItem />
                         <MinimizedImportedCategoryWorkspaceNavItem />
-                        <MinimizedSyncNavItem />
                         <div style={s.navFooter}>
                           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                             {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
@@ -2033,6 +2038,7 @@ export default function App() {
                       </div>
                     )}
                   </SyncStatusProvider>
+                  </VaultGateProvider>
                   </ImportedCategoryWorkspaceProvider>
                   </AmazonImportDetailViewerProvider>
                   </AmazonReconciliationViewerProvider>
