@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 48
+CURRENT_VERSION = 49
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1317,6 +1317,17 @@ def _suspect_pair_distinct_remembers_the_flag(conn):
             conn.execute(f"ALTER TABLE suspect_pair_distinct ADD COLUMN {column} TEXT")
 
 
+@migration(49)
+def _suppressed_series_remember_their_members(conn):
+    # What a series held when it was suppressed — see the baseline CREATE for why re-deriving it does not
+    # work. Nullable, and deliberately not backfilled: the links a v48 suppression dropped are gone, and
+    # inventing a set by matching would recreate exactly the disagreement this removes. Those series keep
+    # falling back to identity matching, and the drill-down reconciles its count to what that returns.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(recurring_series)").fetchall()}
+    if cols and "suppressed_member_ids" not in cols:
+        conn.execute("ALTER TABLE recurring_series ADD COLUMN suppressed_member_ids TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2261,7 +2272,17 @@ def init_db(db_path: str | None = None):
                 rule_id           TEXT REFERENCES category_rule(id) ON DELETE SET NULL,
                 confirmed         INTEGER NOT NULL DEFAULT 0,
                 created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at        TEXT
+                updated_at        TEXT,
+                -- JSON array of the txn ids this series held when it was suppressed, written by the
+                -- suppress endpoint just before it nulls their `recurring_series_id`. It exists because
+                -- that drop is not reversible by query: membership is the detector's judgement (a
+                -- periodicity fit over one charge per date), and re-deriving it from the payee label
+                -- disagreed with the stored `occurrence_count` in both directions — too few where the
+                -- bank spelled the payee inconsistently, far too many where the same payee also had
+                -- unrelated charges. NULL for an unsuppressed series, and for one suppressed before this
+                -- column existed; both fall back to matching, and the drill-down reconciles the count it
+                -- displays to whatever that actually returns.
+                suppressed_member_ids TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
             -- Surgical, scan-durable membership corrections layered over the derived/rule matcher:

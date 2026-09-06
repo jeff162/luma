@@ -482,8 +482,18 @@ def _append_category_ids_filter(clauses, params, *, category_ids: Optional[str],
             params.extend(membership[1])
 
 
+# Matched case-insensitively (`COLLATE NOCASE`), because the same merchant is routinely spelled several
+# ways by the same source — `BIKEREG REGISTRATION` one month and `Bikereg Registration` the next — and to
+# a person choosing a payee those are one payee, not two. Binary equality made that a silent under-match:
+# a filter, a merchant report or a suppressed series' drill-down would show one spelling's rows and
+# quietly omit the rest, with a count beside it derived from a case-folded grouping that disagreed.
+# NOCASE is ASCII-only in SQLite, which is the right scope here — these are payee labels, and widening it
+# would mean carrying a collation the rest of the schema does not use.
 def _payee_membership(names: list[str]) -> tuple[str, list]:
-    or_clauses = ' OR '.join(['(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)'] * len(names))
+    or_clauses = ' OR '.join(
+        ['(t.display_name = ? COLLATE NOCASE OR t.merchant_name = ? COLLATE NOCASE '
+         'OR t.raw_name = ? COLLATE NOCASE)'] * len(names)
+    )
     payee_params: list = []
     for n in names:
         payee_params.extend([n, n, n])

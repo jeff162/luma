@@ -14,6 +14,7 @@ amount), and manual create (from a transaction the detector missed).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import date, timedelta
@@ -45,6 +46,18 @@ router = APIRouter()
 _CADENCE_DAYS = {name: int(round(days)) for name, days in CADENCES}
 
 
+def _member_ids(row: sqlite3.Row) -> list[str] | None:
+    """The stored membership snapshot as a list, or None where there is none to read. Unparseable JSON
+    reads as absent rather than raising: the drill-down's fallback is a worse answer, not a broken one."""
+    if "suppressed_member_ids" not in row.keys() or not row["suppressed_member_ids"]:
+        return None
+    try:
+        ids = json.loads(row["suppressed_member_ids"])
+    except (TypeError, ValueError):
+        return None
+    return [str(i) for i in ids] if isinstance(ids, list) else None
+
+
 def _serialize(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -74,6 +87,15 @@ def _serialize(row: sqlite3.Row) -> dict:
         "status": row["status"],
         "source": row["source"],
         "rule_id": row["rule_id"] if "rule_id" in row.keys() else None,
+        # The rows this series held at the moment it was suppressed. A suppressed series owns no
+        # transactions — suppress nulls their `recurring_series_id`, because that column is the
+        # app-wide "is recurring" flag and a rejected series must not light up the `↻` marker or the
+        # recurring filter — so without this list nothing can say which rows it *was* about, and the
+        # drill-down was left re-deriving them from the visible payee label. That could not agree with
+        # the count beside it: membership is the detector's judgement (a rhythm fit, one charge per
+        # date), not a predicate any query can restate. Null for an unsuppressed series and for one
+        # suppressed before this was recorded, both of which fall back to matching.
+        "suppressed_member_ids": _member_ids(row),
         "confirmed": bool(row["confirmed"]),
         # A series whose category (or its parent group) is exclude_from_totals is "money movement" — a
         # transfer or a credit-card payment, not spending/income. Surfaced with a marker and clustered
@@ -262,9 +284,19 @@ def suppress_series(series_id: str):
             conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (series_id,))
             conn.execute("DELETE FROM recurring_series WHERE id = ?", (series_id,))
             return {"ok": True, "deleted": True}
+        # Record which rows it held *before* dropping the links, because after this they are
+        # unrecoverable: membership is the detector's judgement — a periodicity fit over one charge per
+        # date — and no later query can restate it. Without the snapshot the drill-down had to guess from
+        # the visible payee label, which disagreed with the count in both directions at once: a series
+        # whose members were spelled inconsistently matched almost none of them, while one whose payee
+        # also had unrelated charges matched far too many.
+        members = [r["id"] for r in conn.execute(
+            "SELECT id FROM txn WHERE recurring_series_id = ? ORDER BY date, id", (series_id,)
+        ).fetchall()]
         conn.execute(
-            "UPDATE recurring_series SET status = 'suppressed', updated_at = datetime('now') WHERE id = ?",
-            (series_id,),
+            "UPDATE recurring_series SET status = 'suppressed', suppressed_member_ids = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(members), series_id),
         )
         conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (series_id,))
         return _serialize(_fetch(conn, series_id))
@@ -290,8 +322,12 @@ def restore_series(series_id: str):
     on the next scan."""
     with get_db() as conn:
         _fetch(conn, series_id)
+        # The snapshot goes with the suppression that took it. A restored series owns rows again from the
+        # next scan, so a stale list would send the drill-down to a frozen set while the card counted the
+        # live one — the same disagreement this exists to remove, pointing the other way.
         conn.execute(
-            "UPDATE recurring_series SET status = 'active', confirmed = 1, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE recurring_series SET status = 'active', confirmed = 1, suppressed_member_ids = NULL, "
+            "updated_at = datetime('now') WHERE id = ?",
             (series_id,),
         )
         return _serialize(_fetch(conn, series_id))

@@ -672,7 +672,11 @@ Key invariants:
   The price point is the last component and is null for a `variable` series;
   without it the two price points of one payee share an identity, and confirming either one suppresses
   the other as redundant — destroying a correctly-detected series by the act of endorsing its sibling. A suppressed series owns no transactions but persists so detection won't resurface it
-  ("this is not recurring"). Confirm/suppress/edit/manual-create/pin/exclude are all the actions that make
+  ("this is not recurring"). **What it held is snapshotted into `suppressed_member_ids` before the links
+  are dropped**, because dropping them is not reversible by query — membership is a periodicity fit over
+  one charge per date, not a predicate — and a drill-down re-deriving it from the payee could not agree
+  with the `occurrence_count` shown beside it. Null for an unsuppressed series and for one suppressed
+  before the column existed; `restore` clears it, since a restored series owns rows again. Confirm/suppress/edit/manual-create/pin/exclude are all the actions that make
   a series user-owned. Membership (`txn.recurring_series_id`) is recomputed for every surviving series on
   each scan.
 

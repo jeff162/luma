@@ -750,13 +750,26 @@ export default function Recurring() {
     const base = { limit, offset, sort_by: sort.key, sort_dir: sort.dir }
     if (openSeries?._txnIds) return api.getTransactions({ ids: openSeries._txnIds.join(','), ...base })
     if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...base })
-    // A suppressed series owns no rows (suppress nulls their recurring_series_id), so the membership
-    // fetch would come back empty and the "N transactions" link would look broken. Fall back to the
-    // series' payee (+ account when it's account-scoped) so the link still surfaces the matching
-    // transactions — the set this series would cover — without re-linking them.
+    // A suppressed series owns no rows: suppress nulls their `recurring_series_id`, because that column
+    // is the app-wide "is recurring" flag and a rejected series must not light up the ↻ marker or the
+    // recurring filter. So the rows it was about have to come from somewhere else.
+    //
+    // The snapshot taken at suppression is that somewhere, and it is exact — the same rows the count
+    // beside the link was computed from. Matching is the fallback, not the plan: membership is the
+    // detector's judgement (a rhythm fit over one charge per date) and no predicate restates it.
     if (openSeries?.status === 'suppressed') {
+      if (openSeries.suppressed_member_ids?.length) {
+        return api.getTransactions({ ids: openSeries.suppressed_member_ids.join(','), ...base })
+      }
+      // Suppressed before the snapshot existed. Match on the series' whole identity rather than its
+      // payee alone — category and account scope are what it was detected *as*, and dropping them was
+      // why one of these listed eleven rows for a three-charge series, most of them unrelated business
+      // with the same counterparty. The amount band is deliberately left out: it discriminates two
+      // price points of one payee, which is a question about which series a row joins, not about which
+      // rows this series concerns. The count reconciles to whatever this returns.
       return api.getTransactions({
         payees: openSeries.display_name,
+        category_ids: openSeries.category_id || undefined,
         account_ids: openSeries.account_id || undefined,
         ...base,
       })
@@ -769,6 +782,24 @@ export default function Recurring() {
   })
   // Reconcile after an inline edit / row-menu action operates on the paged member rows in place.
   const setReportRows = membersPaged.setRows
+
+  // The card's count is a stored statistic; the report's total is what the fetch actually found. Where
+  // they differ the report is the honest one — it is the rows on screen — so opening a series corrects
+  // the number beside it rather than leaving a link that promises three and shows four. This is the
+  // safety net under the snapshot: an exact snapshot makes the two agree already, and everything else
+  // (a series suppressed before snapshots, a payee whose rows have since changed) settles here instead
+  // of drifting silently. Local only — `occurrence_count` on the server is the detector's own stat and a
+  // match count is not it.
+  const openSeriesId = openSeries?._all || openSeries?._txnIds ? null : openSeries?.id
+  const reportTotal = membersPaged.total
+  useEffect(() => {
+    if (!openSeriesId || membersPaged.loading) return
+    setAllSeries(prev => (prev || []).map(x => (
+      x.id === openSeriesId && x.occurrence_count !== reportTotal
+        ? { ...x, occurrence_count: reportTotal }
+        : x
+    )))
+  }, [openSeriesId, reportTotal, membersPaged.loading])
 
   useEffect(() => { api.getCategories().then(setCategories).catch(() => {}) }, [])
 

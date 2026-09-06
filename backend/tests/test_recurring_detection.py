@@ -19,7 +19,9 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.recurring import SeriesUpdate, update_series
+from backend.routers.recurring import (
+    SeriesUpdate, restore_series, suppress_series, update_series,
+)
 from backend.services.recurring_detection import (
     _LAST_SCAN_META_KEY,
     maybe_auto_scan,
@@ -479,6 +481,40 @@ class RecurringDetectionTests(unittest.TestCase):
         # Nothing in the default (non-suppressed) list, and no second Netflix row was created.
         self.assertEqual(self._series(), [])
         self.assertEqual(len(self._series(include_suppressed=True)), 1)
+
+    def test_suppressing_records_the_rows_it_held(self):
+        # The count on a suppressed card and the rows its link opens have to be the same set. They cannot
+        # be re-derived to agree: membership is a rhythm fit over one charge per date, not a predicate,
+        # and matching on the payee instead missed rows the bank spelled differently while sweeping in
+        # unrelated charges to the same counterparty. So the set is captured before the links are dropped.
+        self._add_series(payee="Netflix", category="Streaming", count=12, period_days=30, amount=15.99)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            with get_db() as conn:
+                held = [r["id"] for r in conn.execute(
+                    "SELECT id FROM txn WHERE recurring_series_id = ? ORDER BY date, id", (sid,)).fetchall()]
+            self.assertTrue(held, "precondition: the series owns rows before it is suppressed")
+            suppressed = suppress_series(sid)
+
+        self.assertEqual(suppressed["suppressed_member_ids"], held)
+        self.assertEqual(len(suppressed["suppressed_member_ids"]), suppressed["occurrence_count"],
+                         "the snapshot is what the card's count promises")
+        with self._use_db_path():
+            with get_db() as conn:
+                still_linked = conn.execute(
+                    "SELECT COUNT(*) FROM txn WHERE recurring_series_id = ?", (sid,)).fetchone()[0]
+        self.assertEqual(still_linked, 0, "a suppressed series must still own no rows")
+
+    def test_restoring_drops_the_snapshot(self):
+        # A restored series owns rows again from the next scan, so a snapshot left behind would send the
+        # drill-down to a frozen set while the card counted the live one — the same disagreement, mirrored.
+        self._add_series(payee="Netflix", category="Streaming", count=12, period_days=30, amount=15.99)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            self.assertTrue(suppress_series(sid)["suppressed_member_ids"])
+            self.assertIsNone(restore_series(sid)["suppressed_member_ids"])
 
     def test_a_suppression_survives_its_charges_being_categorized_later(self):
         # The rejection is keyed on an identity derived from the member rows, and their category is not
