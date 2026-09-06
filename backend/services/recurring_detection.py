@@ -893,9 +893,21 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # An amount-gated owned series covers only its own price point. Without that test, confirming one of
     # a biller's two subscriptions suppressed the other as redundant, and its charges were left linked to
     # nothing — the sibling was destroyed by the act of endorsing its neighbour.
+    # A missing category on either side is agnostic, exactly as a missing account scope is. The category
+    # is *derived from the member rows* and those rows keep changing — a rule or a hand edit recategorizes
+    # them long after the fact — so an identity that treats NULL as a specific value lets a decision the
+    # user already made walk out from under itself: a series suppressed while its charges were
+    # uncategorized stopped covering the very same charges once they were categorized, and came back as a
+    # fresh suggestion at the same payee, cadence and amounts. Nothing looks wrong in either row.
+    #
+    # Category stays part of the identity when both sides *have* one, and that is not a compromise: one
+    # payee can carry genuinely different obligations, and collapsing them would destroy a correctly
+    # detected series the same way ignoring the price point once did.
     def _covered_by_owned(cand):
         for r in user_owned:
-            if not (r["payee_key"] == cand["payee_key"] and r["category_id"] == cand["category_id"]
+            if not (r["payee_key"] == cand["payee_key"]
+                    and (r["category_id"] == cand["category_id"]
+                         or r["category_id"] is None or cand["category_id"] is None)
                     and (r["scope_account_id"] == cand["account_id"]
                          or r["scope_account_id"] is None or cand["account_id"] is None)):
                 continue

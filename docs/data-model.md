@@ -661,7 +661,15 @@ Key invariants:
   `status='active'` series wholesale, while **manual** (`source='manual'`), **confirmed**
   (`confirmed=1`), and **suppressed** (`status='suppressed'`) series are user-owned — never overwritten,
   and a candidate matching a user-owned identity `(payee_key, category_id, account_id, price point)`
-  is **not re-proposed**. The price point is the last component and is null for a `variable` series;
+  is **not re-proposed**. A component that is **null on either side is agnostic** — a series carrying no
+  category covers a candidate that has one, exactly as an account-agnostic series covers every account.
+  That is not a convenience: the category is *derived from the member rows*, and those rows keep changing
+  as rules and hand edits recategorize them, so treating null as a specific value let a decision the user
+  had already made walk out from under itself — a series suppressed while its charges were uncategorized
+  stopped covering those same charges once they were categorized, and returned as a fresh suggestion at
+  the same payee, cadence and amounts, with nothing in either row looking wrong. Category still
+  distinguishes two identities when both sides *have* one, for the same reason the price point does.
+  The price point is the last component and is null for a `variable` series;
   without it the two price points of one payee share an identity, and confirming either one suppresses
   the other as redundant — destroying a correctly-detected series by the act of endorsing its sibling. A suppressed series owns no transactions but persists so detection won't resurface it
   ("this is not recurring"). Confirm/suppress/edit/manual-create/pin/exclude are all the actions that make

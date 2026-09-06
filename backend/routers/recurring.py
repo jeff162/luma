@@ -198,6 +198,40 @@ def confirm_series(series_id: str):
         return _serialize(_fetch(conn, series_id))
 
 
+@router.post("/{series_id}/unconfirm")
+def unconfirm_series(series_id: str):
+    """Hand an accepted series back to the detector, so it returns to Suggested.
+
+    The counterpart to `confirm`, and the answer to accepting one by mistake. Suppress and End were the
+    only ways back, and both record a judgement the user may not want to make — "not recurring" and
+    "this has stopped" are claims, where the wanted state is *no claim yet*.
+
+    Only an **auto** series can go back: the pile it returns to is the detector's, so there has to be a
+    detector candidate behind it. A `manual` series was created by hand and nothing would re-propose it
+    (deleting it is the way out), and a `rule` series is declared by its rule's flag, which is where it
+    is undeclared. Both are refused rather than silently doing nothing.
+
+    No scan is needed for it to move: the Recurring page derives a card's bucket from `confirmed`/`status`,
+    so clearing the flag returns it to Suggested at once. The next scan then re-derives it like any other
+    candidate — which is also why a hand-pinned amount band does not survive this (the scan rewrites auto
+    series wholesale); accepting again and re-pinning is the way back to it.
+    """
+    with get_db() as conn:
+        series = _fetch(conn, series_id)
+        if series["source"] != "auto":
+            raise HTTPException(status_code=409, detail={
+                "code": "not_auto_detected",
+                "message": ("Only a detected series can go back to Suggested. Delete a manually created "
+                            "one, or uncheck 'Recurring series' on the rule behind a rule-backed one."),
+            })
+        conn.execute(
+            "UPDATE recurring_series SET confirmed = 0, status = 'active', updated_at = datetime('now') "
+            "WHERE id = ?",
+            (series_id,),
+        )
+        return _serialize(_fetch(conn, series_id))
+
+
 def _clear_backing_rule_flag(conn: sqlite3.Connection, series: sqlite3.Row) -> None:
     """A rule-backed series' 'recurring' checkbox lives on its rule. Suppress and delete both mean 'this
     isn't a series', so they clear that flag — otherwise the rule would keep re-declaring the series on the

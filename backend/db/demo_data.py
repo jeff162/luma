@@ -262,9 +262,15 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # Six months rather than three so the price step below is judged against an established price. The
     # newest charge is the one that moved: price change is measured against the occurrences *preceding*
     # the latest, which is the only comparison a stored min/max band cannot make for itself.
+    #
+    # The size of the step is not free either. A series whose charges never vary is held to a percentage
+    # floor before a move counts as a step, so a rise has to clear that floor to be reported at all — an
+    # earlier 15.99 → 17.99 was 12.5%, under it, and this dataset's streaming hike therefore raised
+    # nothing for as long as the comment here claimed it did. The threshold lives in
+    # `recurring_signals._FIXED_STEP_FRACTION`; keep this rise comfortably the far side of it.
     for m in range(6):
         base = m * 30
-        card(base + 8, "Netflix", 15.99 if m else 17.99)   # rule → Streaming Services
+        card(base + 8, "Netflix", 15.99 if m else 18.99)   # rule → Streaming Services
         card(base + 9, "FitClub", 40.00)                   # no rule → uncategorized
     grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
     grocery_amts = [182.40, 64.10, 121.75, 88.30]
@@ -371,6 +377,24 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # --- The features that are done *to* a transaction rather than imported with it ---
     _groups, leaves = _category_lookup(conn)
     examples = seed_all(conn, leaves, tag_ids)
+
+    # Detect the series, then accept the two the dataset was shaped around. Both are load-bearing: the
+    # anomalies this demo advertises — a subscription that stopped, a bill whose price stepped —
+    # are raised only for a series the user has taken on, since about an unaccepted suggestion the app
+    # has no standing to say a charge is missing (see `recurring_signals._is_user_owned`). Leaving every
+    # series unconfirmed would show the page with an empty Needs-attention view, which is the opposite of
+    # what the demo is for. Only these two are accepted, so the Suggested pile still has something in it.
+    from backend.services.recurring_detection import scan_and_store  # local: avoids an import cycle
+
+    scan_and_store(conn)
+    conn.execute(
+        "UPDATE recurring_series SET confirmed = 1 WHERE source = 'auto' AND payee_key IN (?, ?, ?)",
+        # The subscription that stopped, plus the two shapes of price move worth showing side by side:
+        # a fixed subscription that stepped up, and a seasonal bill that peaked. They exercise the two
+        # branches of the price-change test — a tight series judged on a percentage, a variable one
+        # judged against the range it has been in before.
+        ("cloudvault backup", "netflix", "northgate gas"),
+    )
 
     # Mark demo-loaded LAST — after the imports, so the import-block guard never trips during the build.
     conn.execute(

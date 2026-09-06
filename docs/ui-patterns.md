@@ -165,6 +165,17 @@ Shared controls should be treated as finished product surfaces, not reused snipp
 
 - **The Transactions ledger's amount filter is *page-local*, like the quick filter — not part of the shared FilterBar.** A compact toolbar popover (`components/AmountFilterControl.jsx`) reuses the **exact same `AmountCondition`** control the rule editor uses (`RuleForm.jsx`, now exported): Both/Debits/Credits, Range/Equals, a per-bound comparator (`>=`/`>`, `<=`/`<`). Semantics mirror the category-rule amount clause — the magnitude bounds compare against **`ABS(amount)`** while the debit/credit **side rides the existing `direction` param**, so the sign applies separately (e.g. "credit, ≥ $50" → `amount <= -50`). It is deliberately *not* a shared-FilterBar facet: the FilterBar persists across pages and feeds the Dashboard, but an amount slice is a ledger-only working filter, so it lives beside the ledger's quick filter as **session-scoped** page state (survives navigation, resets on next launch) and reaches the backend through the same `_build_transaction_filter` params (`amount_min`/`amount_max`/`amount_min_op`/`amount_max_op` + `direction`), so bulk "select all matching" resolves the exact filtered set. Because an amount filter that yields nothing is *genuine* emptiness (like an include facet, not a subtractive constraint), it registers as **narrowing intent** in `planHidingProbes` but is never a droppable probe — the date/exclude "hiding matches" note still fires correctly with an amount filter active. When a new precise, page-scoped predicate (that also exists as a rule condition) is needed on the ledger, prefer this shape — a page-local popover reusing the rule control — over extending the fuzzy OR-based quick-filter grammar or adding a shared-FilterBar facet. **The reuse is of a contract, not of a widget, so check the contract first.** The recurring series' pinned expectation band was the case that failed it: `AmountCondition` carries per-bound comparators and a debit/credit side, while a series band is inclusive at both ends and its direction is already settled by the series' own charges — so the shared control was the *wrong* contract rather than merely a heavier one, and reusing it would have offered two controls that cannot mean anything there. Where a candidate's extra dimensions have no answer in the new context, build the smaller control.
 
+**Accepting a suggestion is reversible, and reversing it is not a judgement.** "Back to suggested"
+(`POST /recurring/{id}/unconfirm`) returns an accepted series to the pile it came from. Before it, the
+only ways off a confirmed card were Suppress and Mark ended — both of which record a *claim* ("not
+recurring", "this has stopped") when the wanted state is no claim yet, which matters most when the
+series is someone else's to judge. The card moves buckets with no scan, because the page derives a
+card's bucket from `confirmed`/`status` rather than from a stored label. Offered only for an **auto**
+series: the pile it returns to is the detector's, so there must be a detector candidate behind it — a
+manual series is undone by deleting it and a rule-backed one by unchecking its rule, and the endpoint
+refuses both rather than silently doing nothing. Paired with an Undo on the confirm toast, since the
+slip it exists for is a single misplaced click and the card leaves Suggested the instant it happens.
+
 - **The Recurring page's drill-down serves single-series, all-series, and suppressed-series reports through one paged list.** The bottom drill-down (`ReportPanel` + `usePagedTransactions`) is keyed on `openSeries`, and the member fetch branches on it:
   - a real active/confirmed series → **`recurring_series_id`** (its linked members);
   - the **all-series report** → a synthetic marker (`{ id: '__all_recurring__', _all: true }`) → **`recurring_only`** (every row linked to any series). It's launched by the **standard report `↗`** sitting in the `PageHeader` `titleAdornment` beside the "Recurring Transactions" title (not a header button — the ↗ is the app's report-launch affordance). The synthetic id matches no `SeriesCard`;
@@ -963,6 +974,17 @@ stays the content source of truth; keep the topics in step with it as the tools 
 Anything the app raises unprompted — a Tasks card, a recurring anomaly signal — needs an answer for "I
 have seen this and it is fine". Which mechanism depends on whether the thing being dismissed is one
 identifiable finding or a running count of work.
+
+- **The app only raises an anomaly about a commitment the user has taken on.** `missed`, `price_change`
+  and `upcoming` each speak as though the obligation were established — a charge that was owed did not
+  arrive, one that is paid went up, the next one is due — and about an unaccepted suggestion none of
+  those is a statement the app is in a position to make. Reporting that a hypothesis nobody endorsed
+  failed to come true is noise, and it contradicts itself on screen: one candidate appeared under
+  Suggested while warning, beside it, that the charge it had just predicted was missing. So those three
+  are gated on the series being user-owned (confirmed, manual, or rule-backed), and `new_series` — whose
+  whole purpose is to surface a suggestion — carries the inverse gate. **The gate is per-signal, which is
+  how three of four came to be missing it**, so the test asserts on the whole emitted set rather than one
+  kind: a fifth signal fails it until it answers the question too.
 
 - **An individually identifiable finding is dismissed one at a time, by fingerprint.** A recurring
   signal names a specific charge, a specific missed date, or a specific rule, so "seen it" is an answer

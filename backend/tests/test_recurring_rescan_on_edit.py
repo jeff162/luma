@@ -163,6 +163,11 @@ class RecurringRescanOnEditTests(unittest.TestCase):
                           when=date.today() - timedelta(days=39))
         self._monthly(payee="Corner Store", category="Misc", count=2, amount=-4.25)  # keeps the ledger current
         self._scan()
+        # Only a series the user has taken on reports a missing charge, so accepting it is part of
+        # stating the case — an unaccepted candidate raises nothing to be cleared.
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE source = 'auto'")
 
         with self._use_db_path():
             with get_db() as conn:

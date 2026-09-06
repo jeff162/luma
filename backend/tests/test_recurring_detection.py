@@ -76,7 +76,8 @@ class RecurringDetectionTests(unittest.TestCase):
                                          display_name, raw_name, date)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID, self.cats[category],
+                        (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID,
+                         self.cats[category] if category is not None else None,
                          amt, payee, payee, payee, d),
                     )
 
@@ -479,6 +480,42 @@ class RecurringDetectionTests(unittest.TestCase):
         self.assertEqual(self._series(), [])
         self.assertEqual(len(self._series(include_suppressed=True)), 1)
 
+    def test_a_suppression_survives_its_charges_being_categorized_later(self):
+        # The rejection is keyed on an identity derived from the member rows, and their category is not
+        # fixed — a rule or a hand edit moves it long afterwards. Treating a missing category as a
+        # specific value let that mutation walk out from under the user's decision: the same payee, at
+        # the same cadence and the same amounts, came back as a fresh suggestion, with nothing in either
+        # row looking wrong. Suppressed while uncategorized is the case that actually happened.
+        self._add_series(payee="Netflix", category=None, count=12, period_days=30, amount=15.99)
+        self._scan()
+        sid = self._series()[0]["id"]
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertIsNone(conn.execute(
+                    "SELECT category_id FROM recurring_series WHERE id = ?", (sid,)).fetchone()[0],
+                    "precondition: the series was detected with no category")
+                conn.execute("UPDATE recurring_series SET status = 'suppressed' WHERE id = ?", (sid,))
+                conn.execute("UPDATE txn SET category_id = ? WHERE merchant_name = 'Netflix'",
+                             (self.cats["Streaming"],))
+        self._scan()
+        self.assertEqual(self._series(), [], "the categorized charges must not be re-proposed")
+        self.assertEqual(len(self._series(include_suppressed=True)), 1)
+
+    def test_two_categories_on_one_payee_are_still_two_series(self):
+        # The other half of the rule: a missing category is agnostic, but two categories that are both
+        # present stay distinct. One payee can carry genuinely different obligations, and collapsing them
+        # would destroy a correctly detected series the way ignoring the price point once did — so
+        # confirming one must leave the other standing.
+        self._add_series(payee="Multipay", category="Streaming", count=12, period_days=30, amount=9.99)
+        self._add_series(payee="Multipay", category="Water", count=12, period_days=30, amount=88.00)
+        self._scan()
+        self.assertEqual(len(self._series()), 2, "precondition: two series, one per category")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE category_id = ?",
+                             (self.cats["Streaming"],))
+        self._scan()
+        self.assertEqual(len(self._series()), 2, "confirming one must not swallow its sibling")
 
     def test_auto_scan_runs_when_never_scanned_and_stamps_watermark(self):
         # No watermark (a fresh, or migrated pre-recurring, database) → the catch-up must scan and record

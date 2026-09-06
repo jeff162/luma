@@ -91,10 +91,22 @@ class RecurringSignalsTests(unittest.TestCase):
         judged at all. Its payee is deliberately a one-off so it forms no series of its own."""
         self._txn(payee="Corner Store", category="Misc", amount=4.25, when=date.today())
 
-    def _scan(self):
+    def _scan(self, *, confirm=True):
+        """Detect, and by default accept what was detected.
+
+        Almost everything in this file asks what the app should say about a series the user *tracks*,
+        and only a user-owned series raises `missed`, `price_change` or `upcoming` at all — an
+        unaccepted candidate is a hypothesis, and the app has no business reporting that its own
+        unendorsed prediction failed. Confirming here is what makes these fixtures the case they mean.
+        The `new_series` tests pass `confirm=False`, because that signal is by definition about a series
+        the user has *not* taken on yet.
+        """
         with self._use_db_path():
             with get_db() as conn:
-                return scan_and_store(conn)
+                result = scan_and_store(conn)
+                if confirm:
+                    conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE source = 'auto'")
+                return result
 
     def _signals(self, kind=None):
         with self._use_db_path():
@@ -318,21 +330,42 @@ class RecurringSignalsTests(unittest.TestCase):
 
     def test_new_series_survives_the_rescan_that_re_mints_it(self):
         self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6)
-        self._scan()
+        self._scan(confirm=False)
         first = self._signals("new_series")
         self.assertEqual(len(first), 1)
         first_id = first[0]["series_id"]
 
-        self._scan()  # the auto series is deleted and re-inserted with a new id
+        self._scan(confirm=False)  # the auto series is deleted and re-inserted with a new id
         second = self._signals("new_series")
         self.assertEqual(len(second), 1)
         self.assertNotEqual(second[0]["series_id"], first_id, "precondition: the series was re-minted")
         self.assertEqual(second[0]["first_seen"], first[0]["first_seen"])
         self.assertEqual(second[0]["key"], first[0]["key"], "the fingerprint must not move with the id")
 
+    def test_a_suggestion_raises_nothing_but_its_own_proposal(self):
+        # An unaccepted candidate is a hypothesis, so `missed`, `price_change` and `upcoming` — each of
+        # which speaks about an established obligation — have nothing to say about it. The case that
+        # motivated this had the app listing a series under Suggested while warning, beside it, that the
+        # charge it had just predicted was missing. The gate is per-signal rather than central, which is
+        # how three of the four came to be missing it, so this asserts on the whole set: a fifth signal
+        # added later fails here until it answers the question too.
+        self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6,
+                      end=date.today() - timedelta(days=70))
+        self._make_ledger_current()
+        self._scan(confirm=False)
+
+        kinds = {s["kind"] for s in self._signals()["signals"]}
+        self.assertEqual(kinds, {"new_series"})
+
+        # And accepting it is what lets the app speak: the same ledger, now a tracked series.
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE recurring_series SET confirmed = 1 WHERE source = 'auto'")
+        self.assertTrue(self._signals("missed"), "a confirmed series reports the same missing charge")
+
     def test_new_series_ages_out(self):
         self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6)
-        self._scan()
+        self._scan(confirm=False)
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute("UPDATE recurring_series SET created_at = datetime('now', '-60 days')")

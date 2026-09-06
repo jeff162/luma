@@ -52,7 +52,7 @@ const CADENCE_OPTIONS = Object.entries(CADENCE_LABELS).map(([value, label]) => (
 
 // Disposition actions that change how a series is characterized — pressing one collapses an open
 // drill-down (the user has decided). A cadence edit is deliberately excluded (a tweak, not a decision).
-const CHARACTERIZATION_ACTIONS = new Set(['confirm', 'suppress', 'end', 'restore', 'delete'])
+const CHARACTERIZATION_ACTIONS = new Set(['confirm', 'unconfirm', 'suppress', 'end', 'restore', 'delete'])
 
 const STATUS_META = {
   suppressed: { label: 'Suppressed', color: 'var(--muted)' },
@@ -405,6 +405,11 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
             ) : (
               <>
                 {ruleBacked ? <CardActionButton onClick={() => onEditRule(series)}>Edit rule</CardActionButton> : null}
+                {/* Only an auto series has a detector pile to go back to; the other two sources are
+                    undone where they were declared (delete, or the rule's own checkbox). */}
+                {series.source === 'auto' && !dormant ? (
+                  <CardActionButton onClick={() => onAction('unconfirm', series)}>Back to suggested</CardActionButton>
+                ) : null}
                 <CardActionButton onClick={() => onAction('suppress', series)}>Not recurring</CardActionButton>
                 <CardActionButton onClick={() => onAction('end', series)}>Mark ended</CardActionButton>
                 <CardActionButton variant="danger" onClick={() => onAction('delete', series)}>Delete</CardActionButton>
@@ -733,6 +738,7 @@ export default function Recurring() {
   })
   const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
   const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
+  const [confirmUndo, setConfirmUndo] = useState(null)            // { id, name } of the last accepted series
 
   // The drill-down serves three shapes through one paged list: a single series (recurring_series_id),
   // the all-series report (recurring_only — every row linked to any series), and an explicit set of rows
@@ -917,7 +923,14 @@ export default function Recurring() {
   // put until the next load/scan/filter change. Delete removes it; that's a removal, not a reorder.
   async function handleAction(kind, s, value) {
     let updated
-    if (kind === 'confirm') updated = await api.confirmRecurring(s.id)
+    if (kind === 'confirm') {
+      updated = await api.confirmRecurring(s.id)
+      // Accepting is one click and the card leaves the Suggested pile immediately, so the slip
+      // is invisible the moment it happens. The toast is the cheap way back; the row menu's
+      // "Back to suggested" is the one for noticing later.
+      setConfirmUndo({ id: s.id, name: s.display_name || s.payee_key })
+    }
+    else if (kind === 'unconfirm') { updated = await api.unconfirmRecurring(s.id); setConfirmUndo(null) }
     else if (kind === 'suppress') {
       // Suppressing a rule-backed series unchecks its rule and removes it outright (the backend returns
       // {deleted:true}); a derived series just flips to suppressed and is returned serialized.
@@ -1285,6 +1298,15 @@ export default function Recurring() {
           loading={false}
           onRestore={(signal) => restoreSignal(signal.key)}
           onClose={() => setDismissedSignals(null)}
+        />
+      )}
+
+      {confirmUndo && (
+        <UndoToast
+          title="Series confirmed"
+          description={`${confirmUndo.name} is now tracked. Undo puts it back in Suggested.`}
+          onUndo={async () => { await handleAction('unconfirm', { id: confirmUndo.id }); setConfirmUndo(null) }}
+          onDismiss={() => setConfirmUndo(null)}
         />
       )}
 

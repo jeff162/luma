@@ -734,6 +734,7 @@ export const api = {
   reopenDuplicatePairs: (pairs) => request('/accounts/duplicate-pairs/reopen',
     { method: 'POST', body: JSON.stringify({ pairs }) }),
   confirmRecurring:   (id) => request(`/recurring/${id}/confirm`, { method: 'POST' }),
+  unconfirmRecurring: (id) => request(`/recurring/${id}/unconfirm`, { method: 'POST' }),
   suppressRecurring:  (id) => request(`/recurring/${id}/suppress`, { method: 'POST' }),
   endRecurring:       (id) => request(`/recurring/${id}/end`, { method: 'POST' }),
   restoreRecurring:   (id) => request(`/recurring/${id}/restore`, { method: 'POST' }),

@@ -247,8 +247,27 @@ def _series_payload(series) -> dict:
     }
 
 
+def _is_user_owned(series) -> bool:
+    """Whether the user has taken the series on — confirmed it, created it by hand, or declared it
+    through a rule.
+
+    **Everything except `new_series` is gated on this**, because the other three signals all speak about
+    an obligation as though it were established: `missed` says a charge the user is owed did not arrive,
+    `price_change` says one they pay went up, `upcoming` budgets for the next. About an unaccepted
+    suggestion none of those is a statement the app is in a position to make — the series is a
+    hypothesis, and reporting that a hypothesis nobody endorsed failed to come true is noise. It also
+    produced a self-contradiction on screen: one auto candidate appeared in Suggested *and* raised a
+    warning that its own predicted charge was missing, so the app proposed something and complained
+    about it in the same breath.
+
+    `new_series` is the deliberate opposite — it exists precisely to surface a suggestion — and it
+    carries the inverse gate of its own.
+    """
+    return bool(series["confirmed"]) or series["source"] in ("manual", "rule")
+
+
 def _upcoming(series, today: date, horizon_days: int) -> dict | None:
-    if series["status"] != "active" or not series["occurrence_count"]:
+    if not _is_user_owned(series) or series["status"] != "active" or not series["occurrence_count"]:
         return None
     due = _parse_date(series["next_due_date"])
     if due is None or due < today or due > today + timedelta(days=horizon_days):
@@ -269,7 +288,8 @@ def _missed(series, ref_now: date | None) -> dict | None:
     module docstring), and reported with how many whole periods have now gone by — two of them is what
     `presumed_ended` means, which is a statement the card makes and an action it offers, not a status
     the scan writes."""
-    if series["status"] != "active" or not series["occurrence_count"] or ref_now is None:
+    if not _is_user_owned(series) or series["status"] != "active" \
+            or not series["occurrence_count"] or ref_now is None:
         return None
     due = _parse_date(series["next_due_date"])
     period = float(series["period_days"] or 0)
@@ -333,7 +353,8 @@ def _price_change(series, occurrences: list[dict], accepted: list[float] | None 
 
     Either way a step the *previous* charge already made is not reported again: the hike was news once.
     """
-    if series["status"] != "active" or len(occurrences) < _MIN_OCCURRENCES_FOR_PRICE:
+    if not _is_user_owned(series) or series["status"] != "active" \
+            or len(occurrences) < _MIN_OCCURRENCES_FOR_PRICE:
         return None
     latest = occurrences[-1]
     prior = occurrences[:-1]
