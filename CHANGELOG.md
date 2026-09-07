@@ -3,7 +3,7 @@
 All notable changes to Luma are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-This log starts at version 0.4.0.
+This log starts at version 0.3.0.
 
 ---
 
@@ -36,4 +36,4 @@ anyone could be upgrading from, so the entry below describes what exists rather 
 - **Local or networked operation** — a desktop install on loopback, or a machine on the LAN reached by
   other devices behind a sign-in perimeter.
 
-[Unreleased]: https://github.com/jeff162/luma/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jeff162/luma/compare/v0.3.0...HEAD
