@@ -61,6 +61,10 @@ ACCOUNT_REFERENCE_KINDS = {
     # Matching scopes: resolved at read time.
     ("category_rule", "account_id"): "scope",
     ("recurring_series", "account_id"): "scope",
+    # The far account of a two-legged money movement. A matching scope like the near one: pairing
+    # compares it against the row side's already-resolved account, so it has to resolve too or a merge
+    # would leave the movement matching nothing at all.
+    ("recurring_series", "counterpart_account_id"): "scope",
     ("amazon_funding_map", "funding_account_id"): "scope",
     ("amazon_funding_map", "amazon_account_id"): "scope",
     # Dedupe coverage: `duplicate_detection.scope_id_for` resolves it through the group root before

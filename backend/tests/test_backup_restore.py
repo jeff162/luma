@@ -107,6 +107,7 @@ TABLE_TO_SECTION = {
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
     "recurring_signal_dismissal": "recurring_signal_dismissals",
+    "transfer_pair_decision": "transfer_pair_decisions",
     "rule_overlap_dismissal": "rule_overlap_dismissals",
     "txn_link": "txn_links",
     "txn_link_member": "txn_link_members",
@@ -254,6 +255,13 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "INSERT INTO recurring_signal_dismissal (signal_key, kind, dismissed_at) "
                     "VALUES (?, 'price_change', '2026-04-16T09:00:00')",
                     (f"price_change:{txn}",),
+                )
+                # The user's answer to an ambiguous pairing. Same story again: the question is
+                # re-derived from the ledger on every scan, so the answer is the only durable state —
+                # and a restore that lost it would re-ask what the user had already settled.
+                conn.execute(
+                    "INSERT INTO transfer_pair_decision (paying_txn_id, receiving_txn_id) VALUES (?, NULL)",
+                    (txn,),
                 )
                 # An acknowledged rule-overlap finding — same story on the rules side: the findings are
                 # recomputed from the rules every run, so the dismissal is all there is to carry.

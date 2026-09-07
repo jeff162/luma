@@ -49,8 +49,12 @@ except Exception as error:  # noqa: BLE001 - see below
     print(f"Could not use the system certificate store ({error}); TLS falls back to OpenSSL defaults.",
           file=sys.stderr)
 
+import base64
+import json
 from contextlib import asynccontextmanager
 
+import itsdangerous
+from itsdangerous.encoding import base64_decode
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -62,6 +66,71 @@ from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
+
+
+# Starlette's own default, which `SessionMiddleware` is added below without overriding. The re-verify
+# diagnostic has to age a cookie exactly as the middleware does, or it would answer a different question
+# than the one being asked — so if a `max_age` is ever passed there, it belongs here too.
+_SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+
+
+def _signed_age(raw: str) -> str:
+    """How old the cookie's own timestamp is, in seconds, or "unreadable". Negative means it was signed
+    *ahead* of the clock now verifying it."""
+    try:
+        signer = itsdangerous.TimestampSigner(str(config.session_secret))
+        stamp = int.from_bytes(base64_decode(raw.split(".")[1]), "big")
+        return f"{signer.get_timestamp() - stamp}s"
+    except Exception:  # noqa: BLE001 - a diagnostic must never be the thing that raises
+        return "unreadable"
+
+
+def _reverified_here(raw: str | None) -> str:
+    """Whether *this process*, with *its own* secret, can verify the cookie it was just handed — and
+    whether what comes out names a user. Reports a verdict only; the payload is never logged.
+
+    This exists because a preserved trace of the intermittent 401 answered every question the rest of
+    this line can ask, and the answer ruled out its own premise. The rejected cookie was pulled from the
+    trace and unsigned offline against the harness's pinned secret: valid signature, `user_id` present,
+    intact length, sent once. Yet the middleware had handed the app an empty session. So
+    "signed cookie, session keys: -" does **not** imply the signature failed, which is what it had been
+    read as, and the remaining explanations split on exactly this test:
+
+    * **verifies, user_id present** — the cookie is good and the session still arrived empty, so the
+      fault is in the decode/populate step or in the scope, and cookie custody can be dropped from the
+      investigation entirely.
+    * **BadSignature** — this process cannot verify what an offline check with the configured secret
+      can, so the process is not holding the secret the configuration names, and the reasoning that
+      called that impossible has to be re-examined from `app_config.resolve()` outward.
+
+    Cheap enough to be unconditional: it runs only on the rejection path, which is rare by construction.
+    See `docs/transient-failures.md` entry 1.
+    """
+    if not raw or raw == "null":
+        return "-"
+    try:
+        data = itsdangerous.TimestampSigner(str(config.session_secret)).unsign(
+            raw.encode(), max_age=_SESSION_MAX_AGE_SECONDS
+        )
+    except itsdangerous.SignatureExpired:
+        # `itsdangerous` raises this for BOTH an over-age cookie and one whose timestamp is in the
+        # *future* (`age < 0`), and the two mean opposite things: the first is a genuinely stale client,
+        # the second is the verifying clock having moved backwards since the cookie was signed — which
+        # invalidates every session signed in the window that was skipped, for exactly as long as the
+        # step, and then stops. Reporting the age is what tells them apart, and it is a duration rather
+        # than anything about the session.
+        return f"expired (age {_signed_age(raw)})"
+    except itsdangerous.BadSignature:
+        return "BadSignature"
+    except Exception:  # noqa: BLE001 - a diagnostic must never be the thing that raises
+        return "unreadable"
+    try:
+        payload = json.loads(base64.b64decode(data))
+    except Exception:  # noqa: BLE001 - as above
+        return "verifies, unreadable payload"
+    if not isinstance(payload, dict):
+        return "verifies, unreadable payload"
+    return "verifies, user_id present" if payload.get("user_id") else "verifies, no user_id"
 
 
 def _not_authenticated(reason: str, request: Request) -> JSONResponse:
@@ -90,6 +159,11 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
       or was cleared; non-empty without ``user_id`` means something wrote a session that never had one.
     * ``cookie`` — whether the value is absent, empty, or Starlette's cleared marker. A property of the
       value rather than the value itself, so nothing signed or secret is written to the log.
+
+    Those two narrowed it to a cookie that fails verification — and a preserved trace then showed the
+    rejected cookie verifying perfectly well, which leaves that reading with nothing to stand on. The
+    third fact is the one that settles it: whether this process can verify the value itself
+    (``_reverified_here``).
     """
     raw = request.cookies.get(config.session_cookie_name)
     if raw is None:
@@ -103,7 +177,8 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     # `.keys()` only: the session is the value, and this line exists to be pasted into a bug report.
     keys = ",".join(sorted(request.session.keys())) or "-"
     log_warning(
-        f"[auth] rejected {request.url.path} ({cookie_state}, session keys: {keys}): {reason}"
+        f"[auth] rejected {request.url.path} ({cookie_state}, session keys: {keys}, "
+        f"re-verified here: {_reverified_here(raw)}): {reason}"
     )
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 

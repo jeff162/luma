@@ -207,7 +207,8 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 ### Recurring series
 
-- **Backend:** `backend/services/recurring_detection.py` (detection) + `backend/routers/recurring.py` (API)
+- **Backend:** `backend/services/recurring_detection.py` (detection) + `backend/services/transfer_pairs.py`
+  (pairing the two rows one money movement leaves behind) + `backend/routers/recurring.py` (API)
 
 - **Frontend:** `frontend/src/pages/Recurring.jsx` (route `/recurring`, nav "Recurring")
 
@@ -229,6 +230,23 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
     global scan only when one is due: never scanned (a fresh or migrated pre-recurring database) or stale
     (older than the daily interval). This is the safety net for what a scoped pass can't see, and the
     home of the payee-key re-derivation repair.
+
+  **A money movement between two tracked accounts is one series that owns both its legs.** The ledger
+  records the movement once per account, so a payee reading of those rows produces two series whose
+  descriptors then drift apart independently. `scan_and_store` therefore runs a **transfer pass first**:
+  `transfer_pairs.pair_money_movements` pairs the rows structurally (same amount and category, opposite
+  directions, different accounts, within a few days), `detect_transfer_series` scores the rhythm over the
+  *pairs*, and the resulting series claims both legs. **Every** paired row is withheld from the payee
+  pass, not only those a series claimed: a pair with no rhythm is still a pair, so its legs are not
+  merchant activity either, and reading them as one is what produced per-account fragments for a card
+  paid at irregular intervals. It runs over the full pool even on a scoped scan, the same
+  exception rule-backed series get. Its rows are handed to `reconcile_series` as `reserved`, so a payee
+  series that already held them — confirmed or not — gives them up: that reading is the movement read off
+  two descriptions that drift, and nothing is deleted to correct it, since membership is exclusive and a
+  series covering charges outside the movement keeps them. The one claim it yields to is a rule-backed
+  series (`_rule_backed_holdings`), whose membership the user wrote. The single thing it refuses is a
+  pairing *tie*, which is reported rather than guessed (`GET /recurring/transfer-review`). See
+  `data-model.md` → Recurring series and `ui-patterns.md`.
 
   **Duplicate detection has the same shape with a different trigger.** `POST /accounts/duplicate-rescan`
   runs on app load beside the recurring catch-up, but is gated on `DUPLICATE_DETECTION_VERSION` rather

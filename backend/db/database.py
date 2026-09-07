@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 49
+CURRENT_VERSION = 52
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1328,6 +1328,46 @@ def _suppressed_series_remember_their_members(conn):
         conn.execute("ALTER TABLE recurring_series ADD COLUMN suppressed_member_ids TEXT")
 
 
+@migration(50)
+def _series_can_span_two_accounts(conn):
+    # The far account of a two-legged money movement — see the baseline CREATE. Additive and nullable, so
+    # every existing series reads as what it is (a payee series) with no backfill. Transfer series appear
+    # on the next scan, which re-derives auto series wholesale anyway; a confirmed payee series covering
+    # rows a movement would now claim keeps them, because user curation always outranks a fresh reading.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(recurring_series)").fetchall()}
+    if cols and "counterpart_account_id" not in cols:
+        conn.execute("ALTER TABLE recurring_series ADD COLUMN counterpart_account_id TEXT")
+
+
+@migration(51)
+def _remember_transfer_pairing_answers(conn):
+    # The user's answers to the one question the transfer review asks — see the baseline CREATE. Additive
+    # and empty on an existing database: nothing has been asked yet, so there is nothing to backfill, and
+    # an unanswered question behaves exactly as it did before this existed.
+    conn.executescript("""
+        -- What the user answered when the pairing pass could not tell which of two transactions
+        -- was the other half of a movement. `receiving_txn_id` names the counterpart; NULL is the
+        -- dismissal ("this one has none, stop asking") — one column for both answers, because they
+        -- answer the same question. Applied ahead of any inference (`services/transfer_pairs.py`):
+        -- the pass never learns from a decision it made itself, only from one a person made.
+        CREATE TABLE IF NOT EXISTS transfer_pair_decision (
+            paying_txn_id    TEXT PRIMARY KEY REFERENCES txn(id) ON DELETE CASCADE,
+            receiving_txn_id TEXT REFERENCES txn(id) ON DELETE CASCADE,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+
+
+@migration(52)
+def _a_movement_no_longer_asks_permission(conn):
+    # `transfer_movement_declined` recorded "keep the series I already have" for a movement whose rows a
+    # confirmed payee series held. Movements now claim those rows outright — one payment recorded twice is
+    # one thing, and a payee series over it is the same payment read off two descriptions that drift — so
+    # there is no offer left to decline and nothing the table can mean. It exists only on databases that
+    # ran an unreleased v51, hence IF EXISTS.
+    conn.execute("DROP TABLE IF EXISTS transfer_movement_declined")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2282,9 +2322,30 @@ def init_db(db_path: str | None = None):
                 -- unrelated charges. NULL for an unsuppressed series, and for one suppressed before this
                 -- column existed; both fall back to matching, and the drill-down reconciles the count it
                 -- displays to whatever that actually returns.
-                suppressed_member_ids TEXT
+                suppressed_member_ids TEXT,
+                -- The far account of a two-legged money movement. Set only on a transfer series, where
+                -- `account_id` is the paying side and this is the receiving side; NULL on every ordinary
+                -- payee series, which is also what tells the two apart everywhere.
+                --
+                -- A transfer series exists because one movement between two tracked accounts is recorded
+                -- twice, once per account, and grouping those rows by payee reads them as two unrelated
+                -- things whose descriptors then drift apart independently. Its identity is the pair of
+                -- accounts plus the category, so its `payee_key` is a synthetic `transfer:<from>:<to>`
+                -- rather than a name, and it owns BOTH legs of every occurrence it claims. See
+                -- `services/transfer_pairs.py`.
+                counterpart_account_id TEXT REFERENCES account(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
+            -- What the user answered when the pairing pass could not tell which of two transactions
+            -- was the other half of a movement. `receiving_txn_id` names the counterpart; NULL is the
+            -- dismissal ("this one has none, stop asking") — one column for both answers, because they
+            -- answer the same question. Applied ahead of any inference (`services/transfer_pairs.py`):
+            -- the pass never learns from a decision it made itself, only from one a person made.
+            CREATE TABLE IF NOT EXISTS transfer_pair_decision (
+                paying_txn_id    TEXT PRIMARY KEY REFERENCES txn(id) ON DELETE CASCADE,
+                receiving_txn_id TEXT REFERENCES txn(id) ON DELETE CASCADE,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             -- Surgical, scan-durable membership corrections layered over the derived/rule matcher:
             -- 'excluded' keeps a matched row out of its series. Reconcile applies these every scan so
             -- they survive a rebuild. A 'pinned' state (forcing a row *in*) existed and was withdrawn:

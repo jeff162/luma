@@ -733,6 +733,14 @@ export const api = {
   getDismissedDuplicatePairs: () => request('/accounts/duplicate-pairs'),
   reopenDuplicatePairs: (pairs) => request('/accounts/duplicate-pairs/reopen',
     { method: 'POST', body: JSON.stringify({ pairs }) }),
+  getTransferReview:  () => request('/recurring/transfer-review'),
+  decideTransferPair: (payingTxnId, receivingTxnId) =>
+    request('/recurring/transfer-review/pair', {
+      method: 'POST',
+      body: JSON.stringify({ paying_txn_id: payingTxnId, receiving_txn_id: receivingTxnId || null }),
+    }),
+  restoreTransferDecision: (decision) =>
+    request('/recurring/transfer-review/restore', { method: 'POST', body: JSON.stringify(decision) }),
   confirmRecurring:   (id) => request(`/recurring/${id}/confirm`, { method: 'POST' }),
   unconfirmRecurring: (id) => request(`/recurring/${id}/unconfirm`, { method: 'POST' }),
   suppressRecurring:  (id) => request(`/recurring/${id}/suppress`, { method: 'POST' }),

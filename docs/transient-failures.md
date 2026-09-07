@@ -21,9 +21,11 @@ name of the failing test is not a reliable way to tell them apart.
 
 ## 1. A valid session cookie is rejected as having no `user_id`
 
-**Status: recurred; the leading hypothesis is disproved and the next instrument is chosen. The
-instrumentation is itself covered (`backend/tests/test_auth_rejection_diagnostics.py`), because a
-diagnostic for a 1-in-11 failure that is silently broken costs another eleven runs to discover.**
+**Status: SOLVED — the host clock steps backwards mid-run and briefly invalidates every session cookie
+signed in the window it skipped. What remains is a decision about `max_age`, below, not an
+investigation. The instrumentation that found it is covered
+(`backend/tests/test_auth_rejection_diagnostics.py`), because a diagnostic for a 1-in-11 failure that is
+silently broken costs another eleven runs to discover.**
 
 ### Symptom
 
@@ -137,11 +139,161 @@ The rejection line now carries two more facts, and neither is the session itself
 
 `signed cookie, session keys: -` confirms the reading above without needing a trace.
 
-**The instrument to add next** follows the value rather than the key: the raw cookie's **length and a
-short non-reversible digest**, plus whether the `Cookie` header carried the session name more than once.
-Neither reveals the session. It splits the two survivors in one line — a digest matching the known-good
-cookie means verification itself is failing and the fault is below the app, while a different one means
-something replaced or truncated the value, and the phase boundary says where to look.
+### Third occurrence — a trace survives this time
+
+`data/check-logs/20260906-145843-597684/`, with Playwright's **trace, video, screenshot and error
+context copied in beside the logs** (`playwright-artifacts/`) so a later run cannot clear them the way
+it cleared the second occurrence's. Reading that trace is the next step, and it can be done at leisure
+now that it is out of `test-results/`.
+
+It lands at the **same phase boundary for the third time**, two tests past the transition rather than
+one:
+
+```
+✓ 16 [demo-cleared] › demo-clear.setup.js   (58ms)
+✓ 17 [import] › ...falls back to a temporary draft
+✓ 18 [import] › ...applies it without asking
+  [auth] rejected /api/tasks                       (signed cookie, session keys: -)
+  [auth] rejected /api/tasks                       (signed cookie, session keys: -)
+  [auth] rejected /api/import-export/profiles/{id} (signed cookie, session keys: -)
+✘ 19 [import] › ...asks which to use
+```
+
+Three rejections, and the mix is the new fact: `/api/tasks` twice is the **app polling from the browser
+context**, while the profile `DELETE` comes from Playwright's `request` fixture. Two different cookie
+jars are rejected inside the same window, which is what "every request in flight" meant in the first
+occurrence and had not been visible in the second. Whatever fails is not specific to one client.
+
+### The trace was read, and it disproves the remaining hypothesis
+
+That instrument no longer needs building: the preserved trace answers it directly, and the answer is
+that the cookie is **not** the problem.
+
+Every `/api/` request in the trace was pulled apart — its `Cookie` header measured and digested, and the
+three distinct session values that appear across the run **unsigned offline against the pinned
+`e2e-playwright-secret`**. All three:
+
+- carry a **valid signature** (`TimestampSigner.unsign`, 14-day `max_age`, no exception),
+- decode to `{"pwless": …, "user_id": …}` with the **`user_id` present**,
+- are **127 bytes**, and appear exactly once in their `Cookie` header.
+
+So the value that produced `signed cookie, session keys: -` is intact, correctly signed, and carries an
+identity. **It is not altered, truncated, substituted, duplicated, or expired**, and it is not a genuine
+`BadSignature` — which is what the section above had narrowed to. That reading is wrong and the search
+should not resume there.
+
+**The same value both works and fails, minutes apart.** Digest `e6d92f15` was sent on 23 requests: it
+was rejected on two `GET /api/tasks` and one `DELETE /api/import-export/profiles/{id}`, and accepted on
+the other twenty — including a `GET /api/tasks` before, and a `POST /api/import-export/profiles`
+**afterwards**. The fault is therefore time-dependent, not value-dependent, which no property of the
+cookie can explain.
+
+```
+18:59:51.097  401 GET    /api/tasks                       e6d92f15
+18:59:51.173  401 GET    /api/tasks                       e6d92f15
+18:59:51.173  200 GET    /api/auth/status                 e6d92f15   <- same cookie, same instant
+18:59:51.189  200 POST   /api/auth/select-identity        e6d92f15
+18:59:51.197  200 …everything…                            49f28730   <- new session from here
+18:59:51.903  401 DELETE /api/import-export/profiles/{id} e6d92f15   <- request fixture, stale jar
+18:59:52.176  200 POST   /api/import-export/profiles      e6d92f15   <- and it works again
+```
+
+Two clients are involved, which is what "every request in flight" meant: `/api/tasks` is the app polling
+from the **browser context**, the `DELETE` is Playwright's **`request` fixture**, and they hold separate
+cookie jars. The `auth/*` calls beside the rejections succeed only because they are in `public_paths` —
+they never look for a `user_id`.
+
+### What is left, and the one line that splits it
+
+`_not_authenticated`'s own docstring enumerates three situations behind this message. The trace rules out
+two (the cookie is neither cleared nor unverifiable) and the third — "a session that verified perfectly
+well but was written without a `user_id`" — is contradicted by the decoded payload. **The middleware
+handed the app an empty session for a cookie that verifies.** Whatever is wrong sits between
+`SessionMiddleware` decoding the cookie and `TenantSessionMiddleware` reading `scope["session"]`, not in
+cookie custody.
+
+**The instrument is in place** (`_reverified_here` in `backend/main.py`, covered by
+`test_auth_rejection_diagnostics.py`). Every rejection line now carries a third fact — whether *this
+process*, with *its own* secret, can verify the cookie it was handed, and whether what comes out names a
+user. The value is never logged, only the verdict:
+
+```
+[auth] rejected /api/tasks (signed cookie, session keys: -, re-verified here: …): no user_id on the session
+```
+
+It answered on its **first firing**, and the answer was not on the list.
+
+### The verdict: `expired` — and the clock is the suspect
+
+`data/check-logs/20260906-161559-622439` (this time `cash-flow.spec.js`, one of the masks above). Every
+one of the **35 rejection lines in that run carries the same verdict**:
+
+```
+[auth] rejected /api/tags (signed cookie, session keys: -, re-verified here: expired): no user_id …
+```
+
+Not `BadSignature`, so the secret is confirmed correct — the earlier offline check and the process agree.
+Not `verifies, user_id present`, so the decode step is not at fault either. The cookie's **timestamp** is
+what fails, and `itsdangerous` raises `SignatureExpired` for two opposite situations:
+
+* `age > max_age` — a genuinely stale client. Ruled out here: `tests/.auth/state.json` is re-minted every
+  run (checked: 68 seconds old, verifying cleanly, `expires` 14 days out).
+* **`age < 0` — the cookie was signed *ahead* of the clock now verifying it.**
+
+Only the second can happen inside a run lasting under a minute, and it accounts for every property this
+entry has collected and could not previously explain:
+
+| observed | explained by a backwards clock step |
+| --- | --- |
+| a burst inside ~1 second, then normal service | the step's size *is* the outage's length |
+| every request in flight, both cookie jars | every cookie signed in the skipped window is invalid at once |
+| the same cookie value failing, then working again later | it becomes valid again as real time passes its stamp |
+| ~1 in 11 runs | a run has to overlap a correction |
+| the secret cannot differ, and the cookie is intact | neither is involved |
+
+The phase-boundary correlation recorded above now reads as incidental: that is simply where the most
+requests are in flight, so it is where a step is most likely to be *noticed*.
+
+**The environment fits.** This runs on a **WSL2 guest with `NTP service: active`**. A WSL2 VM's clock
+drifts whenever the host sleeps or idles, and the correction is a step — including backwards.
+
+### Confirmed: the clock steps backwards, by one to three seconds, repeatedly
+
+The very next run was **green**, and carried **81 rejections** — every one of them negative:
+
+```
+52 × re-verified here: expired (age -2s)
+27 × re-verified here: expired (age -1s)
+ 2 × re-verified here: expired (age -3s)
+```
+
+A negative age is not ambiguous. The cookie was signed one to three seconds **ahead** of the clock that
+then verified it, by the same process, seconds later. Nothing about the cookie, the secret, the client or
+the middleware ordering is involved: the wall clock moved backwards between signing and verifying, and
+`SessionMiddleware`'s `max_age` check reports that as an expired signature and hands the app `session =
+{}` — indistinguishable, downstream, from no session at all.
+
+That also explains why the failure is only *occasionally* a failure. Steps happen throughout every run;
+a run goes red only when one lands on a request a test asserts on. Roughly one in eleven, as recorded.
+
+**This is not only a test problem.** The same thing happens to a real user whose machine's clock steps
+back — a laptop resuming from sleep, a VM being restored, any NTP correction. They are signed out for
+the length of the step, with no explanation. That makes the entry a product decision rather than a
+harness fix:
+
+* **`max_age=None` on `SessionMiddleware`** — the timestamp is not what secures the cookie (the
+  signature is), and the browser's own `expires` still bounds its life. Removes the failure mode
+  outright, at the cost of a server-side lifetime bound.
+* **Keep `max_age` and tolerate a small negative age** — needs a subclass, and picks an arbitrary
+  tolerance.
+* **Leave it**, treating it as the environment's problem.
+
+Nothing has been changed on the strength of this: it alters how sessions expire for every install, which
+is the user's call, not a conclusion an investigation gets to make on its own.
+
+**Status: understood, awaiting that decision.** When it is taken, the durable half of this entry —
+`SessionMiddleware` answers a timestamp failure and a missing cookie identically, and the diagnostic that
+tells them apart — belongs in `security-model.md` before the entry is deleted.
 
 ---
 

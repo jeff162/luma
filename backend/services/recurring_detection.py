@@ -41,6 +41,9 @@ from typing import NamedTuple
 
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.categorizer import rule_matches_row, rule_scope_account_sql
+from backend.services.transfer_pairs import (
+    group_key, pair_money_movements, pairs_by_movement,
+)
 
 # `recurring_series.account_id` is a matching *scope*: "this series only owns rows on that account".
 # It is written as an already-effective (group-root) id, but a later merge can turn that root into a
@@ -49,6 +52,12 @@ from backend.services.categorizer import rule_matches_row, rule_scope_account_sq
 # column, which is what keeps the scope correct as the account graph changes (`account_groups.py`).
 # Requires the `recurring_series` table to be aliased `s`.
 SERIES_SCOPE_ACCOUNT_SQL = f"{effective_account_id_sql('s.account_id')} AS scope_account_id"
+# The same projection for a transfer series' far account — see `ACCOUNT_REFERENCE_KINDS`, where it is
+# classified as a scope for exactly this reason: pairing compares it against the row side's already-
+# resolved account, so an unresolved counterpart would silently stop matching after a merge.
+COUNTERPART_SCOPE_ACCOUNT_SQL = (
+    f"{effective_account_id_sql('s.counterpart_account_id')} AS counterpart_scope_account_id"
+)
 
 # Canonical cadences: (name, period in days). Monthly/quarterly/etc. use average calendar lengths so a
 # calendar-aligned series (same day-of-month) still snaps cleanly despite 28–31-day months.
@@ -151,10 +160,17 @@ def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict]
                COALESCE(p.type, a.type) AS effective_account_type,
                t.category_id, t.category_source, t.amount, t.date,
                t.merchant_name, t.display_name, t.raw_name,
-               t.owner_id, t.import_evidence_json
+               t.owner_id, t.import_evidence_json,
+               -- Whether the row is money movement rather than spending or income, read through the
+               -- category's group exactly as the reports read it. Carried on the pool because transfer
+               -- pairing is gated on it (services/transfer_pairs.py) and re-querying per row would turn
+               -- one scan into thousands of lookups.
+               COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS money_movement
         FROM   txn t
         JOIN   account a ON a.id = t.account_id
         LEFT   JOIN account p ON p.id = a.parent_account_id
+        LEFT   JOIN category c  ON c.id = t.category_id
+        LEFT   JOIN category pc ON pc.id = c.parent_id
         WHERE  t.trashed_at IS NULL
           AND  t.is_pending = 0
           AND  t.date >= ?
@@ -188,6 +204,7 @@ def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict]
             "import_evidence_json": r["import_evidence_json"],
             "category_id": r["category_id"],
             "category_source": r["category_source"],
+            "money_movement": bool(r["money_movement"]),
             "amount": amount,
             "date": d,
             "payee_key": payee_key,
@@ -480,6 +497,195 @@ def detect_recurring_series(pool: list[dict], ref_now: date) -> list[dict]:
     return candidates
 
 
+def _counterpart_of(series) -> str | None:
+    """A series' far account, or None for an ordinary payee series. Read through a key check because not
+    every caller hands this code a full `recurring_series` row — several build one from a narrower
+    SELECT, and a missing column there means "not a transfer", not an error."""
+    try:
+        keys = series.keys()
+    except AttributeError:
+        return series.get("counterpart_account_id")
+    return series["counterpart_account_id"] if "counterpart_account_id" in keys else None
+
+
+def _transfer_payee_key(from_account_id: str, to_account_id: str) -> str:
+    """A stable internal key for a movement between two accounts. A transfer series has no payee — that
+    is the point of it — but `payee_key` is the column every other part of the subsystem groups and
+    scopes by, so it carries the identity that *does* hold still. Never shown; the card is titled by the
+    accounts and by the most common recent descriptor among its members."""
+    return f"transfer:{from_account_id}:{to_account_id}"
+
+
+def load_transfer_decisions(conn: sqlite3.Connection) -> tuple[dict[str, str], set[str]]:
+    """The user's answers to ambiguous pairings: which counterpart a row has (`chosen`), and which rows
+    were told to stop asking (`dismissed`). A NULL counterpart is the dismissal — one column expressing
+    both answers, because they answer the same question."""
+    chosen: dict[str, str] = {}
+    dismissed: set[str] = set()
+    for row in conn.execute(
+        "SELECT paying_txn_id, receiving_txn_id FROM transfer_pair_decision"
+    ).fetchall():
+        if row["receiving_txn_id"]:
+            chosen[row["paying_txn_id"]] = row["receiving_txn_id"]
+        else:
+            dismissed.add(row["paying_txn_id"])
+    return chosen, dismissed
+
+
+def detect_transfer_series(pool: list[dict], ref_now: date, *, chosen: dict[str, str] | None = None,
+                           dismissed: set[str] | None = None) -> tuple[list[dict], set]:
+    """Candidate series for movements between two tracked accounts, and **every** row that turned out to
+    be half of a movement. Returns `(candidates, paired_ids)`.
+
+    Rows are paired first and scored second, which is the inversion this exists for: the rhythm is read
+    off the *movements*, so a payee spelled sixteen ways over ten years is one series rather than three
+    broken ones and a couple of hundred orphans. A candidate owns **both** legs of each pair it claims,
+    which is what stops the payee pass from re-deriving those rows into per-account series afterwards.
+
+    **`paired_ids` is wider than the candidates on purpose, and that is the point of returning it
+    separately.** A pair that never settles into a rhythm is still a pair: the money moved between two of
+    the user's own accounts, so those rows are not merchant activity and must not be read as a payee
+    series. Withholding only the rows a *series* claimed left a card paid at irregular intervals (gaps of
+    1 to 50 days, amounts $400 to $5,600) surfacing as a handful of one-sided suggestions on each
+    account — the same per-account fragments the pairing exists to remove, minus the rhythm that would
+    have justified them. Not being a series is a fine answer for such a movement; being a merchant is not.
+    """
+    pairs, _ambiguous = pair_money_movements(pool, chosen=chosen, dismissed=dismissed)
+    paired_ids = {i for pair in pairs for i in (pair["out_id"], pair["in_id"])}
+    by_id = {row["id"]: row for row in pool}
+    candidates = []
+    for (from_account_id, to_account_id, category_id), group in pairs_by_movement(pairs).items():
+        # One movement per date, as everywhere else in this file: a periodic series holds at most one
+        # occurrence per date, and a second same-day pair is a different movement, not a faster cadence.
+        occ_rows = [{"id": p["out_id"], "date": p["date"], "amount": p["amount"], "_pair": p}
+                    for p in group]
+        occ = _one_per_date(occ_rows, _reference_amount(occ_rows))
+        scored = _score(occ, ref_now)
+        if scored is None:
+            continue
+        cadence, period_days, confidence = scored
+        amounts = [o["amount"] for o in occ]
+        last_date = occ[-1]["date"]
+        paying_rows = [by_id[o["_pair"]["out_id"]] for o in occ]
+        member_ids = [i for o in occ for i in (o["_pair"]["out_id"], o["_pair"]["in_id"])]
+        candidates.append({
+            "payee_key": _transfer_payee_key(from_account_id, to_account_id),
+            "display_name": _select_display_name(paying_rows, ref_now, period_days) or "Transfer",
+            "category_id": category_id,
+            "account_id": from_account_id,
+            "counterpart_account_id": to_account_id,
+            "cadence": cadence,
+            "period_days": period_days,
+            # Magnitudes: a movement has a size and a direction, and the direction is the account pair.
+            "expected_amount": round(statistics.median(amounts), 2),
+            "amount_min": round(min(amounts), 2),
+            "amount_max": round(max(amounts), 2),
+            "last_txn_date": last_date.isoformat(),
+            "next_due_date": (last_date + timedelta(days=period_days)).isoformat(),
+            # Rows, not movements — the count beside a link is what the link opens, and the drill-down
+            # lists both legs. `transfer_count` carries the number of times the money actually moved.
+            "occurrence_count": len(member_ids),
+            "transfer_count": len(occ),
+            "confidence": confidence,
+            "member_ids": member_ids,
+            "amount_tight": _amount_is_tight(occ),
+            "amount_mode": AMOUNT_MODE_VARIABLE,
+        })
+    return candidates, paired_ids
+
+
+def transfer_review(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT) -> dict:
+    """The pairings the detector refused to make, for the user to settle.
+
+    One case reaches here, and it is a refusal rather than a failure: a paying row whose nearest
+    candidate counterpart is a **tie**. Nothing in the ledger distinguishes two same-day, same-amount
+    rows on different accounts, and guessing files real money against the wrong payment. Ties are rare
+    (one row in 18,400 on the reference ledger) and an unsettled one costs nothing — its rows fall
+    through to payee matching, which is what they had before any of this existed.
+
+    **Nothing else is reported, on purpose.** A movement between two tracked accounts under one category
+    *is* the payment, so it claims its rows outright rather than asking permission of whatever payee
+    series happens to hold them (`scan_and_store`). The one claim it yields to is a rule-backed series,
+    where membership is an instruction the user wrote; that is not a question either, so it is not asked.
+
+    Derived on read, like the pairing itself, so it always describes the ledger as it stands.
+    """
+    pool, _ref_now = _load_pool(conn, window_months)
+    chosen, dismissed = load_transfer_decisions(conn)
+    _pairs, ambiguous = pair_money_movements(pool, chosen=chosen, dismissed=dismissed)
+    names = {r["id"]: r["display_name"] for r in conn.execute(
+        "SELECT id, display_name FROM account").fetchall()}
+
+    def _row_view(row):
+        return {
+            "id": row["id"],
+            "date": row["date"].isoformat(),
+            "amount": row["amount"],
+            "name": row["display"],
+            "account_id": row["account_id"],
+            "account_name": names.get(row["account_id"]),
+        }
+
+    # Everything the user has already answered, so a decision can be taken back. Kept in the same
+    # payload rather than behind a second request: a hidden item is only interesting beside the list it
+    # was hidden from, and one fetch means the count and the list can never disagree.
+    txn_names = {}
+    settled_ids = list(chosen.keys()) + list(dismissed)
+    if settled_ids:
+        marks = ",".join("?" * len(settled_ids))
+        txn_names = {
+            r["id"]: (r["date"], r["amount"], names.get(r["account_id"]))
+            for r in conn.execute(
+                f"SELECT t.id AS id, t.date AS date, t.amount AS amount, "
+                f"       COALESCE(a.parent_account_id, t.account_id) AS account_id "
+                f"FROM txn t JOIN account a ON a.id = t.account_id WHERE t.id IN ({marks})",
+                settled_ids,
+            ).fetchall()
+        }
+    hidden = [
+        {
+            "kind": "paired" if paying in chosen else "dismissed",
+            "label": (f"{txn_names[paying][2]} · {txn_names[paying][0]}"
+                      if paying in txn_names else "A transaction no longer in range"),
+            "detail": txn_names[paying][1] if paying in txn_names else None,
+            "paying_txn_id": paying,
+        }
+        for paying in settled_ids
+    ]
+
+    return {
+        "ambiguous": [
+            {
+                "row": _row_view(a["row"]),
+                "day_offset": a["day_offset"],
+                "candidates": [_row_view(c) for c in a["candidates"]],
+            }
+            for a in ambiguous
+        ],
+        "hidden": hidden,
+    }
+
+
+def _match_transfer_members(pool: list[dict], series: sqlite3.Row, decisions) -> list[dict]:
+    """The rows a user-owned transfer series currently owns: both legs of every pair running between its
+    two accounts under its category. Re-pairs the pool rather than trusting the stored membership, for
+    the same reason payee membership is recomputed — it is a cache of what currently matches."""
+    chosen, dismissed = decisions
+    pairs, _ = pair_money_movements(pool, chosen=chosen, dismissed=dismissed)
+    keys = series.keys()
+    wanted = (series["scope_account_id"] or series["account_id"],
+              (series["counterpart_scope_account_id"] if "counterpart_scope_account_id" in keys
+               else _counterpart_of(series)),
+              series["category_id"])
+    by_id = {row["id"]: row for row in pool}
+    out = []
+    for pair in pairs:
+        if group_key(pair) != wanted:
+            continue
+        out.extend(by_id[i] for i in (pair["out_id"], pair["in_id"]) if i in by_id)
+    return out
+
+
 def _match_members(pool: list[dict], series: sqlite3.Row) -> list[dict]:
     """Rows a user-owned series (manual/confirmed) should currently own: same payee, and same category/
     account/sign where the series constrains them.
@@ -525,15 +731,16 @@ def _insert_series(conn: sqlite3.Connection, series: dict, *, source: str, confi
     conn.execute(
         """
         INSERT INTO recurring_series
-            (id, payee_key, display_name, category_id, account_id, cadence, period_days,
-             expected_amount, amount_min, amount_max, amount_mode, last_txn_date, next_due_date,
-             occurrence_count, confidence, status, source, confirmed, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
+            (id, payee_key, display_name, category_id, account_id, counterpart_account_id, cadence,
+             period_days, expected_amount, amount_min, amount_max, amount_mode, last_txn_date,
+             next_due_date, occurrence_count, confidence, status, source, confirmed, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
                 COALESCE(?, datetime('now')), datetime('now'))
         """,
         (
             series_id, series["payee_key"], series["display_name"], series["category_id"],
-            series["account_id"], series["cadence"], series["period_days"],
+            series["account_id"], series.get("counterpart_account_id"),
+            series["cadence"], series["period_days"],
             series["expected_amount"], series["amount_min"], series["amount_max"],
             series.get("amount_mode", AMOUNT_MODE_VARIABLE),
             series["last_txn_date"], series["next_due_date"], series["occurrence_count"],
@@ -660,6 +867,14 @@ def _reconcile_priority(series: sqlite3.Row):
     account-scoped before account-agnostic, higher confidence first, then id for a stable tiebreak."""
     return (
         1 if series["status"] == "ended" else 0,       # active before ended
+        # A rule's matches are the rule's. Membership there is an instruction the user wrote, not a
+        # reading taken off the ledger, so it claims ahead of everything — including a movement, whose
+        # own precedence below exists to beat *inferred* payee series rather than authored ones.
+        0 if series["source"] == "rule" else 1,
+        # A two-legged movement claims next. Its rows are the ones a payee reading gets *wrong* — the
+        # same movement described differently by each institution — so letting a payee series take them
+        # first would recreate the per-account fragments the pairing exists to replace.
+        0 if _counterpart_of(series) else 1,
         0 if series["account_id"] else 1,              # account-scoped before agnostic
         -(series["confidence"] or 0.0),                # higher confidence first
         series["id"],                                  # stable
@@ -703,10 +918,12 @@ def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
     return {r["id"]: r for r in rows}
 
 
-def _candidate_members(pool: list[dict], series: sqlite3.Row, series_rules: dict) -> list[dict]:
+def _candidate_members(pool: list[dict], series: sqlite3.Row, series_rules: dict, decisions) -> list[dict]:
     """The rows a series should currently own, before overrides/exclusivity. A rule-backed series
     (`source='rule'`) owns exactly its rule's matches (the shared categorizer predicate, so membership
     equals what the rule categorizes); every other series uses the derived payee/category/account match."""
+    if _counterpart_of(series):
+        return _match_transfer_members(pool, series, decisions)
     if series["source"] == "rule" and series["rule_id"]:
         rule = series_rules.get(series["rule_id"])
         if rule is None:  # rule deleted out from under the series — no members until it's cleaned up
@@ -715,7 +932,38 @@ def _candidate_members(pool: list[dict], series: sqlite3.Row, series_rules: dict
     return _match_members(pool, series)
 
 
-def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict]) -> ReconcileResult:
+def _rule_backed_holdings(conn: sqlite3.Connection, pool: list[dict]) -> set:
+    """The rows the rule-backed series will hold, read ahead of the reconcile that assigns them.
+
+    A movement about to be created needs to know which rows it may not take, and a rule's matches are
+    the only claim that outranks it — every other holder yields (see `scan_and_store`). Rule-backed
+    series are never out of a scoped scan's reach, so this asks the database directly rather than taking
+    a caller's list.
+
+    Deliberately an over-estimate: it stops at candidate membership, where the reconcile goes on to
+    thin the rows down by occurrence and exclusivity. Erring this way makes a movement defer to a rule
+    slightly more often than it strictly must, which is the harmless direction — the other one would
+    have a movement quietly take a row the rule names.
+    """
+    rule_series = conn.execute(
+        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} FROM recurring_series s "
+        f"WHERE s.source = 'rule' AND s.rule_id IS NOT NULL AND s.status != 'suppressed'"
+    ).fetchall()
+    if not rule_series:
+        return set()
+    series_rules = _load_series_rules(conn, rule_series)
+    excludes = _load_overrides(conn)
+    decisions = load_transfer_decisions(conn)
+    held = set()
+    for series in rule_series:
+        excluded = excludes.get(series["id"], frozenset())
+        held.update(m["id"] for m in _candidate_members(pool, series, series_rules, decisions)
+                    if m["id"] not in excluded)
+    return held
+
+
+def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict], *,
+                     reserved: set | None = None) -> ReconcileResult:
     """Assign each series in `series_list` the transactions it currently owns and refresh its stats — the
     shared matching core behind both the full scan and the single-series relink (and, in future, a
     targeted per-import update). Three properties make it reusable at any scope:
@@ -734,7 +982,14 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict]) ->
     Per-transaction overrides layer on top: an `excluded` row is dropped from its series even when it
     matches. It survives the rescan because it lives in its own table, not the rebuilt cache.
 
-    An ended series resumes (→ active) only when a charge it owns lands on/after its frozen next_due."""
+    An ended series resumes (→ active) only when a charge it owns lands on/after its frozen next_due.
+
+    `reserved` names rows a two-legged movement is about to be created around, and holds them back from
+    the payee series that would otherwise match them. It is the mechanism behind "the pair wins": one
+    payment recorded twice is one thing, identified by the money rather than by two descriptions that
+    drift apart, so a payee reading of those rows is simply the wrong reading and does not get to keep
+    them by having been confirmed first. Rule-backed series and existing movements are exempt — neither
+    is that wrong reading."""
     ids = [s["id"] for s in series_list]
     if ids:
         # Reclaim only these series' current links; the partial index on recurring_series_id keeps both
@@ -749,13 +1004,19 @@ def reconcile_series(conn: sqlite3.Connection, series_list, pool: list[dict]) ->
     }
     excludes = _load_overrides(conn)
     series_rules = _load_series_rules(conn, series_list)
+    # A transfer series' membership is re-paired here, so it has to pair the way the detector did —
+    # including the user's own answers to ties, or reconcile would quietly hand back a different set.
+    decisions = load_transfer_decisions(conn)
 
     resumed = 0
     for series in sorted((s for s in series_list if s["status"] != "suppressed"), key=_reconcile_priority):
         sid = series["id"]
         excluded = excludes.get(sid, frozenset())
-        members = [m for m in _candidate_members(pool, series, series_rules) if m["id"] not in excluded]
+        members = [m for m in _candidate_members(pool, series, series_rules, decisions)
+                   if m["id"] not in excluded]
         occ = [o for o in _series_occurrences(series, members) if o["id"] not in claimed]
+        if reserved and series["source"] != "rule" and not _counterpart_of(series):
+            occ = [o for o in occ if o["id"] not in reserved]
         advance_next_due = True
         if series["status"] == "ended":
             # Resume only if a charge the series actually owns landed on/after its frozen next_due.
@@ -781,7 +1042,8 @@ def link_series_members(conn: sqlite3.Connection, series_id: str, *, window_mont
     scan. A single-series `reconcile_series` call — same matching, same never-steal-another-series'-row
     guard, scoped to this one series. Returns its member count."""
     series = conn.execute(
-        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL} FROM recurring_series s WHERE s.id = ?", (series_id,)
+        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} "
+        f"FROM recurring_series s WHERE s.id = ?", (series_id,)
     ).fetchone()
     if series is None:
         return 0
@@ -819,7 +1081,29 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
         pool = [r for r in full_pool if r["payee_key"] in payee_keys]
     else:
         pool = full_pool
-    candidates = detect_recurring_series(pool, ref_now)
+    # Movements between two tracked accounts are detected first, and always over the FULL pool — the
+    # same exception rule-backed series get, and for the same reason: a movement's identity is its two
+    # accounts, not a payee, so a pool scoped to one payee holds only part of it and would pair the
+    # halves it happens to contain. Cheap because the pass only ever looks at money-movement rows.
+    chosen, dismissed = load_transfer_decisions(conn)
+    transfer_candidates, paired = detect_transfer_series(
+        full_pool, ref_now, chosen=chosen, dismissed=dismissed)
+    # A rule says which rows belong to its series, so a movement never takes one. Every *other* holder
+    # yields — see `reserved` below — because a payee series over these rows is a reading of two
+    # descriptions of one payment, and the pair is that same payment read off the money instead. Whole
+    # movements defer, never half of one: an occurrence is a pair, so a candidate that gave up one leg
+    # would carry the wrong count and the wrong totals.
+    rule_held = _rule_backed_holdings(conn, full_pool)
+    transfer_candidates = [cand for cand in transfer_candidates
+                           if not any(i in rule_held for i in cand["member_ids"])]
+    # **Every** paired row is withheld from the payee pass, not just the ones a movement series claimed.
+    # This is what "the pair replaces the legs" means mechanically, and the wider set is deliberate: a
+    # pair with no rhythm is still a pair, so reading its rows as a merchant is wrong even though reading
+    # them as a series would also have been. `reserved` is the narrower set, because taking rows *away*
+    # from an existing series needs somewhere for them to go.
+    candidates = transfer_candidates + detect_recurring_series(
+        [r for r in pool if r["id"] not in paired], ref_now)
+    reserved = {i for cand in transfer_candidates for i in cand["member_ids"]}
 
     # Re-derive each existing series' stored payee_key from the names of the transactions it currently
     # owns, so a change to the normalization (or to name resolution) can't strand an existing series
@@ -828,7 +1112,12 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # back to their display name. Skipped on a scoped pass (it is a global repair; the full catch-up
     # owns it), which therefore matches series by their stored key.
     if payee_keys is None:
-        for r in conn.execute("SELECT id, display_name FROM recurring_series").fetchall():
+        # Transfer series are excluded: their `payee_key` is a synthetic account-pair identity, not a
+        # name, so re-deriving it from member descriptors would overwrite the one thing about them that
+        # deliberately does not depend on descriptors.
+        for r in conn.execute(
+            "SELECT id, display_name FROM recurring_series WHERE counterpart_account_id IS NULL"
+        ).fetchall():
             names = [
                 resolve_txn_name(m["merchant_name"], m["display_name"], m["raw_name"])
                 for m in conn.execute(
@@ -847,8 +1136,10 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # them out would strand new members between full scans.
     existing = [
         r for r in conn.execute(
-            f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL} FROM recurring_series s").fetchall()
+            f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL} "
+            f"FROM recurring_series s").fetchall()
         if payee_keys is None or r["payee_key"] in payee_keys or r["source"] == "rule"
+        or r["counterpart_account_id"] is not None  # identity is its accounts; a payee scope can't name it
     ]
     user_owned = [
         r for r in existing
@@ -883,7 +1174,7 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # match its rule across payees a scoped pass wouldn't include. On a full scan this is *every* survivor
     # (global exclusivity); on a scoped pass reconcile still leaves out-of-scope rows claimed by their own
     # series alone.
-    reconciled = reconcile_series(conn, user_owned, full_pool)
+    reconciled = reconcile_series(conn, user_owned, full_pool, reserved=reserved)
     claimed, resumed = reconciled.claimed, reconciled.resumed
 
     # Auto candidates: skip any a user-owned series already covers — same payee+category whose account
@@ -922,7 +1213,18 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     for cand in candidates:
         if _covered_by_owned(cand):
             continue
-        member_ids = [i for i in cand["member_ids"] if i not in claimed]
+        if cand.get("counterpart_account_id"):
+            # A movement is all-or-nothing. Its occurrences are *pairs*, so a candidate that could only
+            # take the halves nobody else claimed would be a series of orphaned legs — the wrong count,
+            # the wrong amounts, and a drill-down showing one side of a two-sided thing. Reconcile has
+            # already reserved these rows, so this can only fire on a **scoped** scan, where a payee
+            # series outside the scope keeps its links and is never asked to give them up. Deferring is
+            # right there: the next full scan sees the whole ledger and takes them.
+            if any(i in claimed for i in cand["member_ids"]):
+                continue
+            member_ids = list(cand["member_ids"])
+        else:
+            member_ids = [i for i in cand["member_ids"] if i not in claimed]
         if not member_ids:
             continue
         cand["occurrence_count"] = len(member_ids)  # keep count == rows actually assigned
@@ -937,6 +1239,7 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
 
     return {
         "detected": len(candidates),
+        "transfers": len(transfer_candidates),
         "inserted": inserted,
         "preserved": len(user_owned),
         "removed_auto": len(auto_ids),

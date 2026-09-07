@@ -785,12 +785,104 @@ Key invariants:
 - **Money-movement series are classified, not hidden.** A series whose category (or its parent group)
   is `exclude_from_totals` — a transfer or a credit-card payment — is *money movement*, not spending or
   income. Rather than dropping these from detection, the series is flagged (derived at read time from
-  the category, no stored column) so the UI marks it and clusters money-movement series together (sorted
-  by category, so the two legs of one transfer sit adjacent). This keeps a recurring CC payment from
-  masquerading as a bill while still surfacing genuine recurring transfers. A formal two-sided "transfer
-  set" (pairing the debit and credit legs into one record, à la import conflict sets) is deferred — the
-  same-category adjacency sort covers the common case, and pairing can't span an untracked external
-  account anyway.
+  the category, no stored column) so the UI marks it and clusters money-movement series after the bills.
+  This keeps a recurring CC payment from masquerading as a bill while still surfacing genuine recurring
+  transfers.
+
+- **A movement between two tracked accounts is one series that owns both its legs**
+  (`services/transfer_pairs.py`, `recurring_series.counterpart_account_id`). A transfer — or a
+  credit-card payment — is a single movement of money that a ledger organized by account necessarily
+  records twice. Grouped by payee the detector saw two unrelated things; grouped by **pair** it sees the
+  movement. `account_id` is the paying side, `counterpart_account_id` the receiving side, and the series'
+  `payee_key` is a synthetic `transfer:<from>:<to>` because its identity is the two accounts plus the
+  category — deliberately not a name.
+
+  **Rows are paired first and scored second, and that order is the whole point.** Two rows pair when they
+  carry the same absolute amount and category, on different accounts, in opposite directions, within
+  `PAIR_WINDOW_DAYS`. Names are never consulted:
+
+  > One monthly card payment on the reference ledger, ten years, **sixteen descriptors** across its two
+  > institutions. Payee-grouped it fell into three series of 15, 16 and 3 members — two carrying cadences
+  > invented from a stale slice — with 210 of its 244 rows in no series at all. Paired, it is a single
+  > monthly series over 96 movements.
+
+  **Why a window rather than an exact date.** Two institutions post one movement on their own schedules;
+  a third of that payment's pairs are one to three days apart. Exact-date matching found 293 pairs across
+  the reference ledger, ±3 days found 660. Same width the duplicate report already uses for its
+  cross-account transfer twin. Resolution is **nearest-date-first globally**, so the outcome does not
+  depend on pool order.
+
+  **Why money movement only.** Of 637 unambiguous pairs on that ledger, **634 were already in an excluded
+  category**; the three that were not are coincidences (a shared meal, a refund) where two people's rows
+  offset by chance. The gate costs nothing and removes the whole false-positive class.
+
+  **A movement is all-or-nothing.** Its occurrences are pairs, so a candidate that could take only the
+  halves nobody else claimed would be a series of orphaned legs — wrong count, wrong amounts, a
+  drill-down showing one side of a two-sided thing. A movement whose rows it cannot have in full is not
+  inserted at all.
+
+  **The pair wins, and does not ask.** `scan_and_store` hands the paired rows to `reconcile_series` as
+  `reserved`, which holds them back from the payee series that would otherwise match them. A payee series
+  over those rows is the same payment read off two descriptions that drift apart, so it is simply the
+  wrong reading — being confirmed first does not make it the right one. **Nothing is deleted to achieve
+  this:** membership is exclusive, one row to one series, so a confirmed series covering a payment *and*
+  charges outside it keeps the charges outside it and is re-stated by the same pass. An earlier design
+  reported these as a *replacement* to accept or decline, and was withdrawn: it named a whole blocking
+  series beside the movement's own total — two populations that do not subtract — and a series reaching
+  outside the payment made `Accept` far more destructive than the card admitted.
+
+  **The one claim it yields to is a rule.** A `source='rule'` series' membership is an instruction the
+  user wrote (these rows, by this rule), so `_rule_backed_holdings` is read *before* the reconcile and any
+  movement touching one of those rows defers whole. `_reconcile_priority` orders rule-backed series ahead
+  of everything for the same reason. Deferral is silent and not reported: the answer is already known, so
+  there is no question to ask.
+
+  **One refusal is asked rather than resolved** (`GET /recurring/transfer-review`): *a tie* — nothing
+  distinguishes two same-day, same-amount candidates, and guessing files real money against the wrong
+  movement (one row in 18,400 on the reference ledger; those rows fall through to payee matching
+  meanwhile).
+
+  **What the user answers is the only stored part, and it is taken as given.** `transfer_pair_decision`
+  holds the answer to a tie — `receiving_txn_id` names the counterpart, NULL is the dismissal, one
+  column because they answer the same question. `pair_money_movements` applies it **before** it infers
+  anything: the pass never learns from a decision it made itself, only from one a person made, which is
+  the same discipline `account_pair_distinct` follows in the dedupe service. Additive, empty on an
+  existing database, and reversible — an unanswered question behaves exactly as it did before it
+  existed.
+
+  **A paired row is never payee material, even when its pairs are not a series.** `detect_transfer_series`
+  returns *every* paired row id alongside its candidates, and the payee pass is run over the pool minus
+  all of them — a wider set than `reserved`, which holds only what a movement series will actually claim.
+  The two differ because taking rows *away* from an existing series needs somewhere for them to go, while
+  declining to invent a new one does not. A pair with no rhythm is still a pair: the money moved between
+  two of the user's own accounts, so "not a series" is a fine answer for it and "a merchant" is not.
+  Measured: a card paid whenever it carried a balance (gaps of 1 to 50 days, amounts $400 to $5,600)
+  scored no movement, and its legs then surfaced as a handful of one-sided suggestions on each account —
+  the per-account fragments the pairing exists to remove, minus the rhythm that would have earned them.
+
+  **Most series are not movements.** The payee pass is untouched and detects everything else exactly as
+  before; the transfer pass only ever touches money-movement rows that actually pair. It runs over the
+  **full** pool even on a scoped scan, the same exception rule-backed series get and for the same reason:
+  a movement's identity is its two accounts, so a pool scoped to one payee holds only part of it.
+
+- **Recency is measured in periods, which biases a stale series' cadence long.** `_score` discards a
+  reading whose last charge is more than three periods old, and that test is applied *after* a cadence is
+  proposed — so for data that has gone quiet, the longer the proposed period the more forgiving the test
+  becomes. A monthly series 336 days idle is rejected at 3 × 30 days; the amount-cluster fallback then
+  offers a semiannual reading of three of its charges, clears 3 × 183 days, and is emitted. **The wrong
+  cadence survives precisely because it is longer.** Confirmation then freezes it: a confirmed series is
+  never re-derived, and `_write_series_stats` rewrites counts, amounts and `next_due` but never
+  `cadence`/`period_days`. Pairing removes the trigger for money movements — their rows no longer go
+  stale under a drifting descriptor — but the bias is general and still reachable by any payee whose name
+  changes. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
+
+- **A movement that is not a series is displayed nowhere.** Pairing identifies every two-legged movement,
+  but only the routes that settle into a rhythm become a series, and a series is the only thing that
+  renders. On the reference ledger 84 of 248 pairs sit on routes that will never score — a card paid when
+  it carries a balance, a wallet drained to checking, an occasional reverse sweep — all correctly
+  identified, correctly kept out of payee matching, and shown by nothing. The obstacle is that pairing is
+  derived per scan and stored nowhere, so no surface outside recurring detection can ask whether a row is
+  half of a transfer. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)
 
 - **`created_at` on a series means *first detected*, not *last rebuilt*.** An auto series is deleted and
   re-inserted with a fresh `uuid` on every scan, so the column would otherwise advance daily and no
@@ -1393,8 +1485,8 @@ Three richer mechanisms were considered and rejected. **Do not re-propose them:*
 
 - **Transfer-leg pairing** — treating a movement as internal when both legs are visible and as
   boundary-crossing when one is missing. It decides *dynamically* what the category flag already decides
-  declaratively. (The deferred two-sided transfer-set primitive under *Recurring series* anticipates the
-  same pairing, and is not needed for this.)
+  declaratively. (Recurring series *do* pair their two legs, under *Recurring series* above, but only to
+  draw one card over them — it changes no total, and is not a route to this.)
 - **A boundary relative to the current filter selection** — money "leaving" whatever accounts are
   selected. Its motivating case, validating a period against a statement, is served by reading the
   statement. What it costs is disqualifying: cash flow for two accounts selected together would not equal

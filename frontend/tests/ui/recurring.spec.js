@@ -53,3 +53,22 @@ test('the review view reports the anomalies the demo data was built to raise', a
   await page.getByRole('button', { name: /Outside a rule/ }).first().click()
   await expect(page.getByRole('button', { name: 'Widen to include' }).first()).toBeVisible()
 })
+
+test('a transfer between two accounts is one series, not two', async ({ page }) => {
+  // The demo's standing transfer is recorded twice — once leaving checking, once arriving in savings —
+  // which is what any movement between two tracked accounts looks like to a ledger organized by
+  // account. The detector pairs those rows by the money (same amount, opposite directions, days apart)
+  // and reads the rhythm off the pairs, so one series owns both legs. The demo's two sides are worded
+  // differently on purpose, which is what makes this the end-to-end proof: no name is involved.
+  await page.goto('/recurring')
+  await page.getByPlaceholder(/Search merchant/).fill('Transfer')
+
+  const card = page.locator('[data-series-id]')
+  await expect(card).toHaveCount(1)
+  await expect(card.getByText('Everyday Checking')).toBeVisible()
+  await expect(card.getByText('Rainy Day Savings')).toBeVisible()
+
+  // One set of actions, over a count that spans both legs' rows.
+  await expect(card.getByRole('button', { name: 'Not recurring' })).toHaveCount(1)
+  await expect(card.getByRole('button', { name: /12 transactions/ })).toBeVisible()
+})

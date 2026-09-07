@@ -14,6 +14,7 @@ demonstrates nothing — which is the state this dataset was in before, with eve
 import json
 import tempfile
 import unittest
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -108,13 +109,17 @@ class DemoDataTests(unittest.TestCase):
                 ).fetchone()
             )
 
-            # The inter-account transfer: two legs, two accounts, opposite signs netting zero.
+            # The standing inter-account transfer: two accounts, opposite signs netting zero, and every
+            # date carrying both legs — which is what the Recurring page pairs on, so a demo where the
+            # dates did not line up would show the two cards this data exists to demonstrate folding.
             legs = conn.execute(
-                "SELECT account_id, amount FROM txn WHERE merchant_name LIKE 'Transfer %'"
+                "SELECT account_id, amount, date FROM txn WHERE merchant_name LIKE 'Transfer %'"
             ).fetchall()
-            self.assertEqual(len(legs), 2)
             self.assertEqual(len({r["account_id"] for r in legs}), 2)
             self.assertEqual(round(sum(r["amount"] for r in legs), 2), 0.0)
+            per_date = Counter(r["date"] for r in legs)
+            self.assertTrue(per_date)
+            self.assertEqual(set(per_date.values()), {2})
 
             # Two import files (one per data source), produced through the real import pipeline — so every
             # row has provenance, both files land under a saved data source, and the cards get coverage.

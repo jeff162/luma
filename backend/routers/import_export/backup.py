@@ -638,6 +638,12 @@ BACKUP_SECTIONS = (
     # without them a restore would re-raise every finding the user had already worked through.
     ("recurring_signal_dismissals", "recurring_signal_dismissal",
      "SELECT * FROM recurring_signal_dismissal ORDER BY rowid"),
+    # The user's answers to the transfer review's one question — which transaction is the other half of
+    # an ambiguous pair. Like the dismissals above, everything they qualify is derived on every scan, so
+    # these are their whole durable state: without them a restore would re-ask questions the user had
+    # already settled, and would silently re-pair rows against a counterpart they had rejected.
+    ("transfer_pair_decisions", "transfer_pair_decision",
+     "SELECT * FROM transfer_pair_decision ORDER BY rowid"),
     # The same thing for the rule-overlap check: its findings are derived from the rules on every run, so
     # these acknowledgements are their whole durable state. Without them a restore would re-raise every
     # deliberate rule pair the user had already waved through.

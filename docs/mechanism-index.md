@@ -62,6 +62,11 @@ splitting stays a manual act.
   order cannot move money into a category total. Nobody reaches for one expecting the other.
 - **Trash vs. exclusion** — soft-delete and "money movement" are not confusable; one removes a row from
   the ledger, the other classifies it.
+- **A recurring movement's two legs vs. `txn_link`** — a transfer series owns both rows of every
+  movement it claims, but no *link* is recorded between them: the pairing is re-derived from the pool on
+  each scan, exactly as membership is (`services/transfer_pairs.py`). Reaching for a `txn_link` kind to
+  "record that these two are one transfer" would store what the rows already say — same amount, opposite
+  directions, days apart — and would then need maintaining as they change.
 
 ---
 

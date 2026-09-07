@@ -27,6 +27,7 @@ import {
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
+import { TransferReviewDialog } from '../components/TransferReviewDialog.jsx'
 import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
 import RecurringAmountMatchDialog from '../components/RecurringAmountMatchDialog.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
@@ -192,7 +193,9 @@ function StatusBadge({ series }) {
 }
 
 function AmountDisplay({ series }) {
-  const direction = (series.expected_amount ?? 0) >= 0 ? 'out' : 'in'
+  // A paired movement carries a magnitude and shows its direction as the from → to block below, so
+  // the in/out word is dropped: money leaving one of the user's own accounts for another is neither.
+  const direction = series.counterpart_account_id ? '' : ((series.expected_amount ?? 0) >= 0 ? 'out' : 'in')
   const variable = series.amount_min != null && series.amount_max != null
     && Math.abs(series.amount_max - series.amount_min) > 0.005
   return (
@@ -200,6 +203,28 @@ function AmountDisplay({ series }) {
       {variable ? '~' : ''}{formatCurrency(series.expected_amount)}
       <span style={{ color: 'var(--muted)', fontWeight: 500, marginLeft: 5, fontSize: 12 }}>{direction}</span>
     </span>
+  )
+}
+
+// The two accounts one movement of money runs between, in place of the single account line a one-legged
+// series shows. The receiving leg's own descriptor is named only when it differs from the card's title —
+// the two banks routinely word the same payment differently ("WDRL … ONLINE PMT" against "ELECTRONIC
+// PAYMENT RECEIVED"), and dropping it would leave the card claiming a name that appears on neither
+// statement.
+function TransferLegs({ series }) {
+  if (!series.counterpart_account_id) return null
+  const moves = series.transfer_count
+  return (
+    <div
+      style={{ marginTop: 6, fontSize: 12.5 }}
+      title={moves ? `${moves} movement${moves === 1 ? '' : 's'}, each recorded once in either account` : undefined}
+    >
+      <div>{series.account_name || 'Unknown account'}</div>
+      <div style={{ paddingLeft: 13, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ color: 'var(--muted)' }} aria-hidden="true">↳</span>
+        <span>{series.counterpart_account_name || 'Unknown account'}</span>
+      </div>
+    </div>
   )
 }
 
@@ -314,7 +339,8 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
           <div style={{ fontSize: 12.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
             <span>{series.category_name || 'Uncategorized'}</span>
             {ruleBacked ? <><span style={{ opacity: 0.5 }}>·</span><span title="Membership is defined by a rule — edit the rule to change which transactions belong">rule-based</span></> : null}
-            {series.account_name ? <><span style={{ opacity: 0.5 }}>·</span><span>{series.account_name}</span></> : null}
+            {series.account_name && !series.counterpart_account_id
+              ? <><span style={{ opacity: 0.5 }}>·</span><span>{series.account_name}</span></> : null}
             <span style={{ opacity: 0.5 }}>·</span>
             {canOpen ? (
               <button
@@ -335,6 +361,7 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
               <><span style={{ opacity: 0.5 }}>·</span><span>{Math.round(series.confidence * 100)}% match</span></>
             ) : null}
           </div>
+          <TransferLegs series={series} />
         </div>
         <div style={{ flex: '0 0 auto', textAlign: 'right' }}>
           <AmountDisplay series={series} />
@@ -739,6 +766,12 @@ export default function Recurring() {
   const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
   const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
   const [confirmUndo, setConfirmUndo] = useState(null)            // { id, name } of the last accepted series
+  // Transfers and card payments the detector found but has not matched up, and what is stopping each.
+  // Fetched once on load for the count on the button; re-fetched when the report opens so it reflects
+  // the ledger as it stands.
+  const [transferReview, setTransferReview] = useState(null)
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [adoptBusy, setAdoptBusy] = useState(null)
 
   // The drill-down serves three shapes through one paged list: a single series (recurring_series_id),
   // the all-series report (recurring_only — every row linked to any series), and an explicit set of rows
@@ -803,6 +836,12 @@ export default function Recurring() {
 
   useEffect(() => { api.getCategories().then(setCategories).catch(() => {}) }, [])
 
+  const loadTransferReview = useCallback(
+    () => api.getTransferReview().then(setTransferReview).catch(() => setTransferReview(null)),
+    [],
+  )
+  useEffect(() => { loadTransferReview() }, [loadTransferReview])
+
   // The removed-from-series rows re-fetch alongside the members whenever the open series (or refresh
   // nonce) changes. It stays a single fetch with an explicit `limit: 0` (all): removals are a bounded,
   // user-curated set, so fetching the whole set is honest here rather than a magic cap that could hide
@@ -859,6 +898,28 @@ export default function Recurring() {
     [],
   )
   useEffect(() => { loadSignals() }, [loadSignals])
+
+  // Every answer in the review changes how rows pair, and the server rescans after each — so everything
+  // the page shows is downstream of it. These reload rather than patching in place, which makes them
+  // deliberate re-sorts, unlike a card action.
+  const answerReview = useCallback(async (key, act) => {
+    setAdoptBusy(key)
+    try {
+      await act()
+      await load()
+      loadSignals()
+      await loadTransferReview()
+    } finally {
+      setAdoptBusy(null)
+    }
+  }, [load, loadSignals, loadTransferReview])
+
+  const pairAmbiguity = (item, receivingId) => answerReview(
+    item.row.id, () => api.decideTransferPair(item.row.id, receivingId))
+  const dismissAmbiguity = (item) => answerReview(
+    item.row.id, () => api.decideTransferPair(item.row.id, null))
+  const restoreDecision = (hidden) => answerReview(
+    hidden.paying_txn_id, () => api.restoreTransferDecision({ paying_txn_id: hidden.paying_txn_id }))
 
   // Landing from a Tasks card (?signal=<kind>) opens the findings view with that kind preselected, then
   // strips the param so the view and the filter are the user's to change from there.
@@ -953,32 +1014,34 @@ export default function Recurring() {
   // Card actions update just the acted-on series in place (no re-sort), so a recategorized card stays
   // put until the next load/scan/filter change. Delete removes it; that's a removal, not a reorder.
   async function handleAction(kind, s, value) {
+    const id = s.id
     let updated
     if (kind === 'confirm') {
-      updated = await api.confirmRecurring(s.id)
+      updated = await api.confirmRecurring(id)
       // Accepting is one click and the card leaves the Suggested pile immediately, so the slip
       // is invisible the moment it happens. The toast is the cheap way back; the row menu's
       // "Back to suggested" is the one for noticing later.
-      setConfirmUndo({ id: s.id, name: s.display_name || s.payee_key })
+      setConfirmUndo({ id, name: s.display_name || s.payee_key })
     }
-    else if (kind === 'unconfirm') { updated = await api.unconfirmRecurring(s.id); setConfirmUndo(null) }
+    else if (kind === 'unconfirm') { updated = await api.unconfirmRecurring(id); setConfirmUndo(null) }
     else if (kind === 'suppress') {
       // Suppressing a rule-backed series unchecks its rule and removes it outright (the backend returns
-      // {deleted:true}); a derived series just flips to suppressed and is returned serialized.
-      const res = await api.suppressRecurring(s.id)
-      if (res && res.deleted) setAllSeries(prev => (prev || []).filter(x => x.id !== s.id))
+      // {deleted:true}); a derived series just flips to suppressed and is returned serialized. Either
+      // half of a pair can be the rule-backed one, so `deleted_ids` names whatever actually went.
+      const res = await api.suppressRecurring(id)
+      if (res && res.deleted) setAllSeries(prev => (prev || []).filter(x => x.id !== id))
       else updated = res
     }
-    else if (kind === 'end') updated = await api.endRecurring(s.id)
-    else if (kind === 'restore') updated = await api.restoreRecurring(s.id)
-    else if (kind === 'cadence') updated = await api.updateRecurring(s.id, { cadence: value })
+    else if (kind === 'end') updated = await api.endRecurring(id)
+    else if (kind === 'restore') updated = await api.restoreRecurring(id)
+    else if (kind === 'cadence') updated = await api.updateRecurring(id, { cadence: value })
     // Opened from the card, so no proposal is in play — clear any left from a previous finding, or the
     // dialog would open on a band proposed for a different charge.
     else if (kind === 'amountMatch') { setAmountMatchSuggestion(null); setAmountMatchSeries(s); return }
-    else if (kind === 'rename') updated = await api.updateRecurring(s.id, { display_name: value })
+    else if (kind === 'rename') updated = await api.updateRecurring(id, { display_name: value })
     else if (kind === 'delete') {
-      await api.deleteRecurring(s.id)
-      setAllSeries(prev => (prev || []).filter(x => x.id !== s.id))
+      await api.deleteRecurring(id)
+      setAllSeries(prev => (prev || []).filter(x => x.id !== id))
     }
     if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
     // A characterization change means the user is done inspecting → collapse the drill-down. A cadence
@@ -1098,12 +1161,22 @@ export default function Recurring() {
   const anomalyCount = signalData?.anomaly_count || 0
   const upcomingCount = signalCounts.upcoming || 0
 
+  // Answered items are deliberately not counted: the button exists to say how much is still open, and a
+  // count that never falls no matter what the user decides is a nag rather than a list. But the button
+  // still *appears* while answers exist with nothing open, because taking one back has to stay
+  // reachable — answering the last item must not hide the way to un-answer it.
+  const reviewCount = transferReview?.ambiguous?.length || 0
+  const reviewHasAny = reviewCount > 0 || (transferReview?.hidden?.length || 0) > 0
   const byId = new Map((allSeries || []).map(s => [s.id, s]))
   // Search is a live display filter over the frozen layout — it narrows which cards show (and hides
   // now-empty sections) without reordering, so cards never jump while typing.
   const term = search.trim().toLowerCase()
   const matchesSearch = (s) => !term
-    || [s.display_name, s.category_name, s.account_name].some(v => String(v || '').toLowerCase().includes(term))
+    || [
+      s.display_name, s.category_name, s.account_name,
+      // A movement runs between two accounts, and searching for either has to find the card for it.
+      s.counterpart_account_name,
+    ].some(v => String(v || '').toLowerCase().includes(term))
   const visibleSections = (layout?.sections || [])
     .map(sec => ({ ...sec, visibleIds: sec.ids.filter(id => { const s = byId.get(id); return s && matchesSearch(s) }) }))
     .filter(sec => sec.visibleIds.length > 0)
@@ -1138,6 +1211,22 @@ export default function Recurring() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Button variant="ghost" onClick={refreshAll} title="Reload everything on this page">Refresh</Button>
               <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
+              {reviewHasAny ? (
+                // The count is the whole signal for whether there is work, so the zero state has to say
+                // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
+                // at zero, and is deliberately not disabled: this button is the only route to the
+                // answered list, so greying it out would strand every answer behind the act of
+                // answering the last one.
+                <Button
+                  variant="ghost"
+                  onClick={() => { setReviewOpen(true); loadTransferReview() }}
+                  title={reviewCount
+                    ? `${reviewCount} transfer${reviewCount === 1 ? '' : 's'} could not be matched up: more than one transaction matches it equally well.`
+                    : 'Nothing pending.'}
+                >
+                  Transfer &amp; payment review{reviewCount ? ` (${reviewCount})` : ''}
+                </Button>
+              ) : null}
               <Button variant="primary" onClick={scan} disabled={scanning}>
                 {scanning ? 'Scanning…' : 'Scan for recurring'}
               </Button>
@@ -1320,6 +1409,18 @@ export default function Recurring() {
             setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
             loadSignals()  // a membership change can resolve or raise a finding about this series
           }}
+        />
+      )}
+
+      {reviewOpen && (
+        <TransferReviewDialog
+          review={transferReview}
+          loading={transferReview === null}
+          busyKey={adoptBusy}
+          onPair={pairAmbiguity}
+          onDismiss={dismissAmbiguity}
+          onRestore={restoreDecision}
+          onClose={() => setReviewOpen(false)}
         />
       )}
 

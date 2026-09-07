@@ -24,6 +24,7 @@ vi.mock('../../lib/api.js', () => ({
     getRecurringSignals: vi.fn(),
     getCategories: vi.fn(),
     getTransactions: vi.fn(),
+    getTransferReview: vi.fn(),
     getDismissedRecurringSignals: vi.fn(),
     dismissRecurringSignal: vi.fn(),
     restoreRecurringSignal: vi.fn(),
@@ -66,6 +67,8 @@ function mockApi() {
   })
   api.getCategories.mockResolvedValue([])
   api.getTransactions.mockResolvedValue({ transactions: [], total: 0 })
+  // Movements to review are orthogonal to the views this file is about; empty is the quiet default.
+  api.getTransferReview.mockResolvedValue({ ambiguous: [], hidden: [] })
 }
 
 // jsdom has no layout, so the "scroll the acted-on card back into view" effect has nothing to call.

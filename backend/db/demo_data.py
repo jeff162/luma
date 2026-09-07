@@ -8,7 +8,7 @@ data, and the Playwright E2E suite, which needs a populated, past-onboarding bas
 entirely invented (generic well-known vendors only, fictional owners/accounts — no PII), and shaped to
 exercise the features worth showing: multiple owners and account types, per-account import batches
 (provenance), custom categories and rules, category-level tags that *inherit* onto transactions, a few
-months of recurring + one-off activity, an inter-account transfer, a refund, and a cross-account
+months of recurring + one-off activity, a standing two-legged inter-account transfer, a refund, and a cross-account
 duplicate that the real post-import sweep flags for review.
 
 Amount sign follows the stored convention (categorizer `_amount_side_matches`): debits/spending are
@@ -227,8 +227,15 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     # a row already carrying the rule's own category is by definition fine.
     bank(4, "Metro Water", "", 63.40, "checking")
 
-    bank(30, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
-    bank(30, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
+    # A standing transfer, recorded twice — leaving checking and arriving in savings — which is what
+    # every movement between two tracked accounts looks like to a ledger organized by account. Detection
+    # makes two series of it and the Recurring page folds them back into the one movement they describe
+    # (services/recurring_pairs.py), so this runs over enough months for that pairing to be visible. The
+    # two sides are worded differently on purpose: pairing is structural — rows that offset exactly — and
+    # a demo whose legs shared a name would let a name-based shortcut look like it worked.
+    for m in range(6):
+        bank(m * 30 + 5, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
+        bank(m * 30 + 5, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
     bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
 
     # The money coming back. Each is claimed by one of the reimbursements built after the import; until

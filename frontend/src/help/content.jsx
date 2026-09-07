@@ -2005,6 +2005,39 @@ export const HELP_TOPICS = [
           or <em>Restore</em>, whichever fits.
         </p>
 
+        <h4>Transfers between two accounts</h4>
+        <p>
+          A transfer -- or a credit-card payment -- moves money between two accounts that are both
+          tracked here, so it arrives as two transactions. The scan matches those two up and treats the
+          movement as one thing: a single series naming both accounts, holding both transactions, with
+          one set of actions.
+        </p>
+        <p>
+          The two sides are matched by the money -- same amount, opposite directions, within a few days
+          -- rather than by name. Two institutions often describe one payment quite differently, and
+          those descriptions change over the years; matching on the money means a payment made monthly
+          for a decade stays one series no matter how its wording drifted. A transfer with only one side
+          on the books, because the other account is not tracked here, is an ordinary series.
+        </p>
+        <p>
+          A matched-up transfer takes over its own transactions, even where those transactions already
+          sat in a series matched by name -- one payment recorded twice is still one payment, and the
+          name is the part that drifts. Nothing is deleted by this: a series that also covers charges
+          outside the transfer keeps those charges. The exception is a series backed by a rule, which
+          keeps everything its rule names.
+        </p>
+        <p>
+          One situation stops a transfer being matched up, and it is listed
+          under <em>Transfer &amp; payment review</em> on the Recurring page: where more than one
+          transaction matches equally well, nothing is paired at all, because the data does not say
+          which is the other half. Choosing the right one there settles it, and the answer is remembered.
+        </p>
+        <p>
+          The question can be turned down as well as answered. Dismissing an unmatched transfer leaves it
+          matched by merchant name, as before. Answered items drop off the list and collect at the foot
+          of the panel, where any of them can be undone.
+        </p>
+
         <h4>What needs attention</h4>
         <p>
           The Recurring page has three views, chosen from the selector under its title: the

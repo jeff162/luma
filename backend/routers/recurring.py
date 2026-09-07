@@ -28,10 +28,12 @@ from backend.services.recurring_detection import (
     AMOUNT_MODE_FIXED,
     AMOUNT_MODE_VARIABLE,
     CADENCES,
+    COUNTERPART_SCOPE_ACCOUNT_SQL,
     SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
     maybe_auto_scan,
     scan_and_store,
+    transfer_review,
 )
 from backend.services.recurring_signals import (
     UPCOMING_HORIZON_DAYS,
@@ -70,6 +72,18 @@ def _serialize(row: sqlite3.Row) -> dict:
         # with what the matcher actually scopes by. See `recurring_detection.SERIES_SCOPE_ACCOUNT_SQL`.
         "account_id": row["scope_account_id"] if "scope_account_id" in row.keys() else row["account_id"],
         "account_name": row["account_name"] if "account_name" in row.keys() else None,
+        # A two-legged money movement: `account_id` is the paying side, this is the receiving side, and
+        # the series owns BOTH legs of every occurrence. NULL on an ordinary payee series, which is what
+        # tells the two apart wherever it matters. See `services/transfer_pairs.py`.
+        "counterpart_account_id": (row["counterpart_scope_account_id"]
+                                   if "counterpart_scope_account_id" in row.keys()
+                                   else row["counterpart_account_id"]),
+        "counterpart_account_name": (row["counterpart_account_name"]
+                                     if "counterpart_account_name" in row.keys() else None),
+        # How many times the money actually moved. Exact rather than an estimate: a movement contributes
+        # its two legs and nothing else, so the rows are always twice the occurrences. `occurrence_count`
+        # stays rows, because the number beside a link has to be what the link opens.
+        "transfer_count": (row["occurrence_count"] // 2) if row["counterpart_account_id"] else None,
         "cadence": row["cadence"],
         "period_days": row["period_days"],
         "expected_amount": row["expected_amount"],
@@ -107,12 +121,15 @@ def _serialize(row: sqlite3.Row) -> dict:
 def _fetch(conn: sqlite3.Connection, series_id: str) -> sqlite3.Row:
     row = conn.execute(
         f"""
-        SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, c.name AS category_name, a.display_name AS account_name,
+        SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL},
+               c.name AS category_name, a.display_name AS account_name,
+               cp.display_name AS counterpart_account_name,
                COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
         FROM   recurring_series s
         LEFT   JOIN category c  ON c.id = s.category_id
         LEFT   JOIN category pc ON pc.id = c.parent_id
         LEFT   JOIN account  a  ON a.id = s.account_id
+        LEFT   JOIN account  cp ON cp.id = s.counterpart_account_id
         WHERE  s.id = ?
         """,
         (series_id,),
@@ -130,12 +147,15 @@ def list_series(include_suppressed: bool = False):
         where = "" if include_suppressed else "WHERE s.status != 'suppressed'"
         rows = conn.execute(
             f"""
-            SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, c.name AS category_name, a.display_name AS account_name,
+            SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, {COUNTERPART_SCOPE_ACCOUNT_SQL},
+                   c.name AS category_name, a.display_name AS account_name,
+                   cp.display_name AS counterpart_account_name,
                    COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
             FROM   recurring_series s
             LEFT   JOIN category c  ON c.id = s.category_id
             LEFT   JOIN category pc ON pc.id = c.parent_id
             LEFT   JOIN account  a  ON a.id = s.account_id
+            LEFT   JOIN account  cp ON cp.id = s.counterpart_account_id
             {where}
             ORDER BY s.next_due_date IS NULL, s.next_due_date, s.confidence DESC
             """
@@ -162,6 +182,54 @@ def auto_scan(window_months: int = 25):
         raise HTTPException(status_code=400, detail="window_months must be between 1 and 120")
     with get_db() as conn:
         return maybe_auto_scan(conn, window_months=window_months)
+
+
+@router.get("/transfer-review")
+def transfer_review_route():
+    """The pairings the detector refused to make — see `recurring_detection.transfer_review`. Only ties
+    reach here: a movement itself needs no permission, it claims its rows outright. A tie is a genuine
+    question, which is why it is a report rather than something the scan settles on its own."""
+    with get_db() as conn:
+        return transfer_review(conn)
+
+
+class PairDecision(BaseModel):
+    paying_txn_id: str
+    receiving_txn_id: Optional[str] = None   # null = "no counterpart, stop asking"
+
+
+@router.post("/transfer-review/pair")
+def decide_pair(body: PairDecision):
+    """Answer an ambiguous pairing: name the counterpart, or dismiss the question.
+
+    The answer is taken as given from then on — the pairing pass applies it before it infers anything,
+    because inference is precisely what was found wanting in the case that raised the question. A rescan
+    follows so a named pair can join its movement immediately; where the payment does not recur, nothing
+    visible changes and the recorded answer is the whole result.
+    """
+    with get_db() as conn:
+        for txn_id in (body.paying_txn_id, body.receiving_txn_id):
+            if txn_id and conn.execute("SELECT 1 FROM txn WHERE id = ?", (txn_id,)).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Transaction not found")
+        conn.execute(
+            "INSERT OR REPLACE INTO transfer_pair_decision (paying_txn_id, receiving_txn_id) VALUES (?, ?)",
+            (body.paying_txn_id, body.receiving_txn_id or None),
+        )
+        return {"ok": True, "scan": scan_and_store(conn)}
+
+
+class RestoreDecision(BaseModel):
+    paying_txn_id: str
+
+
+@router.post("/transfer-review/restore")
+def restore_decision(body: RestoreDecision):
+    """Take back an answer to a tie, putting the question back in the report. The counterpart to every
+    hiding action on this page — a decision made once should not be permanent just because it was
+    made."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM transfer_pair_decision WHERE paying_txn_id = ?", (body.paying_txn_id,))
+        return {"ok": True, "scan": scan_and_store(conn)}
 
 
 # Signal routes are declared ahead of the `/{series_id}` ones so "signals" is never read as a series id.
@@ -289,7 +357,9 @@ def suppress_series(series_id: str):
         # date — and no later query can restate it. Without the snapshot the drill-down had to guess from
         # the visible payee label, which disagreed with the count in both directions at once: a series
         # whose members were spelled inconsistently matched almost none of them, while one whose payee
-        # also had unrelated charges matched far too many.
+        # also had unrelated charges matched far too many. A transfer series is the case that most needs
+        # it: its members are spread over two accounts and two descriptors, so nothing about the label
+        # could recover them at all.
         members = [r["id"] for r in conn.execute(
             "SELECT id FROM txn WHERE recurring_series_id = ? ORDER BY date, id", (series_id,)
         ).fetchall()]

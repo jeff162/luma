@@ -136,7 +136,7 @@ class AccountTypeCriterionTests(unittest.TestCase):
         series = {"source": "rule", "rule_id": rid}
         with self._use_db(), get_db() as conn:
             series_rules = _load_series_rules(conn, [series])
-        members = _candidate_members(pool, series, series_rules)
+        members = _candidate_members(pool, series, series_rules, ({}, set()))
         self.assertEqual({r["id"] for r in members}, {"row-pp"}, "only the paypal-type row is owned by the type-scoped rule")
 
 
