@@ -1054,6 +1054,27 @@ def link_series_members(conn: sqlite3.Connection, series_id: str, *, window_mont
     ).fetchone()[0]
 
 
+def _payee_keys_holding(conn: sqlite3.Connection, txn_ids: set[str]) -> set[str]:
+    """The payee-series keys currently owning any of these rows — the scope a scoped scan has to add to
+    its own so a series that must give up a paired row is actually reconsidered.
+
+    Movement series are excluded (their key is a synthetic account pair, and they are always in scope
+    already) and so are rule-backed ones, whose membership is the user's instruction rather than a
+    reading to revisit. Reads the whole set of series links rather than querying by id: membership is a
+    small, indexed slice of the ledger, and `txn_ids` here is every paired row, which would otherwise
+    mean chunking hundreds of parameters into a query to learn the same thing."""
+    if not txn_ids:
+        return set()
+    return {
+        r["payee_key"] for r in conn.execute(
+            """SELECT s.payee_key, t.id FROM txn t
+               JOIN recurring_series s ON s.id = t.recurring_series_id
+               WHERE s.counterpart_account_id IS NULL AND s.source != 'rule'"""
+        ).fetchall()
+        if r["id"] in txn_ids and r["payee_key"]
+    }
+
+
 def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MONTHS_DEFAULT,
                    payee_keys: set[str] | None = None) -> dict:
     """Idempotent rebuild. Rewrites auto+unconfirmed series from a fresh scan while preserving manual,
@@ -1069,18 +1090,15 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     skips is the payee-key re-derivation below — a global normalization-repair step the daily full-scan
     catch-up owns — so a scoped pass trusts the stored keys.
 
-    Rule-backed series are the deliberate exception to scoping: their members are the rule's matches,
-    which can span payees the scoped pool doesn't hold (varying names — the whole reason a rule is used).
-    So they are always reconciled against the *full* pool, even on a scoped pass, and are never scoped out
-    of `existing`. That is how a newly imported row that matches a recurring rule attaches to its series
-    right away without stamping membership through every insert path."""
+    Two things are deliberate exceptions to scoping, both because their membership is not decided by a
+    payee. **Rule-backed series**: their members are the rule's matches, which can span payees the scoped
+    pool doesn't hold (varying names — the whole reason a rule is used), so they are always reconciled
+    against the *full* pool and never scoped out of `existing`. That is how a newly imported row matching
+    a recurring rule attaches to its series right away without stamping membership through every insert
+    path. **Payee series holding a paired row**: pairing is decided by the money, so a movement's two legs
+    normally sit in different payee groups, and an edit to one leg's group changes what the other's may
+    claim — the scope is widened to those groups below."""
     full_pool, ref_now = _load_pool(conn, window_months)
-    if payee_keys is not None:
-        # Scope is a pure cost knob for the derived path: filtering the pool changes which payees are
-        # processed, not the per-payee outcome (see reconcile_series).
-        pool = [r for r in full_pool if r["payee_key"] in payee_keys]
-    else:
-        pool = full_pool
     # Movements between two tracked accounts are detected first, and always over the FULL pool — the
     # same exception rule-backed series get, and for the same reason: a movement's identity is its two
     # accounts, not a payee, so a pool scoped to one payee holds only part of it and would pair the
@@ -1088,6 +1106,23 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     chosen, dismissed = load_transfer_decisions(conn)
     transfer_candidates, paired = detect_transfer_series(
         full_pool, ref_now, chosen=chosen, dismissed=dismissed)
+    if payee_keys is not None:
+        # Scope is a pure cost knob for the derived path: filtering the pool changes which payees are
+        # processed, not the per-payee outcome (see reconcile_series) — with one exception, and it is the
+        # one relationship in the detector that crosses payee groups. **A payee series holding a row that
+        # pairs is always in scope**, whatever the caller asked for.
+        #
+        # Pairing is decided by the money, so the two legs of a movement usually sit in *different* payee
+        # groups (that is the whole reason it exists). Categorizing one leg is therefore an edit whose
+        # consequence lands on the other's group: filing a card payment's counterpart makes the pair, and
+        # the payee series over the card's own legs — legitimately detected while nothing paired — becomes
+        # a reading of one payment off two descriptions. Scoped to the edited payee alone, the scan would
+        # never look at the group that has to give the rows up, and the stale series would survive until
+        # the next full scan, sitting in the review list beside a Confirm that makes it permanent.
+        payee_keys = payee_keys | _payee_keys_holding(conn, paired)
+        pool = [r for r in full_pool if r["payee_key"] in payee_keys]
+    else:
+        pool = full_pool
     # A rule says which rows belong to its series, so a movement never takes one. Every *other* holder
     # yields — see `reserved` below — because a payee series over these rows is a reading of two
     # descriptions of one payment, and the pair is that same payment read off the money instead. Whole

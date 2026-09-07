@@ -744,7 +744,8 @@ Key invariants:
   away) drops its backing series; unchecking `is_recurring` on the rule drops the series while keeping the
   rule if it still has another action.
 
-- **A hand edit re-evaluates the payees it touched.** Membership is a cache only a scan rewrites, so
+- **Every path that writes a category re-evaluates the payees it touched — including a rule apply.**
+  Membership is a cache only a scan rewrites, so
   before this a manual recategorization left the row linked to the series it used to belong to: the
   row's menu opened the *old* series, the new series' drill-down never gained it, and a missed-charge
   signal about it stayed open — one stale link with three faces, since all three read through it. None
@@ -762,6 +763,24 @@ Key invariants:
   effectively the same as a full scan, which is what makes the per-row version untenable and the
   parked `payee_key` materialization worth more than it was.
 
+  **The rule paths write the same field in bulk and were the last ones left uncovered**
+  (`rules._rescan_recurring`): *apply to matching transactions*, *apply to these transactions* (accepting
+  a rule suggestion), the opt-in reconcile on a rule edit, and trashing a rule with *re-evaluate its
+  transactions* — the last two recategorize through `recategorize_all` directly rather than through the
+  endpoint that owns the full scan. Each runs the scoped scan after its transaction commits, in its own
+  connection, guarded so a detection hiccup cannot fail an apply that already succeeded; a bulk cleanup
+  scans once for every rule it trashed. Prior payee keys are read **before** the write for the same reason
+  a hand edit reads them: a rule's `clean_name` moves rows between groups, and after the update the old
+  name is gone.
+
+  What made these worth finding rather than merely missing is the **phantom series**. A movement's two
+  legs pair only when both carry a money-movement category, so filing the second leg by rule can make a
+  pair that did not exist — and the payee series over the first leg's rows, correctly detected while
+  nothing paired, becomes a reading of one payment off two descriptions. Unscanned it sits in *Needs
+  attention* beside a **Confirm** that makes it permanent: a confirmed series is preserved by every later
+  scan and goes on claiming rows, so the window between the rule apply and the next daily catch-up is one
+  in which the user can ratify a reading the ledger no longer supports.
+
 - **The scan also runs automatically, at two scopes, gated so it never does redundant heavy work.**
   `scan_and_store` takes an optional `payee_keys` scope, so the same pipeline serves both:
   - *Scoped* (`scan_imported_payees`, `payee_keys` set) — a completed CSV import or Plaid sync reprocesses
@@ -770,6 +789,14 @@ Key invariants:
     they are. Correct because detection groups by payee and reconcile never disturbs out-of-scope rows.
     A scoped pass **does not** stamp the watermark and **skips** the payee-key re-derivation (both are
     global concerns it can't do), so it trusts stored keys.
+
+    **A payee series holding a paired row is always in scope, whatever the caller asked for**
+    (`_payee_keys_holding`). Pairing is the one relationship in the detector decided by the money rather
+    than by a name, so a movement's two legs normally sit in *different* payee groups — which makes an
+    edit to one leg's group an edit whose consequence lands on the other's. Scoped to the payee that
+    changed, the scan would never look at the group that has to give the rows up. The widening is
+    computed from the pairing that already runs over the full pool, so it costs one indexed read of the
+    membership links and nothing else.
   - *Full* (`run_auto_scan`, `payee_keys=None`) — app load fires a catch-up (`POST /recurring/auto-scan`
     → `maybe_auto_scan`) that runs a global scan only when *due*: never scanned or older than a ~daily
     interval. It is the safety net for the cross-payee and normalization effects a scoped pass can't see.

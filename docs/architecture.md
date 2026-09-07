@@ -257,9 +257,11 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
   The scan is one function (`scan_and_store`) with an optional `payee_keys` scope; scoped and full share
   the whole pipeline. A third caller uses the scoped path: `rescan_edited_transactions`, wired into the
-  transaction edit endpoints so a hand edit re-evaluates the payees it touched — membership is a cache,
-  and without it a recategorized row stays linked to the series it has left. Bulk edits scan once for
-  the batch, never per row.
+  transaction edit endpoints **and the rule apply/reconcile paths** so any write of a category
+  re-evaluates the payees it touched — membership is a cache, and without it a recategorized row stays
+  linked to the series it has left. Bulk edits and bulk rule cleanups scan once for the batch, never per
+  row. A scoped scan widens its own scope to any payee series holding a *paired* row, since pairing is
+  decided by the money and its two legs normally sit in different payee groups.
 
 - **Anomaly/forecast signals are a read-time projection** (`backend/services/recurring_signals.py`),
   *not* an event fired from the scan. The ingest seam looks like the natural home — it knows which

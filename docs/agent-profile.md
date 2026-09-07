@@ -388,6 +388,17 @@ for what the *user* can act on.
   the one that has been broken twice, and the piping rule below is only the mechanism by which it was
   broken the second time.
 
+- **Write the test as a miniature of the reported case, not of the fix.** A rule apply left a phantom
+  recurring series on screen. The obvious cause was real — the rule endpoints never re-ran detection —
+  and fixing it was necessary and *not sufficient*. A test shaped like the fix ("an apply triggers the
+  rescan") would have passed by construction, since it asserts the line just written. The test shaped
+  like the user's ledger — two accounts, a counterpart leg the rule is about to file, a payee series
+  already sitting over the other leg — failed, and named the missing half: the rescan ran, scoped to the
+  payee that changed, while the stale series lived in the *other* leg's payee group. Build the fixture
+  from the reported shape before believing a diagnosis, and let it fail once against the incomplete fix.
+  The failure this prevents is a change that ships green against its own mechanism and does nothing at
+  all for the person who reported the bug.
+
 - **Never pipe a test or build run into `tail`, `head`, or a filtering `grep`. Redirect to a file and
   read the file.** A run that fails unexpectedly is the only evidence that failure will produce, and a
   pipe throws all of it away before anyone can look. This was learned the expensive way and immediately:

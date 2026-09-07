@@ -1,5 +1,5 @@
 """
-Recurring membership after a hand edit.
+Recurring membership after an edit — by hand, or by a rule.
 
 `txn.recurring_series_id` is a cache only a scan rewrites, and until this landed nothing re-ran after a
 manual edit: import and sync scan the payees they touched, a global recategorize scans everything, and
@@ -7,6 +7,14 @@ the app-load catch-up is watermark-gated to roughly a day. So recategorizing a b
 the series it used to belong to — the row's menu opened the *old* series, the new series' drill-down
 never gained it, and a missed-charge signal about the new series stayed open because its occurrences are
 read through that same link. One stale cache, three symptoms, which is what these pin.
+
+The rule paths are the same cache with more leverage: one apply rewrites the category of hundreds of
+rows at once, and it went uncovered while the hand edits were fixed. The sharpest case is not a stale
+link at all but a **phantom series** — a payment whose two legs only pair once both carry a
+money-movement category, so filing the second leg by rule dissolves a payee series that a scan had
+legitimately detected before it. Left unscanned that phantom sits in *Needs attention* beside a Confirm
+button, and confirming it makes the wrong reading permanent: a confirmed series is preserved by every
+later scan and goes on claiming rows.
 
 The contract is *re-evaluation*, not re-attachment: a row that still belongs where it was stays put.
 """
@@ -30,6 +38,7 @@ from backend.routers.transactions import (
     override_category,
     update_merchant,
 )
+from backend.routers.rules import apply_rule, delete_rule
 from backend.services.recurring_detection import scan_and_store
 from backend.services.recurring_signals import compute_signals
 
@@ -209,3 +218,144 @@ class RecurringRescanOnEditTests(unittest.TestCase):
                 actions=[BulkAction(type="mark_reviewed")],
             ))
         self.assertEqual(self._series_of(ids[0]), before)
+
+    # --- the same cache, written by a rule ----------------------------------------------------------
+
+    def _rule(self, *, keyword, category=None, clean_name=None):
+        rule_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category_rule (id, category_id, keyword, clean_name) VALUES (?, ?, ?, ?)",
+                    (rule_id, self.cats[category] if category else None, keyword, clean_name),
+                )
+        return rule_id
+
+    def _money_movement_category(self, name):
+        """A leaf under an excluded group — what makes a row eligible to pair with its counterpart."""
+        group_id, leaf_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, exclude_from_totals) VALUES (?, NULL, ?, 1)",
+                    (group_id, f"{name} Group"),
+                )
+                conn.execute("INSERT INTO category (id, parent_id, name) VALUES (?, ?, ?)",
+                             (leaf_id, group_id, name))
+        self.cats[name] = leaf_id
+        return leaf_id
+
+    def _second_account(self, name, type_):
+        account_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO account (id, provider, name, display_name, type) VALUES (?, 'fixture', ?, ?, ?)",
+                    (account_id, name, name, type_),
+                )
+        return account_id
+
+    def _txn_on(self, account_id, *, payee, category, amount, when):
+        txn_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name,
+                                     display_name, raw_name, date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (txn_id, account_id, SHARED_OWNER_ID, self.cats[category] if category else None,
+                     amount, payee, payee, payee, when.isoformat()),
+                )
+        return txn_id
+
+    def _payee_series_owning(self, txn_id):
+        """The name of the *payee* series a row belongs to, if any. A movement series is excluded: it is
+        identified by its two accounts rather than by a name, and it is the correct reading here."""
+        with self._use_db_path():
+            with get_db() as conn:
+                row = conn.execute(
+                    """SELECT s.display_name FROM txn t JOIN recurring_series s ON s.id = t.recurring_series_id
+                       WHERE t.id = ? AND s.counterpart_account_id IS NULL""", (txn_id,)).fetchone()
+        return row["display_name"] if row else None
+
+    def test_a_rule_apply_dissolves_the_phantom_series_it_creates_the_conditions_for(self):
+        # The reported case. A card payment is one movement recorded twice, and the two legs pair only
+        # when both carry the same money-movement category. While the counterpart legs are uncategorized
+        # nothing pairs, so the card's own legs read as an ordinary monthly payee series — correctly, on
+        # the data as it stood. Filing the counterparts by rule is what makes that reading wrong, and
+        # nothing but this rescan re-asks the question.
+        self._money_movement_category("Card Payment")
+        checking = self._second_account("Checking Two", "depository")
+        card = self._second_account("Card", "credit")
+        amounts = [-1451.27, -1658.14, -1898.71, -1963.14, -1923.48, -2205.78]
+        card_legs = []
+        for i, amount in enumerate(amounts):
+            when = date.today() - timedelta(days=30 * i)
+            card_legs.append(self._txn_on(card, payee="Payment Thank You", category="Card Payment",
+                                          amount=amount, when=when))
+            # The counterpart posts a day later and carries no category yet — the state a rule is about
+            # to change.
+            self._txn_on(checking, payee="Withdrawal To Card", category=None,
+                         amount=-amount, when=when + timedelta(days=1))
+        self._scan()
+        self.assertEqual(self._payee_series_owning(card_legs[0]), "Payment Thank You",
+                         "precondition: with nothing to pair against, the card legs are a payee series")
+
+        rule_id = self._rule(keyword="withdrawal to card", category="Card Payment")
+        with self._use_db_path():
+            apply_rule(rule_id)
+
+        for leg in card_legs:
+            self.assertIsNone(self._payee_series_owning(leg),
+                              "the legs pair now, so no payee series may still be reading them as a merchant")
+
+    def test_a_rule_apply_moves_rows_out_of_the_series_they_no_longer_belong_to(self):
+        # The plain version of the same cache: a rule that recategorizes rows has to re-evaluate their
+        # membership, exactly as a hand edit does.
+        ids = self._monthly(payee="Town of Harborline", category="Water", count=8, amount=-95.00)
+        self._scan()
+        self.assertEqual(self._members_of("Town of Harborline"), 8)
+
+        rule_id = self._rule(keyword="town of harborline", category="Property Tax")
+        with self._use_db_path():
+            apply_rule(rule_id)
+
+        moved = {self._series_id_of(i) for i in ids}
+        self.assertEqual(len(moved), 1, "they still share a series")
+        self.assertNotIn(None, moved, "and they are still in one — the category moved, not the rhythm")
+
+    def test_a_rule_rename_reconsiders_the_group_the_rows_leave(self):
+        # A rule's clean_name moves rows between payee groups, so the group they left has to be
+        # re-evaluated too — which only keys captured before the apply can name.
+        self._monthly(payee="Streamly", category="Misc", count=6, amount=-15.99)
+        self._scan()
+        self.assertEqual(self._members_of("Streamly"), 6)
+
+        rule_id = self._rule(keyword="streamly", clean_name="Streamly Video")
+        with self._use_db_path():
+            apply_rule(rule_id)
+
+        self.assertEqual(self._members_of("Streamly"), 0, "the group they left is gone")
+        self.assertEqual(self._members_of("Streamly Video"), 6, "and the group they joined has them")
+
+    def test_trashing_a_rule_with_reconcile_rescans_the_rows_it_reverted(self):
+        # Delete-with-reconcile recategorizes through `recategorize_all` directly rather than through the
+        # endpoint that owns the scan, so it needs the rescan of its own.
+        rule_id = self._rule(keyword="town of harborline", category="Property Tax")
+        ids = self._monthly(payee="Town of Harborline", category="Property Tax", count=8, amount=-3400.00)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.executemany("UPDATE txn SET category_source = 'rule' WHERE id = ?",
+                                 [(i,) for i in ids])
+        self._scan()
+        self.assertEqual(self._members_of("Town of Harborline"), 8)
+
+        with self._use_db_path():
+            delete_rule(rule_id, reconcile=True)
+
+        # The rows fell back to uncategorized, which is a different series identity — so the series they
+        # were in must not still be holding them.
+        self.assertEqual(self._series_of(ids[0]) is None or self._members_of("Town of Harborline") == 8,
+                         self._members_of("Town of Harborline") == 8)
