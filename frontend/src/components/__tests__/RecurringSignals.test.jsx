@@ -29,13 +29,6 @@ const PRICE = {
   txn_id: 't9', txn_date: '2026-08-14', amount: 19.99, baseline_amount: 15.99,
   delta: 4, percent: 25, direction: 'increase', amount_kind: 'fixed',
 }
-const RANGE = {
-  kind: 'rule_range', key: 'rule_range:r1:t4', severity: 'warning',
-  rule_id: 'r1', rule_keyword: 'harborline', rule_category_name: 'Insurance',
-  amount_min: null, amount_max: 200, bound: 'max', inside: false, percent: 12,
-  txn_id: 't4', txn_date: '2026-08-02', txn_name: 'Harborline Mutual', amount: 224,
-  current_category_name: 'Uncategorized', series_id: null, series_name: null,
-}
 const UPCOMING = {
   kind: 'upcoming', key: 'upcoming:streamly||:2026-09-14', severity: 'info',
   series_id: 's2', series_name: 'Northgate Fiber', cadence: 'monthly',
@@ -45,8 +38,7 @@ const UPCOMING = {
 function renderSection(props = {}) {
   const handlers = {
     onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(),
-    onOpenSeries: vi.fn(), onEditRule: vi.fn(), onWidenRange: vi.fn(), onShowDismissed: vi.fn(),
-    onAcceptPrice: vi.fn(),
+    onOpenSeries: vi.fn(), onShowDismissed: vi.fn(), onAcceptPrice: vi.fn(),
   }
   const signals = props.signals || []
   const counts = props.counts || signals.reduce((acc, s) => ({ ...acc, [s.kind]: (acc[s.kind] || 0) + 1 }), {})
@@ -91,33 +83,30 @@ describe('RecurringSignals', () => {
   })
 
   it('gives every finding a way to see what it is about', () => {
-    // Three of the five kinds could reach nothing before the arrow replaced the Open series button:
-    // *Newly detected* asked for a Confirm with no way to look, and a rule-range finding offered to
-    // widen a rule with no way to read the charge that would justify it.
+    // Some kinds could reach nothing before the arrow replaced the Open series button — *Newly detected*
+    // asked for a Confirm with no way to look at what was detected.
     const cases = [
-      [MISSED, 'Open this series'],
-      [PRICE, 'Open this series'],
-      [{ kind: 'new_series', key: 'n1', series_id: 's2', series_name: 'Streamly', first_seen: '2026-08-01',
-         occurrence_count: 3, expected_amount: 9.99, cadence: 'monthly' }, 'Open this series'],
-      [RANGE, 'Open this transaction'],
+      MISSED,
+      PRICE,
+      { kind: 'new_series', key: 'n1', series_id: 's2', series_name: 'Streamly', first_seen: '2026-08-01',
+        occurrence_count: 3, expected_amount: 9.99, cadence: 'monthly' },
     ]
-    for (const [signal, label] of cases) {
+    for (const signal of cases) {
       cleanup()
       renderSection({ signals: [signal] })
-      expect(screen.getByRole('button', { name: label })).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Open this series' })).toBeTruthy()
     }
   })
 
   it('opens what the headline names, handing back the finding', async () => {
-    const { onOpenSeries } = renderSection({ signals: [RANGE] })
-    await userEvent.click(screen.getByRole('button', { name: 'Open this transaction' }))
-    expect(onOpenSeries).toHaveBeenCalledWith(RANGE)
+    const { onOpenSeries } = renderSection({ signals: [PRICE] })
+    await userEvent.click(screen.getByRole('button', { name: 'Open this series' }))
+    expect(onOpenSeries).toHaveBeenCalledWith(PRICE)
   })
 
   it('shows no arrow when the finding names nothing that can be opened', () => {
-    // A rule-range finding on a rule with no series still heads its card with the charge; one with no
-    // transaction id at all has nothing to point at, and an arrow that did nothing would be worse.
-    renderSection({ signals: [{ ...RANGE, txn_id: undefined }] })
+    // A finding with no series id has nothing to point at, and an arrow that did nothing would be worse.
+    renderSection({ signals: [{ ...PRICE, series_id: undefined }] })
     expect(screen.queryByRole('button', { name: /^Open this/ })).toBeNull()
   })
 
@@ -147,16 +136,6 @@ describe('RecurringSignals', () => {
   it('offers no such action when the charge is already inside the band', () => {
     renderSection({ signals: [{ ...PRICE, amount_mode: 'fixed', band_min: 12, band_max: 22 }] })
     expect(screen.queryByRole('button', { name: 'Accept new amount' })).toBeNull()
-  })
-
-  it('names what a drifted rule range cost, and offers to widen it', async () => {
-    const { onWidenRange } = renderSection({ signals: [RANGE] })
-    expect(screen.getByText(/12% above the maximum of \$200\.00/)).toBeTruthy()
-    // The consequence, not just the arithmetic — this is the part the user cannot see anywhere else.
-    expect(screen.getByText(/the rule did not claim it/)).toBeTruthy()
-
-    await userEvent.click(screen.getByText('Widen to include'))
-    expect(onWidenRange).toHaveBeenCalledWith(RANGE)
   })
 
   it('never shows an upcoming charge among the findings', () => {

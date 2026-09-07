@@ -5,9 +5,13 @@
 Anomaly and forecast signals over the recurring-series records.
 
 The series subsystem (`recurring_detection.py`) answers "what recurs"; this module answers "and what
-about it needs attention". Five signals: an **upcoming** charge (a forward view, deliberately not a
-nag), a **missed** one, a **newly detected** series, a **price change**, and a rule whose **amount
-range** a charge has drifted out of.
+about it needs attention". Four signals: an **upcoming** charge (a forward view, deliberately not a
+nag), a **missed** one, a **newly detected** series, and a **price change**.
+
+A fifth once lived here — the charge that drifted outside an amount-gated rule's range. It reads as a
+recurring finding because a drifted range costs the row its series, but both actions it offers edit a
+*rule* and it never needed a series to exist at all, so it belongs to the rule set and is derived in
+`rule_range_drift.py` for the Rules page. Only the dismissal store is still shared with it.
 
 **Signals are derived on read, never stored.** The obvious home would have been the import/sync scan
 (`scan_imported_payees`), which knows exactly which payees changed — but stored findings would be
@@ -30,8 +34,9 @@ Two consequences shape everything below:
   series), which is also how the detector picks its own reference date.
 
 The only persisted state is the user's dismissal of a signal, keyed by a fingerprint that is stable
-across scans (a transaction id, or the series' derived identity plus the date it concerns) rather
-than by a series id. A dismissal whose subject later disappears simply never matches again.
+across scans (the series' derived identity plus the date it concerns) rather than by a series id. The
+store itself is `signal_dismissals.py`; a dismissal whose subject later disappears simply never matches
+again.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ import sqlite3
 import statistics
 from datetime import date, timedelta
 
-from backend.services.categorizer import rule_matches_row
+from backend.services import signal_dismissals
 from backend.services.recurring_detection import SERIES_SCOPE_ACCOUNT_SQL
 
 # How far ahead the forward view looks. Upcoming is a budgeting aid rather than an anomaly, so it is
@@ -82,22 +87,11 @@ _MIN_OCCURRENCES_FOR_PRICE = 3
 # would mean "last rebuilt" and every daily catch-up would re-announce the whole list.
 _NEW_SERIES_MAX_AGE_DAYS = 30
 
-# Amount-range drift on a rule. A charge that misses a bound by less than this was probably meant to
-# match — the range has drifted, not the charge. A charge *inside* the range but this close to a bound
-# is the same warning one occurrence earlier.
-_RULE_RANGE_NEAR_FRACTION = 0.25
-_RULE_RANGE_EDGE_FRACTION = 0.10
-# Only recent rows are actionable: a range that drifted two years ago is history, not a task.
-_RULE_RANGE_WINDOW_DAYS = 90
-# At most this many per rule (most recent first). A broad keyword with a tight range could otherwise
-# produce a wall of near-misses that says one thing — "this range is wrong" — a hundred times.
-_RULE_RANGE_PER_RULE_CAP = 3
-
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO = "info"
 
 # Kinds that are anomalies (they reach the Tasks page). `upcoming` is deliberately absent.
-ANOMALY_KINDS = ("missed", "price_change", "new_series", "rule_range", "rule_range_edge")
+ANOMALY_KINDS = ("missed", "price_change", "new_series")
 
 
 def _parse_date(value):
@@ -439,165 +433,12 @@ def _row_get(row, key, default=None):
     return default if value is None else value
 
 
-def _load_ranged_rules(conn: sqlite3.Connection) -> list[dict]:
-    """User-authored rules that gate on amount. App-managed rules are excluded: their bounds are the
-    app's, not the user's, so there is nothing here for the user to maintain."""
-    rows = conn.execute(
-        """
-        SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
-               cr.debit_credit, cr.clean_name, cr.owner_id, cr.account_id, cr.account_type,
-               cr.match_source_text, cr.is_recurring, c.name AS category_name,
-               s.id AS series_id, s.display_name AS series_name
-        FROM   category_rule cr
-        LEFT   JOIN category c ON c.id = cr.category_id
-        LEFT   JOIN recurring_series s ON s.rule_id = cr.id
-        WHERE  cr.deleted_at IS NULL
-          AND  cr.is_managed = 0
-          AND  (cr.amount_min IS NOT NULL OR cr.amount_max IS NOT NULL)
-        """
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _load_recent_rows(conn: sqlite3.Connection, window_days: int) -> list[sqlite3.Row]:
-    """Recent live rows carrying exactly the columns the shared rule matcher reads, so a near-miss is
-    decided by the same predicate that decides a match."""
-    cutoff = (date.today() - timedelta(days=window_days)).isoformat()
-    return conn.execute(
-        """
-        SELECT t.id, t.date, t.amount, t.category_id, t.owner_id, t.recurring_series_id,
-               t.merchant_name, t.display_name, t.raw_name, t.import_evidence_json,
-               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
-               COALESCE(p.type, a.type) AS effective_account_type,
-               c.name AS current_category_name
-        FROM   txn t
-        JOIN   account a ON a.id = t.account_id
-        LEFT   JOIN account  p ON p.id = a.parent_account_id
-        LEFT   JOIN category c ON c.id = t.category_id
-        WHERE  t.trashed_at IS NULL AND t.is_pending = 0 AND t.date >= ?
-        ORDER  BY t.date DESC
-        """,
-        (cutoff,),
-    ).fetchall()
-
-
-def _range_proximity(amount: float, amount_min, amount_max):
-    """Where an amount sits relative to a rule's bounds: which bound is in play, whether the amount is
-    inside the range, and how far off it is as a fraction of that bound. Bounds are compared against the
-    absolute amount, matching `categorizer._amount_rule_matches`."""
-    if amount_min is not None and amount < amount_min:
-        return "min", False, (amount_min - amount) / amount_min if amount_min else None
-    if amount_max is not None and amount > amount_max:
-        return "max", False, (amount - amount_max) / amount_max if amount_max else None
-    # Inside: report the nearer bound, as a fraction of that bound's own size.
-    best = None
-    if amount_min is not None and amount_min > 0:
-        best = ("min", True, (amount - amount_min) / amount_min)
-    if amount_max is not None and amount_max > 0:
-        slack = (amount_max - amount) / amount_max
-        if best is None or slack < best[2]:
-            best = ("max", True, slack)
-    return best if best is not None else (None, True, None)
-
-
-def _rule_range_signals(conn: sqlite3.Connection) -> list[dict]:
-    """Charges an amount-gated rule nearly claimed, or only just claimed.
-
-    A range on a rule is a *matching gate*, which is what makes drift expensive: when a bill grows past
-    the bound the row stops matching, so it silently loses the rule's category as well as its place in
-    the rule's recurring series. Nothing else in the app notices — the row is categorized, just not the
-    way the user intended. So the signal that matters is the row that missed by a little, with the
-    inside-but-near-the-edge case as the same warning one occurrence earlier.
-
-    A row that already carries the rule's own category is not reported: whatever the range says, nothing
-    about that row went wrong.
-    """
-    rules = _load_ranged_rules(conn)
-    if not rules:
-        return []
-    rows = _load_recent_rows(conn, _RULE_RANGE_WINDOW_DAYS)
-    signals: list[dict] = []
-    for rule in rules:
-        relaxed = {**rule, "amount_min": None, "amount_max": None}
-        emitted = 0
-        for row in rows:
-            if emitted >= _RULE_RANGE_PER_RULE_CAP:
-                break
-            # Distance to the bound is arithmetic and rules out almost every row; the merchant match is
-            # string work over three name fields. Cheapest discriminating test first.
-            amount = abs(float(row["amount"] or 0.0))
-            bound, inside, distance = _range_proximity(amount, rule["amount_min"], rule["amount_max"])
-            if bound is None or distance is None:
-                continue
-            if inside:
-                if distance > _RULE_RANGE_EDGE_FRACTION:
-                    continue
-                kind, severity = "rule_range_edge", SEVERITY_INFO
-            else:
-                if distance > _RULE_RANGE_NEAR_FRACTION:
-                    continue
-                kind, severity = "rule_range", SEVERITY_WARNING
-            if rule["category_id"] is not None and row["category_id"] == rule["category_id"]:
-                continue
-            if rule["series_id"] and row["recurring_series_id"] == rule["series_id"]:
-                continue
-            if not rule_matches_row(relaxed, row):
-                continue
-            emitted += 1
-            signals.append({
-                "kind": kind,
-                "key": f"{kind}:{rule['id']}:{row['id']}",
-                "severity": severity,
-                "rule_id": rule["id"],
-                "rule_keyword": rule["keyword"],
-                "rule_category_name": rule["category_name"],
-                "rule_is_recurring": bool(rule["is_recurring"]),
-                "amount_min": rule["amount_min"],
-                "amount_max": rule["amount_max"],
-                "bound": bound,
-                "inside": inside,
-                "percent": round(distance * 100, 1),
-                "txn_id": row["id"],
-                "txn_date": row["date"],
-                "txn_name": row["display_name"] or row["merchant_name"] or row["raw_name"],
-                "amount": round(float(row["amount"] or 0.0), 2),
-                "current_category_name": row["current_category_name"],
-                "series_id": rule["series_id"],
-                "series_name": rule["series_name"],
-            })
-    return signals
-
-
-# --- Dismissal -------------------------------------------------------------------------------------
-# A dismissal is the only durable part of this module. It is keyed by the signal's fingerprint rather
-# than by any row id, so it survives the auto-series rebuild; a fingerprint whose subject later
-# disappears (the transaction is trashed, the rule deleted) simply stops matching anything, which is
-# why nothing prunes them. Stored in the data DB and shared rather than per-user: dismissing a signal
-# is curation of the ledger, like confirming or suppressing a series, not a UI preference.
-
-def dismissed_keys(conn: sqlite3.Connection) -> set[str]:
-    return {r["signal_key"] for r in conn.execute("SELECT signal_key FROM recurring_signal_dismissal")}
-
-
-def dismiss_signal(conn: sqlite3.Connection, key: str, kind: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO recurring_signal_dismissal (signal_key, kind, dismissed_at)
-        VALUES (?, ?, datetime('now'))
-        ON CONFLICT(signal_key) DO UPDATE SET kind = excluded.kind, dismissed_at = excluded.dismissed_at
-        """,
-        (key, kind),
-    )
-
-
-def restore_signal(conn: sqlite3.Connection, key: str) -> None:
-    conn.execute("DELETE FROM recurring_signal_dismissal WHERE signal_key = ?", (key,))
-
-
 def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HORIZON_DAYS,
                     include_dismissed: bool = False) -> dict:
-    """Every open signal, plus per-kind counts. One pass over the series and their members; the
-    rule-range pass is skipped entirely when no rule gates on amount."""
+    """Every open signal, plus per-kind counts, in one pass over the series and their members.
+
+    A dismissal is keyed by the signal's own fingerprint rather than by any row id, so it survives the
+    auto-series rebuild, and one whose subject later disappears simply stops matching anything."""
     today = date.today()
     series_rows = _load_series(conn)
     members = _load_members(conn)
@@ -615,9 +456,8 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
         ):
             if signal is not None:
                 signals.append(signal)
-    signals.extend(_rule_range_signals(conn))
 
-    dismissed = set() if include_dismissed else dismissed_keys(conn)
+    dismissed = set() if include_dismissed else signal_dismissals.dismissed_keys(conn)
     open_signals = [s for s in signals if s["key"] not in dismissed]
     dismissed_count = len(signals) - len(open_signals)
 
@@ -642,7 +482,7 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
 def dismissed_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HORIZON_DAYS) -> list[dict]:
     """The signals a dismissal is currently hiding — what the review surface offers to bring back. Only
     signals that still compute are listed: a dismissal whose subject is gone has nothing to restore."""
-    dismissed = dismissed_keys(conn)
+    dismissed = signal_dismissals.dismissed_keys(conn)
     if not dismissed:
         return []
     everything = compute_signals(conn, horizon_days=horizon_days, include_dismissed=True)["signals"]

@@ -120,8 +120,10 @@ minimum rather than a limit:
   separating several bills from one biller by size — which makes the range a **matching gate**. When a
   bill drifts past the bound the row stops matching, so it loses the rule's category *and* its place in
   the rule's series, and nothing else in the app notices: the row is categorized, just not as intended.
-  The signal reports a charge that missed by a little (and, more quietly, one sitting just inside a
-  limit) and offers **Widen to include**, which moves the bound and re-applies the rule.
+  The finding reports a charge that missed by a little (and, more quietly, one sitting just inside a
+  limit) and offers **Widen to include**, which moves the bound and re-applies the rule. It was built
+  beside the recurring signals and **now lives on the Rules page**, in the *Rule checkup* panel beside the
+  overlap findings: both of its actions edit a rule, and it never needed a series to exist at all.
 - **Task dismissal**, which applies to tasks predating this work. The mark is the count at dismissal and
   **ratchets down** to any lower count seen since — a mark that only held at its original value swallows
   new work precisely because the user cleared some. `txn` has no insertion timestamp, so the alternative
@@ -406,7 +408,7 @@ what the Recurring page shows (a card can now say it is matched by amount, and c
 control), which is relevant to **Screenshots**.
 
 **Rule overlap surfacing** ([`backlog/rule-amount-overlaps.md`](backlog/rule-amount-overlaps.md), shipped
-2026-08-27). *Check overlaps* on the Rules page reports rule pairs that compete for the same
+2026-08-27). *Rule checkup* on the Rules page reports rule pairs that compete for the same
 transactions: amount ranges overlapping with no deterministic winner (a warning, not dismissible, no
 delete — the answer is to refine the conditions), and nested merchant matchers (information, dismissible,
 with a delete on the surplus half where the pair files identically). It was picked up as parked backlog
@@ -417,10 +419,12 @@ Two things it moved that matter to the steps below:
 - **Schema version 45 and backup payload version 14**, both purely additive — a `rule_overlap_dismissal`
   table and its backup section. Anything in the release notes that names a payload version needs the new
   number, and the kit test now exercises a migration on top of everything else.
-- **The Rules page header changed** — a new control, *Re-run categorization* renamed to *Run
-  categorization* (the Help topics had always called it that), and `PageHeader`'s action row now wraps
-  instead of squeezing. That last one is shared by every page, though it is inert until a header actually
-  overflows. Relevant to **Screenshots**, which is the step that assumes surfaces have stopped moving.
+- **The Rules page header changed** — a new control, a rename of the categorize button, and
+  `PageHeader`'s action row now wraps instead of squeezing. That last one is shared by every page, though
+  it is inert until a header actually overflows. The header moved again when the rule range-drift
+  findings arrived there (below), so it now reads *Categorize* / *Generate rules from imported data* /
+  *Rule checkup* / *+ New*. Relevant to **Screenshots**, which is the step that assumes surfaces have
+  stopped moving.
 
 ## Release mechanics
 

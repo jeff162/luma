@@ -36,7 +36,7 @@ import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { txnMutations, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
+import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -773,15 +773,12 @@ export default function Recurring() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [adoptBusy, setAdoptBusy] = useState(null)
 
-  // The drill-down serves three shapes through one paged list: a single series (recurring_series_id),
-  // the all-series report (recurring_only — every row linked to any series), and an explicit set of rows
-  // (`ids`), which is how a rule-range finding shows the charge it is about. Each is flagged by a
-  // synthetic marker on `openSeries` rather than a separate panel, so every one of them lands in the
-  // same report with the same row editing — which is the point: the finding's arrow always opens a
-  // transaction report, whatever the finding is about.
+  // The drill-down serves two shapes through one paged list: a single series (recurring_series_id) and
+  // the all-series report (recurring_only — every row linked to any series). The second is flagged by a
+  // synthetic marker on `openSeries` rather than a separate panel, so both land in the same report with
+  // the same row editing.
   const membersLoadPage = useCallback((offset, limit, sort) => {
     const base = { limit, offset, sort_by: sort.key, sort_dir: sort.dir }
-    if (openSeries?._txnIds) return api.getTransactions({ ids: openSeries._txnIds.join(','), ...base })
     if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...base })
     // A suppressed series owns no rows: suppress nulls their `recurring_series_id`, because that column
     // is the app-wide "is recurring" flag and a rejected series must not light up the ↻ marker or the
@@ -823,7 +820,7 @@ export default function Recurring() {
   // (a series suppressed before snapshots, a payee whose rows have since changed) settles here instead
   // of drifting silently. Local only — `occurrence_count` on the server is the detector's own stat and a
   // match count is not it.
-  const openSeriesId = openSeries?._all || openSeries?._txnIds ? null : openSeries?.id
+  const openSeriesId = openSeries?._all ? null : openSeries?.id
   const reportTotal = membersPaged.total
   useEffect(() => {
     if (!openSeriesId || membersPaged.loading) return
@@ -848,10 +845,8 @@ export default function Recurring() {
   // some — the case the limit: 0 opt-in exists for.
   useEffect(() => {
     // The all-series report has no single series to fetch removals for — an 'excluded' override is
-    // per-series, so the removed-rows section only applies to a single-series drill-down.
-    // Neither synthetic report has a series whose removals could be fetched — an 'excluded' override is
     // per-series, so the removed-rows section only applies to a real single-series drill-down.
-    if (!openSeries || openSeries._all || openSeries._txnIds) { setExcluded([]); return undefined }
+    if (!openSeries || openSeries._all) { setExcluded([]); return undefined }
     let live = true
     api.getTransactions({ recurring_excluded_series_id: openSeries.id, limit: 0 })
       .then(resp => { if (live) setExcluded(resp.transactions || []) })
@@ -1080,39 +1075,12 @@ export default function Recurring() {
   // worse in both directions: it took them away from the finding they were working through, and the
   // list's own filter can exclude the very series being opened (a Confirmed series while only Suggested
   // is selected), so the drill-down would describe a card that was nowhere on screen.
-  // Opens whatever the finding's headline names — the series for most kinds, the offending transaction
-  // for the two rule-range ones (see `signalTarget`). A rule-range finding heads its card with the charge
-  // rather than a series, and that charge is the thing the user needs: "Widen to include" is only the
-  // right answer when the bound is too tight, and it takes reading the transaction to know that it isn't
-  // simply miscategorized.
+  // Opens the series the finding's headline names, which is every kind of finding this view carries.
   function openSignalTarget(signal) {
     const target = signalTarget(signal)
     if (!target) return
-    if (target.type === 'series') {
-      const series = seriesById(target.id)
-      if (series) openReport(series)
-      return
-    }
-    // A rule-range finding is about one charge rather than a series, and it opens as a one-row report
-    // rather than an editor. Same panel, same row editing, same place on screen as every other finding's
-    // arrow — a second kind of surface for the same gesture would be the confusing outcome, and the
-    // report already reaches the editor for anyone who wants it.
-    openReport({ id: target.id, display_name: signal.txn_name || 'Transaction', _txnIds: [target.id] })
-  }
-
-  // Move the rule's limit out to this charge and re-apply it, which is the whole maintenance action the
-  // signal exists to offer — the alternative is the rule editor and mental arithmetic. Manual per-row
-  // edits are preserved: widening a range says which rows the rule should claim, not that someone's
-  // hand-categorization was wrong.
-  async function widenRuleRange(signal) {
-    const amount = Math.abs(Number(signal.amount) || 0)
-    const patch = signal.bound === 'max'
-      ? { amount_max: Math.ceil(amount * 100) / 100 }
-      : { amount_min: Math.floor(amount * 100) / 100 }
-    await api.updateRule(signal.rule_id, patch)
-    await txnMutations.applyRule(signal.rule_id, { preserveManual: true })
-    loadSignals()
-    load()
+    const series = seriesById(target.id)
+    if (series) openReport(series)
   }
 
   // Refresh re-reads **everything the page can show**, not just the series list. It used to call `load()`
@@ -1126,9 +1094,9 @@ export default function Recurring() {
     setReportNonce(n => n + 1)  // an open drill-down re-fetches its rows too
   }, [load, loadSignals])
 
-  // Accepting a price change is deliberately *not* the one-click apply its rule-range neighbour above
-  // is. A rule's bound has one right answer — take in this charge — while a series' band has two ends
-  // and the finding cannot tell which should move: a bill that rose because everything rose wants both
+  // Accepting a price change is deliberately *not* a one-click apply, the way widening a rule's bound is
+  // on the Rules page. A bound has one right answer — take in this charge — while a series' band has two
+  // ends and the finding cannot tell which should move: a bill that rose because everything rose wants both
   // carried up, one new outlier wants a single bound moved, and the same holds downward when a utility
   // posts its cheapest month yet. So it opens the band editor on the proposal rather than writing it.
   function acceptPriceChange(signal) {
@@ -1311,8 +1279,6 @@ export default function Recurring() {
                   onDismiss={dismissSignal}
                   onSeriesAction={signalSeriesAction}
                   onOpenSeries={openSignalTarget}
-                  onEditRule={(signal) => setRuleModal({ mode: 'edit', ruleId: signal.rule_id })}
-                  onWidenRange={widenRuleRange}
                   onAcceptPrice={acceptPriceChange}
                   onShowDismissed={showDismissedSignals}
                 />

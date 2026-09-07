@@ -7,13 +7,13 @@
  * Signals are derived server-side on every read (services/recurring_signals.py), so this component
  * holds no state about them beyond what the user is looking at: there is nothing to reconcile in place
  * after an action, because the next fetch recomputes the truth. Every action a row offers is an
- * existing endpoint — confirm/suppress/end a series, edit or widen a rule — plus the one action that
- * belongs to the signal itself, dismissal.
+ * existing endpoint — confirm/suppress/end a series — plus the one action that belongs to the signal
+ * itself, dismissal.
  *
- * Dismissal is per signal, not per kind: each finding names a specific charge, a specific missed date,
- * or a specific rule, so "seen it" is an answer about that one thing. It is keyed by the signal's
- * fingerprint rather than any row id, which is what lets it survive the nightly rebuild that gives
- * every auto-detected series a new identity.
+ * Dismissal is per signal, not per kind: each finding names a specific charge or a specific missed date,
+ * so "seen it" is an answer about that one thing. It is keyed by the signal's fingerprint rather than any
+ * row id, which is what lets it survive the nightly rebuild that gives every auto-detected series a new
+ * identity.
  *
  * These are two *peer views* of the Recurring page, selected alongside the series list rather than
  * stacked above it. The first arrangement put them in the page's pinned header over the list, and a
@@ -22,13 +22,10 @@
  * between findings and the series they refer to was the mistake; capping the findings only rationed it.
  * Each view now owns the scrolling body.
  *
- * A finding's headline carries an arrow that **opens a transaction report for what the headline names** —
- * the series' members for most kinds, the offending charge for the two rule-range ones, and always the
- * same report rather than an editor for one of them: one gesture doing two different kinds of thing is
- * the confusing outcome, and the report reaches the editor anyway. It replaced an "Open series" button that
- * only two of the five kinds ever had, which left *Newly detected* asking the user to Confirm a series
- * with no way to look at it, and a rule-range finding offering to widen a rule with no way to see the
- * charge that would justify it. The arrow is on the name because the name is what it opens.
+ * A finding's headline carries an arrow that **opens a transaction report for the series it names**. It
+ * replaced an "Open series" button that only some kinds ever had, which left *Newly detected* asking the
+ * user to Confirm a series with no way to look at it. The arrow is on the name because the name is what
+ * it opens.
  *
  * Either target opens **in place**, docked under the findings. Switching to the series list was tried and
  * was worse both ways: it took the user out of the list of findings they were working through, and the
@@ -50,11 +47,9 @@ import { priceChangeBand, signalTarget } from '../lib/recurringSignals.js'
 const SIGNAL_KINDS = {
   missed: { label: 'Missing charge', tone: 'var(--warning)' },
   price_change: { label: 'Amount changed', tone: 'var(--warning)' },
-  rule_range: { label: 'Outside a rule’s range', tone: 'var(--warning)' },
-  rule_range_edge: { label: 'Near a rule’s limit', tone: 'var(--accent2)' },
   new_series: { label: 'Newly detected', tone: 'var(--accent2)' },
 }
-const ANOMALY_KIND_ORDER = ['missed', 'price_change', 'rule_range', 'rule_range_edge', 'new_series']
+const ANOMALY_KIND_ORDER = ['missed', 'price_change', 'new_series']
 
 function pluralPeriods(n) {
   return n === 1 ? 'period' : 'periods'
@@ -98,48 +93,21 @@ function describe(signal) {
     }
     case 'new_series':
       return `First detected ${formatDate(signal.first_seen)} · ${signal.occurrence_count} charges · ~${formatCurrency(signal.expected_amount)} ${String(signal.cadence || '')}.`
-    case 'rule_range': {
-      const bound = signal.bound === 'max' ? 'maximum' : 'minimum'
-      const limit = formatCurrency(signal.bound === 'max' ? signal.amount_max : signal.amount_min)
-      const where = signal.bound === 'max' ? 'above' : 'below'
-      const landed = signal.current_category_name
-        ? `It is categorized as ${signal.current_category_name} instead.`
-        : 'It is uncategorized as a result.'
-      return `${formatCurrency(Math.abs(signal.amount))} on ${formatDate(signal.txn_date)} is ${signal.percent}% ${where} the ${bound} of ${limit}, so the rule did not claim it. ${landed}`
-    }
-    case 'rule_range_edge': {
-      const bound = signal.bound === 'max' ? 'maximum' : 'minimum'
-      const limit = formatCurrency(signal.bound === 'max' ? signal.amount_max : signal.amount_min)
-      return `${formatCurrency(Math.abs(signal.amount))} on ${formatDate(signal.txn_date)} is within ${signal.percent}% of the rule's ${bound} of ${limit}. The next one may fall outside it.`
-    }
     default:
       return ''
   }
 }
 
 function headline(signal) {
-  if (signal.kind === 'rule_range' || signal.kind === 'rule_range_edge') {
-    return signal.txn_name || signal.rule_keyword
-  }
   return signal.series_name
 }
 
-// What the headline names, and therefore what the arrow beside it reports on. The two rule-range kinds
-// head their card with the *transaction* that fell outside the range; every other kind heads it with the
-// series. One rule, two scopes, one surface — both open the same drill-down report.
-//
+// The second line of identification: which category and account the series sits on.
 function subject(signal) {
-  // The second line of identification: which rule, or which category/account the series sits on.
-  if (signal.kind === 'rule_range' || signal.kind === 'rule_range_edge') {
-    const parts = [`rule "${signal.rule_keyword}"`]
-    if (signal.rule_category_name) parts.push(signal.rule_category_name)
-    if (signal.series_name) parts.push(`series ${signal.series_name}`)
-    return parts.join(' · ')
-  }
   return [signal.category_name, signal.account_name].filter(Boolean).join(' · ')
 }
 
-function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange, onAcceptPrice }) {
+function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice }) {
   const tone = SIGNAL_KINDS[signal.kind]?.tone || 'var(--accent2)'
   const target = signalTarget(signal)
   const actions = []
@@ -167,20 +135,6 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
   } else if (signal.kind === 'new_series') {
     actions.push(<SignalAction key="confirm" variant="primary" onClick={() => onSeriesAction('confirm', signal)}>Confirm</SignalAction>)
     actions.push(<SignalAction key="suppress" onClick={() => onSeriesAction('suppress', signal)}>Not recurring</SignalAction>)
-  } else if (signal.kind === 'rule_range') {
-    actions.push(
-      <SignalAction
-        key="widen"
-        variant="primary"
-        onClick={() => onWidenRange(signal)}
-        title="Move the rule's limit to include this charge, then re-apply the rule"
-      >
-        Widen to include
-      </SignalAction>,
-    )
-    actions.push(<SignalAction key="rule" onClick={() => onEditRule(signal)}>Edit rule</SignalAction>)
-  } else if (signal.kind === 'rule_range_edge') {
-    actions.push(<SignalAction key="rule" onClick={() => onEditRule(signal)}>Edit rule</SignalAction>)
   }
   actions.push(
     <SignalAction key="dismiss" variant="quiet" onClick={() => onDismiss(signal)} title="Hide this one finding; a new one still appears">
@@ -204,10 +158,8 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
           {target ? (
             <button
               onClick={() => onOpenSeries(signal)}
-              aria-label={target.type === 'series' ? 'Open this series' : 'Open this transaction'}
-              title={target.type === 'series'
-                ? 'Show this series’ transactions'
-                : 'Show this transaction'}
+              aria-label="Open this series"
+              title="Show this series’ transactions"
               style={{
                 background: 'none', border: 'none', padding: '0 0 0 5px', cursor: 'pointer',
                 color: 'var(--accent2)', fontSize: 12.5, fontWeight: 700, lineHeight: 1,
@@ -265,7 +217,7 @@ function TabButton({ label, count, on, onClick, tone }) {
  */
 export function RecurringSignalsView({
   signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
-  onDismiss, onSeriesAction, onOpenSeries, onEditRule, onWidenRange, onAcceptPrice, onShowDismissed,
+  onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onShowDismissed,
 }) {
   const anomalies = (signals || []).filter(s => s.kind !== 'upcoming')
   const activeKinds = ANOMALY_KIND_ORDER.filter(k => (counts?.[k] || 0) > 0)
@@ -305,8 +257,6 @@ export function RecurringSignalsView({
               onDismiss={onDismiss}
               onSeriesAction={onSeriesAction}
               onOpenSeries={onOpenSeries}
-              onEditRule={onEditRule}
-              onWidenRange={onWidenRange}
               onAcceptPrice={onAcceptPrice}
             />
           ))}
@@ -314,7 +264,7 @@ export function RecurringSignalsView({
       ) : (
         <EmptyState message={anomalies.length
           ? 'Nothing of that kind is open. Choose All to see the rest.'
-          : 'Nothing needs attention. Missing charges, amount changes, newly detected series and drifted rule ranges show up here.'}
+          : 'Nothing needs attention. Missing charges, amount changes and newly detected series show up here.'}
         />
       )}
 

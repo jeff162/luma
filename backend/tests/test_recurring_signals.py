@@ -25,7 +25,8 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.services.recurring_detection import scan_and_store
-from backend.services.recurring_signals import compute_signals, dismiss_signal, restore_signal
+from backend.services.recurring_signals import compute_signals
+from backend.services.signal_dismissals import dismiss, restore
 
 
 class RecurringSignalsTests(unittest.TestCase):
@@ -148,7 +149,7 @@ class RecurringSignalsTests(unittest.TestCase):
         # one payload cannot lose it quietly.
         self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6 + [19.99])
         self._scan()
-        signals = [s for s in self._signals()["signals"] if s["kind"] != "rule_range"]
+        signals = self._signals()["signals"]
         self.assertTrue(signals, "precondition: something to check")
         for signal in signals:
             with self.subTest(kind=signal["kind"]):
@@ -228,7 +229,7 @@ class RecurringSignalsTests(unittest.TestCase):
         self.assertEqual(len(peak), 1, "precondition: an unaccepted peak is reported once")
         with self._use_db_path():
             with get_db() as conn:
-                dismiss_signal(conn, peak[0]["key"], peak[0]["kind"])
+                dismiss(conn, peak[0]["key"], peak[0]["kind"])
         for i in range(5):  # ordinary months, pushing the peak out of the recent window
             self._txn(payee="Harborline Gas", category="Water", amount=40.00,
                       when=date.today() + timedelta(days=60 + 30 * i))
@@ -262,7 +263,7 @@ class RecurringSignalsTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
-                restore_signal(conn, key)
+                restore(conn, key)
         self.assertEqual(len(self._signals("price_change")), 1)
 
     def test_a_fixed_series_does_not_learn_from_a_dismissal(self):
@@ -275,7 +276,7 @@ class RecurringSignalsTests(unittest.TestCase):
         self.assertEqual(len(first), 1)
         with self._use_db_path():
             with get_db() as conn:
-                dismiss_signal(conn, first[0]["key"], first[0]["kind"])
+                dismiss(conn, first[0]["key"], first[0]["kind"])
 
         self._txn(payee="Streamly", category="Streaming", amount=19.99, when=date.today() + timedelta(days=30))
         self._txn(payee="Streamly", category="Streaming", amount=24.99, when=date.today() + timedelta(days=60))
@@ -347,8 +348,8 @@ class RecurringSignalsTests(unittest.TestCase):
         # which speaks about an established obligation — have nothing to say about it. The case that
         # motivated this had the app listing a series under Suggested while warning, beside it, that the
         # charge it had just predicted was missing. The gate is per-signal rather than central, which is
-        # how three of the four came to be missing it, so this asserts on the whole set: a fifth signal
-        # added later fails here until it answers the question too.
+        # how three of the four came to be missing it, so this asserts on the whole set: a signal added
+        # later fails here until it answers the question too.
         self._monthly(payee="Streamly", category="Streaming", amounts=[15.99] * 6,
                       end=date.today() - timedelta(days=70))
         self._make_ledger_current()
@@ -371,58 +372,6 @@ class RecurringSignalsTests(unittest.TestCase):
                 conn.execute("UPDATE recurring_series SET created_at = datetime('now', '-60 days')")
         self.assertEqual(self._signals("new_series"), [])
 
-    # --- rule amount range ------------------------------------------------------------------------
-
-    def _ranged_rule(self, *, keyword, category, amount_min=None, amount_max=None):
-        rule_id = str(uuid.uuid4())
-        with self._use_db_path():
-            with get_db() as conn:
-                conn.execute(
-                    "INSERT INTO category_rule (id, category_id, keyword, amount_min, amount_max) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (rule_id, self.cats[category], keyword, amount_min, amount_max),
-                )
-        return rule_id
-
-    def test_charge_just_over_a_rules_maximum_is_reported(self):
-        self._ranged_rule(keyword="harborline", category="Insurance", amount_max=200.0)
-        self._txn(payee="Harborline Mutual", category="Misc", amount=224.0, when=date.today())
-
-        signals = self._signals("rule_range")
-        self.assertEqual(len(signals), 1)
-        self.assertEqual(signals[0]["bound"], "max")
-        self.assertFalse(signals[0]["inside"])
-        self.assertEqual(signals[0]["current_category_name"], "Misc")
-
-    def test_a_charge_far_outside_the_range_is_not_a_drifted_range(self):
-        # 3x the limit is a different bill, not a range that needs widening.
-        self._ranged_rule(keyword="harborline", category="Insurance", amount_max=200.0)
-        self._txn(payee="Harborline Mutual", category="Misc", amount=600.0, when=date.today())
-        self.assertEqual(self._signals("rule_range"), [])
-
-    def test_a_row_already_carrying_the_rules_category_is_not_reported(self):
-        # Whatever the range says, nothing about this row went wrong.
-        self._ranged_rule(keyword="harborline", category="Insurance", amount_max=200.0)
-        self._txn(payee="Harborline Mutual", category="Insurance", amount=224.0, when=date.today())
-        self.assertEqual(self._signals("rule_range"), [])
-
-    def test_a_charge_inside_but_near_the_limit_is_the_quieter_warning(self):
-        self._ranged_rule(keyword="harborline", category="Insurance", amount_max=200.0)
-        self._txn(payee="Harborline Mutual", category="Misc", amount=195.0, when=date.today())
-
-        signals = self._signals("rule_range_edge")
-        self.assertEqual(len(signals), 1)
-        self.assertTrue(signals[0]["inside"])
-        self.assertEqual(signals[0]["severity"], "info")
-
-    def test_only_the_most_recent_few_near_misses_of_one_rule_are_reported(self):
-        # One drifted range says one thing; it should not say it once per matching row.
-        self._ranged_rule(keyword="harborline", category="Insurance", amount_max=200.0)
-        for i in range(6):
-            self._txn(payee="Harborline Mutual", category="Misc", amount=224.0,
-                      when=date.today() - timedelta(days=i))
-        self.assertEqual(len(self._signals("rule_range")), 3)
-
     # --- dismissal --------------------------------------------------------------------------------
 
     def test_dismissal_hides_one_signal_and_survives_a_rescan(self):
@@ -432,7 +381,7 @@ class RecurringSignalsTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
-                dismiss_signal(conn, signal["key"], signal["kind"])
+                dismiss(conn, signal["key"], signal["kind"])
 
         self.assertEqual(self._signals("price_change"), [])
         self.assertEqual(self._signals()["dismissed_count"], 1)
@@ -446,8 +395,8 @@ class RecurringSignalsTests(unittest.TestCase):
         signal = self._signals("price_change")[0]
         with self._use_db_path():
             with get_db() as conn:
-                dismiss_signal(conn, signal["key"], signal["kind"])
-                restore_signal(conn, signal["key"])
+                dismiss(conn, signal["key"], signal["kind"])
+                restore(conn, signal["key"])
         self.assertEqual(len(self._signals("price_change")), 1)
 
     def test_a_dismissed_missed_date_does_not_hide_the_next_one(self):

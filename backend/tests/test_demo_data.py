@@ -232,9 +232,9 @@ class DemoWorkedExampleTests(unittest.TestCase):
         return _scoped(self.db_path)
 
     def test_every_recurring_signal_kind_is_represented(self):
-        """The reason the dataset carries a stopped subscription, a streaming price step and a water
-        bill that outgrew its rule: without all three, three of the four findings never appear and the
-        Recurring page's whole review section can only be seen empty."""
+        """The reason the dataset carries a stopped subscription and a streaming price step: without
+        them the findings never appear and the Recurring page's whole review section can only be seen
+        empty."""
         from backend.services.recurring_detection import maybe_auto_scan
         from backend.services.recurring_signals import compute_signals
 
@@ -242,11 +242,21 @@ class DemoWorkedExampleTests(unittest.TestCase):
             maybe_auto_scan(conn)
             counts = compute_signals(conn)["counts"]
 
-        for kind in ("missed", "price_change", "rule_range", "new_series"):
+        for kind in ("missed", "price_change", "new_series"):
             self.assertGreaterEqual(counts.get(kind, 0), 1, f"no {kind} signal in the demo data")
 
+    def test_the_water_bill_that_outgrew_its_rule_is_findable(self):
+        """The same reason as the signals above, for the finding that lives with the rules instead: the
+        demo's water bill drifts past its rule's maximum, so the Rules page's findings panel has its
+        range-drift section to show."""
+        from backend.services.rule_range_drift import find_range_drift
+
+        with self._conn() as conn:
+            kinds = {finding["kind"] for finding in find_range_drift(conn)["findings"]}
+        self.assertIn("rule_range", kinds)
+
     def test_both_kinds_of_rule_overlap_are_findable(self):
-        """`Check overlaps` reports nothing on a tidy rule set, so the demo carries one ambiguous pair
+        """The overlap half of `Rule checkup` reports nothing on a tidy rule set, so the demo carries one ambiguous pair
         and one nested pair — the two the checker deliberately tells apart."""
         from backend.services.rule_overlaps import find_rule_overlaps
 

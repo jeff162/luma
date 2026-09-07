@@ -104,7 +104,7 @@ scale — rather than by feature.
   (~125 ms vs ~124 ms on 20,000 rows) — academic when scans followed an import, less so now that it is
   on the path of every category edit. Pushing the filter into SQL needs `payee_key` materialized on
   `txn`; the revisit threshold is roughly 50,000 rows.
-- [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** *Check overlaps*
+- [rule-amount-overlaps.md](rule-amount-overlaps.md) — **shipped 2026-08-27.** The overlap half of *Rule checkup*
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
   winner is not always the one a reader predicts). The mechanism is in `data-model.md` → Category rules;

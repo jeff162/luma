@@ -116,34 +116,6 @@ describe('Recurring page views', () => {
     expect(screen.queryByPlaceholderText(/Search merchant/)).toBeNull()
   })
 
-  it('opens a rule-range finding as a report of its charge, not as an editor', async () => {
-    // The arrow is one gesture and must open one kind of surface. A rule-range finding is about a single
-    // charge rather than a series, so it reports on exactly that row — same panel, same row editing.
-    const RANGE_SIGNAL = {
-      kind: 'rule_range', key: 'rule_range:r1:t7', severity: 'warning',
-      rule_id: 'r1', rule_keyword: 'harborline', rule_category_name: 'Insurance',
-      amount_min: 300, amount_max: null, bound: 'min', inside: false, percent: 18.1,
-      txn_id: 't7', txn_date: '2026-08-03', txn_name: 'Harborline Insurance', amount: 245.84,
-      current_category_name: 'Uncategorized', series_id: null, series_name: null,
-    }
-    mockApi()
-    api.getRecurringSignals.mockResolvedValue({
-      signals: [RANGE_SIGNAL], counts: { rule_range: 1 },
-      anomaly_count: 1, dismissed_count: 0, horizon_days: 30,
-    })
-    render(<MemoryRouter initialEntries={['/recurring']}><Recurring /></MemoryRouter>)
-    await screen.findByText('Streamly')
-    await userEvent.click(screen.getByText('Needs attention'))
-    await userEvent.click(await screen.findByRole('button', { name: 'Open this transaction' }))
-
-    await waitFor(() => {
-      expect(api.getTransactions).toHaveBeenCalledWith(expect.objectContaining({ ids: 't7' }))
-    })
-    // The report panel opens headed by the charge, so the name is on screen twice: once on the finding
-    // and once on the report it opened. Two is the assertion — one would mean nothing opened.
-    await waitFor(() => expect(screen.getAllByText('Harborline Insurance')).toHaveLength(2))
-  })
-
   it('lands on the findings view when the Tasks page links to a kind', async () => {
     renderPage('/recurring?signal=price_change')
     expect(await screen.findByText(/from its established amount/)).toBeTruthy()

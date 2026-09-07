@@ -1063,21 +1063,16 @@ identifiable finding or a running count of work.
   a page with several views reloads every source the active view draws from, including an open drill-down.
 
 - **A finding's headline opens a report of what it names.** Every recurring finding carries an arrow on
-  its headline that opens the same drill-down report on whatever the headline is about — the series'
-  members for most kinds, the single offending charge for the two rule-range ones — docked in place under
-  the findings. **One gesture opens one kind of surface**: the rule-range case first opened a transaction
-  *editor* instead, on the reasoning that the finding is about one row, and that was wrong — the same
-  arrow doing two different kinds of thing depending on the row it sits on is exactly the inconsistency
-  the single affordance was meant to remove, and the report reaches the editor anyway. The drill-down
-  already served two shapes through one paged list, so the third is a synthetic marker beside them rather
-  than a second panel. It replaced an *Open series* button
-  that only two of the five kinds ever had, which left *Newly detected* asking for a Confirm with no way
-  to look at the series, and a rule-range finding offering *Widen to include* with no way to read the
-  charge. That second one is the sharper case: widening is only right when the bound is too tight, and
-  telling that apart from a miscategorized charge needs the transaction — so the surface offered the
-  destructive reading and withheld the corrective one. **Two affordances for one action, present on some
-  rows and not others, is worse than either alone**; the arrow goes on the name because the name is what
-  it opens, which is the same rule as the row markers above.
+  its headline that opens the drill-down report on the series the headline is about, docked in place
+  under the findings. It replaced an *Open series* button that only some kinds ever had, which left
+  *Newly detected* asking for a Confirm with no way to look at the series. **Two affordances for one
+  action, present on some rows and not others, is worse than either alone**; the arrow goes on the name
+  because the name is what it opens, which is the same rule as the row markers above.
+
+  This surface once also carried the rule range-drift findings, whose headline named a *transaction*
+  rather than a series, and the arrow's target changed with the row it sat on. Those findings now live on
+  the Rules page, where both of their actions already pointed — see *A finding belongs to the surface its
+  actions edit* below.
 
   **Where the durable half lives depends on the scope of the decision, not the surface that raised it.**
   Keep on a flagged duplicate follows this pattern with the second half in **Settings** rather than at
@@ -1101,6 +1096,26 @@ identifiable finding or a running count of work.
 - **Purely forward-looking information is not a nag and gets no badge.** Upcoming recurring charges are
   a budgeting view someone may want to consult; nothing about them is wrong, so they carry no actions, no
   dismissal, and never reach the Tasks page. A badge that counts ordinary life stops meaning anything.
+
+- **A finding belongs to the surface its actions edit, not the one where it was first noticed.** The
+  rule range-drift findings — a charge that missed an amount-gated rule's bound — were built beside the
+  recurring signals, because a drifted range costs the row its place in the rule's series. But both
+  actions they offer (*Widen to include*, *Edit rule*) edit a **rule**, the finding is derived without
+  reference to any series, and a rule with no series at all raises it just the same. On the Recurring
+  page they had to head their card with a transaction instead of a series, give the headline arrow a
+  second kind of target, and take a name-plus-a-caveat in a filter row about series. On the Rules page
+  they are one more thing wrong with the rule set. **The tell is a finding that needs an exception in
+  every shared mechanism of the surface hosting it**; the consequence it names — here, the lost series —
+  belongs in the finding's own sentence, not in its address. What follows from the fix follows on its
+  own: widening re-applies the rule, and the detector returns the row to the series on its next pass.
+
+- **Only the half that arrives on its own earns a badge.** The Rules page's *Rule checkup* runs three
+  checks and badges one. Drifted ranges appear because a charge landed in the ledger and a rule quietly
+  stopped claiming it — news, and worth a count on the control. The overlap and nesting findings are an
+  **audit**: they change only when the user edits a rule, so a badge for them would sit at 3 for months
+  over pairs already looked at and decided about, which is the same way a badge that counts ordinary life
+  stops meaning anything. The unbadged half also stays *on demand* — its pairwise pass runs when the
+  panel opens, while the badged half runs on page load.
 
 ## Import-specific patterns
 

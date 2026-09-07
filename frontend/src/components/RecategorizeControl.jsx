@@ -46,9 +46,10 @@ export function useRecategorize() {
   return { pendingCount, result, run, reloadPreview, dismissResult }
 }
 
-// Default label is "Run categorization", which is what the Help topics have always called it — the
-// button read "Re-run categorization" and the docs read "Run categorization" for the same control.
-export function RecategorizeButton({ pendingCount, onRun, label = '↻ Run categorization', showCount = false }) {
+// Default label is "Categorize", with the ↻ carrying the "again" the word "Run" used to. Help names it
+// the same way: a topic that calls a button something the button does not say sends the reader looking
+// for a control that is not there, so the two move together.
+export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categorize', showCount = false }) {
   const hasPending = pendingCount > 0
   const style = hasPending
     ? {

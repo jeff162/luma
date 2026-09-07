@@ -650,6 +650,17 @@ export const api = {
     request('/rules/overlaps/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
   restoreRuleOverlap: (key) =>
     request('/rules/overlaps/restore', { method: 'POST', body: JSON.stringify({ key }) }),
+  // Recent charges an amount-gated rule nearly claimed: one that missed a bound (a warning — the row
+  // lost the rule's category) and one sitting just inside a bound (information). Same payload shape as
+  // the overlaps check, because one panel presents both.
+  getRuleRangeDrift: ({ includeDismissed = false } = {}) =>
+    request(`/rules/range-drift${includeDismissed ? '?include_dismissed=true' : ''}`),
+  // Acknowledge one charge ("not this rule's"), and the undo. Keyed by rule and transaction, so it says
+  // nothing about the next charge and never uses up the cap on how many of a rule's near-misses list.
+  dismissRuleRangeDrift: (key, kind) =>
+    request('/rules/range-drift/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
+  restoreRuleRangeDrift: (key) =>
+    request('/rules/range-drift/restore', { method: 'POST', body: JSON.stringify({ key }) }),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
   // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save

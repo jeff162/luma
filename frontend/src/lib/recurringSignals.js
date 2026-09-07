@@ -2,20 +2,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * What a recurring signal points at, and what widening its range would mean.
+ * What a recurring signal points at, and what accepting its new amount would mean.
  *
  * Both are answers about the finding itself rather than about how it is drawn, which is why they sit
  * apart from the review surface that renders it: the page reads them to build its cards and its
  * actions, and they are the half worth testing on its own.
  */
 
-// Reachability is the point rather than convenience: three of the five kinds could reach nothing at all
-// before this, including *Newly detected*, which asks the user to Confirm a series without offering any
-// way to look at it. See `ui-patterns.md` on markers opening what they stand for.
+// Reachability is the point rather than convenience: some kinds could reach nothing at all before this,
+// including *Newly detected*, which asks the user to Confirm a series without offering any way to look at
+// it. See `ui-patterns.md` on markers opening what they stand for.
 export function signalTarget(signal) {
-  if (signal.kind === 'rule_range' || signal.kind === 'rule_range_edge') {
-    return signal.txn_id ? { type: 'transaction', id: signal.txn_id } : null
-  }
   return signal.series_id ? { type: 'series', id: signal.series_id } : null
 }
 

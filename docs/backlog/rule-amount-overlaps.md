@@ -1,6 +1,6 @@
 # Surfacing rules that compete for the same transactions
 
-**Shipped 2026-08-27** as *Check overlaps* on the Rules page (`GET /rules/overlaps`,
+**Shipped 2026-08-27** as the overlap half of *Rule checkup* on the Rules page (`GET /rules/overlaps`,
 `services/rule_overlaps.py`, `components/RuleOverlapsDialog.jsx`). The mechanism and its rules live in
 `data-model.md` → Category rules; this file keeps only what that section should not carry — the shapes
 that were rejected, and the one case still deferred.

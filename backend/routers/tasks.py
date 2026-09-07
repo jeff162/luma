@@ -38,6 +38,7 @@ from backend.services import crypto_service
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_signals import compute_signals
+from backend.services.rule_range_drift import find_range_drift
 from backend.services.reimbursements import due_reminders
 
 router = APIRouter()
@@ -333,6 +334,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
             })
 
         tasks.extend(_recurring_signal_tasks(conn))
+        tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))
         tasks.extend(_connection_tasks(conn))
 
@@ -422,16 +424,6 @@ _SIGNAL_TASKS = [
         "plural": "new recurring series were detected recently",
         "detail": "Confirm the ones that are real — this is where a forgotten trial that started billing shows up.",
     },
-    {
-        "kinds": ("rule_range", "rule_range_edge"),
-        "id": "rule_amount_range",
-        "title": "Rule amount range may need adjusting",
-        "severity": SEVERITY_WARNING,
-        "singular": "recent transaction sits outside a rule's amount range, or right at its edge",
-        "plural": "recent transactions sit outside a rule's amount range, or right at its edge",
-        "detail": "An amount range decides which rows the rule claims, so a charge that drifts past it "
-                  "quietly stops being categorized by that rule.",
-    },
 ]
 
 
@@ -455,6 +447,29 @@ def _recurring_signal_tasks(conn) -> list[dict]:
             "severity":    spec["severity"],
         })
     return tasks
+
+
+def _rule_range_drift_tasks(conn) -> list[dict]:
+    """The charges an amount-gated rule nearly claimed. One task covering both kinds rather than two,
+    because they are one situation reported at two moments — the range has drifted — and the fix is the
+    same rule either way. Like the recurring signals it carries no `dismiss_key`: each finding is
+    dismissed individually on the Rules page this links to."""
+    counts = find_range_drift(conn)["counts"]
+    n = sum(counts.values())
+    if not n:
+        return []
+    return [{
+        "id":          "rule_amount_range",
+        "title":       "Rule amount range may need adjusting",
+        "description": f"{n} recent transaction{'' if n == 1 else 's'} "
+                       f"{'sits' if n == 1 else 'sit'} outside a rule's amount range, or right at its "
+                       "edge. An amount range decides which rows the rule claims, so a charge that "
+                       "drifts past it quietly stops being categorized by that rule.",
+        "count":       n,
+        "link":        "/rules?findings=range-drift",
+        "link_label":  "Review rules",
+        "severity":    SEVERITY_WARNING,
+    }]
 
 
 def _dismissal_scope(request: Request | None) -> str | None:

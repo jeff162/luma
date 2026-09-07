@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { createPortal } from 'react-dom'
@@ -16,7 +16,7 @@ import { TagBadge } from '../components/TagUi.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
-import RuleOverlapsDialog from '../components/RuleOverlapsDialog.jsx'
+import RuleFindingsDialog from '../components/RuleFindingsDialog.jsx'
 import { formatDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -484,6 +484,7 @@ export function EditRuleOverlay({ rule, categories, owners, accounts, onSave, on
 export default function Rules() {
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [rules,      setRules]      = useState([])
   const [categories, setCategories] = useState([])
   const [owners,     setOwners]     = useState([])
@@ -518,7 +519,8 @@ export default function Rules() {
   const [sortMode, setSortMode] = useState('alpha') // 'alpha' | 'lastUsed'
   const [cleanupWindow, setCleanupWindow] = useUserPreference('ui.rules.cleanupWindow', '')
   const [cleanupOpen, setCleanupOpen] = useState(false)
-  const [overlapsOpen, setOverlapsOpen] = useState(false)
+  const [findingsOpen, setFindingsOpen] = useState(false)
+  const [rangeDriftCount, setRangeDriftCount] = useState(0)
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
@@ -537,8 +539,26 @@ export default function Rules() {
     api.getRules().then(r => { setRules(r); setLoading(false) })
   }, [])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
+  // Only the range-drift half of the rule checkup is counted on load. It is the half that arrives on its
+  // own — a charge appears in the ledger and a rule silently stops claiming it — so it is news worth a
+  // badge, and it is the cheaper pass. The overlap check reports on rules the user edited themselves and
+  // never changes on its own, so badging it would leave a number sitting there for months over something
+  // the user has already decided is fine, which is how a badge stops meaning anything.
+  const loadRangeDriftCount = useCallback(() => {
+    api.getRuleRangeDrift().then(r => setRangeDriftCount(r?.count || 0)).catch(() => setRangeDriftCount(0))
+  }, [])
 
   useEffect(() => { loadRules() },      [loadRules])
+  useEffect(() => { loadRangeDriftCount() }, [loadRangeDriftCount])
+
+  // Landing from the Tasks card (?findings=range-drift) opens the checkup panel, then strips the param
+  // so closing it does not reopen on the next render and a refresh does not reopen it at all.
+  useEffect(() => {
+    if (searchParams.get('findings') !== 'range-drift') return
+    setFindingsOpen(true)
+    const next = new URLSearchParams(searchParams); next.delete('findings')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
@@ -840,23 +860,32 @@ export default function Rules() {
           </Tooltip>
           {/* Sits beside "Generate rules" because it is the same shape of thing — analyse the rule set,
               present findings, let the user act — rather than in the toolbar below, which is search,
-              filter and sort. Gated only on there being a pair to compare, deliberately *not* on any rule
-              carrying amount bounds: the nesting half of the check is about merchant matchers and is just
-              as useful without them. */}
-          <Tooltip content={rules.length < 2
-            ? 'Nothing to compare until there are two rules'
-            : 'Find rules that could both claim the same transaction'}>
+              filter and sort. Enabled as soon as either check can say anything: a single rule with an
+              amount range can have a charge drift out of it, while the overlap half needs a pair to
+              compare. The badge counts only the drifted charges (see `loadRangeDriftCount`). */}
+          <Tooltip content={rules.length < 2 && !rangeDriftCount
+            ? 'Nothing to check until there are two rules, or a charge drifts out of one'
+            : rangeDriftCount
+              ? `${rangeDriftCount} recent charge${rangeDriftCount === 1 ? '' : 's'} a rule's amount range no longer claims`
+              : 'Check for drifted amount ranges and rules that compete for the same transaction'}>
             <Button
               small
               variant="ghost"
-              disabled={rules.length < 2}
-              onClick={() => setOverlapsOpen(true)}
+              disabled={rules.length < 2 && !rangeDriftCount}
+              onClick={() => setFindingsOpen(true)}
+              style={rangeDriftCount ? {
+                background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+                border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))',
+              } : undefined}
             >
-              Check overlaps
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span>Rule checkup</span>
+                <ActionCountBadge count={rangeDriftCount} tone="warning" />
+              </span>
             </Button>
           </Tooltip>
           {/* Empty-state-only, like the Categories starter offer: a head start shown only while there
-              are no rules yet. Once any rule exists it's gone (add more via "Add rule"). */}
+              are no rules yet. Once any rule exists it's gone (add more via "+ New"). */}
           {!loading && rules.length === 0 ? (
             <Button
               small
@@ -867,8 +896,10 @@ export default function Rules() {
               Starter rules
             </Button>
           ) : null}
+          {/* "+ New" rather than "Add rule": the page is the noun, and repeating it in the button only
+              costs header width the controls beside it need. */}
           <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
-            {showAnyEditor ? 'Cancel' : 'Add rule'}
+            {showAnyEditor ? 'Cancel' : '+ New'}
           </Button>
         </PageHeader>
       </div>
@@ -1043,7 +1074,7 @@ export default function Rules() {
         {loading ? (
             <div style={{ padding: 24 }}><Spinner /></div>
           ) : rules.length === 0 ? (
-            <EmptyState message='No rules yet — click "Add rule" to create one' />
+            <EmptyState message='No rules yet — click "+ New" to create one' />
           ) : filteredRules.length === 0 ? (
             <EmptyState message="No rules match your search or filters" />
           ) : (
@@ -1145,10 +1176,12 @@ export default function Rules() {
         />
       ) : null}
 
-      {overlapsOpen ? (
-        <RuleOverlapsDialog
-          onClose={() => setOverlapsOpen(false)}
-          onEditRule={id => { setOverlapsOpen(false); openEditForm(id) }}
+      {findingsOpen ? (
+        <RuleFindingsDialog
+          // Closing re-reads the badge: widening a range or dismissing a charge inside the panel is
+          // exactly what changes it, and a badge still showing the old number reads as a failed action.
+          onClose={() => { setFindingsOpen(false); loadRangeDriftCount() }}
+          onEditRule={id => { setFindingsOpen(false); loadRangeDriftCount(); openEditForm(id) }}
           onRulesChanged={() => { loadRules(); loadRecategorizePreview() }}
         />
       ) : null}

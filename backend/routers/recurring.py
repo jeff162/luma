@@ -38,10 +38,9 @@ from backend.services.recurring_detection import (
 from backend.services.recurring_signals import (
     UPCOMING_HORIZON_DAYS,
     compute_signals,
-    dismiss_signal,
     dismissed_signals,
-    restore_signal,
 )
+from backend.services.signal_dismissals import dismiss, restore
 
 router = APIRouter()
 
@@ -264,7 +263,7 @@ def dismiss_signal_route(body: SignalDismissal):
     if not (body.key or "").strip():
         raise HTTPException(status_code=400, detail="key is required")
     with get_db() as conn:
-        dismiss_signal(conn, body.key.strip(), (body.kind or "").strip())
+        dismiss(conn, body.key.strip(), (body.kind or "").strip())
         return {"ok": True}
 
 
@@ -272,7 +271,7 @@ def dismiss_signal_route(body: SignalDismissal):
 def restore_signal_route(body: SignalDismissal):
     """Undo a dismissal — both the immediate toast and the dismissed list route here."""
     with get_db() as conn:
-        restore_signal(conn, (body.key or "").strip())
+        restore(conn, (body.key or "").strip())
         return {"ok": True}
 
 

@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
-// The overlap check's panel. Every finding is derived server-side, so what is worth pinning is what the
-// panel *says* about each kind — because the two kinds mean opposite things and look similar otherwise.
+// The rule checkup panel. Every finding is derived server-side, so what is worth pinning is what the
+// panel *says* about each kind — because the three kinds mean different things and look similar
+// otherwise, and because two of them come from a different endpoint than the third.
+//
+// The range-drift half is the one with a fix attached, and the fix has two halves that must stay
+// together: widening moves the bound *and* re-applies the rule, since a bound that moves without a
+// re-apply leaves the charge exactly where it was while the panel reports success. It is offered on the
+// outside-the-range kind alone — a charge still inside the range is already being claimed, so widening
+// out to it would loosen the rule for nothing.
 //
 // The properties that break quietly, and the delete's placement is the one most likely to be "corrected"
 // back to where it looks like it belongs. **Delete is on the nesting half, not the overlap half.** An
@@ -25,15 +32,19 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import RuleOverlapsDialog from '../RuleOverlapsDialog.jsx'
+import RuleFindingsDialog from '../RuleFindingsDialog.jsx'
 import { api } from '../../lib/api.js'
+import { txnMutations } from '../../lib/txnMutations.js'
 
 vi.mock('../../lib/api.js', () => ({
   api: {
     getRuleOverlaps: vi.fn(), deleteRule: vi.fn(),
     dismissRuleOverlap: vi.fn(), restoreRuleOverlap: vi.fn(),
+    getRuleRangeDrift: vi.fn(), updateRule: vi.fn(),
+    dismissRuleRangeDrift: vi.fn(), restoreRuleRangeDrift: vi.fn(),
   },
 }))
+vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn() } }))
 
 // Call counts are asserted below (a re-run of the check, a delete that must not fire), so the shared api
 // mock has to be reset between tests as well as the DOM.
@@ -85,24 +96,43 @@ const REDUNDANT = {
   dismissible: true,
 }
 
-function renderDialog(findings, { dismissedCount = 0 } = {}) {
+// A charge that missed a rule's maximum by 12%, on the rule that gates the water bill by size.
+const DRIFT = {
+  kind: 'rule_range', key: 'rule_range:broad:t4', severity: 'warning', dismissible: true, dismissed: false,
+  rule_id: 'broad', amount_min: null, amount_max: 200, bound: 'max', percent: 12,
+  txn_id: 't4', txn_date: '2026-08-02', txn_name: 'Town of Harborline', amount: 224,
+  current_category_name: null, series_name: null,
+}
+// Still inside the range: the same warning one occurrence earlier, with nothing yet to take in.
+const DRIFT_EDGE = {
+  ...DRIFT, kind: 'rule_range_edge', key: 'rule_range_edge:broad:t5', severity: 'info',
+  txn_id: 't5', amount: 195, percent: 2.5,
+}
+
+function payload(findings, dismissedCount) {
   // Counts describe the *open* set, as the server reports them — a dismissed finding is rendered but
   // never counted, which is the property the header depends on.
   const open = findings.filter(f => !f.dismissed)
   const counts = open.reduce((acc, f) => ({ ...acc, [f.kind]: (acc[f.kind] || 0) + 1 }), {})
-  api.getRuleOverlaps.mockResolvedValue({
-    count: open.length, counts, dismissed_count: dismissedCount, findings, rules: RULES,
-  })
+  return { count: open.length, counts, dismissed_count: dismissedCount, findings, rules: RULES }
+}
+
+function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissedCount = 0 } = {}) {
+  api.getRuleOverlaps.mockResolvedValue(payload(findings, dismissedCount))
+  api.getRuleRangeDrift.mockResolvedValue(payload(drift, driftDismissedCount))
   api.deleteRule.mockResolvedValue({ ok: true })
+  api.updateRule.mockResolvedValue({ ok: true })
   api.dismissRuleOverlap.mockResolvedValue({ ok: true })
   api.restoreRuleOverlap.mockResolvedValue({ ok: true })
+  api.dismissRuleRangeDrift.mockResolvedValue({ ok: true })
+  api.restoreRuleRangeDrift.mockResolvedValue({ ok: true })
   const onEditRule = vi.fn()
   const onRulesChanged = vi.fn()
-  render(<RuleOverlapsDialog onClose={vi.fn()} onEditRule={onEditRule} onRulesChanged={onRulesChanged} />)
+  render(<RuleFindingsDialog onClose={vi.fn()} onEditRule={onEditRule} onRulesChanged={onRulesChanged} />)
   return { onEditRule, onRulesChanged }
 }
 
-describe('RuleOverlapsDialog', () => {
+describe('RuleFindingsDialog', () => {
   it('names the band two overlapping rules both claim, and proposes no fix', async () => {
     renderDialog([OVERLAP])
     await screen.findByText(/Amount ranges that overlap/)
@@ -144,9 +174,10 @@ describe('RuleOverlapsDialog', () => {
     expect(screen.getByText(/rule wins here/)).toBeTruthy()
   })
 
-  it('separates the two kinds and counts them apart', async () => {
-    renderDialog([OVERLAP, NESTING])
-    expect(await screen.findByText('1 to settle, 1 for information.')).toBeTruthy()
+  it('separates the kinds and counts them apart', async () => {
+    renderDialog([OVERLAP, NESTING], { drift: [DRIFT] })
+    expect(await screen.findByText('1 charge outside a range · 1 to settle · 1 for information')).toBeTruthy()
+    expect(screen.getByText(/Charges outside a rule/)).toBeTruthy()
     expect(screen.getByText(/Amount ranges that overlap/)).toBeTruthy()
     expect(screen.getByText(/Merchant matchers that nest/)).toBeTruthy()
   })
@@ -253,11 +284,75 @@ describe('RuleOverlapsDialog', () => {
     expect(screen.queryByText('Dismiss')).toBeNull()
   })
 
-  it('says so when nothing competes', async () => {
+  it('says so when nothing is wrong with the rule set', async () => {
     renderDialog([])
     await waitFor(() => {
-      expect(screen.getByText(/No rules are competing/)).toBeTruthy()
+      expect(screen.getByText(/Every rule claims the charges it should/)).toBeTruthy()
     })
     expect(screen.queryByText(/Amount ranges that overlap/)).toBeNull()
+    expect(screen.queryByText(/Charges outside a rule/)).toBeNull()
+  })
+
+  // --- charges that drifted out of a range ---------------------------------------------------------
+
+  it('names what a drifted range cost and where the charge landed instead', async () => {
+    renderDialog([], { drift: [DRIFT] })
+    expect(await screen.findByText(/12% above the maximum of \$200\.00/)).toBeTruthy()
+    // The consequence, not just the arithmetic — this is the part the user cannot see anywhere else.
+    expect(screen.getByText(/the rule did not claim it/)).toBeTruthy()
+    expect(screen.getByText(/It is uncategorized as a result/)).toBeTruthy()
+  })
+
+  it('says which series the charge fell out of, where the rule feeds one', async () => {
+    renderDialog([], { drift: [{ ...DRIFT, series_name: 'Town of Harborline' }] })
+    expect(await screen.findByText(/It dropped out of the Town of Harborline series too/)).toBeTruthy()
+  })
+
+  it('widens the bound and re-applies the rule, as one action', async () => {
+    // Both halves or neither: a bound that moves without a re-apply leaves the charge exactly where it
+    // was, while the panel reports the fix as done.
+    const { onRulesChanged } = renderDialog([], { drift: [DRIFT] })
+    await userEvent.click(await screen.findByText('Widen to include'))
+    await waitFor(() => {
+      expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_max: 224 })
+      expect(txnMutations.applyRule).toHaveBeenCalledWith('broad', { preserveManual: true })
+    })
+    expect(onRulesChanged).toHaveBeenCalled()
+    // The whole checkup re-runs: widening can settle an overlap as well as this finding.
+    await waitFor(() => expect(api.getRuleRangeDrift).toHaveBeenCalledTimes(2))
+  })
+
+  it('rounds the widened bound outwards, so the charge it names actually matches', async () => {
+    renderDialog([], { drift: [{ ...DRIFT, amount: 224.005 }] })
+    await userEvent.click(await screen.findByText('Widen to include'))
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_max: 224.01 }))
+  })
+
+  it('moves the minimum when that is the bound the charge missed', async () => {
+    renderDialog([], { drift: [{ ...DRIFT, bound: 'min', amount_min: 300, amount_max: null, amount: 245.845 }] })
+    await userEvent.click(await screen.findByText('Widen to include'))
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_min: 245.84 }))
+  })
+
+  it('offers no widening on a charge still inside the range', async () => {
+    // It is already being claimed; moving the bound out to it would loosen the rule for nothing.
+    renderDialog([], { drift: [DRIFT_EDGE] })
+    expect(await screen.findByText(/within 2.5% of the rule/)).toBeTruthy()
+    expect(screen.queryByText('Widen to include')).toBeNull()
+    expect(screen.getByText('Edit')).toBeTruthy()
+  })
+
+  it('dismisses one charge through its own store, not the overlap check\'s', async () => {
+    renderDialog([], { drift: [DRIFT] })
+    await userEvent.click(await screen.findByText('Dismiss'))
+    await waitFor(() => expect(api.dismissRuleRangeDrift).toHaveBeenCalledWith(DRIFT.key, 'rule_range'))
+    expect(api.dismissRuleOverlap).not.toHaveBeenCalled()
+  })
+
+  it('restores a revealed drift dismissal through the same store', async () => {
+    renderDialog([], { drift: [{ ...DRIFT, dismissed: true }], driftDismissedCount: 1 })
+    await userEvent.click(await screen.findByLabelText(/Show dismissed/i, { selector: 'input' }))
+    await userEvent.click(await screen.findByText('Restore'))
+    await waitFor(() => expect(api.restoreRuleRangeDrift).toHaveBeenCalledWith(DRIFT.key))
   })
 })

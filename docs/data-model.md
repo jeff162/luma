@@ -417,7 +417,23 @@ Important behavior:
   `[3000, ∞)`) have no principled winner at all, which is a modelling ambiguity for the user to resolve
   rather than something ordering can answer — it is **surfaced rather than resolved**, see below
 
-- **rules that compete for the same rows are surfaced on demand**, from *Check overlaps* on the
+- **charges that drifted out of a rule's amount range are reported on the Rules page**
+  (`GET /rules/range-drift`, `services/rule_range_drift.py`), because **an amount range on a rule is a
+  matching gate**: when a bill drifts past the bound the row stops matching, so it loses the rule's
+  category *and* its place in the rule's series, and nothing else in the app notices — the row is
+  categorized, just not as intended. Derived on read over a 90-day window, like the recurring signals it
+  was first written beside, and sharing their dismissal store (`services/signal_dismissals.py`) rather
+  than a table of its own. A charge missing a bound by up to 25% is a **warning** with a one-click
+  *Widen to include* (the bound has one right answer; the row then takes the category back, and the
+  detector returns it to the series on its next pass); one sitting within 10% *inside* a bound is the
+  same warning one occurrence earlier, **information**, with no widen offered since the rule still claims
+  it. A row already carrying the rule's own category is never reported, and each rule reports at most its
+  three most recent near-misses, since a drifted range says one thing however many rows hit it — a
+  **dismissal does not consume that cap**, or acknowledging what is on screen would silence the rule.
+  This is the half of the Rules page's *Rule checkup* that **arrives on its own**, and therefore the only
+  half that badges the control: the overlap findings below change only when the user edits a rule.
+
+- **rules that compete for the same rows are surfaced on demand**, from *Rule checkup* on the
   Rules page (`GET /rules/overlaps`, `services/rule_overlaps.py`). Two findings with opposite intents.
   An **amount overlap** is the case above: two rules the ordering can separate only by the span term,
   whose ranges intersect with neither containing the other. **Nothing is offered but Edit** — inventing a
@@ -505,7 +521,7 @@ Between them those three close the machine-versus-human case entirely. **What re
 
 - **`split` is feature-owned too, and is the one source no rule apply may take.** A split transaction's categorization *is* its set of `txn_split` allocations; the row's own `category_id` is only the retained pre-split value that un-splitting restores. Every automatic pass skips it by source, as with `enrichment`. Where it diverges is the **full-force rule apply**, which may take an `enrichment` row but **refuses** a split one and reports how many it declined: an `enrichment` row's prior is recoverable from its `txn_link` metadata, whereas a split is hand-built allocation work with no other record, so replacing it with a single category would be an unrecoverable loss performed silently. Bulk category edit refuses on the same grounds and reports the same count, and `PATCH /transactions/{id}/category` refuses outright rather than discarding the parts. The refusal is scoped to the **category** effect only — a rule's rename and tags describe the purchase, which a split says nothing about, so those still apply. Un-splitting is therefore always an explicit act.
 
-- **Run categorization** (`recategorize_all`, the *run categorization* button via `POST /sync/recategorize`) re-runs all rules but selects only `category_overridden = 0` rows that are not `enrichment` — `rule` and uncategorized — so `manual`, `import`, and `enrichment` rows are left untouched. It is **retain-by-default and monotonic**: it only ever *sets* or *changes* a category (and rule-applied tags), never *removes* one. A `rule` row that now matches nothing **keeps its category** — it stays `category_overridden = 0`, so a future rule can still reclaim it. This is deliberate: deleting an obsolete rule, or narrowing one, must not silently un-categorize the history it already produced. (Rule *renames* have always behaved this way — a no-match row keeps its display name; this makes categories and rule-tags consistent with that.)
+- **Run categorization** (`recategorize_all`, the *Categorize* button via `POST /sync/recategorize`) re-runs all rules but selects only `category_overridden = 0` rows that are not `enrichment` — `rule` and uncategorized — so `manual`, `import`, and `enrichment` rows are left untouched. It is **retain-by-default and monotonic**: it only ever *sets* or *changes* a category (and rule-applied tags), never *removes* one. A `rule` row that now matches nothing **keeps its category** — it stays `category_overridden = 0`, so a future rule can still reclaim it. This is deliberate: deleting an obsolete rule, or narrowing one, must not silently un-categorize the history it already produced. (Rule *renames* have always behaved this way — a no-match row keeps its display name; this makes categories and rule-tags consistent with that.)
 
   - **Reconcile is the opt-in, scoped exception.** `recategorize_all(retain_unmatched=False)` restores the old projection behavior — a no-match `rule` row is cleared to uncategorized (a `cleared` row keeps its marker), and its rule-tags removed. It is **only** ever run over a **specific row set** (`txn_ids`), never the whole ledger, so it cannot mass-revert the orphaned-rule rows that retain accumulates. Two callers: the **"re-evaluate this rule's transactions" opt-in** on a rule delete/edit (`DELETE`/`PATCH /rules/{id}?reconcile=true` — the "this rule was wrong, revert its rows" path, off by default), which reconciles just that rule's matched rows; and the money-movement **"remove a type"** path, which reconciles just the excluded "Money movement" leaf's rows so an un-approved type falls back out (retain would otherwise strand it there). Scoping to one rule's rows is what makes reconcile safe — it re-derives each row against the *remaining* rules (a dropped row clears or moves to another matching rule; a still-matched row is unchanged) and never touches a categorization another rule owns.
 
@@ -893,9 +909,11 @@ Key invariants:
   rebuild is keyed by it.
 
 - **Anomaly/forecast signals are derived on read and never stored** (`services/recurring_signals.py`).
-  Five kinds: **upcoming**, **missed**, **new series detected**, **price change**, and a rule whose
-  **amount range** a charge has drifted out of. Two facts force the derivation rather than the
-  event-driven alternative the scan seam was originally marked for:
+  Four kinds: **upcoming**, **missed**, **new series detected** and **price change**. A fifth once lived
+  here — the charge that drifted outside an amount-gated rule's range — and now sits with the rules
+  (below); it reads as a recurring finding because a drifted range costs the row its series, but both
+  actions it offers edit a *rule* and it never needed a series to exist at all. Two facts force the
+  derivation rather than the event-driven alternative the scan seam was originally marked for:
   - **The stored `amount_min`/`amount_max` band cannot detect a price change.** `_write_series_stats`
     rewrites it from exactly the rows the series owns, so a hiked charge is *inside* the band by the
     time anything could compare against it. Price change is measured against the occurrences
@@ -923,12 +941,6 @@ Key invariants:
     account-agnostic series), never later than today. Comparing `next_due_date` to today would turn a
     month without an import into a wall of false alarms, and an account that has stopped syncing has no
     opinion about whether its charge arrived.
-
-  The rule-range signal exists because **an amount range on a rule is a matching gate**: when a bill
-  drifts past the bound the row stops matching, so it loses the rule's category *and* its place in the
-  rule's series, and nothing else in the app notices — the row is categorized, just not as intended. A
-  row already carrying the rule's own category is never reported, and each rule reports at most its
-  three most recent near-misses, since a drifted range says one thing however many rows hit it.
 
 - **`recurring_signal_dismissal` is the whole of the signals' durable state.** Keyed by each signal's
   own fingerprint — a transaction id, or a series' identity tuple plus the date concerned — deliberately

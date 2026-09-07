@@ -266,10 +266,11 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
   payees changed — but a stored finding would be orphaned within a day (an auto series is re-minted
   with a new id on every scan) and stale on the next edit (a recategorize, a trash, a membership
   override). Deriving from the series and their members on each read is self-healing, idempotent, and
-  cheap: the pass is bounded by series membership rather than by ledger size, and the rule-range half is
-  skipped outright when no rule gates on amount. See `data-model.md` → Recurring series for the five
-  kinds, why the stored amount band cannot detect a price change, and why lateness is measured against
-  data freshness rather than the calendar.
+  cheap: the pass is bounded by series membership rather than by ledger size. The same reasoning, and the
+  same dismissal store, carries the rule range-drift findings on the Rules page
+  (`backend/services/rule_range_drift.py`), which are about the rule set rather than about a series. See
+  `data-model.md` → Recurring series for the four kinds, why the stored amount band cannot detect a price
+  change, and why lateness is measured against data freshness rather than the calendar.
 
 - **Two surfaces, split by whether the thing is wrong.** The four anomaly kinds become Tasks items
   (`routers/tasks.py` reads the same computed counts) linking into the Recurring page's review section,

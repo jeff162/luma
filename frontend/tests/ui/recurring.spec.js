@@ -47,11 +47,13 @@ test('the review view reports the anomalies the demo data was built to raise', a
   // presence is what proves rows rendered rather than an empty state under a populated tab.
   await expect(page.getByRole('button', { name: 'Dismiss' }).first()).toBeVisible()
 
-  // A rule-range finding carries the action that fixes the cause rather than the symptom: the demo's
-  // newest water bill grew past the ceiling on the rule that files these, so it arrived uncategorized
-  // and nothing else in the app noticed. Selecting the kind also covers the tabs actually filtering.
-  await page.getByRole('button', { name: /Outside a rule/ }).first().click()
-  await expect(page.getByRole('button', { name: 'Widen to include' }).first()).toBeVisible()
+  // Selecting a kind covers the tabs actually filtering, not merely rendering.
+  await page.getByRole('button', { name: /Amount changed/ }).click()
+  await expect(page.getByRole('button', { name: /^All/ })).toBeVisible()
+
+  // The drifted water bill the demo also seeds is *not* here: it is a finding about a rule, and it
+  // belongs to the Rules page's checkup (tests/ui/rule-checkup.spec.js).
+  await expect(page.getByRole('button', { name: /Outside a rule/ })).toHaveCount(0)
 })
 
 test('a transfer between two accounts is one series, not two', async ({ page }) => {

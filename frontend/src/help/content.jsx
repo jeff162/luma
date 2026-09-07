@@ -242,7 +242,7 @@ export const HELP_TOPICS = [
             turn that action into a rule -- give it conditions and actions, apply it to other matching
             transactions, and save it. From then on it runs automatically against newly imported data
             (Categorizing imported data can be controlled when importing a file and there is
-            a <em>run categorization</em> button to trigger a pass on demand).
+            a <em>Categorize</em> button to trigger a pass on demand).
           </li>
           <li>
             When a transaction is marked as part of a recurring series the way that happens is through the
@@ -536,18 +536,18 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'What changes a transaction’s category',
     surfaces: ['Rules page'],
-    summary: 'Run categorization re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
+    summary: 'Categorize re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
     body: () => (
       <>
         <p>
           A transaction’s category can come from a few different places, and the two bulk actions that
-          re-categorize -- <strong>Run categorization</strong> and a rule’s <strong>apply to matching
+          re-categorize -- <strong>Categorize</strong> and a rule’s <strong>apply to matching
             transactions</strong> -- treat those origins differently. The practical effect of each is
           below; a closing section ranks the sources in full for anyone who wants it.
         </p>
-        <h4>Run categorization</h4>
+        <h4>Categorize</h4>
         <p>
-          The <strong>Run categorization</strong> button (on the Rules page) re-applies every rule
+          The <strong>Categorize</strong> button (on the Rules page) re-applies every rule
           across the whole ledger, but only to rows that are <strong>not pinned</strong> -- those
           categorized by a rule, and those still uncategorized. It deliberately leaves alone anything
           categorized <em>by hand</em> or kept from a <em>trusted import</em>. It only ever <em>sets</em>
@@ -583,7 +583,7 @@ export const HELP_TOPICS = [
             <em> use the categories present in the data</em>. Also protected from automatic re-runs, but
             a rule apply can reclaim it (turning it into a rule categorization), and the Generate-rules
             conflict screen can re-categorize it in place -- see below.</li>
-          <li><strong>Rule</strong> -- assigned by a matching rule. Not pinned, so Run categorization
+          <li><strong>Rule</strong> -- assigned by a matching rule. Not pinned, so Categorize
             re-evaluates it (it can move to another rule, but is never cleared) and a full-force apply
             overwrites it; it is reverted only by the opt-in <em>re-evaluate</em> when the rule is deleted
             or edited.</li>
@@ -592,7 +592,7 @@ export const HELP_TOPICS = [
             can categorize it, but the discarded file label is kept on the row and never re-applied.)</li>
         </ul>
         <p>
-          The asymmetry is the part to remember: <strong>Run categorization</strong> respects the two
+          The asymmetry is the part to remember: <strong>Categorize</strong> respects the two
           protected origins, while a rule’s <strong>apply to matching</strong> does not.
         </p>
         <p>
@@ -621,7 +621,7 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are never ordered by hand -- the most specific one wins, on a fixed ranking that puts scope first, then keyword length, then the narrower amount range. Two situations are worth a look and the Rules page can list them on demand: amount ranges that overlap without one containing the other, which nothing can settle on its own and which is resolved by refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads -- and where a rule that files nothing differently can be deleted outright.',
+    summary: 'Rules are never ordered by hand -- the most specific one wins, on a fixed ranking that puts scope first, then keyword length, then the narrower amount range. Two situations are worth a look and the Rules page can list them on demand from Rule checkup: amount ranges that overlap without one containing the other, which nothing can settle on its own and which is resolved by refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads -- and where a rule that files nothing differently can be deleted outright.',
     body: () => (
       <>
         <p>
@@ -640,10 +640,12 @@ export const HELP_TOPICS = [
         </p>
         <h4>Checking for rules that compete</h4>
         <p>
-          <strong>Check overlaps</strong> on the Rules page lists the pairs that can both claim
+          <strong>Rule checkup</strong> on the Rules page lists the pairs that can both claim
           a transaction. Running the check changes nothing on its own; the panel it opens reports what it
-          found, and each rule can be opened for editing from there. Two kinds of finding appear, and
-          they mean opposite things.
+          found, and each rule can be opened for editing from there. Two kinds of finding appear here, and
+          they mean opposite things -- the same panel also reports{' '}
+          <HelpLink to="/help/rule-amount-drift">charges that have drifted out of a rule&rsquo;s range</HelpLink>,
+          which is the reverse situation: a rule that has stopped claiming something it used to.
         </p>
         <ul>
           <li>
@@ -693,6 +695,55 @@ export const HELP_TOPICS = [
           Ranges where one sits entirely inside the other are deliberately not reported. That case has a
           clear answer already -- the inner range wins -- and it is the recommended way to split one
           merchant&rsquo;s charges across categories.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'rule-amount-drift',
+    section: 'organizing',
+    title: 'When a bill outgrows its rule',
+    surfaces: ['Rules page'],
+    summary: 'An amount range decides which transactions a rule claims, so a bill that grows past the limit stops being categorized by that rule and drops out of any series the rule feeds -- with nothing appearing to go wrong. Rule checkup reports the recent charges this has happened to, and offers to move the limit out to take one back.',
+    body: () => (
+      <>
+        <p>
+          An amount range on a rule is a <strong>matching gate</strong>, not a preference: a charge
+          outside it is not claimed by that rule at all. That is what makes a single biller&rsquo;s
+          several bills separable by size, and it is also what makes a drifting bill easy to miss. When a
+          water bill that has always come in under $60 arrives at $63, the rule stops matching it. The
+          charge keeps whatever category it would have had without the rule -- often none -- and it drops
+          out of any recurring series the rule feeds, because a series claims the transactions its rule
+          claims. Nothing malfunctions, so nothing announces it.
+        </p>
+        <p>
+          <strong>Rule checkup</strong> on the Rules page reports these. The control carries a count when
+          there are any, and the panel lists each charge with the rule it just missed, how far outside the
+          limit it landed, and where it ended up instead. Only recent charges are listed, and only ones
+          that missed by a little: a charge at three times the limit is a different bill, not a limit that
+          needs moving.
+        </p>
+        <ul>
+          <li>
+            <strong>Widen to include</strong> moves that one limit out to the charge and re-applies the
+            rule, which is usually the whole fix. Categorizations made by hand are left alone. The series
+            follows on its own: once the row carries the rule&rsquo;s category again, the next scan takes
+            it back into the series.
+          </li>
+          <li>
+            <strong>Edit</strong> opens the rule itself, for the times the range is not what wants
+            changing -- a rule that should be split in two, or a charge that belongs somewhere else
+            entirely.
+          </li>
+          <li>
+            <strong>Dismiss</strong> acknowledges one charge without touching the rule, for a charge the
+            rule was never meant to claim. It covers that charge alone; the next one still reports.
+          </li>
+        </ul>
+        <p>
+          A charge that is <em>inside</em> the range but close to a limit is reported the same way, more
+          quietly -- the same warning one occurrence earlier, with no offer to widen, since the rule is
+          still claiming it.
         </p>
       </>
     ),
@@ -803,7 +854,7 @@ export const HELP_TOPICS = [
           way in.
         </p>
         <p>
-          Automatic categorization leaves a split alone. <strong>Run categorization</strong> skips it, and
+          Automatic categorization leaves a split alone. <strong>Categorize</strong> skips it, and
           even applying a rule to its matching transactions -- which otherwise overrides a category set by
           hand -- will not overwrite one, reporting how many it left instead. A split is hand-built work
           with no other record of it. See{' '}
@@ -1935,7 +1986,7 @@ export const HELP_TOPICS = [
     section: 'recurring',
     title: 'Recurring transactions',
     surfaces: ['Recurring', 'Rules (recurring series)', 'Transactions (row menu)'],
-    summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions. A review section reports what is missing, what changed price, and what was just detected, alongside a forward view of what is due next.',
+    summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule. Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions. A review section reports what is missing, what changed price, and what was just detected, alongside a forward view of what is due next.',
     body: () => (
       <>
         <p>
@@ -2065,14 +2116,6 @@ export const HELP_TOPICS = [
           <li>
             <strong>Newly detected</strong> -- a series found for the first time in the last month. This
             is where a forgotten trial that has started billing turns up.
-          </li>
-          <li>
-            <strong>Outside a rule’s range</strong> -- a charge that a rule would have claimed except for
-            its amount. An amount range decides which transactions a rule matches, so a bill that grows
-            past the limit quietly stops being categorized by that rule and drops out of its series.
-            <em> Widen to include</em> moves the limit out to that charge and re-applies the rule. A charge
-            that is still inside the range but close to a limit is reported the same way, one occurrence
-            earlier.
           </li>
         </ul>
         <p>
