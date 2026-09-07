@@ -57,16 +57,27 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   // the dwell never resolves into a hint. Capture phase because the scroll almost always happens in an
   // ancestor container and scroll events don't bubble. Only listens while this tooltip is showing or
   // armed, so the many idle tooltips in a list cost nothing.
+  //
+  // The same dismissal serves a right-click. A context menu opens at the pointer without the pointer
+  // moving, so no `mouseleave` ever fires and the hint stays up — and since this tooltip sits at the top
+  // of the app's stacking order (see `zIndex` below), it paints over the menu; an `interactive` hint also
+  // keeps pointer events, so the menu items it covers stop being clickable. Capture phase and window-wide
+  // because the menu may be opened from an ancestor of the trigger (transaction rows put the handler on
+  // the row, not the cell) or from somewhere else on the page entirely.
   useEffect(() => {
     if (!open && !pending) return undefined
-    function onScroll() {
+    function dismiss() {
       clearTimeout(openTimer.current)
       clearTimeout(closeTimer.current)
       setPending(false)
       setOpen(false)
     }
-    window.addEventListener('scroll', onScroll, true)
-    return () => window.removeEventListener('scroll', onScroll, true)
+    window.addEventListener('scroll', dismiss, true)
+    window.addEventListener('contextmenu', dismiss, true)
+    return () => {
+      window.removeEventListener('scroll', dismiss, true)
+      window.removeEventListener('contextmenu', dismiss, true)
+    }
   }, [open, pending])
   // Position only once the tooltip is mounted, so its real measured size is known. A portaled DOM
   // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
