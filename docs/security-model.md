@@ -116,6 +116,32 @@ A trusting household can therefore be entirely passwordless and still need vault
 may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
 passwordless install can hold vault-encrypted credentials, and an authenticated one can have no vault.
 
+**A session's *timestamp* is not part of what secures it, and a clock is not a trustworthy witness.**
+The session cookie is secured by its signature; the timestamp inside it is signed data, unforgeable
+without the secret, and its only job is to bound how long a session lives. `itsdangerous` nonetheless
+rejects a stamp in the **future** (`age < 0`) exactly as it rejects a stale one, and Starlette's
+`SessionMiddleware` answers *either* failure with `session = {}` — which downstream is indistinguishable
+from having sent no cookie at all, so the user is silently signed out with no explanation. A wall clock
+that steps backwards therefore invalidates every session signed in the window it skipped, for exactly as
+long as the step: a laptop resuming from sleep, a VM restored from a snapshot, any NTP correction. This
+was live for months and was found only because the browser suite failed on it about one run in eleven.
+
+`ClockSkewTolerantSigner` (`backend/session_signing.py`) accepts a stamp up to five minutes ahead, which
+costs only that much extra session life and no security property whatsoever. Two things about it are
+worth carrying rather than rediscovering: **the fix cannot be made by adjusting `get_timestamp`**, which
+supplies both sides of the age subtraction and so cancels itself out — only the comparison can be
+widened; and **`max_age=None` is not the cheap alternative**, because Starlette derives the browser's
+own `Max-Age` attribute from the same parameter, so disabling the server-side check also surrenders the
+cookie's declared lifetime.
+
+**A diagnostic on the rejection path must use the same primitives as the path it explains.** The reason
+this took eleven runs is that "no `user_id` on the session" named three unrelated causes at once — no
+cookie, an unverifiable one, and one that verified but carried no identity — and reported them
+identically. What resolved it was a verdict logged from *this process, with its own secret*
+(`_reverified_here` in `backend/main.py`), and it answered on its first firing. It signs with the
+middleware's signer for that reason: a diagnostic holding a different signer would report an expiry the
+app never acted on.
+
 **A protection that can be switched off must not destroy the state needed to switch it back on.**
 Enabling and disabling sign-in are both flag flips: a user with no password is the same row as one with
 a password, holding a deliberately unusable sentinel, so disabling leaves hashes dormant rather than

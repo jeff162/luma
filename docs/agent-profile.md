@@ -383,8 +383,8 @@ for what the *user* can act on.
   The gate now writes every run whole to `data/check-logs/` and prints the path on its last line
   (`scripts/check_backend_and_frontend.sh`), so preserving a failure costs nothing and forgetting to is
   no longer possible. Read that directory *before* re-running, and check the failure against
-  [`transient-failures.md`](transient-failures.md) — the known intermittents each surface in several
-  unrelated specs, so the failing test's name is not how you tell them apart. This rule is stated first because it is
+  [`transient-failures.md`](transient-failures.md) — an intermittent can surface in several unrelated
+  specs, so the failing test's name is not how you tell them apart. This rule is stated first because it is
   the one that has been broken twice, and the piping rule below is only the mechanism by which it was
   broken the second time.
 

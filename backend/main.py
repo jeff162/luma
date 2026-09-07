@@ -59,18 +59,18 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
 from backend import app_config, runtime_config, spa
 from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
+from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
-# Starlette's own default, which `SessionMiddleware` is added below without overriding. The re-verify
-# diagnostic has to age a cookie exactly as the middleware does, or it would answer a different question
-# than the one being asked — so if a `max_age` is ever passed there, it belongs here too.
+# Starlette's own default, passed explicitly below so the session's lifetime is stated here rather than
+# inherited. The re-verify diagnostic has to age a cookie exactly as the middleware does — same value and
+# same signer — or it would answer a different question than the one being asked.
 _SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 
 
@@ -78,7 +78,7 @@ def _signed_age(raw: str) -> str:
     """How old the cookie's own timestamp is, in seconds, or "unreadable". Negative means it was signed
     *ahead* of the clock now verifying it."""
     try:
-        signer = itsdangerous.TimestampSigner(str(config.session_secret))
+        signer = ClockSkewTolerantSigner(str(config.session_secret))
         stamp = int.from_bytes(base64_decode(raw.split(".")[1]), "big")
         return f"{signer.get_timestamp() - stamp}s"
     except Exception:  # noqa: BLE001 - a diagnostic must never be the thing that raises
@@ -104,21 +104,26 @@ def _reverified_here(raw: str | None) -> str:
       called that impossible has to be re-examined from `app_config.resolve()` outward.
 
     Cheap enough to be unconditional: it runs only on the rejection path, which is rare by construction.
-    See `docs/transient-failures.md` entry 1.
+
+    It answered on its first firing, and the answer was `expired` at a *negative* age — the host clock
+    stepping backwards, which is now handled (`backend/session_signing.py`). The instrument stays: it is
+    what would name the next cause as quickly, and a diagnostic for a 1-in-11 failure that has silently
+    rotted costs another eleven runs to discover. See `docs/security-model.md` → *Identity and the
+    network perimeter*.
     """
     if not raw or raw == "null":
         return "-"
     try:
-        data = itsdangerous.TimestampSigner(str(config.session_secret)).unsign(
+        data = ClockSkewTolerantSigner(str(config.session_secret)).unsign(
             raw.encode(), max_age=_SESSION_MAX_AGE_SECONDS
         )
     except itsdangerous.SignatureExpired:
-        # `itsdangerous` raises this for BOTH an over-age cookie and one whose timestamp is in the
-        # *future* (`age < 0`), and the two mean opposite things: the first is a genuinely stale client,
-        # the second is the verifying clock having moved backwards since the cookie was signed — which
-        # invalidates every session signed in the window that was skipped, for exactly as long as the
-        # step, and then stops. Reporting the age is what tells them apart, and it is a duration rather
-        # than anything about the session.
+        # The middleware's own signer, so this verdict is the middleware's verdict — a diagnostic that
+        # answered with a *different* signer would report an expiry the app did not act on. A backwards
+        # clock step no longer reaches here (`session_signing.py` tolerates a stamp up to five minutes
+        # ahead), so this is now either a genuinely stale client or a skew past that tolerance. The age
+        # is what separates them: positive is age, negative is the clock. It is a duration, not anything
+        # about the session.
         return f"expired (age {_signed_age(raw)})"
     except itsdangerous.BadSignature:
         return "BadSignature"
@@ -252,11 +257,14 @@ config = app_config.resolve()
 app = FastAPI(title=config.app_name, version=runtime_config.APP_VERSION, lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
-    SessionMiddleware,
+    # Starlette's `SessionMiddleware` with a clock-skew-tolerant signer: a wall clock that steps
+    # backwards used to sign every session out for the length of the step. See `session_signing.py`.
+    ClockSkewTolerantSessionMiddleware,
     # Generated and stored on first run rather than required up front, so a fresh install needs no
     # configuration file. It has to persist: a secret regenerated per boot would sign every session out.
     secret_key=config.session_secret,
     session_cookie=config.session_cookie_name,
+    max_age=_SESSION_MAX_AGE_SECONDS,
     # Mark the cookie Secure on a TLS-terminated (client-server) deployment so it never crosses the
     # network in cleartext. Driven by an explicit env the install sets — NOT derived from the security
     # profile (that is a recommendation, not a transport guarantee; deriving Secure from it would lock
