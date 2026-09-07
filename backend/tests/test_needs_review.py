@@ -112,9 +112,7 @@ class NeedsReviewTests(unittest.TestCase):
         with self._use_db_path():
             result = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
-                sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
-                source_account_ids=None, category_id=None, group_ids=None, category_ids=None,
-                tag_ids=None, owner_ids=None, payees=None, direction=None, view=None,
+                sort_by="date", sort_dir="desc", account_id=None, source_account_ids=None, category_id=None, direction=None, view=None,
                 search=None, quick_filter=None, ids=None, needs_review=True,
                 include_trashed=False, limit=200, offset=0,
             )

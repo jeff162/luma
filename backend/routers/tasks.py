@@ -256,7 +256,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "description": f"{uncategorized} transaction{'s have' if uncategorized != 1 else ' has'} "
                                "no category. Categorizing them improves your Dashboard and reports.",
                 "count":       uncategorized,
-                "link":        "/transactions?uncategorized=1",
+                "link":        "/transactions?only=uncategorized",
                 "link_label":  "Review transactions",
                 "severity":    SEVERITY_INFO,
                 "dismiss_key": "uncategorized_txns",

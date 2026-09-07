@@ -24,6 +24,7 @@ from backend.routers.transactions import (
     spending_by_group,
 )
 from backend.services.categorizer import preview_recategorize_count, recategorize_all
+from backend.services.transaction_facets import TransactionFacets
 from backend.services.transaction_tags import (
     get_blocked_transaction_tag_map,
     list_visible_transaction_tags,
@@ -224,13 +225,8 @@ class TransactionTagsTests(unittest.TestCase):
                 sort_by="date",
                 sort_dir="desc",
                 account_id=None,
-                account_ids=None,
                 category_id=None,
-                group_ids=None,
-                category_ids=None,
-                tag_ids=essential_tag_id,
-                owner_ids=None,
-                payees=None,
+                facets=TransactionFacets(tag_ids=essential_tag_id),
                 direction=None,
                 search=None,
                 quick_filter=None,
@@ -242,10 +238,8 @@ class TransactionTagsTests(unittest.TestCase):
                 date_start=None,
                 date_end=None,
                 account_id=None,
-                account_ids=None,
-                tag_ids=essential_tag_id,
-                owner_ids=None,
-            )
+                facets=TransactionFacets(tag_ids=essential_tag_id),
+                )
 
         self.assertEqual([txn["id"] for txn in ledger["transactions"]], [tagged_txn_id])
         self.assertEqual(len(grouped), 1)
@@ -415,9 +409,9 @@ class TransactionTagsTests(unittest.TestCase):
             def _ledger(tag_ids):
                 return list_transactions(
                     month=None, date_start=None, date_end=None, import_batch_id=None,
-                    sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
-                    category_id=None, group_ids=None, category_ids=None, tag_ids=tag_ids,
-                    owner_ids=None, payees=None, direction=None, search=None, quick_filter=None,
+                    sort_by="date", sort_dir="desc", account_id=None, category_id=None,
+                    facets=TransactionFacets(tag_ids=tag_ids),
+                    direction=None, search=None, quick_filter=None,
                     limit=200, offset=0,
                 )
 
@@ -428,8 +422,7 @@ class TransactionTagsTests(unittest.TestCase):
             # Reporting agrees: the Essential total counts only B's amount.
             grouped = spending_by_group(
                 month="2026-04", date_start=None, date_end=None, account_id=None,
-                account_ids=None, tag_ids=essential_tag_id, owner_ids=None,
-            )
+                facets=TransactionFacets(tag_ids=essential_tag_id), )
             self.assertEqual(len(grouped), 1)
             self.assertEqual(grouped[0]["group_id"], group_id)
             self.assertEqual(grouped[0]["total"], 12.0)

@@ -8,6 +8,7 @@
 
 import { useState } from 'react'
 import { api } from '../../lib/api.js'
+import { selectionsToParams } from '../../lib/filterParams.js'
 import { FilterProvider, useFilters } from '../../lib/FilterContext.jsx'
 import FilterBar from '../FilterBar.jsx'
 import { Button, Card } from '../ui.jsx'
@@ -35,25 +36,14 @@ function ExportTabContent() {
   }
 
   function downloadCsv() {
-    // Include vs exclude ('is not') mode splits each facet into its include param and its exclude_*
-    // mirror. Payee is not an export facet (never was).
-    const idsOf = (type, exclude) => filters.selections
-      .filter(s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'))
-      .map(s => s.id)
-    const join = arr => (arr.length ? arr.join(',') : undefined)
+    // One translation of the chip row, shared with the ledger and the dashboard, so an export carries
+    // exactly the slice the user is looking at. This previously hand-rolled the same mapping and had
+    // drifted: it matched the synthetic Uncategorized bucket ids as though they were real categories,
+    // so exporting an Uncategorized selection produced a file with no rows.
     window.open(api.exportTransactionsCsv({
       columns: [...selectedCols].join(','),
       date_start: filters.date?.start || undefined, date_end: filters.date?.end || undefined,
-      account_ids: join(idsOf('account')),
-      owner_ids: join(idsOf('owner')),
-      group_ids: join(idsOf('group')),
-      category_ids: join(idsOf('category')),
-      tag_ids: join(idsOf('tag')),
-      exclude_account_ids: join(idsOf('account', true)),
-      exclude_owner_ids: join(idsOf('owner', true)),
-      exclude_group_ids: join(idsOf('group', true)),
-      exclude_category_ids: join(idsOf('category', true)),
-      exclude_tag_ids: join(idsOf('tag', true)),
+      ...selectionsToParams(filters.selections),
     }), '_blank')
   }
 

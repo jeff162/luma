@@ -1,0 +1,355 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+The shared filter facets — one definition of "is a member of this facet set", for every surface.
+
+A *facet* is one axis the app-wide FilterBar exposes as chips: account, group, category, owner, payee,
+tag, and attribute. Each is accepted as an **include** set and an **exclude** set, and the two are the same expression
+— exclusion is the NULL-safe negation of the membership the include path builds, so they cannot drift.
+
+**Why this is a registry rather than a helper per endpoint.** Nine endpoints consume these facets (the
+transaction list feed, seven summary/trend endpoints, and the CSV export), and before this module each
+one declared its own ~12 `Query` parameters and called its own sequence of append helpers. Adding a
+facet therefore meant editing nine signatures, and the failure mode of missing one was silent: the
+endpoint kept answering, unfiltered, so a total stopped matching the list it drilled into. The export
+had already drifted that way — it hand-rolled its membership SQL and so ignored the synthetic
+uncategorized buckets the list feed honors, returning an empty file for a filter that showed rows on
+screen.
+
+So the shape here is: one `Facet` row per axis, one `TransactionFacets` dependency carrying the query
+parameters, and one `append_facets` that walks the registry. A new facet is a new row plus a new field,
+and every endpoint that declares the dependency gets it at once. `FACET_PARAM_NAMES` closes the loop for
+callers that need the set as data — the bulk endpoint's allowlist derives from it rather than repeating
+it, and the guard in `tests/test_transaction_facets.py` asserts every endpoint accepts every facet, so an
+omission fails loudly instead of quietly widening a result.
+
+What deliberately stays out: parameters that are not facets — `view`, `direction`, `ids`, the amount
+bounds, `quick_filter`, `recurring_series_id` — remain per-endpoint, because they genuinely differ in
+meaning and reach from one surface to the next.
+"""
+
+from dataclasses import dataclass, fields as dataclass_fields
+from typing import Callable, Optional
+
+from fastapi import Query
+# Aliased: `params` is a local name for SQL bind values throughout this module.
+from fastapi import params as fastapi_params
+from pydantic.fields import FieldInfo
+
+from backend.services.account_groups import effective_account_id_sql
+from backend.services.transaction_attributes import attribute_membership
+from backend.services.transaction_tags import tag_filter_membership_sql
+
+# Every membership expression below correlates on the alias set the callers all JOIN identically:
+# t(xn) / a(ccount) / p(arent account) / c(ategory) / pc (parent category).
+EFFECTIVE_ACCOUNT_ID_SQL = effective_account_id_sql("t.account_id")
+
+# Synthetic selections the category facet accepts alongside real ids. They are not rows in `category`;
+# they name the uncategorized buckets the UI shows as if they were entries, which is why every consumer
+# has to route through the membership builder rather than comparing ids directly.
+UNCATEGORIZED_CATEGORY_ID = "__uncategorized__"
+UNCATEGORIZED_EXPENSE_CATEGORY_ID = "__uncategorized_expense__"
+UNCATEGORIZED_INCOME_CATEGORY_ID = "__uncategorized_income__"
+
+# The owner facet's first-class unowned bucket, expressed as `owner_id IS NULL`.
+UNASSIGNED_OWNER_ID = "unassigned"
+
+
+# --- Exclusion ("is not") -------------------------------------------------------------------------
+# Exclusion is the NULL-safe negation of the *same* membership expression the include path builds. The
+# NULL-safety is load-bearing: `t.category_id NOT IN (...)` is SQL-*unknown* (not true) for a NULL
+# category, which would silently drop every uncategorized row from a "not Groceries" result even though
+# an uncategorized row plainly is not Groceries. Collapsing unknown membership to non-member first keeps
+# the invariant that a row the include set does not match always survives that facet's exclusion.
+# See docs/data-model.md → "Filter exclusion".
+def negate_membership(expr: str) -> str:
+    return f"COALESCE(({expr}), 0) = 0"
+
+
+# Tags negate with a plain NOT: membership is an EXISTS, which is never NULL, so the COALESCE guard
+# above would be redundant rather than protective. Kept as its own function so the registry row states
+# which negation a facet uses instead of leaving it implicit.
+def negate_exists(expr: str) -> str:
+    return f"NOT ({expr})"
+
+
+def split_ids(raw: Optional[str], separator: str) -> list[str]:
+    """Parse one facet parameter into its values.
+
+    The isinstance guard is not defensive noise: these endpoints are also called directly (not over
+    HTTP) by tests and internal callers, where an unset `Query(...)` default stays a truthy `FieldInfo`
+    object rather than None — so a bare truthiness check would trip the clause and filter on nothing.
+    """
+    if not raw or not isinstance(raw, str):
+        return []
+    return [value.strip() for value in raw.split(separator) if value.strip()]
+
+
+# --- Membership per facet -------------------------------------------------------------------------
+
+# Both sides of an account comparison have to resolve the same way. The row side already does
+# (`EFFECTIVE_ACCOUNT_ID_SQL`), and the *given* ids are resolved here too rather than compared raw,
+# because a caller can hold an id that has since become a merged child — nothing resolves to a child
+# any more, so a raw child id matches no row at all and reports no error. Resolving both sides makes
+# a child id mean "the group it belongs to", which is the only reading anyone ever wants; "exactly
+# this underlying account" is what `source_account_ids` is for. Done in SQL, not by resolving the ids
+# in Python first, so the filter builder stays a pure function with no connection of its own.
+# See docs/data-model.md → "A stored account id is a reference into a mutable graph".
+def account_membership(ids: list[str]) -> Optional[tuple[str, list]]:
+    if not ids:
+        return None
+    placeholders = ','.join('?' * len(ids))
+    return (
+        f"{EFFECTIVE_ACCOUNT_ID_SQL} IN "
+        f"(SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))",
+        list(ids),
+    )
+
+
+def uncategorized_multi_membership(column_sql: str, raw_ids: list[str]) -> Optional[tuple[str, list]]:
+    """Membership over real ids mixed with the synthetic uncategorized buckets, OR'd together.
+
+    `__uncategorized__` subsumes the two sign-scoped buckets, so when it is present the narrower pair is
+    not also emitted — the union is already the whole NULL-category set.
+    """
+    ids = [value.strip() for value in raw_ids if value and value.strip()]
+    if not ids:
+        return None
+    normal_ids = []
+    include_any_uncategorized = False
+    include_uncategorized_expense = False
+    include_uncategorized_income = False
+    for value in ids:
+        if value == UNCATEGORIZED_CATEGORY_ID:
+            include_any_uncategorized = True
+        elif value == UNCATEGORIZED_EXPENSE_CATEGORY_ID:
+            include_uncategorized_expense = True
+        elif value == UNCATEGORIZED_INCOME_CATEGORY_ID:
+            include_uncategorized_income = True
+        else:
+            normal_ids.append(value)
+
+    clauses: list[str] = []
+    params: list = []
+    if normal_ids:
+        placeholders = ",".join("?" * len(normal_ids))
+        clauses.append(f"{column_sql} IN ({placeholders})")
+        params.extend(normal_ids)
+    if include_any_uncategorized:
+        clauses.append("t.category_id IS NULL")
+    else:
+        if include_uncategorized_expense:
+            clauses.append("(t.category_id IS NULL AND t.amount > 0)")
+        if include_uncategorized_income:
+            clauses.append("(t.category_id IS NULL AND t.amount < 0)")
+    if not clauses:
+        return None
+    return f"({' OR '.join(clauses)})", params
+
+
+def category_membership(ids: list[str]) -> Optional[tuple[str, list]]:
+    return uncategorized_multi_membership("t.category_id", ids)
+
+
+def group_membership(ids: list[str]) -> Optional[tuple[str, list]]:
+    # Membership = the leaf category sits under one of the selected top-level groups, plus any
+    # synthetic uncategorized buckets selected alongside them.
+    uncategorized = uncategorized_multi_membership("t.category_id", ids)
+    normal_group_ids = [
+        value for value in ids
+        if value not in {
+            UNCATEGORIZED_CATEGORY_ID,
+            UNCATEGORIZED_EXPENSE_CATEGORY_ID,
+            UNCATEGORIZED_INCOME_CATEGORY_ID,
+        }
+    ]
+    clauses: list[str] = []
+    params: list = []
+    if normal_group_ids:
+        placeholders = ','.join('?' * len(normal_group_ids))
+        clauses.append(f"t.category_id IN (SELECT id FROM category WHERE parent_id IN ({placeholders}))")
+        params.extend(normal_group_ids)
+    if uncategorized:
+        clauses.append(uncategorized[0])
+        params.extend(uncategorized[1])
+    if not clauses:
+        return None
+    return f"({' OR '.join(clauses)})", params
+
+
+def owner_membership(ids: list[str]) -> Optional[tuple[str, list]]:
+    # 'unassigned' expresses the first-class unowned bucket as `owner_id IS NULL`. Returning the
+    # inclusion expression is what lets exclude negate it NULL-safely — which is why a NULL owner_id
+    # survives "not owned by X" but *is* removed by "not unassigned": that is the set the user named.
+    if not ids:
+        return None
+    if UNASSIGNED_OWNER_ID in ids:
+        other_ids = [i for i in ids if i != UNASSIGNED_OWNER_ID]
+        if other_ids:
+            placeholders = ','.join('?' * len(other_ids))
+            return f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))", other_ids
+        return "t.owner_id IS NULL", []
+    placeholders = ','.join('?' * len(ids))
+    return f"t.owner_id IN ({placeholders})", list(ids)
+
+
+# Matched case-insensitively (`COLLATE NOCASE`), because the same merchant is routinely spelled several
+# ways by the same source — `BIKEREG REGISTRATION` one month and `Bikereg Registration` the next — and to
+# a person choosing a payee those are one payee, not two. Binary equality made that a silent under-match:
+# a filter, a merchant report or a suppressed series' drill-down would show one spelling's rows and
+# quietly omit the rest, with a count beside it derived from a case-folded grouping that disagreed.
+# NOCASE is ASCII-only in SQLite, which is the right scope here — these are payee labels, and widening it
+# would mean carrying a collation the rest of the schema does not use.
+def payee_membership(names: list[str]) -> Optional[tuple[str, list]]:
+    if not names:
+        return None
+    or_clauses = ' OR '.join(
+        ['(t.display_name = ? COLLATE NOCASE OR t.merchant_name = ? COLLATE NOCASE '
+         'OR t.raw_name = ? COLLATE NOCASE)'] * len(names)
+    )
+    params: list = []
+    for name in names:
+        params.extend([name, name, name])
+    return f"({or_clauses})", params
+
+
+def tag_membership(ids: list[str]) -> Optional[tuple[str, list]]:
+    # The *effective*-tag test — direct, inherited from the leaf category, its parent group, or the
+    # effective account, and block-aware — plus the synthetic Untagged and Recurring selections. Defined
+    # in services/transaction_tags.py so the row's own tag rendering and this filter ask one question.
+    return tag_filter_membership_sql(ids)
+
+
+# --- The registry ---------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Facet:
+    name: str
+    include_param: str
+    exclude_param: Optional[str]
+    membership: Callable[[list[str]], Optional[tuple[str, list]]]
+    negate: Callable[[str], str] = negate_membership
+    # Payee values are names, which may legitimately contain a comma, so that facet is pipe-separated.
+    separator: str = ','
+
+
+FACETS: tuple[Facet, ...] = (
+    Facet('account', 'account_ids', 'exclude_account_ids', account_membership),
+    Facet('group', 'group_ids', 'exclude_group_ids', group_membership),
+    Facet('category', 'category_ids', 'exclude_category_ids', category_membership),
+    Facet('owner', 'owner_ids', 'exclude_owner_ids', owner_membership),
+    Facet('payee', 'payees', 'exclude_payees', payee_membership, separator='|'),
+    Facet('tag', 'tag_ids', 'exclude_tag_ids', tag_membership, negate=negate_exists),
+    # What a row *is*, rather than what it is filed under — see services/transaction_attributes.py.
+    # Its own facet rather than a rider on tags (which is where "recurring" briefly lived) because
+    # facets AND with each other while values within one OR: "tagged Business" AND "has an attachment"
+    # is the combination people reach for, and riding the tag facet would have made it an OR.
+    Facet('attribute', 'attribute_ids', 'exclude_attribute_ids', attribute_membership),
+)
+
+# Every query-parameter name the registry owns, for callers that need the set as data rather than as
+# code — the bulk endpoint's allowlist derives from this, so a facet cannot be added to the list feed
+# and forgotten there (a missing key made bulk resolve a *wider* set than the count on screen).
+FACET_PARAM_NAMES: frozenset[str] = frozenset(
+    name
+    for facet in FACETS
+    for name in (facet.include_param, facet.exclude_param)
+    if name
+)
+
+
+@dataclass
+class TransactionFacets:
+    """The facet query parameters, as one FastAPI dependency.
+
+    Declared as `facets: TransactionFacets = Depends()` on an endpoint, which keeps the wire format
+    byte-identical to the hand-written parameter block it replaces — these are the same names, still
+    plain optional query strings — while making the set additive in one place.
+    """
+
+    attribute_ids: Optional[str] = Query(None, description="comma-separated attribute keys (see GET /transactions/filter-attributes)")
+    account_ids: Optional[str] = Query(None, description="comma-separated account IDs (effective/top-level account)")
+    group_ids: Optional[str] = Query(None, description="comma-separated top-level group IDs")
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs")
+    owner_ids: Optional[str] = Query(None, description="comma-separated owner IDs")
+    payees: Optional[str] = Query(None, description="pipe-separated payee names")
+    tag_ids: Optional[str] = Query(None, description="comma-separated tag IDs")
+    exclude_account_ids: Optional[str] = Query(None, description="account IDs to exclude ('is not')")
+    exclude_group_ids: Optional[str] = Query(None, description="group IDs to exclude ('is not')")
+    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')")
+    exclude_owner_ids: Optional[str] = Query(None, description="owner IDs to exclude ('is not')")
+    exclude_payees: Optional[str] = Query(None, description="payee names to exclude ('is not')")
+    exclude_tag_ids: Optional[str] = Query(None, description="tag IDs to exclude ('is not')")
+    exclude_attribute_ids: Optional[str] = Query(None, description="attribute keys to exclude ('is not')")
+
+    def as_params(self) -> dict:
+        """The set as a plain dict, for callers that pass facets around as keyword arguments."""
+        return {f.name: getattr(self, f.name) for f in dataclass_fields(self)}
+
+
+def facets_from(values: Optional[dict]) -> TransactionFacets:
+    """Build the dependency from a loose dict — the bulk endpoint's stored filter payload."""
+    values = values or {}
+    return TransactionFacets(**{
+        f.name: values.get(f.name) for f in dataclass_fields(TransactionFacets)
+    })
+
+
+def split_facets(values: dict) -> tuple[TransactionFacets, dict]:
+    """Divide a loose keyword mapping into the facet dependency and everything else.
+
+    For callers that hold one flat bag of endpoint arguments and need it in the two-part shape the
+    endpoints now take — chiefly the test suite's direct calls, which build a full explicit kwarg set
+    because unset `Query(...)` defaults are FieldInfo objects rather than None.
+    """
+    return facets_from(values), {k: v for k, v in values.items() if k not in FACET_PARAM_NAMES}
+
+
+def coerce_facets(facets) -> Optional[TransactionFacets]:
+    """Resolve whatever a caller passed into facets, or None for "no facets selected".
+
+    This exists for the **direct-call** path. These endpoints are called as plain functions by the test
+    suite and by internal callers, where a parameter left at its `Depends()` / `Query()` default keeps
+    the FastAPI sentinel object rather than becoming None — the same footgun that makes every other
+    filter here carry an isinstance guard. Absorbing it once, here, is what lets a direct caller simply
+    omit `facets` when it is filtering on something else, instead of restating twelve `None`s.
+
+    Anything that is neither a real selection nor a recognized sentinel raises, so a genuine mistake
+    (passing a list, say) still fails loudly rather than filtering on nothing.
+    """
+    if facets is None:
+        return None
+    if isinstance(facets, TransactionFacets):
+        return facets
+    if isinstance(facets, dict):
+        return facets_from(facets)
+    # The unresolved FastAPI defaults: `Depends()` on the endpoint, or a bare `Query(...)` FieldInfo.
+    if isinstance(facets, (fastapi_params.Depends, FieldInfo)):
+        return None
+    raise TypeError(f"facets must be TransactionFacets, dict or None — got {type(facets).__name__}")
+
+
+def append_facets(clauses: list, params: list, facets: TransactionFacets | dict | None) -> None:
+    """Append every selected facet's clause to a WHERE being assembled.
+
+    Facets AND together (a row must satisfy each one that is selected); values *within* one facet OR
+    together, which is what makes "Groceries or Dining, but not in Checking" the natural reading of a
+    chip row. Include and exclude of the same facet both apply — the frontend splits its chips by mode,
+    so a value never appears in both.
+    """
+    facets = coerce_facets(facets)
+    if facets is None:
+        return
+    values = facets.as_params()
+    for facet in FACETS:
+        included = facet.membership(split_ids(values.get(facet.include_param), facet.separator))
+        if included:
+            clauses.append(included[0])
+            params.extend(included[1])
+        if not facet.exclude_param:
+            continue
+        excluded = facet.membership(split_ids(values.get(facet.exclude_param), facet.separator))
+        if excluded:
+            clauses.append(facet.negate(excluded[0]))
+            params.extend(excluded[1])

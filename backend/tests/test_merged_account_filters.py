@@ -28,6 +28,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import _build_transaction_filter
+from backend.services.transaction_facets import split_facets
 
 
 class MergedAccountFilterTests(unittest.TestCase):
@@ -143,14 +144,13 @@ class MergedAccountFilterTests(unittest.TestCase):
         from backend.routers.import_export.backup import export_transactions_csv
         params = dict(
             columns="merchant_name", date_start=None, date_end=None,
-            account_ids=None, owner_ids=None, group_ids=None, category_ids=None, tag_ids=None,
-            exclude_account_ids=None, exclude_owner_ids=None, exclude_group_ids=None,
-            exclude_category_ids=None, exclude_tag_ids=None, search=None,
+            search=None,
         )
         params.update(query_kwargs)
+        facets, rest = split_facets(params)
         token = set_current_db_path(str(self.db_path))
         try:
-            resp = export_transactions_csv(**params)
+            resp = export_transactions_csv(**rest, facets=facets)
         finally:
             reset_current_db_path(token)
 

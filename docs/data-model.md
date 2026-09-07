@@ -131,7 +131,7 @@ Important behavior:
 
 - `parent_account_id = NULL` means the row is a top-level selectable account; child accounts keep historical account numbers visible on the Accounts page but resolve through the parent for account filtering, import/export display, and other account-facing surfaces
 
-- **A stored account id is a reference into a mutable graph, and is resolved at read time — never rewritten at merge time.** Merging is deliberately non-destructive: it sets `parent_account_id` and moves nothing, which is exactly what lets detach reverse it. So an account id persisted in some *other* table can become a child after it was written, while the transactions it was meant to select keep resolving to the group root. Every account comparison therefore has two sides that must resolve the same way — the **row side** (`COALESCE(parent_account_id, account_id)`, the effective account a transaction sits on) and the **stored side**. Comparing a raw stored id against a resolved row side is a silent failure mode, not an error: nothing resolves to a merged child any more, so the reference simply stops selecting rows — a rule stops firing, an Amazon order stops finding its charge — with nothing in the stored row that looks wrong. `backend/services/account_groups.py` is the single home for both forms of the resolution (`effective_account_id_sql` for queries, `effective_account_id` / `account_group_member_ids` for id lists), and the one place repointing *is* correct is `_finalize_trashed_account`, where the child row is about to be deleted and the merge is no longer reversible. **The tell for where this goes wrong is column-vs-parameter.** Where the stored side is a *column* the codebase has always resolved it — `rule.account_id`, `amazon_funding_map`, a recurring series' scope — because the resolution is right there in the same query. Where the stored side arrives as a *bind parameter* it went unresolved for years, in every such filter at once, because nothing in the expression looks wrong: an id that has since become a child simply matches no row. Both API-parameter filters now resolve their given ids in SQL (`_effective_account_membership` in the transactions router and the copy the CSV export inlines), so a child id passed to `account_ids` means *the group it belongs to* — the only reading a caller wants, with "exactly this underlying account" living in `source_account_ids`. Behavior is pinned in `backend/tests/test_merged_account_filters.py`. **One comparison is deliberately asymmetric and must stay that way:** `account_tag` matching (`services/transaction_tags.py`) compares its stored side raw, which is exactly what makes a merged child's own tags go dormant and return on detach — resolving it would reactivate them all and make detach unable to restore the prior state
+- **A stored account id is a reference into a mutable graph, and is resolved at read time — never rewritten at merge time.** Merging is deliberately non-destructive: it sets `parent_account_id` and moves nothing, which is exactly what lets detach reverse it. So an account id persisted in some *other* table can become a child after it was written, while the transactions it was meant to select keep resolving to the group root. Every account comparison therefore has two sides that must resolve the same way — the **row side** (`COALESCE(parent_account_id, account_id)`, the effective account a transaction sits on) and the **stored side**. Comparing a raw stored id against a resolved row side is a silent failure mode, not an error: nothing resolves to a merged child any more, so the reference simply stops selecting rows — a rule stops firing, an Amazon order stops finding its charge — with nothing in the stored row that looks wrong. `backend/services/account_groups.py` is the single home for both forms of the resolution (`effective_account_id_sql` for queries, `effective_account_id` / `account_group_member_ids` for id lists), and the one place repointing *is* correct is `_finalize_trashed_account`, where the child row is about to be deleted and the merge is no longer reversible. **The tell for where this goes wrong is column-vs-parameter.** Where the stored side is a *column* the codebase has always resolved it — `rule.account_id`, `amazon_funding_map`, a recurring series' scope — because the resolution is right there in the same query. Where the stored side arrives as a *bind parameter* it went unresolved for years, in every such filter at once, because nothing in the expression looks wrong: an id that has since become a child simply matches no row. API-parameter filters resolve their given ids in SQL (`account_membership` in `services/transaction_facets.py` — one definition, reached by every faceted endpoint including the CSV export, which used to inline its own copy), so a child id passed to `account_ids` means *the group it belongs to* — the only reading a caller wants, with "exactly this underlying account" living in `source_account_ids`. Behavior is pinned in `backend/tests/test_merged_account_filters.py`. **One comparison is deliberately asymmetric and must stay that way:** `account_tag` matching (`services/transaction_tags.py`) compares its stored side raw, which is exactly what makes a merged child's own tags go dormant and return on detach — resolving it would reactivate them all and make detach unable to restore the prior state
 
 - the distinction that decides how a given column behaves is whether it names a **matching scope** or a **specific account row**. Scopes resolve: `category_rule.account_id` (which rows a rule governs), `recurring_series.account_id` (which rows a series owns — written as an already-effective id, which a later merge can still demote to a child), `amazon_funding_map.funding_account_id` / `amazon_account_id` (which account a card's charges land on, and which Amazon account an override applies to), and `import_batch_account.account_id` (dedupe coverage, resolved through `duplicate_detection.scope_id_for`). Specific references stay raw, and the merge is *meant* to change what they mean: `account_tag.account_id` attaches a tag to one account row, so a merged child's tags lie dormant until detached; `account_pair_distinct` records assertions about the account rows themselves and a merge deletes the row outright; `connection_account` / `csv_import_profile` name a write target, where a merged child is a legitimate destination because its rows roll up through the row side. `backend/tests/test_account_group_references.py` derives every foreign key into `account(id)` from the schema and fails until a new one is classified — the choice is easy to make and easy to skip, and skipping it is invisible until data goes missing
 
@@ -339,6 +339,70 @@ params).
 - The frontend carries the mode on each selection (`mode: 'include' | 'exclude'`, default include) and
   **must split selections by both type and mode**; feeding an exclude selection into an include param
   would invert its meaning. See `ui-patterns.md` → the include/exclude facet pattern.
+
+### One facet registry, both halves
+
+A facet is declared once and reaches every surface that filters transactions: `services/transaction_facets.py`
+holds one `Facet` row per axis (its membership builder, its two parameter names, its negation and its
+separator), a `TransactionFacets` dependency carrying the query parameters, and one `append_facets` that
+walks the registry; `lib/filterParams.js` is its frontend counterpart, turning the chip row into those
+same parameters. Adding an axis is a row in each.
+
+**The registry exists because the failure of the hand-written version was silent.** Nine endpoints
+consume these facets — the list feed, seven summary/trend endpoints, and CSV export — and each formerly
+declared its own parameter block and called its own sequence of append helpers, with three separate
+frontend translations feeding them. An endpoint that never learned about a facet does not error; it
+answers unfiltered, so a total stops matching the list it drills into. That had already happened: the
+export hand-rolled its membership SQL and compared the synthetic uncategorized bucket ids as though they
+were rows in `category`, so an Uncategorized chip exported an empty file while the ledger showed rows.
+
+Two derivations keep it honest rather than merely tidy. The bulk endpoint's `_BULK_FILTER_KEYS` is built
+from `FACET_PARAM_NAMES` instead of restating it — a facet missing there does not fail closed, it
+*widens* the set bulk resolves past the count on screen. And because the axes are now enumerable, a guard
+asserts every faceted endpoint accepts every facet (`tests/test_transaction_facets.py`), so an omission
+is a red test rather than a report nobody checks.
+
+### Attributes — filtering by what a row is
+
+The facets above ask what a transaction is *filed under*. The attribute facet
+(`services/transaction_attributes.py`, parameters `attribute_ids` / `exclude_attribute_ids`) asks what it
+*is*: carries an attachment, belongs to a recurring series, has money owed back on it, has not been
+looked over yet. The vocabulary is deliberately **the row's own marker strip** plus the two states the
+ledger previously had dedicated toggles for, so that reading a row and filtering for it use one set of
+words.
+
+- **Labels name the distinction, not the mechanism's category.** `purchase` reads *Multi-payment
+  purchase* rather than "part of a purchase", because nearly every debit is a purchase so that names
+  nothing — and not "multi-part purchase" either, since a split's allocations are the parts, and
+  `mechanism-index.md` records splits-versus-multi-payment-purchases as the one pair that genuinely gets
+  confused. Dividing across **payments** is what separates it, so that word has to survive the shortening.
+- **Keys are plain words** (`attachment`, `needs-review`), not the `__sentinel__` shape the category and
+  tag facets use. That shape exists to avoid colliding with real ids in a namespace shared with uuids;
+  this namespace holds nothing else. The same keys serve as the `?only=<key>` deep link.
+- **Every predicate must be NULL-free**, so `negate_membership`'s COALESCE is belt-and-braces rather than
+  load-bearing. "Is not X" has to return every row that is not X, including rows where X is unknown.
+- **An unknown key is ignored; an unknown *parameter* is still a 400.** A key is a value inside a filter,
+  so a stale one from an old link narrows to what it can still express, exactly as a deleted tag id in
+  `tag_ids` matches nothing. Strictness belongs at the parameter name, which is where it stays.
+- **`in_filter_bar` marks the one deliberate omission.** `uncategorized` is in the vocabulary (the
+  ledger's quick filter and `?only=` links need it) but the FilterBar does not offer it as a row, because
+  the Categories tab already owns that bucket and two identical-looking controls in one popover is a
+  question the user should not have to answer.
+- The vocabulary — labels and descriptions included — is served by `GET /transactions/filter-attributes`
+  rather than duplicated in the frontend, so adding an attribute cannot leave a label table behind.
+- **`require_all_attribute_ids` is the AND counterpart**, mirroring `require_all_tag_ids`, and it exists
+  because the ledger's toolbar filter is a *separate control* rather than another tick in the FilterBar's
+  picker. Values within a facet OR, so folding the toolbar's key into `attribute_ids` would OR it with
+  the chips — and a second filter that **widens** the result is the one behaviour a filter must never
+  have. The toolbar therefore sends this parameter; the FilterBar sends the facet. It is not a facet, so
+  it is named by hand in `_BULK_FILTER_KEYS` like the other non-facet filters.
+
+**Recurring used to be a synthetic tag** (`__recurring__` inside `tag_filter_membership_sql`), because
+riding the tag facet bought it every surface the tag filter already reached with no per-endpoint
+plumbing. It is an attribute now. The move became possible once the attribute facet reached those same
+surfaces on its own, and it was necessary because **facets AND with each other while values within one
+facet OR**: as a pseudo-tag, "Business" plus "Recurring" meant *either*, where the combination anyone
+actually wants is *both*. Do not re-add it to the tag facet.
 
 ## Rules
 

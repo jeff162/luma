@@ -4,6 +4,21 @@
 warrant their own backlog file. When an entry here grows into a real initiative, promote it to
 its own file; when it ships, delete the entry.
 
+## Whether the ledger's attribute quick filter should outlive the session
+
+**Context.** The Transactions toolbar's attribute filter (`?only=` / `AttributeFilterControl`) keeps its
+choice in the page's session state, alongside the quick filter and the amount filter — so it survives
+navigation and resets on reload or relaunch. It was put there to match those two siblings rather than
+because the question was settled.
+
+**The question.** Should it instead be a durable `ui_preference`, remembered across launches? The user
+assumed on first sight that it already was, which is evidence for durable; the argument against is that
+opening the app to a silently filtered ledger, with no memory of having set it, is the failure mode the
+session-scoped choice avoids for its siblings. Answering it for this control probably answers it for the
+quick filter and the amount filter too, which is why it is worth deciding once rather than per control.
+
+**Not blocking anything.** The current behavior is coherent; this is a preference decision, not a defect.
+
 ## CHANGELOG entry for tag-as-owner replacement
 
 **Context.** The four-phase work that removed `owner_id` from `category`

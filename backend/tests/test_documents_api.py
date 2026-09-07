@@ -77,8 +77,7 @@ class DocumentsApiTestCase(unittest.TestCase):
     def _list(self, value):
         return list_transactions(
             month=None, date_start=None, date_end=None, import_batch_id=None,
-            sort_by="date", sort_dir="desc", account_id=None, account_ids=None, category_id=None,
-            group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+            sort_by="date", sort_dir="desc", account_id=None, category_id=None,
             direction=None, view=None, search=None, quick_filter=value,
             include_trashed=False, limit=50, offset=0,
         )
@@ -374,8 +373,7 @@ class DocumentSearchTests(DocumentsApiTestCase):
     def test_the_ledger_row_carries_its_documents_for_the_marker(self):
         result = list_transactions(
             month=None, date_start=None, date_end=None, import_batch_id=None,
-            sort_by="date", sort_dir="desc", account_id=None, account_ids=None, category_id=None,
-            group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+            sort_by="date", sort_dir="desc", account_id=None, category_id=None,
             direction=None, view=None, search=None, quick_filter=None,
             include_trashed=False, limit=50, offset=0,
         )

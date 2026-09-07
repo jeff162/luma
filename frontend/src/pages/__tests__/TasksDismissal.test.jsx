@@ -21,7 +21,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 const DISMISSIBLE = {
   id: 'uncategorized_txns', title: 'Uncategorized transactions', description: '4 transactions have no category.',
-  count: 4, link: '/transactions?uncategorized=1', link_label: 'Review transactions', severity: 'info',
+  count: 4, link: '/transactions?only=uncategorized', link_label: 'Review transactions', severity: 'info',
   dismiss_key: 'uncategorized_txns',
 }
 const NOT_DISMISSIBLE = {

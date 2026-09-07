@@ -23,6 +23,7 @@ from backend.routers.transactions import (
     spending_by_category_in_group,
     spending_by_group,
 )
+from backend.services.transaction_facets import split_facets
 
 
 class ReportSignFiltersTests(unittest.TestCase):
@@ -115,23 +116,16 @@ class ReportSignFiltersTests(unittest.TestCase):
 
     def _by_category(self, **overrides):
         kwargs = dict(
-            month="2026-04", date_start=None, date_end=None, account_id=None, account_ids=None,
-            tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
-            exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-            exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
-            exclude_income=False, exclude_expense=False,
+            month="2026-04", date_start=None, date_end=None, account_id=None, exclude_income=False, exclude_expense=False,
         )
         kwargs.update(overrides)
-        return spending_by_category(**kwargs)
+        facets, rest = split_facets(kwargs)
+        return spending_by_category(**rest, facets=facets)
 
     def _by_category_in_group(self, group_id):
         return spending_by_category_in_group(
             month="2026-04", date_start=None, date_end=None, group_id=group_id,
-            account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
-            category_ids=None, group_ids=None, payees=None,
-            exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-            exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
-        )
+            account_id=None, )
 
     def test_untyped_income_leaf_reads_positive_not_negative(self):
         account_id = self._insert_account("Checking")
@@ -180,8 +174,7 @@ class ReportSignFiltersTests(unittest.TestCase):
         with self._use_db_path():
             group_rows = spending_by_group(
                 month="2026-04", date_start=None, date_end=None,
-                account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
-            )
+                account_id=None, )
             in_group_rows = self._by_category_in_group(income_group_id)
 
         group_row = next(r for r in group_rows if r["group_id"] == income_group_id)
@@ -217,8 +210,6 @@ class ReportSignFiltersTests(unittest.TestCase):
                 category_id=other_income_id,
                 payee=None,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
                 months=18,
                 date_start="2026-04-01",
                 date_end="2026-04-30",
@@ -242,20 +233,14 @@ class ReportSignFiltersTests(unittest.TestCase):
                 date_start=None,
                 date_end=None,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
-                owner_ids=None,
-            )
+                )
             category_rows = spending_by_category_in_group(
                 month="2026-04",
                 date_start=None,
                 date_end=None,
                 group_id=expense_group_id,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
-                owner_ids=None,
-            )
+                )
 
         self.assertEqual(group_rows[0]["group_id"], expense_group_id)
         self.assertEqual(group_rows[0]["count"], 2)
@@ -277,12 +262,10 @@ class ReportSignFiltersTests(unittest.TestCase):
         with self._use_db_path():
             group_rows = spending_by_group(
                 month="2026-04", date_start=None, date_end=None, account_id=None,
-                account_ids=None, tag_ids=None, owner_ids=None,
-            )
+                )
             category_rows = spending_by_category_in_group(
                 month="2026-04", date_start=None, date_end=None, group_id=expense_group_id,
-                account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
-            )
+                account_id=None, )
 
         self.assertEqual(group_rows[0]["total"], -60.0)
         self.assertEqual(category_rows[0]["total"], -60.0)
@@ -298,26 +281,18 @@ class ReportSignFiltersTests(unittest.TestCase):
                 date_start=None,
                 date_end=None,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
-                owner_ids=None,
-            )
+                )
             income_rows = spending_by_category_in_group(
                 month="2026-04",
                 date_start=None,
                 date_end=None,
                 group_id=UNCATEGORIZED_INCOME_CATEGORY_ID,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
-                owner_ids=None,
-            )
+                )
             income_trend = monthly_trend(
                 category_id=UNCATEGORIZED_INCOME_CATEGORY_ID,
                 payee=None,
                 account_id=None,
-                account_ids=None,
-                tag_ids=None,
                 months=18,
                 date_start="2026-04-01",
                 date_end="2026-04-30",

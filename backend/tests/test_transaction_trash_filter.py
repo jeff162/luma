@@ -137,9 +137,8 @@ class TrashFilterCoverageTests(unittest.TestCase):
             result = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sort_by="date", sort_dir="desc",
-                account_id=None, account_ids=None, category_id=None,
-                group_ids=None, category_ids=None, tag_ids=None,
-                owner_ids=None, payees=None, direction=None, view=None,
+                account_id=None, category_id=None,
+                direction=None, view=None,
                 search=None, quick_filter=None,
                 include_trashed=False, limit=200, offset=0,
             )
@@ -154,9 +153,8 @@ class TrashFilterCoverageTests(unittest.TestCase):
             result = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sort_by="date", sort_dir="desc",
-                account_id=None, account_ids=None, category_id=None,
-                group_ids=None, category_ids=None, tag_ids=None,
-                owner_ids=None, payees=None, direction=None, view=None,
+                account_id=None, category_id=None,
+                direction=None, view=None,
                 search=None, quick_filter=None,
                 include_trashed=True, limit=200, offset=0,
             )
@@ -174,9 +172,8 @@ class TrashFilterCoverageTests(unittest.TestCase):
             result = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sort_by="date", sort_dir="desc",
-                account_id=None, account_ids=None, category_id=None,
-                group_ids=None, category_ids=None, tag_ids=None,
-                owner_ids=None, payees=None, direction=None, view=None,
+                account_id=None, category_id=None,
+                direction=None, view=None,
                 search=None, quick_filter=None,
                 include_trashed=False, limit=200, offset=0,
             )
@@ -190,8 +187,7 @@ class TrashFilterCoverageTests(unittest.TestCase):
         # The endpoint functions default to FastAPI `Query` objects, which aren't real Python
         # defaults — pass explicit `None` for each so the actual code path runs.
         kwargs = dict(
-            category_id=None, payee=None, account_id=None, account_ids=None,
-            tag_ids=None, date_start=None, date_end=None, view="cash_flow",
+            category_id=None, payee=None, account_id=None, date_start=None, date_end=None, view="cash_flow",
         )
         with self._use_db_path():
             before = monthly_trend(months=120, **kwargs)
@@ -211,9 +207,7 @@ class TrashFilterCoverageTests(unittest.TestCase):
         account, group, keep, trash = self._seed_two()
         kwargs = dict(
             month="2026-04", date_start=None, date_end=None,
-            account_id=None, account_ids=None,
-            tag_ids=None, owner_ids=None,
-        )
+            account_id=None, )
         with self._use_db_path():
             before = spending_by_group(**kwargs)
             trash_transaction(trash)

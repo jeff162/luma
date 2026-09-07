@@ -20,6 +20,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers.accounts import AccountTagsUpdate, set_account_tags
 from backend.routers.transactions import list_transactions
 from backend.services.transaction_tags import list_visible_transaction_tags
+from backend.services.transaction_facets import TransactionFacets
 
 
 class AccountTagTests(unittest.TestCase):
@@ -87,9 +88,9 @@ class AccountTagTests(unittest.TestCase):
         with self._use_db_path():
             ledger = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
-                sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
-                category_id=None, group_ids=None, category_ids=None, tag_ids=tag_id,
-                owner_ids=None, payees=None, direction=None, search=None,
+                sort_by="date", sort_dir="desc", account_id=None, category_id=None,
+                facets=TransactionFacets(tag_ids=tag_id),
+                direction=None, search=None,
                 quick_filter=None, limit=200, offset=0,
             )
         return [txn["id"] for txn in ledger["transactions"]]

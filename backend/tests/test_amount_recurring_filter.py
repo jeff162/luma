@@ -184,19 +184,25 @@ class AmountRecurringFilterTests(unittest.TestCase):
         # Recurring AND > $100 has no member (the only recurring row is $50).
         self.assertEqual(self._matching_keys(recurring_only=True, amount_min=100.0), set())
 
-    # --- recurring as a synthetic tag-filter selection (rides the shared tag facet) --------------
+    # --- recurring as an attribute selection (it used to ride the tag facet as a synthetic id) -----
 
-    def test_recurring_via_tag_filter_include(self):
-        from backend.services.transaction_tags import RECURRING_FILTER_ID
-        # Selecting the synthetic "Recurring" bucket in the tag filter matches only series-linked rows.
-        self.assertEqual(self._matching_keys(tag_ids=RECURRING_FILTER_ID), {"rec50"})
+    def test_recurring_via_attribute_filter_include(self):
+        # Selecting "Recurring" in the attribute facet matches only series-linked rows.
+        self.assertEqual(self._matching_keys(attribute_ids="recurring"), {"rec50"})
 
-    def test_recurring_via_tag_filter_exclude(self):
-        from backend.services.transaction_tags import RECURRING_FILTER_ID
+    def test_recurring_via_attribute_filter_exclude(self):
         # "≠ Recurring" is the NULL-safe complement — every non-recurring (one-off) row.
         self.assertEqual(
-            self._matching_keys(exclude_tag_ids=RECURRING_FILTER_ID),
+            self._matching_keys(exclude_attribute_ids="recurring"),
             {"d20", "d50", "d200", "c50", "c200"},
+        )
+
+    def test_attributes_and_tags_are_separate_axes(self):
+        # The reason for the move: facets AND with each other, so an attribute plus a tag means *both*.
+        # As a pseudo-tag the two ORed together, which is not the combination anyone reaches for.
+        self.assertEqual(
+            self._matching_keys(attribute_ids="recurring", exclude_attribute_ids="pending"),
+            {"rec50"},
         )
 
 

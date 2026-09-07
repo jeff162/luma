@@ -8,6 +8,7 @@ import {
   Customized,
 } from 'recharts'
 import { api } from '../lib/api.js'
+import { selectionsOfType, selectionsToParams } from '../lib/filterParams.js'
 import { reconcileRowsAfterRuleApply, applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
@@ -1735,27 +1736,22 @@ export default function Dashboard() {
   const singlePeriodLabel = (effectiveDate && effectiveDate.start && effectiveDate.end)
     ? (effectiveDate.preset || `${effectiveDate.start} → ${effectiveDate.end}`)
     : 'All time'
-  // Include-mode selections drive the historical include params; exclude-mode ('is not') chips feed the
-  // parallel exclude_* params carried in summaryFilters. Splitting by mode keeps an exclude chip from
-  // leaking into an include list (which would invert its meaning). Tags are include-only (see FilterBar).
-  const incSel = (type) => filters.selections.filter(s => s.type === type && s.mode !== 'exclude')
-  const excSel = (type) => filters.selections.filter(s => s.type === type && s.mode === 'exclude')
-  const joinIds = (arr, key = 'id', sep = ',') => (arr.length > 0 ? arr.map(s => s[key]).join(sep) : undefined)
-
-  const accountSelections = incSel('account')
+  // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), which
+  // splits each facet by mode so an exclude chip can never leak into an include list and invert its
+  // own meaning. The named consts below are the same values, destructured for the call sites that
+  // pass one facet on its own rather than the whole bag.
+  const facetParams = selectionsToParams(filters.selections)
+  // A single account selection also fills the singular `account_id` some endpoints take; two or more
+  // has no singular form, so those fall back to `account_ids` alone.
+  const accountSelections = selectionsOfType(filters.selections, 'account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
-  const tagIds = joinIds(incSel('tag'))
-  const ownerIds = joinIds(incSel('owner'))
-  const accountIds = joinIds(accountSelections)
-  const groupIds = joinIds(incSel('group'))
-  const categoryIds = joinIds(incSel('category'))
-  const payees = joinIds(incSel('payee'), 'label', '|')
-  const excludeAccountIds = joinIds(excSel('account'))
-  const excludeGroupIds = joinIds(excSel('group'))
-  const excludeCategoryIds = joinIds(excSel('category'))
-  const excludeOwnerIds = joinIds(excSel('owner'))
-  const excludeTagIds = joinIds(excSel('tag'))
-  const excludePayees = joinIds(excSel('payee'), 'label', '|')
+  const {
+    tag_ids: tagIds, owner_ids: ownerIds, account_ids: accountIds, group_ids: groupIds,
+    category_ids: categoryIds, payees,
+    exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
+    exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
+    exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
+  } = facetParams
   // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.
   // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
   // narrow the whole dashboard, not just bits of it. Keys match both the summary opts and the list params.

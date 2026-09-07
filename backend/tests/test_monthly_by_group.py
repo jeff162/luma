@@ -16,6 +16,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import monthly_by_group, monthly_trend
+from backend.services.transaction_facets import TransactionFacets
 
 
 class MonthlyByGroupTests(unittest.TestCase):
@@ -102,7 +103,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=ignored_leaf_id, amount=99.0, date="2026-04-20")
 
         with self._use_db_path():
-            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=expense_group_id)
+            rows = monthly_by_group(months=24, account_id=None, group_id=expense_group_id)
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["series_id"], groceries_id)
@@ -118,8 +119,8 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=10.0, date="2026-05-16", owner_id=bob)
 
         with self._use_db_path():
-            all_rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id)
-            alice_rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, owner_ids=alice, group_id=group_id)
+            all_rows = monthly_by_group(months=24, account_id=None, group_id=group_id)
+            alice_rows = monthly_by_group(months=24, account_id=None, group_id=group_id, facets=TransactionFacets(owner_ids=alice))
 
         self.assertEqual(sum(r["total"] for r in all_rows), 50.0)
         self.assertEqual(sum(r["total"] for r in alice_rows), 40.0)
@@ -134,11 +135,10 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=10.0, date="2026-05-16", owner_id=bob)
 
         # Called directly (not via FastAPI), so every param must be passed to avoid Query() defaults.
-        trend_kwargs = dict(category_id=None, payee=None, account_id=None, account_ids=None,
-                            tag_ids=None, months=24, date_start=None, date_end=None, view="spending")
+        trend_kwargs = dict(category_id=None, payee=None, account_id=None, months=24, date_start=None, date_end=None, view="spending")
         with self._use_db_path():
-            all_rows = monthly_trend(owner_ids=None, **trend_kwargs)
-            alice_rows = monthly_trend(owner_ids=alice, **trend_kwargs)
+            all_rows = monthly_trend(**trend_kwargs)
+            alice_rows = monthly_trend(facets=TransactionFacets(owner_ids=alice), **trend_kwargs)
 
         self.assertEqual(sum(r["total"] for r in all_rows), 50.0)
         self.assertEqual(sum(r["total"] for r in alice_rows), 40.0)
@@ -153,7 +153,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_b, amount=10.0, date="2026-05-16")
 
         with self._use_db_path():
-            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=None, group_ids=group_a)
+            rows = monthly_by_group(months=24, account_id=None, group_id=None, facets=TransactionFacets(group_ids=group_a))
 
         self.assertEqual(sum(r["total"] for r in rows), 40.0)
         self.assertTrue(all(r["series_id"] == group_a for r in rows))
@@ -167,7 +167,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_2, amount=10.0, date="2026-05-16")
 
         with self._use_db_path():
-            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id, category_ids=leaf_1)
+            rows = monthly_by_group(months=24, account_id=None, group_id=group_id, facets=TransactionFacets(category_ids=leaf_1))
 
         self.assertEqual(sum(r["total"] for r in rows), 40.0)
         self.assertTrue(all(r["series_id"] == leaf_1 for r in rows))
@@ -181,11 +181,10 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=100.0, date="2026-05-10")
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=-160.0, date="2026-05-20")
 
-        trend_kwargs = dict(category_id=None, payee=None, account_id=None, account_ids=None,
-                            tag_ids=None, owner_ids=None, months=24, date_start=None, date_end=None,
+        trend_kwargs = dict(category_id=None, payee=None, account_id=None, months=24, date_start=None, date_end=None,
                             view="spending")
         with self._use_db_path():
-            group_rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id)
+            group_rows = monthly_by_group(months=24, account_id=None, group_id=group_id)
             trend_rows = monthly_trend(**trend_kwargs)
 
         self.assertEqual(sum(r["total"] for r in group_rows), -60.0)
@@ -201,7 +200,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=-500.0, date="2026-05-15")
 
         with self._use_db_path():
-            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id)
+            rows = monthly_by_group(months=24, account_id=None, group_id=group_id)
 
         self.assertEqual(sum(r["total"] for r in rows), 500.0)
 
@@ -213,7 +212,7 @@ class MonthlyByGroupTests(unittest.TestCase):
         self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=10.0, date="2026-05-16", merchant="BetaMerch")
 
         with self._use_db_path():
-            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id, payees="AlphaMerch")
+            rows = monthly_by_group(months=24, account_id=None, group_id=group_id, facets=TransactionFacets(payees="AlphaMerch"))
 
         self.assertEqual(sum(r["total"] for r in rows), 40.0)
 

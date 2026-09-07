@@ -1663,8 +1663,8 @@ export const HELP_TOPICS = [
     id: 'reviewing-transactions',
     section: 'importing',
     title: 'Reviewing newly imported transactions',
-    surfaces: ['Transactions (Needs review)', 'Import / Export (file card)'],
-    summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Needs review filter, and Mark reviewed work through them. A whole imported file clears at once with Mark all reviewed.',
+    surfaces: ['Transactions (Only… filter)', 'Import / Export (file card)'],
+    summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Only… filter set to Needs review, and Mark reviewed work through them. A whole imported file clears at once with Mark all reviewed.',
     body: () => (
       <>
         <p>
@@ -1689,14 +1689,19 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          There is a <strong>Needs review</strong> filter on the Transactions page.
+          The Transactions page carries an <strong>Only…</strong> button that narrows the ledger to one kind
+          of transaction at a time. Picking <strong>Needs review</strong> there leaves only the flagged rows;
+          clicking the button again shows everything without losing the choice, so the ledger can be flipped
+          back and forth. The same list holds <strong>Uncategorized</strong> and the other row markers &mdash;
+          attachments, splits, recurring, possible duplicates. Combining one of them with an account, a
+          category or a tag is what the shared filter bar’s <strong>Attributes</strong> tab is for.
         </p>
         <p>
           A long historical import flags a lot of transactions at once. If reviewing them is not of interest,
           each imported file’s card on the Import / Export page shows a <strong>to
             review</strong> count and a <strong>Mark all reviewed</strong> button that clears the whole file in
-          one click. A data connection has corresponding per-file card yet. Its transactions are cleared with
-          the <strong>Needs review</strong> filter and a bulk <strong>Mark reviewed</strong> instead.
+          one click. A data connection does not have a corresponding per-file card yet. Its transactions are
+          cleared with the <strong>Needs review</strong> filter and a bulk <strong>Mark reviewed</strong> instead.
         </p>
       </>
     ),

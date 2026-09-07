@@ -2,7 +2,7 @@
 Filter exclusion ("is not") coverage.
 
 The shared FilterBar lets any facet be selected as include or exclude. Exclusion is the NULL-safe
-negation of the same membership test the include path builds (`_negate_membership` wraps membership in
+negation of the same membership test the include path builds (`negate_membership` wraps membership in
 `COALESCE((...), 0) = 0`). The NULL-safety is the whole point: a row whose membership is *unknown*
 (a NULL category against an IN list, a NULL owner against an owner list) is not a member and must
 survive the exclusion — a plain `NOT IN` would silently drop those rows. These tests run the shared
@@ -19,6 +19,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import _build_transaction_filter, list_transactions
+from backend.services.transaction_facets import split_facets
 
 
 class FilterExclusionTests(unittest.TestCase):
@@ -273,10 +274,7 @@ class FilterExclusionTests(unittest.TestCase):
             resp = list_transactions(
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sort_by="date", sort_dir="desc",
-                account_id=None, account_ids=None, source_account_ids=None, category_id=None,
-                group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
-                exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-                exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+                account_id=None, source_account_ids=None, category_id=None,
                 direction=None, view=None, search=None, quick_filter=None, ids=None,
                 recurring_series_id=None, recurring_excluded_series_id=None,
                 account_type=None, import_evidence_type=None,
@@ -302,13 +300,12 @@ class FilterExclusionTests(unittest.TestCase):
         # inlines without an isinstance guard — so pass explicit Nones for every filter it reads.
         params = dict(
             columns="merchant_name", date_start=None, date_end=None,
-            account_ids=None, owner_ids=None, group_ids=None, category_ids=None, tag_ids=None,
-            exclude_account_ids=None, exclude_owner_ids=None, exclude_group_ids=None,
-            exclude_category_ids=None, exclude_tag_ids=None, search=None,
+            search=None,
         )
         params.update(query_kwargs)
+        facets, rest = split_facets(params)
         with self._use_db_path():
-            resp = export_transactions_csv(**params)
+            resp = export_transactions_csv(**rest, facets=facets)
 
         async def _drain():
             parts = []

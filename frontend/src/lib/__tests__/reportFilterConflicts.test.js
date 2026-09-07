@@ -122,14 +122,20 @@ describe('computeReportSpendingConflicts — tag report', () => {
     ])
   })
 
-  it('ignores synthetic tag buckets (Recurring/Untagged) — they are orthogonal axes, not report tags', () => {
-    // A `Recurring` include chip is not "filtering on tags": recurring rows can carry the report's tags,
-    // so it must not flag every report tag as missing.
-    expect(computeReportSpendingConflicts({ ...base, selections: [include('tag', '__recurring__', 'Recurring')] })).toEqual([])
+  it('ignores the synthetic Untagged bucket — an orthogonal axis, not a report tag', () => {
+    // An `Untagged` include chip is not "filtering on tags", so it must not flag every report tag as
+    // missing; it has no wedge of its own either.
     expect(computeReportSpendingConflicts({ ...base, selections: [include('tag', '__untagged__', 'Untagged')] })).toEqual([])
     // A real excluded report tag is still flagged even alongside a synthetic include chip.
-    const out = computeReportSpendingConflicts({ ...base, selections: [include('tag', '__recurring__', 'Recurring'), exclude('tag', 't1', 'Business')] })
+    const out = computeReportSpendingConflicts({ ...base, selections: [include('tag', '__untagged__', 'Untagged'), exclude('tag', 't1', 'Business')] })
     expect(out).toEqual([{ facet: 'tag', id: 't1', label: 'Business', reason: 'excluded' }])
+  })
+
+  it('ignores attribute chips entirely — they are a different facet', () => {
+    // Recurring used to be a pseudo-tag, which is why the branch above had to screen it out by id
+    // shape. As its own facet it never reaches the tag check at all: a recurring row can carry every
+    // tag the report is about, so narrowing to one must not read as narrowing the report's tags.
+    expect(computeReportSpendingConflicts({ ...base, selections: [include('attribute', 'recurring', 'Recurring')] })).toEqual([])
   })
 })
 

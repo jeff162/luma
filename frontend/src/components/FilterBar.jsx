@@ -93,10 +93,6 @@ const SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID = '__uncategorized_income_group__'
 // tag_filter_membership_sql recognizes this id as the untagged bucket. Mirrors the category filter's
 // synthetic Uncategorized ids and the owner filter's 'unassigned'.
 const UNTAGGED_TAG_ID = '__untagged__'
-// Synthetic tag selection for "belongs to any recurring series". Recurring isn't a tag, but it shares
-// the row's tag marker strip and rides the tag facet, so a single backend definition
-// (tag_filter_membership_sql) carries it to the ledger, the Dashboard, and the CSV export at once.
-const RECURRING_TAG_ID = '__recurring__'
 
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
@@ -204,6 +200,10 @@ const FILTER_TABS = [
   { id: 'tags',       label: 'Tags'       },
   { id: 'owners',     label: 'Owners'     },
   { id: 'payee',      label: 'Payee'      },
+  // What a row *is* (has an attachment, is recurring, needs review) rather than what it is filed
+  // under. The vocabulary comes from the backend so this tab never keeps its own copy — see
+  // services/transaction_attributes.py.
+  { id: 'attributes', label: 'Attributes' },
 ]
 
 function FilterPopover({ onClose }) {
@@ -213,6 +213,7 @@ function FilterPopover({ onClose }) {
   const [accounts, setAccounts]             = useState([])
   const [owners, setOwners]                 = useState([])
   const [tags, setTags]                     = useState([])
+  const [attributes, setAttributes]         = useState([])
   const [payeeSearch, setPayeeSearch]       = useState('')
   const [payeeSuggestions, setPayeeSuggestions] = useState([])
   // Category tree UI state (the merged Groups+Categories tab): per-group collapse + a type-to-filter box.
@@ -224,6 +225,7 @@ function FilterPopover({ onClose }) {
     api.getAccounts().then(setAccounts)
     api.getOwners().then(setOwners)
     api.getTags().then(setTags)
+    api.getFilterAttributes().then(setAttributes)
   }, [])
 
   useEffect(() => {
@@ -306,12 +308,16 @@ function FilterPopover({ onClose }) {
   }, [categories])
 
   return (
-    <Popover onClose={onClose} style={{ minWidth: 300 }}>
-      <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+    <Popover onClose={onClose} style={{ minWidth: 420 }}>
+      {/* Tabs size to their own labels rather than to equal `flex: 1` cells. Equal cells put the widest
+        labels ("Accounts", "Categories") edge-to-edge in theirs while "Tags" sat in slack, so two of
+        them read as one run of text — worse with each tab added. Natural width plus real padding keeps
+        the gaps even in the way that matters, which is between the words rather than between the cells. */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
         {FILTER_TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
-            flex: 1, padding: '9px 0', border: 'none', background: 'none',
-            fontSize: 12, cursor: 'pointer',
+            flex: '0 1 auto', padding: '9px 10px', border: 'none', background: 'none',
+            fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap',
             color: tab === t.id ? 'var(--text)' : 'var(--muted)',
             borderBottom: tab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
             fontWeight: tab === t.id ? 500 : 400,
@@ -460,9 +466,6 @@ function FilterPopover({ onClose }) {
           // The synthetic "Untagged" bucket (rows with no effective tag) leads the list and is always
           // available even before any tags exist — it's a filter over the absence of tags, not a tag.
           const untaggedSel = { type: 'tag', id: UNTAGGED_TAG_ID, label: 'Untagged' }
-          // "Recurring" is not a tag but shares the tag marker strip and rides the tag facet — so it can
-          // scope the Dashboard and the ledger the same way. Excludable too: `≠ Recurring` = one-off rows.
-          const recurringSel = { type: 'tag', id: RECURRING_TAG_ID, label: 'Recurring' }
           return (
             <>
               <div onClick={() => pickInclude(untaggedSel)} style={{
@@ -472,17 +475,6 @@ function FilterPopover({ onClose }) {
               }}>
                 <span style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--muted)' }}>Untagged</span>
                 <RowTrailing mode={selectionOf(UNTAGGED_TAG_ID)?.mode} excludable onExclude={() => pickExclude(untaggedSel)} />
-              </div>
-              <div onClick={() => pickInclude(recurringSel)} style={{
-                ...rowStyle,
-                background: rowBg(RECURRING_TAG_ID),
-                justifyContent: 'space-between',
-                borderBottom: '1px solid var(--border)',
-              }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted)' }}>
-                  <span aria-hidden="true">↻</span> Recurring
-                </span>
-                <RowTrailing mode={selectionOf(RECURRING_TAG_ID)?.mode} excludable onExclude={() => pickExclude(recurringSel)} />
               </div>
               {tags.length === 0 ? (
                 <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
@@ -533,6 +525,30 @@ function FilterPopover({ onClose }) {
               <div style={{ fontSize: 13, color: 'var(--muted)', padding: '6px 0' }}>No matches</div>
             )}
           </div>
+        )}
+
+        {tab === 'attributes' && (
+          attributes.length === 0 ? (
+            <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>None.</div>
+          ) : (
+            // `in_filter_bar` is the backend's call, not a display preference: Uncategorized is part of
+            // the vocabulary (the ledger's quick filter and `?only=` links use it) but the Categories
+            // tab already offers that bucket, and two identical-looking controls in one popover is a
+            // question the user should never have to answer.
+            attributes.filter(a => a.in_filter_bar).map(attribute => {
+              const sel = { type: 'attribute', id: attribute.key, label: attribute.label }
+              return (
+                <div key={attribute.key} onClick={() => pickInclude(sel)} title={attribute.description} style={{
+                  ...rowStyle,
+                  background: rowBg(attribute.key),
+                  justifyContent: 'space-between',
+                }}>
+                  <span style={{ fontSize: 13 }}>{attribute.label}</span>
+                  <RowTrailing mode={selectionOf(attribute.key)?.mode} excludable onExclude={() => pickExclude(sel)} />
+                </div>
+              )
+            })
+          )
         )}
       </div>
 

@@ -11,7 +11,7 @@ Treat this file as two related contracts:
   reports keep both debits and credits in the selected slice and roll them up as net totals, and group/category filters use subqueries so the reporting
   joins do not accidentally change which transactions qualify.
 """
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -21,8 +21,19 @@ import uuid
 from backend.db.database import get_db
 from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
 from backend.services.account_groups import effective_account_id_sql
+from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
+from backend.services.transaction_facets import (
+    FACET_PARAM_NAMES,
+    TransactionFacets,
+    UNCATEGORIZED_CATEGORY_ID,
+    UNCATEGORIZED_EXPENSE_CATEGORY_ID,
+    UNCATEGORIZED_INCOME_CATEGORY_ID,
+    account_membership,
+    append_facets,
+    coerce_facets,
+    facets_from,
+)
 from backend.services.transaction_tags import (
-    tag_filter_membership_sql,
     effective_selected_tag_signature_sql,
     effective_tag_match_all_sql,
     get_blocked_transaction_tag_map,
@@ -79,9 +90,6 @@ TRANSACTION_SORT_SQL = {
     "amount": "t.amount",
 }
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
-UNCATEGORIZED_CATEGORY_ID = "__uncategorized__"
-UNCATEGORIZED_EXPENSE_CATEGORY_ID = "__uncategorized_expense__"
-UNCATEGORIZED_INCOME_CATEGORY_ID = "__uncategorized_income__"
 UNCATEGORIZED_EXPENSE_CATEGORY_NAME = "Uncategorized"
 UNCATEGORIZED_INCOME_CATEGORY_NAME = "Other Income"
 
@@ -201,40 +209,6 @@ def _resolve_category_is_income(conn, category_id: str) -> bool:
     return bool(row and row[0] == "income")
 
 
-def _build_uncategorized_multi_filter(column_sql: str, raw_ids: list[str]):
-    ids = [value.strip() for value in raw_ids if value and value.strip()]
-    if not ids:
-        return None
-    normal_ids = []
-    include_any_uncategorized = False
-    include_uncategorized_expense = False
-    include_uncategorized_income = False
-    for value in ids:
-        if value == UNCATEGORIZED_CATEGORY_ID:
-            include_any_uncategorized = True
-        elif value == UNCATEGORIZED_EXPENSE_CATEGORY_ID:
-            include_uncategorized_expense = True
-        elif value == UNCATEGORIZED_INCOME_CATEGORY_ID:
-            include_uncategorized_income = True
-        else:
-            normal_ids.append(value)
-
-    clauses = []
-    params = []
-    if normal_ids:
-        placeholders = ",".join("?" * len(normal_ids))
-        clauses.append(f"{column_sql} IN ({placeholders})")
-        params.extend(normal_ids)
-    if include_any_uncategorized:
-        clauses.append("t.category_id IS NULL")
-    else:
-        if include_uncategorized_expense:
-            clauses.append("(t.category_id IS NULL AND t.amount > 0)")
-        if include_uncategorized_income:
-            clauses.append("(t.category_id IS NULL AND t.amount < 0)")
-    if not clauses:
-        return None
-    return f"({' OR '.join(clauses)})", params
 
 
 def _summary_uncategorized_id_sql(level: str) -> str:
@@ -303,57 +277,17 @@ def _summary_signed_total_sql(type_expr: str) -> str:
     return f"CASE WHEN ({type_expr}) = 'income' THEN -SUM(t.amount) ELSE SUM(t.amount) END"
 
 
-# --- Exclusion ("is not") ---------------------------------------------------------------------
-# Every facet the shared FilterBar exposes can be selected as *include* (the historical default) or
-# *exclude*. Exclusion is expressed as the NULL-safe negation of the same membership expression the
-# include path builds, so there is one definition of "is a member of this facet set" per facet and
-# the two modes can never drift. The NULL-safety matters: `t.category_id NOT IN (...)` is *unknown*
-# (not true) for a NULL category, which would silently drop uncategorized rows from a "not Groceries"
-# result even though an uncategorized row plainly is not Groceries. `_negate_membership` collapses
-# unknown membership to non-member first, so a row the include set doesn't match always survives its
-# exclusion. See docs/data-model.md (filter exclusion semantics).
-def _negate_membership(expr: str) -> str:
-    return f"COALESCE(({expr}), 0) = 0"
-
-
-# Both sides of an account comparison have to resolve the same way. The row side already does
-# (`EFFECTIVE_ACCOUNT_ID_SQL`), and the *given* ids are resolved here too rather than compared raw,
-# because a caller can hold an id that has since become a merged child — nothing resolves to a child
-# any more, so a raw child id matches no row at all and reports no error. Resolving both sides makes
-# a child id mean "the group it belongs to", which is the only reading anyone ever wants; "exactly
-# this underlying account" is what `source_account_ids` is for. Done in SQL, not by resolving the ids
-# in Python first, so the filter builder stays a pure function with no connection of its own.
-# See docs/data-model.md → "A stored account id is a reference into a mutable graph".
-def _effective_account_membership(ids: list[str]) -> tuple[str, list]:
-    placeholders = ','.join('?' * len(ids))
-    return (
-        f"{EFFECTIVE_ACCOUNT_ID_SQL} IN "
-        f"(SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({placeholders}))",
-        list(ids),
-    )
-
-
-def _append_effective_account_filter(
-    clauses, params, *, account_id: Optional[str], account_ids: Optional[str],
-    exclude_account_ids: Optional[str] = None,
-):
-    if account_ids and isinstance(account_ids, str):
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        if ids:
-            expr, expr_params = _effective_account_membership(ids)
-            clauses.append(expr)
-            params.extend(expr_params)
-    elif account_id and isinstance(account_id, str):
-        # Single-id form of the same comparison, resolved on both sides for the same reason.
-        expr, expr_params = _effective_account_membership([account_id])
-        clauses.append(expr)
-        params.extend(expr_params)
-    if exclude_account_ids and isinstance(exclude_account_ids, str):
-        ids = [i.strip() for i in exclude_account_ids.split(',') if i.strip()]
-        if ids:
-            expr, expr_params = _effective_account_membership(ids)
-            clauses.append(_negate_membership(expr))
-            params.extend(expr_params)
+# The singular `account_id` is a legacy convenience the registry deliberately does not carry: it means
+# the same thing as a one-element `account_ids`, and `account_ids` wins when both arrive. Kept as its own
+# helper so that precedence is stated once rather than re-derived per caller.
+def _append_single_account_filter(clauses, params, *, account_id: Optional[str], account_ids: Optional[str]):
+    if account_ids and isinstance(account_ids, str) and account_ids.strip():
+        return
+    if account_id and isinstance(account_id, str):
+        membership = account_membership([account_id])
+        if membership:
+            clauses.append(membership[0])
+            params.extend(membership[1])
 
 
 def _append_source_account_filter(clauses, params, *, source_account_ids: Optional[str]):
@@ -369,25 +303,11 @@ def _append_source_account_filter(clauses, params, *, source_account_ids: Option
             params.extend(ids)
 
 
-def _append_tag_filter(
-    clauses, params, *, tag_ids: Optional[str], exclude_tag_ids: Optional[str] = None,
-    require_all_tag_ids: Optional[str] = None,
-):
-    # Membership ("has this tag", effective + block-aware, plus the synthetic Untagged bucket) is defined
-    # once in tag_filter_membership_sql so list/summaries/export all agree. Exclusion negates the same
-    # expression: EXISTS is null-free, so plain NOT(...) is the exact negation (no COALESCE guard).
-    # `require_all_tag_ids` is a *separate* AND constraint (has all of these), independent of the OR
-    # `tag_ids`, so a caller can apply both at once — see effective_tag_match_all_sql.
-    if tag_ids and isinstance(tag_ids, str):
-        membership = tag_filter_membership_sql([i.strip() for i in tag_ids.split(",") if i.strip()])
-        if membership:
-            clauses.append(membership[0])
-            params.extend(membership[1])
-    if exclude_tag_ids and isinstance(exclude_tag_ids, str):
-        membership = tag_filter_membership_sql([i.strip() for i in exclude_tag_ids.split(",") if i.strip()])
-        if membership:
-            clauses.append(f"NOT ({membership[0]})")
-            params.extend(membership[1])
+# `require_all_tag_ids` is not a facet: it is an *AND* constraint ("has all of these") that applies
+# alongside the OR tag facet rather than instead of it, and it is internal — the tag-report drill scopes
+# rows to an exact signature with it, while the app-wide FilterBar stays OR. See docs/data-model.md →
+# "Filter exclusion".
+def _append_require_all_tags_filter(clauses, params, *, require_all_tag_ids: Optional[str]):
     if require_all_tag_ids and isinstance(require_all_tag_ids, str):
         ids = [i.strip() for i in require_all_tag_ids.split(",") if i.strip()]
         if ids:
@@ -395,125 +315,16 @@ def _append_tag_filter(
             params.extend(ids)
 
 
-def _owner_membership(ids: list[str]) -> tuple[str, list]:
-    # 'unassigned' expresses the first-class unowned bucket as `owner_id IS NULL`. Returns the
-    # inclusion expression so include and exclude share one definition (exclude negates it NULL-safely,
-    # which is why a NULL owner_id survives "not owned by X" but is removed by "not unassigned").
-    if 'unassigned' in ids:
-        other_ids = [i for i in ids if i != 'unassigned']
-        if other_ids:
-            placeholders = ','.join('?' * len(other_ids))
-            return f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))", other_ids
-        return "t.owner_id IS NULL", []
-    placeholders = ','.join('?' * len(ids))
-    return f"t.owner_id IN ({placeholders})", list(ids)
-
-
-def _append_owner_filter(clauses, params, *, owner_ids: Optional[str], exclude_owner_ids: Optional[str] = None):
-    # Mirrors the inline owner filter used by the transaction list and the totals summaries: a comma list
-    # of owner ids, with 'unassigned' expressing the first-class unowned bucket as `owner_id IS NULL`.
-    if owner_ids and isinstance(owner_ids, str):
-        ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
-        if ids:
-            expr, expr_params = _owner_membership(ids)
-            clauses.append(expr)
-            params.extend(expr_params)
-    if exclude_owner_ids and isinstance(exclude_owner_ids, str):
-        ids = [i.strip() for i in exclude_owner_ids.split(',') if i.strip()]
-        if ids:
-            expr, expr_params = _owner_membership(ids)
-            clauses.append(_negate_membership(expr))
-            params.extend(expr_params)
-
-
-def _group_membership(ids: list[str]) -> Optional[tuple[str, list]]:
-    # Membership = leaf category sits under one of the selected top-level groups (plus any synthetic
-    # uncategorized buckets). Shared by include and exclude so both read the same set definition.
-    group_filter = _build_uncategorized_multi_filter("t.category_id", ids)
-    normal_group_ids = [
-        value for value in ids
-        if value not in {UNCATEGORIZED_CATEGORY_ID, UNCATEGORIZED_EXPENSE_CATEGORY_ID, UNCATEGORIZED_INCOME_CATEGORY_ID}
-    ]
-    group_clauses, group_params = [], []
-    if normal_group_ids:
-        placeholders = ','.join('?' * len(normal_group_ids))
-        group_clauses.append(f"t.category_id IN (SELECT id FROM category WHERE parent_id IN ({placeholders}))")
-        group_params.extend(normal_group_ids)
-    if group_filter:
-        group_clauses.append(group_filter[0])
-        group_params.extend(group_filter[1])
-    if not group_clauses:
-        return None
-    return f"({' OR '.join(group_clauses)})", group_params
-
-
-def _append_group_filter(clauses, params, *, group_ids: Optional[str], exclude_group_ids: Optional[str] = None):
-    # Restrict to transactions whose leaf category sits under one of the selected top-level groups
-    # (plus any synthetic uncategorized buckets). Mirrors the transaction list's group_ids handling.
-    if group_ids and isinstance(group_ids, str):
-        ids = [i.strip() for i in group_ids.split(',') if i.strip()]
-        membership = _group_membership(ids) if ids else None
+# The attribute counterpart, and for the same reason: the ledger's toolbar filter is a control of its own
+# rather than another tick in the facet's picker, so it has to AND. Folding its key into `attribute_ids`
+# would OR it with the FilterBar's chips, which means adding a second filter could *widen* the result.
+def _append_require_all_attributes_filter(clauses, params, *, require_all_attribute_ids: Optional[str]):
+    if require_all_attribute_ids and isinstance(require_all_attribute_ids, str):
+        keys = [k.strip() for k in require_all_attribute_ids.split(",") if k.strip()]
+        membership = attribute_require_all_sql(keys) if keys else None
         if membership:
             clauses.append(membership[0])
             params.extend(membership[1])
-    if exclude_group_ids and isinstance(exclude_group_ids, str):
-        ids = [i.strip() for i in exclude_group_ids.split(',') if i.strip()]
-        membership = _group_membership(ids) if ids else None
-        if membership:
-            clauses.append(_negate_membership(membership[0]))
-            params.extend(membership[1])
-
-
-def _append_category_ids_filter(clauses, params, *, category_ids: Optional[str], exclude_category_ids: Optional[str] = None):
-    # Restrict to the selected leaf categories (plus synthetic uncategorized buckets). Mirrors the list.
-    if category_ids and isinstance(category_ids, str):
-        membership = _build_uncategorized_multi_filter(
-            "t.category_id", [i.strip() for i in category_ids.split(',') if i.strip()]
-        )
-        if membership:
-            clauses.append(membership[0])
-            params.extend(membership[1])
-    if exclude_category_ids and isinstance(exclude_category_ids, str):
-        membership = _build_uncategorized_multi_filter(
-            "t.category_id", [i.strip() for i in exclude_category_ids.split(',') if i.strip()]
-        )
-        if membership:
-            clauses.append(_negate_membership(membership[0]))
-            params.extend(membership[1])
-
-
-# Matched case-insensitively (`COLLATE NOCASE`), because the same merchant is routinely spelled several
-# ways by the same source — `BIKEREG REGISTRATION` one month and `Bikereg Registration` the next — and to
-# a person choosing a payee those are one payee, not two. Binary equality made that a silent under-match:
-# a filter, a merchant report or a suppressed series' drill-down would show one spelling's rows and
-# quietly omit the rest, with a count beside it derived from a case-folded grouping that disagreed.
-# NOCASE is ASCII-only in SQLite, which is the right scope here — these are payee labels, and widening it
-# would mean carrying a collation the rest of the schema does not use.
-def _payee_membership(names: list[str]) -> tuple[str, list]:
-    or_clauses = ' OR '.join(
-        ['(t.display_name = ? COLLATE NOCASE OR t.merchant_name = ? COLLATE NOCASE '
-         'OR t.raw_name = ? COLLATE NOCASE)'] * len(names)
-    )
-    payee_params: list = []
-    for n in names:
-        payee_params.extend([n, n, n])
-    return f"({or_clauses})", payee_params
-
-
-def _append_payee_filter(clauses, params, *, payees: Optional[str], exclude_payees: Optional[str] = None):
-    # Pipe-separated payee names; matches whichever merchant field carries the visible name. Mirrors the list.
-    if payees and isinstance(payees, str):
-        names = [n.strip() for n in payees.split('|') if n.strip()]
-        if names:
-            expr, expr_params = _payee_membership(names)
-            clauses.append(expr)
-            params.extend(expr_params)
-    if exclude_payees and isinstance(exclude_payees, str):
-        names = [n.strip() for n in exclude_payees.split('|') if n.strip()]
-        if names:
-            expr, expr_params = _payee_membership(names)
-            clauses.append(_negate_membership(expr))
-            params.extend(expr_params)
 
 
 # Quick filter parsing keeps the Transactions page's one-box workflow lightweight:
@@ -764,21 +575,28 @@ def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
 def _build_transaction_filter(
     *,
     month=None, date_start=None, date_end=None, import_batch_id=None,
-    account_id=None, account_ids=None, source_account_ids=None, category_id=None, group_ids=None,
-    category_ids=None, tag_ids=None, owner_ids=None, payees=None,
-    exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-    exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None, require_all_tag_ids=None,
+    account_id=None, source_account_ids=None, category_id=None, require_all_tag_ids=None,
+    require_all_attribute_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     sync_connection_id=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
     amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
     recurring_only=None,
+    **facet_kwargs,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
     # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
     # Returns (clauses, params) against the alias set t(xn)/a(ccount)/p(arent account)/c(ategory)/
     # pc(parent category); any caller must JOIN those aliases identically.
+    #
+    # The facets arrive as **kwargs rather than as named parameters so that adding one is a change to
+    # the registry alone. They are still checked against it, so a misspelled facet is a TypeError here
+    # exactly as it would have been in an explicit signature — the looseness is in *which* names are
+    # accepted, never in whether an unrecognized one is noticed.
+    unknown = sorted(set(facet_kwargs) - FACET_PARAM_NAMES)
+    if unknown:
+        raise TypeError(f"_build_transaction_filter() got unexpected keyword argument(s): {', '.join(unknown)}")
     clauses: list[str] = []
     params: list = []
     if not include_trashed:
@@ -848,10 +666,10 @@ def _build_transaction_filter(
             WHERE  cn.id = ?
         )""")
         params.append(sync_connection_id)
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
+    _append_single_account_filter(
+        clauses, params, account_id=account_id, account_ids=facet_kwargs.get('account_ids'),
     )
+    append_facets(clauses, params, facets_from(facet_kwargs))
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     # Scope by the *effective* account type ('paypal'/'amazon'/…) — the money-movement report uses this
     # with `import_evidence_type` to list every row the type-scoped rule reaches.
@@ -898,14 +716,10 @@ def _build_transaction_filter(
     # NULL-safe negation). Payee chips come from canonicalized labels in the UI, so matching honors
     # whichever merchant field currently carries the visible name; owner exposes the unowned bucket as a
     # first-class 'unassigned' value.
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(
-        clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids,
+    _append_require_all_tags_filter(clauses, params, require_all_tag_ids=require_all_tag_ids)
+    _append_require_all_attributes_filter(
+        clauses, params, require_all_attribute_ids=require_all_attribute_ids,
     )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids,
-                       require_all_tag_ids=require_all_tag_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
     if direction == "debit":
         clauses.append("t.amount > 0")
     elif direction == "credit":
@@ -961,6 +775,18 @@ def _build_transaction_filter(
     return clauses, params
 
 
+@router.get("/filter-attributes")
+def list_filter_attributes():
+    """The attribute vocabulary, labels included, so no UI surface keeps its own copy.
+
+    Both consumers read this: the FilterBar's Attributes tab (multi-select, with "is not") and the
+    Transactions toolbar's single-select quick filter. Serving the labels rather than only the keys is
+    what makes adding an attribute a one-place change — a parallel label table in the frontend would be
+    a second list to keep in step, which is the duplication this whole seam exists to remove.
+    """
+    return attribute_vocabulary()
+
+
 @router.get("")
 def list_transactions(
     month:        Optional[str] = Query(None, description="YYYY-MM"),
@@ -970,21 +796,11 @@ def list_transactions(
     sort_by:      Optional[str] = Query("date", description="date | merchant | category | account | amount"),
     sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
     account_id:   Optional[str] = Query(None),
-    account_ids:  Optional[str] = Query(None, description="comma-separated account IDs (effective/top-level account)"),
+    facets:       TransactionFacets = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     category_id:  Optional[str] = Query(None),
-    group_ids:    Optional[str] = Query(None, description="comma-separated group IDs"),
-    category_ids: Optional[str] = Query(None, description="comma-separated category IDs"),
-    tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs"),
-    owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs"),
-    payees:       Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="comma-separated account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="comma-separated group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="comma-separated category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="pipe-separated payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs to exclude ('is not')"),
     require_all_tag_ids:  Optional[str] = Query(None, description="comma-separated tag IDs the row must ALL have (AND), independent of tag_ids"),
+    require_all_attribute_ids: Optional[str] = Query(None, description="comma-separated attribute keys the row must ALL carry (AND), independent of attribute_ids"),
     direction:    Optional[str] = Query(None, description="debit | credit"),
     view:         Optional[str] = Query(None, description="spending | income | cash_flow — mirrors monthly-trend's cross-cutting dashboard scope"),
     search:       Optional[str] = Query(None),
@@ -1005,6 +821,8 @@ def list_transactions(
     limit:        int           = Query(200, ge=0, le=1000, description="rows per page (max 1000); 0 = no limit — returns all matching rows, for known-bounded scopes only"),
     offset:       int           = Query(0),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
     # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
     sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
@@ -1012,13 +830,10 @@ def list_transactions(
 
     clauses, params = _build_transaction_filter(
         month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
-        account_id=account_id, account_ids=account_ids, source_account_ids=source_account_ids,
-        category_id=category_id, group_ids=group_ids,
-        category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
-        exclude_account_ids=exclude_account_ids, exclude_group_ids=exclude_group_ids,
-        exclude_category_ids=exclude_category_ids, exclude_owner_ids=exclude_owner_ids,
-        exclude_payees=exclude_payees, exclude_tag_ids=exclude_tag_ids,
-        require_all_tag_ids=require_all_tag_ids,
+        account_id=account_id, source_account_ids=source_account_ids,
+        category_id=category_id, require_all_tag_ids=require_all_tag_ids,
+        require_all_attribute_ids=require_all_attribute_ids,
+        **facets.as_params(),
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         sync_connection_id=sync_connection_id,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
@@ -1038,8 +853,8 @@ def list_transactions(
     # and cash_flow through its exclude_from_totals guard, which a split's parts can straddle. See
     # services/txn_splits.py.
     expand_splits = bool(
-        category_id or category_ids or group_ids
-        or exclude_category_ids or exclude_group_ids
+        category_id or facets.category_ids or facets.group_ids
+        or facets.exclude_category_ids or facets.exclude_group_ids
         or view in ("spending", "income", "cash_flow")
     )
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -1740,11 +1555,15 @@ def trash_transaction(txn_id: str):
 # which is how a "mark the 28 rows needing review" once resolved to the whole ledger. An unsupported
 # key is a client and a server that disagree about the selection, and the only safe reading of that
 # disagreement is to refuse it.
-_BULK_FILTER_KEYS = {
-    "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id", "account_ids",
-    "source_account_ids", "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids",
-    "payees", "exclude_account_ids", "exclude_group_ids", "exclude_category_ids",
-    "exclude_owner_ids", "exclude_payees", "exclude_tag_ids", "require_all_tag_ids",
+# The facet half is *derived* from the registry rather than restated, because restating it is exactly
+# how this list goes wrong: every filter here narrows, so a key missing from the allowlist does not fail
+# closed — it is rejected as unknown if sent, and if the client stops sending it the selection silently
+# *widens* past the count the user is looking at. That is not hypothetical; `needs_review` was once
+# missing and "mark the 28 rows needing review" resolved to the whole ledger. Adding a facet now reaches
+# bulk automatically; only the non-facet filters below still have to be named by hand.
+_BULK_FILTER_KEYS = FACET_PARAM_NAMES | {
+    "month", "date_start", "date_end", "import_batch_id", "sync_connection_id", "account_id",
+    "source_account_ids", "category_id", "require_all_tag_ids", "require_all_attribute_ids",
     "direction", "view", "search", "quick_filter", "needs_review",
     "amount_min", "amount_max", "amount_min_op", "amount_max_op", "recurring_only",
 }
@@ -2105,21 +1924,12 @@ def spending_by_category(
     date_start:         Optional[str] = Query(None),
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
-    account_ids:        Optional[str] = Query(None),
-    tag_ids:            Optional[str] = Query(None),
-    owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
-    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:      TransactionFacets = Depends(),
     exclude_income:     bool          = Query(False, description="omit income categories from results"),
     exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
     params  = []
@@ -2132,16 +1942,8 @@ def spending_by_category(
     elif month:
         clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
+    append_facets(clauses, params, facets)
 
     if exclude_income:
         clauses.append(
@@ -2197,21 +1999,12 @@ def spending_by_tag_signature(
     date_start:         Optional[str] = Query(None),
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
-    account_ids:        Optional[str] = Query(None),
-    tag_ids:            Optional[str] = Query(None),
-    owner_ids:          Optional[str] = Query(None, description="comma-separated owner IDs"),
-    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:      TransactionFacets = Depends(),
     exclude_income:     bool          = Query(False, description="omit income categories from results"),
     exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     # The tag report's pie: buckets the scoped spending by *tag signature* — which of the report's
     # selected tags each transaction effectively carries — entirely in SQL. This replaces a client-side
     # aggregation over a /transactions fetch capped at 1000 rows, which silently truncated (and thus
@@ -2231,15 +2024,8 @@ def spending_by_tag_signature(
     elif month:
         clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
+    append_facets(clauses, params, facets)
     if exclude_income:
         clauses.append("((t.category_id IS NULL AND t.amount > 0) OR "
                        "COALESCE(c.category_type, p.category_type) != 'income')")
@@ -2305,19 +2091,10 @@ def spending_by_group(
     date_start:         Optional[str] = Query(None),
     date_end:           Optional[str] = Query(None),
     account_id:         Optional[str] = Query(None),
-    account_ids:        Optional[str] = Query(None),
-    tag_ids:            Optional[str] = Query(None),
-    owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
-    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:      TransactionFacets = Depends(),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
     params  = []
@@ -2330,15 +2107,8 @@ def spending_by_group(
     elif month:
         clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
+    append_facets(clauses, params, facets)
 
     with get_db() as conn:
         # Category rollups read the split-expansion seam: a split transaction contributes one row
@@ -2375,19 +2145,10 @@ def spending_by_category_in_group(
     date_end:    Optional[str] = Query(None),
     group_id:    str           = Query(...),
     account_id:  Optional[str] = Query(None),
-    account_ids: Optional[str] = Query(None),
-    tag_ids:     Optional[str] = Query(None),
-    owner_ids:   Optional[str] = Query(None, description="comma-separated owner IDs"),
-    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:      TransactionFacets = Depends(),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params  = []
     if date_start and date_end:
@@ -2413,16 +2174,8 @@ def spending_by_category_in_group(
         )
         params.extend([group_id, group_id])
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
+    append_facets(clauses, params, facets)
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -2473,25 +2226,16 @@ def monthly_trend(
     category_id: Optional[str] = Query(None),
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
-    account_ids: Optional[str] = Query(None),
+    facets:      TransactionFacets = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
-    tag_ids:     Optional[str] = Query(None),
-    owner_ids:   Optional[str] = Query(None),
-    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
     anchor:      Optional[str] = Query(None, description="'latest' slides the rolling window to end at the scope's most recent transaction instead of today"),
     view:        str            = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     if payee:
         # Payee detail drawers want the merchant's full visible history by default, so the rolling month window is
         # suppressed unless the caller supplied an explicit date filter.
@@ -2555,16 +2299,9 @@ def monthly_trend(
                 "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"
             )
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    append_facets(clauses, params, facets)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -2578,7 +2315,7 @@ def monthly_trend(
     # older than `months` still shows its most recent N months of history rather than nothing.
     anchor_latest = anchor == "latest" and not date_start and not date_end and not payee
 
-    if (not date_start and not date_end and not payee and not account_id and not account_ids
+    if (not date_start and not date_end and not payee and not account_id and not facets.account_ids
             and not source_account_ids and not anchor_latest):
         # The generic trends view stays bounded by a rolling window so dashboards do not turn into unbounded
         # all-history scans unless the caller explicitly asked for that.
@@ -2661,22 +2398,13 @@ def monthly_trend(
 def monthly_cash_flow(
     months:      int           = Query(24, le=240),
     account_id:  Optional[str] = Query(None),
-    account_ids: Optional[str] = Query(None),
+    facets:      TransactionFacets = Depends(),
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
-    tag_ids:     Optional[str] = Query(None),
-    owner_ids:   Optional[str] = Query(None),
-    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     clauses = [
         "t.is_pending = 0",
         "t.trashed_at IS NULL",
@@ -2687,16 +2415,9 @@ def monthly_cash_flow(
     ]
     params: list = []
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    append_facets(clauses, params, facets)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -2749,20 +2470,11 @@ def monthly_by_group(
     # data without turning into an open-ended all-history scan.
     months:      int           = Query(24, le=240),
     account_id:  Optional[str] = Query(None),
-    account_ids: Optional[str] = Query(None),
-    tag_ids:     Optional[str] = Query(None),
-    owner_ids:   Optional[str] = Query(None),
-    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
-    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
-    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:      TransactionFacets = Depends(),
     group_id:    Optional[str] = Query(None),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     clauses = [
         "t.is_pending = 0",
         "t.trashed_at IS NULL",
@@ -2772,15 +2484,8 @@ def monthly_by_group(
     ]
     params = [f"-{months}"]
 
-    _append_effective_account_filter(
-        clauses, params, account_id=account_id, account_ids=account_ids,
-        exclude_account_ids=exclude_account_ids,
-    )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
-    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
-    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
-    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
-    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    _append_single_account_filter(clauses, params, account_id=account_id, account_ids=facets.account_ids)
+    append_facets(clauses, params, facets)
 
     if group_id == UNCATEGORIZED_EXPENSE_CATEGORY_ID:
         clauses.extend(["t.category_id IS NULL", "t.amount > 0"])

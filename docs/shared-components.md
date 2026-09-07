@@ -20,6 +20,18 @@ same-name collisions). This is a "what's the shared way to do X?" lookup, **not*
 component. A recurring shape that has no shared control *yet* belongs in the watchlist at the bottom,
 not in these tables.
 
+## Filtering
+
+| Reach for | Instead of building | Where |
+| --- | --- | --- |
+| **`selectionsToParams`** — the one translation of the FilterBar chip row into API parameters, splitting each facet by include/exclude mode | a per-page `ofType`/`idsOf`/`incSel` helper (there were four, and their comments had drifted) | `lib/filterParams.js` |
+| **`AttributeFilterControl`** — the ledger's single-select "filter to one kind of transaction" split button | a bespoke on/off toggle per attribute | `components/AttributeFilterControl.jsx` *(sole use)* |
+| **`AmountFilterControl`** — a page-local toolbar filter opening a popover | a bespoke amount input in a toolbar | `components/AmountFilterControl.jsx` *(sole use)* |
+
+Adding a filter axis means one row in `FILTER_FACETS` (`lib/filterParams.js`) and one in the backend
+registry (`services/transaction_facets.py`) — never a new parameter threaded through each consumer. See
+`data-model.md` → *One facet registry, both halves*.
+
 ## Transactions — lists, rows, editing
 
 | Reach for | Instead of building | Where |

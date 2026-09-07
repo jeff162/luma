@@ -55,7 +55,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from cryptography.hazmat.primitives import hashes, serialization
@@ -95,7 +95,7 @@ from backend.services.restore_state import (
     require_no_pending_restore,
     set_restore_state,
 )
-from backend.services.transaction_tags import tag_filter_membership_sql
+from backend.services.transaction_facets import TransactionFacets, append_facets, coerce_facets
 
 router = APIRouter()
 
@@ -428,18 +428,11 @@ def export_transactions_csv(
     columns:      str           = Query("date,merchant_name,amount,account,category"),
     date_start:   Optional[str] = Query(None),
     date_end:     Optional[str] = Query(None),
-    account_ids:  Optional[str] = Query(None),
-    owner_ids:    Optional[str] = Query(None),
-    group_ids:    Optional[str] = Query(None),
-    category_ids: Optional[str] = Query(None),
-    tag_ids:      Optional[str] = Query(None),
-    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
-    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
-    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
-    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
-    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    facets:       TransactionFacets = Depends(),
     search:       Optional[str] = Query(None),
 ):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
     col_keys = [c.strip() for c in columns.split(",") if c.strip() in EXPORT_COLUMNS]
     if not col_keys:
         col_keys = ["date", "merchant_name", "amount", "account", "category"]
@@ -454,62 +447,15 @@ def export_transactions_csv(
         clauses.append("t.date >= ?"); params.append(date_start)
     elif date_end:
         clauses.append("t.date <= ?"); params.append(date_end)
-    if account_ids:
-        # Both sides resolved to the group root — see the transactions router's
-        # `_effective_account_membership`, whose shape this mirrors: an id that has since become a
-        # merged child resolves to nothing on the row side, so comparing it raw selects no rows and
-        # raises nothing. An export silently missing a third of the ledger is the failure that buys.
-        ids = [i.strip() for i in account_ids.split(",") if i.strip()]
-        clauses.append(
-            f"COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) "
-            f"IN (SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({','.join('?'*len(ids))}))"
-        ); params.extend(ids)
-    if owner_ids:
-        ids = [i.strip() for i in owner_ids.split(",") if i.strip()]
-        clauses.append(f"t.owner_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
-    if group_ids:
-        ids = [i.strip() for i in group_ids.split(",") if i.strip()]
-        clauses.append(
-            f"t.category_id IN (SELECT id FROM category WHERE parent_id IN ({','.join('?'*len(ids))}))"
-        ); params.extend(ids)
-    if category_ids:
-        ids = [i.strip() for i in category_ids.split(",") if i.strip()]
-        clauses.append(f"t.category_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
-    # Exclusion ("is not"): NULL-safe negation of the same membership test, so a row the include set
-    # doesn't match (including one with a NULL category/owner) survives the exclusion. Mirrors the
-    # transactions router's _negate_membership. Payee is intentionally not an export facet (never was).
-    if exclude_account_ids:
-        ids = [i.strip() for i in exclude_account_ids.split(",") if i.strip()]
-        clauses.append(
-            f"COALESCE((COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) "
-            f"IN (SELECT COALESCE(parent_account_id, id) FROM account WHERE id IN ({','.join('?'*len(ids))}))), 0) = 0"
-        ); params.extend(ids)
-    if exclude_owner_ids:
-        ids = [i.strip() for i in exclude_owner_ids.split(",") if i.strip()]
-        clauses.append(f"COALESCE((t.owner_id IN ({','.join('?'*len(ids))})), 0) = 0"); params.extend(ids)
-    if exclude_group_ids:
-        ids = [i.strip() for i in exclude_group_ids.split(",") if i.strip()]
-        clauses.append(
-            f"COALESCE((t.category_id IN (SELECT id FROM category WHERE parent_id IN ({','.join('?'*len(ids))}))), 0) = 0"
-        ); params.extend(ids)
-    if exclude_category_ids:
-        ids = [i.strip() for i in exclude_category_ids.split(",") if i.strip()]
-        clauses.append(f"COALESCE((t.category_id IN ({','.join('?'*len(ids))})), 0) = 0"); params.extend(ids)
-    # Tag include/exclude use the shared *effective*-tag membership (direct + inherited from
-    # category/group/account, block-aware) so a tag chip means the same thing here as on the ledger and
-    # dashboard. (This deliberately replaced an older direct-tags-only export filter, which silently
-    # omitted rows tagged only via their category or account.) Exclude negates it with NOT — EXISTS is
-    # null-free, so an untagged row is exactly the NOT set.
-    if tag_ids:
-        membership = tag_filter_membership_sql([i.strip() for i in tag_ids.split(",") if i.strip()])
-        if membership:
-            clauses.append(membership[0])
-            params.extend(membership[1])
-    if exclude_tag_ids:
-        membership = tag_filter_membership_sql([i.strip() for i in exclude_tag_ids.split(",") if i.strip()])
-        if membership:
-            clauses.append(f"NOT ({membership[0]})")
-            params.extend(membership[1])
+    # Facets go through the shared registry rather than being restated here. They were restated once,
+    # and the copy drifted: the hand-written category/group clauses compared the synthetic uncategorized
+    # bucket ids (`__uncategorized_expense__` and friends) as though they were real category rows, so
+    # selecting an Uncategorized chip and exporting produced an empty file while the ledger on screen
+    # showed rows. Going through the registry also *widened* this endpoint by one facet: it now accepts
+    # `payees`/`exclude_payees`, which it never did before. That is deliberate — the alternative is a
+    # per-endpoint facet subset, which is precisely the divergence the registry removes, and the export
+    # tab does not send it today so nothing changes for the shipped client.
+    append_facets(clauses, params, facets)
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])

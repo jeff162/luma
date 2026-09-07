@@ -18,6 +18,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import spending_by_tag_signature
+from backend.services.transaction_facets import split_facets
 
 
 class TagSignatureSummaryTests(unittest.TestCase):
@@ -88,15 +89,12 @@ class TagSignatureSummaryTests(unittest.TestCase):
         params = dict(
             selected_tag_ids=f"{self.t1},{self.t2}",
             month=None, date_start=None, date_end=None,
-            account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
-            category_ids=None, group_ids=None, payees=None,
-            exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-            exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
-            exclude_income=True, exclude_expense=False,
+            account_id=None, exclude_income=True, exclude_expense=False,
         )
         params.update(overrides)
+        facets, rest = split_facets(params)
         with self._use_db_path():
-            rows = spending_by_tag_signature(**params)
+            rows = spending_by_tag_signature(**rest, facets=facets)
         return {frozenset(r["signature_tag_ids"]): (round(r["total"], 2), r["count"]) for r in rows}
 
     def test_buckets_by_signature_including_inheritance_and_other(self):

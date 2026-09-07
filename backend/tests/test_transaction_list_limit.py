@@ -13,6 +13,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import list_transactions
+from backend.services.transaction_facets import split_facets
 
 
 def _list(**overrides):
@@ -20,14 +21,14 @@ def _list(**overrides):
     params = dict(
         month=None, date_start=None, date_end=None, import_batch_id=None,
         sort_by="date", sort_dir="desc",
-        account_id=None, account_ids=None, category_id=None,
-        group_ids=None, category_ids=None, tag_ids=None,
-        owner_ids=None, payees=None, direction=None, view=None,
+        account_id=None, category_id=None,
+        direction=None, view=None,
         search=None, quick_filter=None,
         include_trashed=False, limit=200, offset=0,
     )
     params.update(overrides)
-    return list_transactions(**params)
+    facets, rest = split_facets(params)
+    return list_transactions(**rest, facets=facets)
 
 
 class TransactionListLimitTests(unittest.TestCase):

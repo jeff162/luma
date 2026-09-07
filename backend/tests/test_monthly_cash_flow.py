@@ -26,14 +26,12 @@ from backend.routers.transactions import (
     spending_by_category,
 )
 from backend.services.txn_splits import save_split
+from backend.services.transaction_facets import split_facets
 
 # monthly_trend is called directly rather than through FastAPI, so every Query() parameter has to be
 # passed explicitly or it arrives as a FieldInfo.
 TREND_CASH_FLOW_KWARGS = dict(
-    category_id=None, payee=None, account_id=None, account_ids=None, source_account_ids=None,
-    tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
-    exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-    exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+    category_id=None, payee=None, account_id=None, source_account_ids=None,
     months=24, date_start=None, date_end=None, anchor=None, view="cash_flow",
 )
 
@@ -43,9 +41,7 @@ def _list_kwargs(**overrides):
     # so every argument has to be passed explicitly.
     base = dict(
         month=None, date_start=None, date_end=None, import_batch_id=None,
-        sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
-        source_account_ids=None, category_id=None, group_ids=None, category_ids=None,
-        tag_ids=None, owner_ids=None, payees=None, direction=None, view=None,
+        sort_by="date", sort_dir="desc", account_id=None, source_account_ids=None, category_id=None, direction=None, view=None,
         search=None, quick_filter=None, ids=None, include_trashed=False, limit=200, offset=0,
     )
     base.update(overrides)
@@ -138,14 +134,12 @@ class MonthlyCashFlowTests(unittest.TestCase):
         return self._insert_category(name=leaf_name, parent_id=group_id, category_type=category_type)
 
     def _cash_flow(self, **overrides):
-        params = dict(months=24, account_id=None, account_ids=None, source_account_ids=None,
-                      tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
-                      exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-                      exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+        params = dict(months=24, account_id=None, source_account_ids=None,
                       date_start=None, date_end=None)
         params.update(overrides)
+        facets, rest = split_facets(params)
         with self._use_db_path():
-            return monthly_cash_flow(**params)
+            return monthly_cash_flow(**rest, facets=facets)
 
     def _month(self, rows, month):
         matches = [r for r in rows if r["month"] == month]
@@ -366,11 +360,7 @@ class MonthlyCashFlowTests(unittest.TestCase):
 
         with self._use_db_path():
             rows = spending_by_category(
-                month="2026-05", date_start=None, date_end=None, account_id=None, account_ids=None,
-                tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
-                exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-                exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
-                exclude_income=False, exclude_expense=False,
+                month="2026-05", date_start=None, date_end=None, account_id=None, exclude_income=False, exclude_expense=False,
             )
 
         by_type = {r["category_type"]: r for r in rows}
@@ -395,11 +385,7 @@ class MonthlyCashFlowTests(unittest.TestCase):
 
         with self._use_db_path():
             cats = spending_by_category(
-                month="2026-05", date_start=None, date_end=None, account_id=None, account_ids=None,
-                tag_ids=None, owner_ids=None, category_ids=None, group_ids=None, payees=None,
-                exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-                exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
-                exclude_income=False, exclude_expense=False,
+                month="2026-05", date_start=None, date_end=None, account_id=None, exclude_income=False, exclude_expense=False,
             )
         row = self._month(self._cash_flow(), "2026-05")
 

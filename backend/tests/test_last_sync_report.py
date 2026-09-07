@@ -153,9 +153,8 @@ class LastSyncReportTests(unittest.TestCase):
                 month=None, date_start=None, date_end=None, import_batch_id=None,
                 sync_connection_id=connection_id or self.CONNECTION_ID,
                 sort_by="date", sort_dir="desc",
-                account_id=None, account_ids=None, category_id=None,
-                group_ids=None, category_ids=None, tag_ids=None,
-                owner_ids=None, payees=None, direction=None, view=None,
+                account_id=None, category_id=None,
+                direction=None, view=None,
                 search=None, quick_filter=None,
                 include_trashed=False, limit=200, offset=0,
             )

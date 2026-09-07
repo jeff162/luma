@@ -4,9 +4,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { selectionsToParams } from '../lib/filterParams.js'
 import { txnMutations, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
+import AttributeFilterControl from '../components/AttributeFilterControl.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, Input, SelectAllCheckbox, Tooltip } from '../components/ui.jsx'
@@ -69,6 +71,22 @@ function normalizeTransactionSortState(value) {
   return { key, dir }
 }
 
+// The ledger's attribute quick filter always carries a *choice*; what varies is whether it is applied.
+// Uncategorized is the seed because it is the most-reached-for of the set and the one the Tasks nudge
+// links to — starting with nothing chosen would leave the button unable to name itself, which is the
+// whole reason it is one button rather than a row of toggles.
+const DEFAULT_ATTRIBUTE_FILTER = { attribute: 'uncategorized', active: false }
+
+function normalizeAttributeFilter(value) {
+  // The key is not validated against the vocabulary here: that list is fetched, so it is not available
+  // when session state is read, and an unknown key already narrows to nothing server-side rather than
+  // erroring. Shape is all this can honestly check.
+  if (!value || typeof value !== 'object' || typeof value.attribute !== 'string') {
+    return DEFAULT_ATTRIBUTE_FILTER
+  }
+  return { attribute: value.attribute, active: !!value.active }
+}
+
 function getTransactionsNavigationType() {
   if (typeof window === 'undefined' || !window.performance?.getEntriesByType) return ''
   const navigationEntry = window.performance.getEntriesByType('navigation')[0]
@@ -96,19 +114,21 @@ function loadTransactionsSessionState() {
       // navigation but resets on next launch. normalizeAmountFilter drops an inactive/no-op draft.
       amountFilter: normalizeAmountFilter(parsed?.amountFilter),
       sortState: normalizeTransactionSortState(parsed?.sortState),
+      attributeFilter: normalizeAttributeFilter(parsed?.attributeFilter),
     }
   } catch {
     return null
   }
 }
 
-function saveTransactionsSessionState({ quickFilter, amountFilter, sortState }) {
+function saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter }) {
   if (typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(TXN_SESSION_STATE_STORAGE_KEY, JSON.stringify({
       quickFilter: quickFilter || '',
       amountFilter: normalizeAmountFilter(amountFilter),
       sortState: normalizeTransactionSortState(sortState),
+      attributeFilter: normalizeAttributeFilter(attributeFilter),
     }))
   } catch { }
 }
@@ -290,58 +310,48 @@ export default function Transactions() {
     setStoredCols(persistable)
   }
 
-  const [uncategorizedOnly, setUncategorizedOnly] = useState(
-    () => new URLSearchParams(location.search).get('uncategorized') === '1'
-  )
-  // "Needs review only" is an independent axis from uncategorized (a rule-categorized row can still
-  // need review). Deep-linkable so the import "review this file" nudge can route straight to it.
-  const [needsReviewOnly, setNeedsReviewOnly] = useState(
-    () => new URLSearchParams(location.search).get('needs_review') === '1'
-  )
+  // The ledger's single-select attribute quick filter, deep-linkable as `?only=<key>` so a Tasks nudge
+  // can route straight to the rows it is nagging about. `?uncategorized=1` and `?needs_review=1` are
+  // the two links that predate it and are still honored — a bookmark or an older Tasks entry may carry
+  // either, and a link that silently stops narrowing is worse than one that errors.
+  const [attributeFilter, setAttributeFilter] = useState(() => {
+    const search = new URLSearchParams(location.search)
+    const only = search.get('only')
+    if (only) return { attribute: only, active: true }
+    if (search.get('uncategorized') === '1') return { attribute: 'uncategorized', active: true }
+    if (search.get('needs_review') === '1') return { attribute: 'needs-review', active: true }
+    // A link is an explicit instruction and outranks what the session remembers; with no link, the
+    // session's choice carries over, and failing that the seeded default.
+    return normalizeAttributeFilter(initialSessionStateRef.current?.attributeFilter)
+  })
+  const [filterAttributes, setFilterAttributes] = useState([])
+  useEffect(() => { api.getFilterAttributes().then(setFilterAttributes) }, [])
+  // The key actually in force, or undefined. Everything downstream reads this rather than the pair, so
+  // "picked but switched off" cannot leak into a request.
+  const activeAttribute = attributeFilter.active ? attributeFilter.attribute || undefined : undefined
 
   // Bulk edit. The filter params below mirror the list fetch exactly so "select all matching" resolves
   // the same rows server-side. The ledger is the paginated source of truth, so Apply re-fetches (via
   // onReload) rather than patching rows in place.
   const currentFilterParams = useMemo(() => {
-    const sel = filters.selections || []
-    // Include vs exclude mode splits each facet into its include param and its exclude_* mirror, so a
+    // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), so a
     // bulk "select all matching" resolves the exact same rows the list shows (exclusions and all).
-    const ofType = (type, exclude, key = 'id') => sel
-      .filter(s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'))
-      .map(s => s[key])
-    const accountSel = ofType('account')
-    const groupSel = ofType('group')
-    const categorySel = ofType('category')
-    const tagSel = ofType('tag')
-    const payeeSel = ofType('payee', false, 'label')
-    const ownerSel = ofType('owner')
-    const exAccountSel = ofType('account', true)
-    const exGroupSel = ofType('group', true)
-    const exCategorySel = ofType('category', true)
-    const exTagSel = ofType('tag', true)
-    const exPayeeSel = ofType('payee', true, 'label')
-    const exOwnerSel = ofType('owner', true)
+    const facetParams = selectionsToParams(filters.selections)
     return {
       date_start: getRawDate()?.start || undefined,
       date_end: getRawDate()?.end || undefined,
-      account_ids: accountSel.length ? accountSel.join(',') : undefined,
-      group_ids: groupSel.length ? groupSel.join(',') : undefined,
-      category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
-      category_ids: !uncategorizedOnly && categorySel.length ? categorySel.join(',') : undefined,
-      tag_ids: tagSel.length ? tagSel.join(',') : undefined,
-      payees: payeeSel.length ? payeeSel.join('|') : undefined,
-      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
-      exclude_account_ids: exAccountSel.length ? exAccountSel.join(',') : undefined,
-      exclude_group_ids: exGroupSel.length ? exGroupSel.join(',') : undefined,
-      exclude_category_ids: exCategorySel.length ? exCategorySel.join(',') : undefined,
-      exclude_tag_ids: exTagSel.length ? exTagSel.join(',') : undefined,
-      exclude_payees: exPayeeSel.length ? exPayeeSel.join('|') : undefined,
-      exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
+      ...facetParams,
+      // The toolbar filter rides the AND parameter rather than joining the facet's OR list: it is a
+      // separate control, so setting it on top of a FilterBar attribute chip has to *narrow*. Folding
+      // it into `attribute_ids` would OR the two, and a second filter that widens the result is the one
+      // behaviour a filter must never have. (It also ANDs across facets, so picking a category chip and
+      // "Uncategorized" resolves to nothing — correct, and unlike the toggle it replaces, which
+      // squatted on `category_id` and silently won.)
+      require_all_attribute_ids: activeAttribute,
       quick_filter: debouncedQuickFilter || undefined,
-      needs_review: needsReviewOnly ? true : undefined,
       ...amountFilterParams(amountFilter),
     }
-  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, amountFilter])
+  }, [filters, getRawDate, activeAttribute, debouncedQuickFilter, amountFilter])
 
 
   useEffect(() => {
@@ -366,44 +376,20 @@ export default function Transactions() {
   }, [quickFilter])
 
   useEffect(() => {
-    saveTransactionsSessionState({ quickFilter, amountFilter, sortState })
-  }, [quickFilter, amountFilter, sortState])
+    saveTransactionsSessionState({ quickFilter, amountFilter, sortState, attributeFilter })
+  }, [quickFilter, amountFilter, sortState, attributeFilter])
 
   const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
-    // Selections split by facet *and* mode: include-mode drives the historical params, exclude-mode
-    // ('is not') drives the parallel exclude_* params. Tags are include-only (see FilterBar).
-    const selBy = (type, exclude) => filters.selections.filter(
-      s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'),
-    )
-    const accountSel = selBy('account').map(s => s.id)
-    const groupSel = selBy('group').map(s => s.id)
-    const categorySel = selBy('category').map(s => s.id)
-    const tagSel = selBy('tag').map(s => s.id)
-    const payeeSel = selBy('payee').map(s => s.label)
-    const ownerSel = selBy('owner').map(s => s.id)
-    const exAccountSel = selBy('account', true).map(s => s.id)
-    const exGroupSel = selBy('group', true).map(s => s.id)
-    const exCategorySel = selBy('category', true).map(s => s.id)
-    const exTagSel = selBy('tag', true).map(s => s.id)
-    const exPayeeSel = selBy('payee', true).map(s => s.label)
-    const exOwnerSel = selBy('owner', true).map(s => s.id)
+    // The chip row becomes parameters through the shared facet registry, which splits each facet by
+    // mode — include drives the plain param, exclude ('is not') the parallel exclude_* mirror.
+    const facetParams = selectionsToParams(filters.selections)
     const offset = append ? offsetOverride : 0
     const pageSize = getTransactionsPageSize(offset)
     const requestKey = JSON.stringify({
-      accountSel,
-      groupSel,
-      categorySel,
-      tagSel,
-      payeeSel,
-      ownerSel,
-      exAccountSel,
-      exGroupSel,
-      exCategorySel,
-      exTagSel,
-      exPayeeSel,
-      exOwnerSel,
-      uncategorizedOnly,
-      needsReviewOnly,
+      // Derived from the resolved params rather than from a hand-listed set of facets, so a facet
+      // added to the registry participates in out-of-order protection without being named again here.
+      facetParams,
+      activeAttribute,
       amountFilter,
       dateStart: getRawDate()?.start || '',
       dateEnd: getRawDate()?.end || '',
@@ -423,21 +409,9 @@ export default function Transactions() {
     const response = await api.getTransactions({
       date_start: getRawDate()?.start || undefined,
       date_end: getRawDate()?.end || undefined,
-      account_ids: accountSel.length ? accountSel.join(',') : undefined,
-      group_ids: groupSel.length ? groupSel.join(',') : undefined,
-      category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
-      category_ids: !uncategorizedOnly && categorySel.length ? categorySel.join(',') : undefined,
-      tag_ids: tagSel.length ? tagSel.join(',') : undefined,
-      payees: payeeSel.length ? payeeSel.join('|') : undefined,
-      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
-      exclude_account_ids: exAccountSel.length ? exAccountSel.join(',') : undefined,
-      exclude_group_ids: exGroupSel.length ? exGroupSel.join(',') : undefined,
-      exclude_category_ids: exCategorySel.length ? exCategorySel.join(',') : undefined,
-      exclude_tag_ids: exTagSel.length ? exTagSel.join(',') : undefined,
-      exclude_payees: exPayeeSel.length ? exPayeeSel.join('|') : undefined,
-      exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
+      ...facetParams,
+      require_all_attribute_ids: activeAttribute,
       quick_filter: debouncedQuickFilter || undefined,
-      needs_review: needsReviewOnly || undefined,
       ...amountFilterParams(amountFilter),
       sort_by: sortState.key,
       sort_dir: sortState.dir,
@@ -464,7 +438,7 @@ export default function Transactions() {
     setInitialLoading(false)
     setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, amountFilter, debouncedQuickFilter, sortState])
+  }, [filters, getRawDate, activeAttribute, amountFilter, debouncedQuickFilter, sortState])
 
   useEffect(() => {
     isFirstLoad.current = true
@@ -977,35 +951,12 @@ export default function Transactions() {
             >
               ↻ Refresh
             </Button>
-            <button
-              onClick={() => { setUncategorizedOnly(v => !v); isFirstLoad.current = true }}
-              style={{
-                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-                border: `1px solid ${uncategorizedOnly ? 'var(--accent)' : 'var(--border)'}`,
-                background: uncategorizedOnly
-                  ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-                  : 'var(--surface2)',
-                color: uncategorizedOnly ? 'var(--accent2)' : 'var(--muted)',
-                fontWeight: uncategorizedOnly ? 500 : 400,
-              }}
-            >
-              {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
-            </button>
-            <button
-              onClick={() => { setNeedsReviewOnly(v => !v); isFirstLoad.current = true }}
-              title="Show only transactions still flagged as needing review"
-              style={{
-                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-                border: `1px solid ${needsReviewOnly ? 'var(--review-marker-color)' : 'var(--border)'}`,
-                background: needsReviewOnly
-                  ? 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))'
-                  : 'var(--surface2)',
-                color: needsReviewOnly ? 'var(--review-marker-color)' : 'var(--muted)',
-                fontWeight: needsReviewOnly ? 500 : 400,
-              }}
-            >
-              {needsReviewOnly ? '✕ Needs review' : 'Needs review'}
-            </button>
+            <AttributeFilterControl
+              attributes={filterAttributes}
+              value={attributeFilter.attribute}
+              active={attributeFilter.active}
+              onChange={next => { setAttributeFilter(next); isFirstLoad.current = true }}
+            />
             <FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />
             <CopyTransactionsButton rows={data.transactions} title="Transactions" tooltip="Copy the transactions shown" />
             <button
