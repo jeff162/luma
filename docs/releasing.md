@@ -179,3 +179,74 @@ cheapest runner, so macOS is not the first place it is ever exercised.
 5. Tag `vX.Y.Z` and push. CI builds all five artifacts.
 6. Write the GitHub Release and **attach the five artifacts and their `.sha256` files**. Nothing is
    downloadable until this happens.
+
+## Configuring the public repository
+
+Public visibility is part of a release, not a replacement for one: publish the tagged GitHub Release
+and attach its artifacts before or alongside changing visibility, so the README's download link works
+when visitors first see it. The repository's community files — `README.md`, `LICENSE`,
+`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, the issue forms, and the pull-request template
+— are the public contract and should remain enabled.
+
+Some GitHub controls are unavailable on a private repository under the free plan. Configure the
+following immediately after making the repository public, in this order.
+
+### Security features
+
+Open **Settings → Code security and analysis** and enable:
+
+- **Dependency graph**, **Dependabot alerts**, and **Dependabot security updates**, so known vulnerable
+  dependencies create actionable, repository-visible alerts.
+- **Secret scanning** and **push protection**, so new credentials are blocked before reaching public
+  history. These prevent future disclosure; they do not remove anything already pushed.
+- **Code scanning default setup**, selecting both Python and JavaScript when GitHub asks which
+  languages to analyze. Review the first scan's findings before treating its configuration as settled.
+
+Keep private vulnerability reporting enabled under the repository's **Security** tab. The existing
+`SECURITY.md` and issue-form contact link direct reporters to that channel instead of exposing
+financial-data security reports in public issues.
+
+### Main branch rule
+
+Create a branch ruleset in **Settings → Rules → Rulesets** that targets `main`. Require a pull request
+before merging and require these CI status checks:
+
+- `Backend, unit and lint`
+- `Browser suite`
+
+Also block force pushes and branch deletion, and require the branch to be up to date before merging.
+Do not require an approving review merely because the control exists: for a sole maintainer, it adds
+friction without an independent review. If collaborators gain merge access, revisit that choice and
+the bypass list at the same time. Keep the ruleset in an active/enforced state, and verify a test pull
+request cannot merge while either required check is failing.
+
+### Actions supply chain
+
+The repository currently uses version tags for GitHub Actions. Before enabling mandatory SHA pinning,
+replace every external `uses:` reference in `.github/workflows/` with the full commit SHA for a
+reviewed release of that action; retain the version in a trailing comment so it remains auditable.
+After that change is merged, open **Settings → Actions → General** and:
+
+- set **Actions permissions** to allow only GitHub-owned actions and explicitly approved actions or
+  reusable workflows;
+- enable **Require actions to be pinned to a full-length commit SHA**;
+- retain the read-only default `GITHUB_TOKEN` permissions and leave workflow pull-request approval
+  disabled.
+
+Pinning first makes an Actions compromise unable to silently move a tag to different code. Requiring
+SHAs before the workflow change would instead stop the release and CI workflows from running.
+
+### Repository presentation and collaboration
+
+Open **Settings → General** and check the repository description, topics, homepage, and social preview.
+The description already states Luma's purpose; add concise discovery topics that accurately describe
+the project, such as `personal-finance`, `local-first`, `self-hosted`, `python`, and `react`. Leave the
+homepage blank unless there is a maintained project site distinct from this repository. Use a real,
+sanitized application screenshot for the social preview after the screenshot work in the release plan
+is complete.
+
+Keep **Issues** and **Discussions** enabled, and leave the wiki disabled unless it gains a clearly
+different purpose from `docs/`. Preserve the existing signed-commit acknowledgement requirement and
+delete-head-branch-on-merge setting. Review the fork setting deliberately: public forks are normal for
+an AGPL project, but disabling them is reasonable if the maintainer does not want to support that
+workflow.

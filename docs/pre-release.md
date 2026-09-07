@@ -443,6 +443,97 @@ Two things it moved that matter to the steps below:
   attaching the five artifacts and their `.sha256` files to a written release is a manual step, and
   nothing is downloadable until it happens.
 
+## Pre-public audit closure
+
+The 2026-09-07 security review and broader correctness, architecture and documentation audit found the
+following. These are release work, not a retrospective record: close every release blocker and high
+finding before public visibility, then update the durable reference document named with each item so the
+fixed behavior, its invariant, and any rejected alternative remain discoverable after this plan is
+deleted.
+
+### Release blockers
+
+1. **Make archive restore report the real outcome on Windows.** The restore path commits the ledger,
+   then tries to remove a staged archive while the archive remains open. Windows rejects that removal,
+   so a restore succeeds destructively but returns an error; retrying it is unsafe. Close the file
+   before cleanup, preserve the staged artifact and marker on a real failure, and cover both fresh
+   restore and resume on Windows. Correct `operations.md` → *Restore is a destructive operation*, which
+   currently promises a failed restore leaves the target untouched.
+2. **Enforce the two-level, leaf-only category model at the API boundary.** Creation and moves currently
+   permit nested categories, cycles and assignment to a category with children. That produces report
+   trees that cannot reconcile. Validate parent kind, depth and acyclicity; prevent assignment to a
+   group; test malformed API requests; and retain the model in `data-model.md` → *Categories*.
+
+### Security and authority
+
+1. **Enforce secure transport before any provider-secret operation.** A network HTTP request can
+   configure a provider app secret, start a credential-bearing connection, or reveal a decrypted secret;
+   the current transport check only warns after accepting the value. Reject non-loopback cleartext
+   requests in a server-side dependency shared by all provider and credential-bearing vault operations.
+   Derive loopback from the trusted peer/proxy boundary rather than the Host header. Keep
+   `security-model.md` → *Transport security* accurate to the enforced rule.
+2. **Bind vault authority to an authenticated session, not only `user_id`.** In passwordless mode, one
+   client can select another identity, then inherit its cached unlock and proof state. That can grant an
+   attacker a durable vault slot while the holder is active. Separate authenticated principal selection
+   from local-mode convenience, bind proof and the cached DEK to an unguessable session/device context,
+   and prevent identity switching from inheriting it. Update `security-model.md` → *Identity and the
+   network perimeter* and *Authorizing a change to how the vault opens* only after the behavior matches
+   their claims.
+3. **Restrict SimpleFIN claim and access destinations.** A setup token currently directs server-side
+   requests to arbitrary HTTPS hosts, follows redirects, and can return target error text to the caller.
+   Allowlist the supported Bridge host/port or make custom hosts explicit administrator configuration;
+   revalidate every redirect or disable automatic redirects; reject non-public destinations; and never
+   return remote response bodies in provider errors. Record the connector-specific rule in
+   `building-a-connector.md`.
+4. **Require administrator authorization for every restore path.** Any authenticated member can replace
+   shared ledger data and use legacy credential restore to replace connections and global provider
+   configuration. Apply the existing admin authorization policy to data restore, credential restore and
+   backup-recipient mutation when sign-in is on; then align `operations.md` → *Restore is a destructive
+   operation* and `security-model.md`.
+
+### Ledger, reporting and workflows
+
+1. **Keep inherited category type coherent when a category moves.** Moving a leaf or group across the
+   income/expense boundary leaves descendant explicit types unchanged, so category, group and cash-flow
+   totals diverge. Propagate or recompute the effective type atomically on type-changing moves, and add
+   regression coverage beside the reporting-sign tests introduced by commit `4963501f3446162eb794f674bb1edf0216a1e2d6`.
+   Preserve the group-total reconciliation invariant in `data-model.md` → *Reporting assumptions*.
+2. **Protect active reimbursement claims from category lifecycle changes.** A claimed receivable can be
+   moved out of Reimbursable or deleted, causing its outstanding balance to disappear while its claim
+   link survives. Either block those category changes with an explanation or migrate claims through an
+   explicit, lossless workflow; test move and deletion with active claims; document the invariant in
+   `data-model.md` and `mechanism-index.md`.
+3. **Validate manual transaction dates as calendar dates.** Manual and bulk edits accept impossible
+   `YYYY-MM-DD` values, which distort date-bucketed reporting and skip recurring detection. Reuse the
+   import path's calendar validation in both edit paths and add invalid-date coverage.
+4. **Make imported-category draft persistence concurrency-safe.** Full snapshots are saved without
+   ordering, revision checks or surfaced errors, so rapid edits, multiple tabs or multiple members can
+   silently lose changes. Add server-issued revision/ETag conditional writes, serialize local saves, and
+   surface a conflict or persistence failure with a safe reload/merge path. The final lifecycle belongs
+   in `architecture.md` and `ui-patterns.md`.
+5. **Make imported-category Apply an atomic server operation.** The UI presently creates, moves, parks
+   and restores categories through several calls, leaving a partial tree on failure despite the documented
+   atomic model. Replace it with a validated batch endpoint in one SQLite transaction, return the
+   canonical tree, refresh after failure, and correct `architecture.md` → *Category import workspace*.
+6. **Exercise material historical migrations.** Fresh-schema coverage does not prove upgrades across the
+   active migration chain. Add compact historical fixtures for each material transformation after v25,
+   asserting schema, migrated data and its invariants. Correct the stale module documentation that calls
+   the migration chain empty, and keep `data-model.md` → *Schema evolution* as the durable account.
+
+### Documentation corrections
+
+1. **Describe duplicate handling accurately in the README.** Exact re-imports are rejected, while
+   cross-source candidates are flagged for review and can double-count until resolved.
+2. **Describe desktop passkeys accurately in the README.** Network passkeys need HTTPS and a hostname;
+   the supported desktop `localhost` path is a secure context without TLS.
+3. **Stop copying the backup restore-version range.** `data-model.md` should cite
+   `RESTORABLE_PAYLOAD_VERSIONS`; its stated 7–11 range is stale against the current accepted versions.
+4. **Correct category set-aside semantics.** `architecture.md` says Set aside deactivates a category,
+   while the actual and intended model leaves it active and marks it set aside.
+5. **Resolve the browser-test policy conflict.** `collaboration-notes.md` should prohibit headed/manual
+   sessions only, matching `AGENTS.md` and `CONTRIBUTING.md`, which permit and expect headless
+   Playwright coverage.
+
 ## Sequencing
 
 1. **Streaming backup (5) before receipts (1).** The storage decision is settled, but shipping documents
