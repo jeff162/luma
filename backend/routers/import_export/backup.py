@@ -718,8 +718,10 @@ def restore_staging_file():
 
     The export's staging file is deliberately unnamed, so a crash mid-export cannot strand one. A
     restore's has the opposite requirement: its documents phase runs after the ledger has committed, so
-    an interruption there needs the source archive still to exist and still to be findable. It is
-    removed as soon as that phase completes, or immediately if the restore never reached it.
+    an interruption there needs the source archive still to exist and still to be findable. Whoever
+    opened it removes it — as soon as the phase completes, or immediately if the restore never reached
+    it — because the phase itself runs with this handle still open and Windows will not delete a file
+    that is.
 
     Beside the data database for the same reasons as every other staging file here — `/tmp` is
     RAM-backed on many Linux installs, and the data directory is the volume the user has sized.
@@ -1674,6 +1676,10 @@ def resume_restore_documents():
         })
     with open(path, "rb") as staged, zipfile.ZipFile(staged) as zf:
         documents = _restore_documents(zf)
+    # Outside the `with`, because the handle above has to be closed before the file can be deleted on
+    # Windows. The phase cleared the marker, so nothing claims it any more; a phase that raised instead
+    # never reaches this and leaves the artifact for the next attempt.
+    Path(path).unlink(missing_ok=True)
     return {"ok": True, "documents": documents}
 
 
@@ -1806,11 +1812,14 @@ def _restore_documents(zf) -> dict:
         # The phase is over: every document the archive could supply has been written and the directory
         # has been reconciled against the ledger. `missing` and `corrupt` are *reported*, not retried —
         # rerunning would produce the same answer, since neither the archive nor the ledger will change.
-        staged = _finish_restore_phase(conn)
-    if staged:
-        # Deleted only now. It had to outlive the ledger commit so an interrupted phase had something to
-        # resume from; with the phase complete it is a copy of a backup the user already has.
-        Path(staged).unlink(missing_ok=True)
+        #
+        # Clearing the marker un-claims the staged artifact, but **deleting it is the caller's job, not
+        # this function's**: every caller is still inside the `with` that holds that same file open, and
+        # Windows refuses to delete a file any handle is holding — including one this process opened
+        # itself (WinError 32). Deleting it here worked on POSIX and turned a completed restore into a
+        # 500 on Windows. Each caller unlinks after closing; see `restore_backup_file` and
+        # `resume_restore_documents`.
+        clear_restore_state(conn)
     return {
         "restored": restored,
         "retained": len(retained),
@@ -1818,13 +1827,6 @@ def _restore_documents(zf) -> dict:
         "corrupt": len(corrupt),
         "swept": len(swept),
     }
-
-
-def _finish_restore_phase(conn) -> Optional[str]:
-    """Clear the restore marker, returning the staged artifact's path so the caller can remove it."""
-    state = get_restore_state(conn)
-    clear_restore_state(conn)
-    return state.get("artifact_path") if state else None
 
 
 # --- Uploads: staging, decryption, and dispatch --------------------------------------------------
@@ -2337,6 +2339,8 @@ async def restore_backup_file(
             finally:
                 plaintext.close()
     finally:
+        # Closed *then* deleted, and that order is the requirement rather than tidiness: Windows refuses
+        # to unlink a file this process still holds open.
         staged.close()
         _discard_unclaimed_staging(staged_path)
 

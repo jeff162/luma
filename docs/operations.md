@@ -182,6 +182,15 @@ data backup for the same reason, so the two halves of the same assertion move to
 leave the database cleanly rolled back and the documents directory half-rewritten. A marker in the data
 DB carries the operation across that gap, and an import or a sync refuses while it is set.
 
+**The staged upload is released by whoever opened it, once its handle is closed.** The uploaded archive
+is kept on disk past the ledger commit precisely so an interrupted documents phase has something to
+resume from, and clearing the marker is what releases it — but the phase runs *inside* the caller's open
+handle on that same file, so the delete belongs to the caller, after the close. Deleting it from inside
+the phase is correct on POSIX and fails on Windows, which refuses to unlink a file any handle is holding,
+the process's own included: the restore commits in full and then reports itself as a server error, which
+is the worst possible way for it to be wrong. `test_restore_documents_phase.py` emulates the Windows rule
+so a Linux run still catches it.
+
 **The operator always retains a working admin login.** Where a restore includes identity data, the
 current admin is preserved and the backup's accounts merged in, rather than the perimeter being
 silently overwritten. Restoring requires admin in the first place — it is a destructive act somebody

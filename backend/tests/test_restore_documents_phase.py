@@ -11,10 +11,12 @@ indistinguishable from data loss.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from fastapi import HTTPException
 
@@ -23,6 +25,7 @@ from backend.routers.import_export.backup import (
     RESTORE_PHASE_DOCUMENTS,
     RESTORE_PHASE_STAGING,
     resume_restore_documents,
+    restore_backup_file,
     restore_from_archive,
     restore_state_status,
     write_backup_archive,
@@ -59,15 +62,55 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
         # The ordinary path: the phase runs to completion inside the same request, so by the time the
         # caller sees a result there is nothing outstanding and the staged copy of their backup — which
         # only existed so an interruption could be resumed — is gone.
+        #
+        # Driven through the upload endpoint rather than `restore_from_archive`, because the endpoint is
+        # what opens the staging file and therefore what deletes it. Asserting the deletion anywhere
+        # further in would be asserting it of something that no longer owns the handle.
         self._seed_complete()
-        staged = self._staged_archive(self._write_archive())
+        archive = self._write_archive()
 
         with self._use_db_path():
-            with zipfile.ZipFile(staged) as zf:
-                restore_from_archive(zf, force=False, artifact_path=staged)
+            asyncio.new_event_loop().run_until_complete(restore_backup_file(
+                file=self._upload(archive, "luma_backup.zip"),
+                private_key_file=None,
+                private_key_passphrase=None,
+                force=False,
+            ))
 
         self.assertIsNone(self._state())
-        self.assertFalse(Path(staged).exists())
+        self.assertEqual(list(Path(self.tempdir.name).glob(".restore-staging-*")), [])
+
+    def test_the_phase_does_not_delete_an_archive_its_caller_still_holds_open(self):
+        # The Windows bug this ordering exists for. `_restore_documents` used to unlink the staged
+        # artifact itself, as its last act — while the caller's `ZipFile` was still open on that very
+        # file. POSIX allows that (the name goes, the inode lives until the handle closes); Windows
+        # refuses it with WinError 32 and reported a restore that had fully committed as a 500.
+        #
+        # The suite does not run on Windows, so the rule is emulated: a delete aimed at a file this test
+        # still holds open raises exactly as Windows would. Nothing here is platform-specific — the
+        # invariant is that the phase never deletes what its caller is holding, whoever enforces it.
+        self._seed_complete()
+        staged = self._staged_archive(self._write_archive())
+        real_unlink = Path.unlink
+        held = []
+
+        def windows_unlink(target, *args, **kwargs):
+            if str(target) == staged and any(not handle.closed for handle in held):
+                raise PermissionError(
+                    32, "The process cannot access the file because it is being used by another process"
+                )
+            return real_unlink(target, *args, **kwargs)
+
+        with self._use_db_path(), mock.patch.object(Path, "unlink", windows_unlink):
+            with open(staged, "rb") as handle:
+                held.append(handle)
+                with zipfile.ZipFile(handle) as zf:
+                    restore_from_archive(zf, force=False, artifact_path=staged)
+
+        # Committed and finished: the marker is clear, so the artifact is released for its owner to
+        # delete — which on the real path is the endpoint, once its handle is closed.
+        self.assertIsNone(self._state())
+        Path(staged).unlink(missing_ok=True)
 
     def test_an_interrupted_phase_leaves_a_marker_naming_what_is_owed(self):
         # The crash case, simulated by committing the ledger and then not running the documents phase.
