@@ -52,17 +52,17 @@ export const HELP_SECTIONS = [
   {
     key: 'organizing',
     label: 'Categories & tags',
-    blurb: 'Two ways to organize transactions for reports -- a category tree and cross-cutting tags.',
+    blurb: 'Two ways to organize transactions for reports: a category tree and cross-cutting tags.',
   },
   {
     key: 'transaction-detail',
     label: 'Transaction detail',
-    blurb: 'Recording what a transaction does not say on its own -- the paperwork behind it, and purchases that took more than one payment.',
+    blurb: 'Recording what a transaction does not say on its own: the paperwork behind it, and purchases that took more than one payment.',
   },
   {
     key: 'recurring',
     label: 'Recurring transactions',
-    blurb: 'Transactions that repeat on a schedule -- what the scan finds on its own, and how to declare one it cannot see.',
+    blurb: 'Transactions that repeat on a schedule: what the scan finds on its own, and how to declare one it cannot see.',
   },
   {
     key: 'reports',
@@ -72,7 +72,7 @@ export const HELP_SECTIONS = [
   {
     key: 'access-safety',
     label: 'Access & data safety',
-    blurb: 'What sign-in protection and two-factor guard, and what stays in your hands -- the ledger on disk, and backups.',
+    blurb: 'What sign-in protection and two-factor guard, and what stays on the machine: the ledger on disk, and backups.',
   },
 ]
 
@@ -82,7 +82,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `How ${APP_NAME} works`,
     surfaces: ['Getting started', 'Dashboard'],
-    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else -- accounts, owners, categories, tags, rules -- exist to make these two better.`,
+    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else (accounts, owners, categories, tags, rules) exists to make these two better.`,
     body: () => (
       <>
         <p>
@@ -98,8 +98,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           All of the data remains local unless you move it somewhere else; {APP_NAME} never makes an outgoing
-          connection unless specifically requested (eg. downloading
-          transactions from a data provider, store a backup on a cloud service).
+          connection unless specifically requested (e.g. downloading
+          transactions from a data provider, storing a backup on a cloud service).
         </p>
         <p>
           To get started:
@@ -125,7 +125,6 @@ export const HELP_TOPICS = [
             that there are two different sets of conditions that select the interesting set of records and there is no
             way to express that in the filters. Tags can be baked into rules and are available as a bulk edit action in
             addition to being part of the transaction editor.
-
           </li>
           <li>
             Create Categories and Rules - There are two paths to getting started with categories:
@@ -135,11 +134,11 @@ export const HELP_TOPICS = [
                 transaction categorization, this can be noted during the import or on the import record, and
                 the <strong>Group imported categories</strong> and <strong>Generate rules</strong> buttons
                 on the Import/Export page can bring them in to the system and propose matching rules based on
-                the transactions existing categorization.
+                the transactions' existing categorization.
               </li>
               <li>
                 <p>
-                  If not but categories are of interest, the built in set of seed categories and rules can be loaded
+                  If not but categories are of interest, the built-in set of seed categories and rules can be loaded
                   via the <strong>Add starter categories</strong> button on the Categories page and/or
                   the <strong>Starter rules</strong> button on the Rules page (this button also brings in categories).
                 </p>
@@ -171,15 +170,15 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'A tour of the app -- what each section is for (Import/Export, accounts & owners, categories & groups, tags, rules, the dashboard) and the two ways rules come into being.',
+    summary: 'A tour of the app: what each section is for (Import/Export, accounts & owners, categories & groups, tags, rules, the dashboard) and the two ways rules come into being.',
     body: () => (
       <>
         <p>The major modules are:</p>
         <ol>
           <li>
             <strong>Import/Export</strong> Load data, create backups and export data. Transactions come in
-            via a CSV file or a connected a data source. There is strong
-            duplicate detection to deal with overlapping sources or overlapping imports from a signal
+            via a CSV file or a connected data source. There is strong
+            duplicate detection to deal with overlapping sources or overlapping imports from a single
             source. When the duplicate-detection code encounters a situation it is not sure how to resolve
             it surfaces the conflict(s) in a report launched
             from the file card for the import (on the Import/Export main page). Detailed purchase data from sources
@@ -267,7 +266,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `How ${APP_NAME} is designed to be used`,
     surfaces: ['Getting started'],
-    summary: `A few deliberate choices shape how ${APP_NAME} behaves -- categorization that compounds instead of repeating, editing in place, non-destructive toggles, and dedupe that makes overlapping imports safe. Knowing the reasoning makes the rest of the app easier to use.`,
+    summary: `A few deliberate choices shape how ${APP_NAME} behaves: categorization that compounds instead of repeating, editing in place, non-destructive toggles, and dedupe that makes overlapping imports safe. Knowing the reasoning makes the rest of the app easier to use.`,
     body: () => (
       <>
         <p>
@@ -331,7 +330,7 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'How tags work',
     surfaces: ['Tag manager (Settings)'],
-    summary: 'Tags are cross-cutting labels applied at the transaction, category, or group level. A transaction’s effective tags are the union of all three sources.',
+    summary: "Tags are cross-cutting labels applied at the transaction, category, group, or account level. A transaction's effective tags are the union of all four sources.",
     body: () => (
       <>
         <p>
@@ -341,7 +340,7 @@ export const HELP_TOPICS = [
           used as placeholders to build complicated expressions which cannot be expressed in the filter.
         </p>
         <p>
-          A tag can be attached at four levels, and a transaction’s <strong>effective
+          A tag can be attached at four levels, and a transaction's <strong>effective
             tags</strong> are the additive union of all four:
         </p>
         <ul>
@@ -350,23 +349,23 @@ export const HELP_TOPICS = [
           <li><strong>Category-level</strong> &mdash; a tag attached to a leaf category propagates
             to every transaction in that category.</li>
           <li><strong>Group-level</strong> &mdash; a tag attached to a category group propagates to
-            every transaction in any of the group’s leaves.</li>
+            every transaction in any of the group's leaves.</li>
           <li><strong>Account-level</strong> &mdash; a tag attached to an account (on the Accounts
             page) propagates to every transaction in that account. For a merged account the top-level
-            account’s tags carry to its child accounts’ transactions, while a merged child’s own tags
+            account's tags carry to its child accounts' transactions, while a merged child's own tags
             stay dormant until it is detached.</li>
         </ul>
         <p>
           Pick the level that matches the intent. A tag like <em>Bills</em> probably belongs on a
           group although if it is only on a single group, there may not be any need for it.
           A tag such as <em>Essential Expense</em> may get applied to several categories, or even individual
-          transactions which may fall into a category which is not one that is marked.  Composing across
+          transactions which may fall into a category which is not one that is marked. Composing across
           levels is fine &mdash; the same tag can be on a group, an account and on individual transactions. The
           expectation is that a tag is on more than one thing, and/or is generated by one or more rules.
         </p>
         <p>
-          To hide an inherited tag on a single transaction, uncheck it in that transaction’s tag
-          picker (the row’s tag popover or the transaction editor). It stays on every other
+          To hide an inherited tag on a single transaction, uncheck it in that transaction's tag
+          picker (the row's tag popover or the transaction editor). It stays on every other
           transaction that inherits it, and a strike-through <em>hidden here</em> entry in the picker
           can be checked to restore it. Removing the tag from the category, group, or account drops
           it from every transaction under that level.
@@ -387,14 +386,14 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          The right-hand panel on the Categories page shows the selected category’s tags as
+          The right-hand panel on the Categories page shows the selected category's tags as
           pills. Click <strong>+ Tag</strong> to attach a new one.
         </p>
         <p>
-          When a leaf category is selected it, the assigned tags are displayed as well as
+          When a leaf category is selected, the assigned tags are displayed as well as
           any <em>inherited</em> tags from the group. Inherited tags are displayed in italics and do
-          not have a remove button.  To remove an <em>inherited</em> tag,
-          remove the tag from the group. There is no way to block an inherited tag on one of the group&rsquo;s categories.
+          not have a remove button. To remove an <em>inherited</em> tag,
+          remove the tag from the group. There is no way to block an inherited tag on one of the group's categories.
         </p>
         <p>
           Direct tags can be removed with the <strong>&times;</strong> on each pill. A single transaction can
@@ -415,7 +414,7 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          The dashboard’s &quot;Spending by…&quot; picker offers two built-in breakdowns
+          The dashboard's "Spending by…" picker offers two built-in breakdowns
           (<em>group</em>, <em>category</em>) plus saved tag reports. A tag report is a
           set of tags that become the wedges along with the <em>remaining</em> category. For example
           if tags exist to track the owners, a <em>Per-owner</em> report could be built from tags Alice, Bob, Shared.
@@ -429,7 +428,7 @@ export const HELP_TOPICS = [
         <p>
           Each unique combination of selected tags found in the transaction data becomes its own
           wedge &mdash; so a transaction tagged both <em>Alice</em> and <em>Essential</em> shows up
-          in an &quot;Alice + Essential&quot; wedge rather than being assigned to one or the other. A
+          in an "Alice + Essential" wedge rather than being assigned to one or the other. A
           transaction matching none of the selected tags falls into a synthetic
           <em> Other / Untagged</em> wedge so the wedges sum to 100% of the transactions.
         </p>
@@ -455,7 +454,7 @@ export const HELP_TOPICS = [
           offset is not 100% accurate.
         </p>
         <p>
-          The sankey diagram used for the <strong>single period</strong> report depicts income on the
+          The Sankey diagram used for the <strong>single period</strong> report depicts income on the
           left, the net in the middle, and expenses on the right. The width of each band is the
           amount, and the labels and hover text carry the value. Clicking a band drills down into it
           the same way it works on the pie chart: a group opens its categories, a category opens its
@@ -476,7 +475,7 @@ export const HELP_TOPICS = [
           single-period view for that month.
         </p>
         <p>
-          A category&rsquo;s <strong>net</strong> for the period decides which side it lands on.
+          A category's <strong>net</strong> for the period decides which side it lands on.
           A month where returns outweighed purchases puts that category
           on the incoming side; income clawed back lands on the outgoing side. This is also why the
           figures net rather than gross: a purchase and its later refund in the same category and
@@ -491,7 +490,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Tag reports are not offered in this frame. A tag signature mixes categories from both
-          directions, so it has no single direction to net; tags like other criteria can be used
+          directions, so it has no single direction to net; tags, like other criteria, can be used
           as filters for all of the reports.
         </p>
         <p>
@@ -505,43 +504,43 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'Excluding a group from totals',
     surfaces: ['Categories (group settings)'],
-    summary: '"Exclude from totals" is used to keep money movement -- credit-card payments, transfers between accounts, reimbursable expenses -- out of income and spending totals.',
+    summary: '"Exclude from totals" is used to keep money movement (credit-card payments, transfers between accounts, reimbursable expenses) out of income and spending totals.',
     body: () => (
       <>
         <p>
           <strong>Exclude from totals</strong> removes a category group and the categories under
-          it from the dashboard&rsquo;s charts and totals. It is a reporting switch, not a delete:
-          the transactions still exist and stay searchable, they just don&rsquo;t count toward the
+          it from the dashboard's charts and totals. It is a reporting switch, not a delete:
+          the transactions still exist and stay searchable, they just don't count toward the
           spending or income figures.
         </p>
         <p>
-          One use case is for <strong>money movement that isn&rsquo;t spending or income</strong>. Bringing in
+          One use case is for <strong>money movement that isn't spending or income</strong>. Bringing in
           data from both a credit card account and a bank account brings in both the payments for each of the
           credit card transactions as well as the payment from the bank account to pay off the credit card (and the
-          crediting of that payment on the credit card side.)
+          crediting of that payment on the credit card side).
         </p><p>
           Another use case is for transfers between accounts. If money is kept in some high(er) yielding
           account and transferred in to cover spending periodically, it probably should not be counted as spending or
           income. Likewise, if money is moved from a checking account to a savings account, while that might be
-          interesting, it also shouldn&rsquo;t be counted. P2P account transfers may also fall into this
+          interesting, it also shouldn't be counted. P2P account transfers may also fall into this
           category.
         </p><p>
 
           Assigning those <strong>credit-card payments</strong> and <strong>transfers
-            between accounts</strong> to a category in an group excluded from the totals keeps the ledger clean. Often a
+            between accounts</strong> to a category in a group excluded from the totals keeps the ledger clean. Often a
           surprising spending level or imbalance in income/expenses can be attributed to something not being
           excluded from the total that should have been.
         </p>
         <p>
-          The system supplied <strong>Transfers</strong> group ships with this turned on, so
+          The system-supplied <strong>Transfers</strong> group ships with this turned on, so
           either use the pre-built categories under it, or create new categories, and use them for
           credit-card payments and account-to-account transfers. The switch works on
           any group, and can be disabled on <strong>Transfers</strong> if desired.
         </p>
         <p>
-          The built in <strong>Reimbursable</strong> group is also excluded from totals. This cannot
+          The built-in <strong>Reimbursable</strong> group is also excluded from totals. This cannot
           be turned off for this group. This is used as part
-          of <HelpLink to="/help/reimbursable-expenses">the reimbursable expense workflow</HelpLink>
+          of <HelpLink to="/help/reimbursable-expenses">the reimbursable expense workflow</HelpLink>.
         </p>
 
       </>
@@ -550,14 +549,14 @@ export const HELP_TOPICS = [
   {
     id: 're-categorizing',
     section: 'organizing',
-    title: 'What changes a transaction’s category',
+    title: "What changes a transaction's category",
     surfaces: ['Rules page'],
     summary: 'Categorize re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
     body: () => (
       <>
         <p>
-          A transaction’s category can come from a few different places, and the two bulk actions that
-          re-categorize -- <strong>Categorize</strong> and a rule’s <strong>apply to matching
+          A transaction's category can come from a few different places, and the two bulk actions that
+          re-categorize -- <strong>Categorize</strong> and a rule's <strong>apply to matching
             transactions</strong> -- treat those origins differently. The practical effect of each is
           below; a closing section ranks the sources in full for anyone who wants it.
         </p>
@@ -568,22 +567,22 @@ export const HELP_TOPICS = [
           categorized by a rule, and those still uncategorized. It deliberately leaves alone anything
           categorized <em>by hand</em> or kept from a <em>trusted import</em>. It only ever <em>sets</em>
           or <em>changes</em> a category, never removes one: a rule-assigned row that no longer matches
-          any rule <strong>keeps</strong> its category, so deleting or narrowing a rule doesn&rsquo;t
+          any rule <strong>keeps</strong> its category, so deleting or narrowing a rule doesn't
           silently un-categorize the transactions it already handled. It is the pass to run after adding
           or changing rules, to refresh categorization without disturbing earlier work.
         </p>
         <p>
-          To deliberately <em>undo</em> a rule&rsquo;s categorizations -- when a rule was wrong -- use the{' '}
-          <em>re-evaluate this rule&rsquo;s transactions</em> option offered when you delete or edit a
+          To deliberately <em>undo</em> a rule's categorizations -- when a rule was wrong -- use the{' '}
+          <em>re-evaluate this rule's transactions</em> option offered when you delete or edit a
           rule. It re-runs just those rows against the remaining rules, so they fall to another matching
-          rule or to uncategorized, rather than keeping the removed rule&rsquo;s category.
+          rule or to uncategorized, rather than keeping the removed rule's category.
         </p>
         <h4>Apply a rule to its matching transactions</h4>
         <p>
           When a rule is saved -- for example from the toast offered after categorizing a transaction --
           it offers to apply to every transaction its matcher catches: the keyword together with any
           owner, account, or amount limits. This apply is <strong>full force</strong>. It claims all
-          matching rows and sets them to the rule’s category, <strong>including rows categorized by hand
+          matching rows and sets them to the rule's category, <strong>including rows categorized by hand
             or by a trusted import</strong>. It is the one bulk action that overrides a manual edit, so
           the match count is worth a glance before applying if manual edits might be caught in it.
         </p>
@@ -609,12 +608,12 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           The asymmetry is the part to remember: <strong>Categorize</strong> respects the two
-          protected origins, while a rule’s <strong>apply to matching</strong> does not.
+          protected origins, while a rule's <strong>apply to matching</strong> does not.
         </p>
         <p>
           One deliberate exception lives on the{' '}
           <HelpLink to="/help/generate-rules">Generate-rules conflict screen</HelpLink>:
-          re-categorizing a row there corrects the file’s category and the row <em>keeps</em> its
+          re-categorizing a row there corrects the file's category and the row <em>keeps</em> its
           trusted-import weight (and keeps informing rule suggestions). Only <strong>Preserve</strong>
           turns such a row into a manual exception. It is the one place a trusted-import categorization
           is edited while staying trusted-import.
@@ -625,7 +624,7 @@ export const HELP_TOPICS = [
           even a full-force rule apply, which reports how many it skipped rather than overwriting them.
         </p>
         <p>
-          To check a single transaction’s current source, open its detail panel: a small pinned label
+          To check a single transaction's current source, open its detail panel: a small pinned label
           sits beside the category, and the details show a <em>Categorized by</em> line naming the
           source -- a rule, a manual edit, or the category present in the source data.
         </p>
@@ -637,7 +636,7 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'When two rules match the same transaction',
     surfaces: ['Rules page'],
-    summary: 'Rules are not ranked manually, there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, which requires refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads. Rule checkup also identifies rules which are essentially duplicates of each other where one can be deleted outright.',
+    summary: 'Rules are not ranked manually; there is an internal ranking that puts scope first, then keyword length, then the narrower amount range. There are ambiguous situations which require decisions and the Rules checkup lists them: amount ranges that overlap without one containing the other, which requires refining the conditions, and merchant names where one contains the other, which is fine but does not always resolve the way it reads. Rule checkup also identifies rules which are essentially duplicates of each other where one can be deleted outright.',
     body: () => (
       <>
         <p>
@@ -651,42 +650,42 @@ export const HELP_TOPICS = [
         <p>
           Narrower on the amount axis means the <em>smaller range</em>, not the rule with more limits
           set. A rule for charges over $3,000 matches strictly fewer transactions than one for charges
-          over $300, so it wins wherever both apply -- which is what makes a single biller&rsquo;s
+          over $300, so it wins wherever both apply -- which is what makes a single biller's
           several bills separable by size, one rule per band.
         </p>
         <h4>Checking for rules that compete</h4>
         <p>
           <strong>Rule checkup</strong> on the Rules page lists the pairs which overlap.
           Running the check changes nothing on its own; it opens a report with what it
-          found, and each rule can be opened for editing from there. The report also lists {' '}
-          <HelpLink to="/help/rule-amount-drift">charges that have drifted out of a rule&rsquo;s range</HelpLink>.
+          found, and each rule can be opened for editing from there. The report also lists{' '}
+          <HelpLink to="/help/rule-amount-drift">charges that have drifted out of a rule's range</HelpLink>.
         </p>
         <p>
           Rule checkup reports:
-          <ul>
-            <li>
-              <strong>Amount ranges that overlap</strong> -- two rules for the same merchant whose ranges
-              cross without one sitting inside the other, such as $300 to $4,000 against $3,000 and up. A
-              $3,500 charge matches both and neither rule is the more specific one, so which of them wins
-              is arbitrary. The way to settle this is to refine the conditions so they do not overlap.
-            </li>
-            <li>
-              <strong>Merchant criteria that nest</strong> -- one rule&rsquo;s keyword contained in
-              another&rsquo;s, such as <em>northgate</em> and <em>northgate prime</em>. Nothing is wrong
-              here, and it is listed only so the outcome is visible: usually the longer keyword wins, but
-              because scope is settled first, a short keyword scoped to an owner or an account matches transactions
-              that otherwise would be matched to the longer keyword.
-            </li>
-            <li>
-              <strong>A nesting pair can also be surplus.</strong> Where both rules file to the same
-              category and carry the same owner, account and debit/credit limits, the narrower one changes
-              nothing -- the broader rule would file those transactions identically so the finding
-              offers to <strong>delete</strong> it, recoverable from the rules trash. The offer appears on
-              the narrower rule alone.  Where the two differ in a rename or a tag,
-              the finding says what those transactions would gain or lose before anything is removed.
-            </li>
-          </ul>
         </p>
+        <ul>
+          <li>
+            <strong>Amount ranges that overlap</strong> -- two rules for the same merchant whose ranges
+            cross without one sitting inside the other, such as $300 to $4,000 against $3,000 and up. A
+            $3,500 charge matches both and neither rule is the more specific one, so which of them wins
+            is arbitrary. The way to settle this is to refine the conditions so they do not overlap.
+          </li>
+          <li>
+            <strong>Merchant criteria that nest</strong> -- one rule's keyword contained in
+            another's, such as <em>northgate</em> and <em>northgate prime</em>. Nothing is wrong
+            here, and it is listed only so the outcome is visible: usually the longer keyword wins, but
+            because scope is settled first, a short keyword scoped to an owner or an account matches transactions
+            that otherwise would be matched to the longer keyword.
+          </li>
+          <li>
+            <strong>A nesting pair can also be surplus.</strong> Where both rules file to the same
+            category and carry the same owner, account and debit/credit limits, the narrower one changes
+            nothing -- the broader rule would file those transactions identically, so the finding
+            offers to <strong>delete</strong> it, recoverable from the rules trash. The offer appears on
+            the narrower rule alone. Where the two differ in a rename or a tag,
+            the finding says what those transactions would gain or lose before anything is removed.
+          </li>
+        </ul>
         <p>
           Plenty of the nesting pairs are deliberate, so those can be <strong>dismissed</strong> -- an
           acknowledgement, not a fix, which drops the pair from the list and from the counts so what is
@@ -704,7 +703,7 @@ export const HELP_TOPICS = [
         <p>
           Ranges where one sits entirely inside the other are deliberately not reported. That case has a
           clear answer already -- the inner range wins -- and it is the recommended way to split one
-          merchant&rsquo;s charges across categories.
+          merchant's charges across categories.
         </p>
       </>
     ),
@@ -714,12 +713,12 @@ export const HELP_TOPICS = [
     section: 'organizing',
     title: 'When a bill outgrows its rule',
     surfaces: ['Rules page'],
-    summary: 'An amount range decides which transactions a rule claims, so a bill that grows past the limit stops being categorized by that rule and drops out of any series the rule feeds -- with nothing appearing to go wrong. Rule checkup reports the recent charges this has happened to, and offers to move adjust the limit.',
+    summary: 'An amount range decides which transactions a rule claims, so a bill that grows past the limit stops being categorized by that rule and drops out of any series the rule feeds, with nothing appearing to go wrong. Rule checkup reports the recent charges this has happened to, and offers to adjust the limit.',
     body: () => (
       <>
         <p>
           An amount range on a rule is a <strong>matching gate</strong>, not a preference: a charge
-          outside it is not claimed by that rule at all. That is what makes a single biller&rsquo;s
+          outside it is not claimed by that rule at all. That is what makes a single biller's
           several bills separable by size, and it is also what makes a drifting bill easy to miss. When a
           water bill that has always come in under $60 arrives at $63, the rule stops matching it. The
           charge keeps whatever category it would have had without the rule -- often none -- and it drops
@@ -736,25 +735,25 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Actions available for each reported charge are:
-          <ul>
-            <li>
-              <strong>Widen to include</strong> moves the limit out to the charge and re-applies the
-              rule. Categorizations made by hand are left alone. The series
-              follows on its own: once the row carries the rule&rsquo;s category again, the next scan takes
-              it back into the series.
-            </li>
-            <li>
-              <strong>Edit</strong> opens the rule itself, for the times the range is not what wants
-              changing or the adjustment should be larger than suggested.
-            </li>
-            <li>
-              <strong>Dismiss</strong> acknowledges one charge without touching the rule, for a charge the
-              rule was not meant to claim. It covers that charge alone, another charge of the same amount
-              would raise the exception again. Create a new rule if there are repeated expected charges close
-              to the edge of the existing range.
-            </li>
-          </ul>
         </p>
+        <ul>
+          <li>
+            <strong>Widen to include</strong> moves the limit out to the charge and re-applies the
+            rule. Categorizations made by hand are left alone. The series
+            follows on its own: once the row carries the rule's category again, the next scan takes
+            it back into the series.
+          </li>
+          <li>
+            <strong>Edit</strong> opens the rule itself, for the times the range is not what wants
+            changing or the adjustment should be larger than suggested.
+          </li>
+          <li>
+            <strong>Dismiss</strong> acknowledges one charge without touching the rule, for a charge the
+            rule was not meant to claim. It covers that charge alone; another charge of the same amount
+            would raise the exception again. Create a new rule if there are repeated expected charges close
+            to the edge of the existing range.
+          </li>
+        </ul>
         <p>
           A charge that is <em>inside</em> the range but close to a limit is reported the same way, more
           quietly -- the same warning one occurrence earlier, with no offer to widen, since the rule is
@@ -778,24 +777,23 @@ export const HELP_TOPICS = [
           for one purchase, because that is what happened.
         </p>
         <p>
-          There many situations where this can be useful. One example is a purchase from a marketplace such as
+          There are many situations where this can be useful. One example is a purchase from a marketplace such as
           Target, Walmart, Best Buy etc. where a purchase might include several items that fall into different categories.
-          Filing the whole amount under a single category overstates that category and cause the other category to under report
+          Filing the whole amount under a single category overstates that category and causes the other category to under-report
           its spending. Small transactions may not be worth splitting but larger ones probably benefit from being split, if
           reporting spending by category is of interest.
         </p>
 
-
         <h4>Adding the split transaction details</h4>
         <p>
-          The editor opens three ways -- from the row&rsquo;s right-click menu
+          The editor opens three ways -- from the row's right-click menu
           (<strong>Split&hellip;</strong>, or <strong>Edit split&hellip;</strong> on one already split),
           from the <strong>Split (N)</strong> marker that a split row shows in its category column, or
           from the <strong>Split&hellip;</strong> button beside the category in the transaction detail
           panel. All three land in the same dialog.
         </p>
         <p>
-          The split transaction editor reads as a small ledger, <em>Description</em>, <em>Category</em>, <em>Amount</em>,
+          The split transaction editor reads as a small ledger &mdash; <em>Description</em>, <em>Category</em>, <em>Amount</em>,
           in the same order the transaction list uses. The description is optional and names what the portion
           is. Filling this in is useful as it is displayed when hovering over the
           transaction. <strong>+ Item</strong> adds another line. A split transaction needs at least two pieces.
@@ -829,9 +827,9 @@ export const HELP_TOPICS = [
         <p>
           Where the transaction came from a marketplace order whose per-item detail was imported, the
           editor opens with one line per item already filled in.
-          Each item&rsquo;s list price is listed differs from the item&rsquo;s share of the transaction
-          because the list price  exclude tax, shipping and discounts. The extra charges are  -- so they are
-          used <em>proportioned</em> across the items. <strong>Use items</strong> applies the proposal.
+          Each item's list price differs from the item's share of the transaction, because a
+          list price excludes tax, shipping and discounts. Those extra charges are
+          <em>proportioned</em> across the items. <strong>Use items</strong> applies the proposal.
           Every field stays editable afterwards.
         </p>
 
@@ -844,13 +842,13 @@ export const HELP_TOPICS = [
         <p>
           The ledger shows the transaction <em>once</em>, at its full amount. Inside a report or a
           category drill-down it appears instead as the <em>item</em> that matched, at that
-          item&rsquo;s amount. Opening the same transaction&rsquo;s detail panel shows the whole amount again. That
+          item's amount. Opening the same transaction's detail panel shows the whole amount again. That
           difference is intended: one is the purchase, the other is the part of it that belongs to the
           category being looked at.
         </p>
         <p>
           Tags behave the way they read. A tag put on the transaction applies to the whole thing and to
-          every item; a tag inherited from a category follows each item&rsquo;s own category, so a split
+          every item; a tag inherited from a category follows each item's own category, so a split
           transaction can contribute to multiple tag totals. See{' '}
           <HelpLink to="/help/tags">how tags work</HelpLink>.
         </p>
@@ -865,7 +863,7 @@ export const HELP_TOPICS = [
           Automatic categorization leaves a split alone. <strong>Categorize</strong> skips it, and
           even applying a rule to its matching transactions -- which otherwise overrides a category set by
           hand -- will not overwrite one, reporting how many it left instead.
-          See{' '}<HelpLink to="/help/re-categorizing">what changes a transaction&rsquo;s category</HelpLink>.
+          See{' '}<HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
         </p>
       </>
     ),
@@ -882,13 +880,13 @@ export const HELP_TOPICS = [
           Some money leaves as an expense and comes back weeks or months later. Three concert tickets on
           one card charge with two of them bought for friends, a work expense paid personally and claimed
           afterwards, a medical expense submitted for insurance reimbursement, a group dinner where one person
-          pays the bill and receives money from the others. These are all transaction that,
+          pays the bill and receives money from the others. These are all transactions that,
           at least partially, should not be counted against spending, nor should the repayment
           count against income.
         </p>
         <p>
           Tracking reimbursable expenses works by parking the part that is expected to be paid back in a category
-          that is a member of the system&rsquo;s <em>Reimbursable</em> group.
+          that is a member of the system's <em>Reimbursable</em> group.
           A system group, {' '}
           <strong>Reimbursable</strong>, sits alongside the other category groups and is excluded
           from totals, exactly as <strong>Transfers</strong> is. This group cannot be deleted although
@@ -899,7 +897,7 @@ export const HELP_TOPICS = [
         <p>
           The <em>Reimbursable</em> group ships empty. A useful naming scheme for the categories is to
           indicate <em>what the money is for</em> -- Concert tickets, Work expenses, Health care expense, etc.
-          Using &ldquo;Reimbursable&rdquo; as a prefix (Reimbursable work expenses) makes it easy to enter them when assigning
+          Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy to enter them when assigning
           categories.
         </p>
         <h4>Recording one</h4>
@@ -954,7 +952,7 @@ export const HELP_TOPICS = [
           longer than expected therefore appears on the Tasks page.
         </p>
         <p>
-          How long is &ldquo;longer than expected&rdquo; is set at the foot of the{' '}
+          How long is "longer than expected" is set at the foot of the{' '}
           <strong>Reimbursements</strong> report, and it is measured from the date of the transaction
           rather than from when the record was made -- an expense entered months after the fact is
           already overdue, and recording it should not push the reminder further away. Thirty days suits
@@ -970,8 +968,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Where more than one person is set up as an owner, the reminders arrive as one task per owner,
-          based on the account each transaction sits on. That way one person&rsquo;s outstanding expenses
-          can be worked through without wading through another&rsquo;s. Every task is visible to
+          based on the account each transaction sits on. That way one person's outstanding expenses
+          can be worked through without wading through another's. Every task is visible to
           everyone; the split is there to make them separable, not private.
         </p>
 
@@ -1015,7 +1013,7 @@ export const HELP_TOPICS = [
         <h4>What the group will not allow</h4>
         <p>
           The <strong>Reimbursable</strong> group can be renamed and its contents are entirely the
-          user&rsquo;s to add to, rename and remove. The group itself cannot be deleted, moved inside
+          user's to add to, rename and remove. The group itself cannot be deleted, moved inside
           another group, or counted toward spending totals: each of those would either strand money owed
           back where nothing can find it, or silently restore the overstatement the group exists to
           remove.
@@ -1028,21 +1026,21 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
     surfaces: ['Import / Export (file ↗ report)', 'Duplicate-detection report'],
-    summary: 'When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision — and the only category counted as pending work (the file’s “to review” count and the Tasks warning). Rejected · review (Matched nearby date, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn’t have been rejected, or Mark reviewed. Hover over a pill for a short explanation.',
+    summary: `When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision, and the only category counted as pending work (the file's "to review" count and the Tasks warning). Rejected · review (Matched nearby date, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn't have been rejected, or Mark reviewed. Hover over a pill for a short explanation.`,
     body: () => (
       <>
         <p>
           {APP_NAME} builds one clean ledger out of several sources over time, and the same activity often
           arrives more than once &mdash; once from a card, again from the bank that pays it off, from an
-          aggregator that has seen both or simply because two csv exports contain overlapping data which is a
+          aggregator that has seen both, or simply because two CSV exports contain overlapping data which is a
           common situation. The dedupe engine settles the clear, high-confidence cases and surfaces the rest.
         </p>
-        <p>There are two major types:
+        <p>There are two major types:</p>
           <ul>
             <li><strong>Review</strong> &mdash; an undecided match that <em>needs a decision</em>, usually a{' '}
               <HelpLink to="/help/cross-account-duplicates">cross-account duplicate</HelpLink>. This is the
-              category that counts as <strong>pending work</strong>: it drives the file&rsquo;s
-              &ldquo;to review&rdquo; count and the &ldquo;Possible duplicate transactions&rdquo; item on the
+              category that counts as <strong>pending work</strong>: it drives the file's
+              "to review" count and the "Possible duplicate transactions" item on the
               Tasks page.</li>
             <li><strong>Rejected &middot; review</strong> &mdash; <strong>Matched nearby date</strong> and
               <strong> No specific match</strong>. These were already rejected at import and are
@@ -1054,22 +1052,21 @@ export const HELP_TOPICS = [
               transaction which should be included. See{' '}
               <HelpLink to="/help/covered-range-review">covered-range review</HelpLink>.</li>
           </ul>
-        </p>
         <p>
           Click a pill to filter by a group (the header checkbox then selects all of
           it); <strong>hover on a pill</strong> for a short explanation of what it means.
         </p>
         <p>
-          A rejected duplicate&rsquo;s detail can be captured and added to the retained transaction.
+          A rejected duplicate's detail can be captured and added to the retained transaction.
           When it unambiguously matches one existing
           transaction, <strong>Enrich</strong> folds the <em>new</em> detail (a memo, a transaction id, a
-          richer name) into that transaction&rsquo;s source record &mdash; additive and reversible
-          (<strong>Unenrich</strong> removes exactly what was added). The file card&rsquo;s
+          richer name) into that transaction's source record &mdash; additive and reversible
+          (<strong>Unenrich</strong> removes exactly what was added). The file card's
           <strong> Enrich existing transactions from this source</strong> checkbox does the same for the
           whole file at once &mdash; at any time, since rejected rows keep their full detail &mdash; and a
           data source can opt in permanently on its mapping screen so future imports enrich automatically.
           Once a row has enriched its match, its Kind reads <strong>Matched</strong> (green) rather than
-          &ldquo;Rejected&rdquo;: it was recognized as one you already had and contributed its detail, not
+          "Rejected": it was recognized as one you already had and contributed its detail, not
           discarded. The additional information becomes part of the hover text displayed when hovering
           over the merchant name and is available for use in rules and when searching for
           transactions.
@@ -1077,11 +1074,10 @@ export const HELP_TOPICS = [
         <p>
           Removing a duplicate is reversible &mdash; see{' '}
           <HelpLink to="/help/removed-as-duplicates">where a removed duplicate went</HelpLink>.
-          <p>
-            A single
-            file listing the same purchase twice, is a different problem ({''}
-            <HelpLink to="/help/intra-file-duplicates">a source that double-lists rows</HelpLink>).
-          </p>
+        </p>
+        <p>
+          A single file listing the same purchase twice is a different problem
+          (<HelpLink to="/help/intra-file-duplicates">a source that double-lists rows</HelpLink>).
         </p>
       </>
     ),
@@ -1098,7 +1094,7 @@ export const HELP_TOPICS = [
           A <strong>cross-account match</strong> is what looks like the same transaction arriving from
           more than one source on <em>different accounts</em>. This can be real, two people paid for the
           same thing on the same date, a transit trip perhaps, or it can be a mistake where either one source
-          has the account wrong or the two sources have different names for the same account and they haven&rsquo;t been
+          has the account wrong or the two sources have different names for the same account and they haven't been
           paired up in {APP_NAME}.
         </p>
         <p>
@@ -1110,15 +1106,15 @@ export const HELP_TOPICS = [
         </p>
         <p>
           There are three actions:
-          <ul>
-            <li><strong>Keep both</strong> &mdash; they really are two different transactions.  If the accounts weren&rsquo;t merged this also
-              asserts <em>these two accounts are distinct</em>, so future imports stop re-flagging the pair.</li>
-            <li><strong>Discard new</strong> &mdash; the just-imported row is the duplicate; keep the copy
-              already in the ledger.</li>
-            <li><strong>Replace existing</strong> &mdash; the just-imported row is the <em>better</em> record
-              (e.g. it has the correct account). Keep it and remove the existing one.</li>
-          </ul>
         </p>
+        <ul>
+          <li><strong>Keep both</strong> &mdash; they really are two different transactions. If the accounts weren't merged this also
+            asserts <em>these two accounts are distinct</em>, so future imports stop re-flagging the pair.</li>
+          <li><strong>Discard new</strong> &mdash; the just-imported row is the duplicate; keep the copy
+            already in the ledger.</li>
+          <li><strong>Replace existing</strong> &mdash; the just-imported row is the <em>better</em> record
+            (e.g. it has the correct account). Keep it and remove the existing one.</li>
+        </ul>
         <p>
           For Replace existing, the categorization comes from the new file if the new file is the only
           file with the box checked to import categories from the file. If both files, only the old file, or neither file,
@@ -1132,21 +1128,21 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Merging accounts to reconcile',
     surfaces: ['Accounts page'],
-    summary: 'Merging two accounts that are represent the same physical account auto-confirms their overlapping duplicates; order doesn’t matter and detaching reverses it.',
+    summary: "Merging two accounts that represent the same physical account auto-confirms their overlapping duplicates; order doesn't matter and detaching reverses it.",
     body: () => (
       <>
         <p>
-          Merging two accounts on the Accounts page means <strong>“these are the same physical
-            account.”</strong> When they genuinely are, merging <strong>auto-confirms the overlapping
+          Merging two accounts on the Accounts page means <strong>"these are the same physical
+            account."</strong> When they genuinely are, merging <strong>auto-confirms the overlapping
               duplicates</strong> between them. The order is irrelevant: <em>importing then merging</em> and
           <em> merging then importing</em> reach the same state. <strong>Detaching</strong> an account
-          reverses the merge’s auto-confirmations &mdash; your explicit Reject / Replace decisions are kept.
+          reverses the merge's auto-confirmations &mdash; your explicit Reject / Replace decisions are kept.
         </p>
         <h4>The umbrella-account trap</h4>
         <p>
           Some sources record several real accounts under one generic label &mdash; e.g. an aggregator that
           files two physical cards as one account. <strong>Do not merge an umbrella account into a single
-            card.</strong> Merging it into one card only resolves that card’s overlaps and strands the other’s.
+            card.</strong> Merging it into one card only resolves that card's overlaps and strands the other's.
         </p>
         <p>
           Instead, resolve the overlaps per row in the duplicate report &mdash;{' '}
@@ -1161,7 +1157,7 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reviewing covered-range duplicates (nearby date / transfer / no match)',
     surfaces: ['Duplicate-detection report'],
-    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each transaction being loaded is paired against the existing data by date and amount (the exact date first, then ±1 day, then outward to a week, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched nearby date (a same-account counterpart turned up only after widening the window, and the row shows how many days apart), Possible transfer match (a same-amount row naming this account sits on another account — a wallet funding leg whose twin is already on your books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
+    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each transaction being loaded is paired against the existing data by date and amount (the exact date first, then ±1 day, then outward to a week, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched nearby date (a same-account counterpart turned up only after widening the window, and the row shows how many days apart), Possible transfer match (a same-amount row naming this account sits on another account: a wallet funding leg whose twin is already on the books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
     body: () => (
       <>
         <p>
@@ -1174,29 +1170,29 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Three of the pairing outcomes are surfaced for review:
-
-          <ul>
-            <li><strong>Matched nearby date</strong> &mdash; a counterpart turned up only after the date
-              window widened past the exact day; each row states how far apart the two are. Posting dates drift
-              between sources for several reasons &mdash; pending vs. posted timing, weekend or holiday
-              settlement, and time-zone differences on foreign charges &mdash; so the same transaction can sit
-              several days apart in two sources, and the further apart the pair sits the more it is worth a
-              glance before clearing. Once the pair
-              looks right, <strong>Mark reviewed</strong> clears it from the
-              needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the rows
-              and import both.</li>
-            <li><strong>Possible transfer match</strong> &mdash; nothing matched on this account, but a
-              same-amount transaction naming this account sits on <em>another</em> one, a few days apart. That
-              is the signature of a wallet funding/deposit leg (a PayPal/Venmo &ldquo;Bank Deposit&rdquo; row)
-              whose money-movement twin is the funding charge on your bank or card &mdash; already on your
-              books, so the leg is correctly not re-imported. <strong>Mark reviewed</strong> to confirm, or
-              <strong> Import anyway</strong> if they really are separate.</li>
-            <li><strong>No specific match</strong> &mdash; the date is covered but nothing paired with it at
-              all, anywhere in the window or across accounts. That makes it the row to actually investigate: it
-              is usually present in one source and genuinely missing from the other, in which case
-              <strong> Import anyway</strong> keeps it.</li>
-          </ul>
         </p>
+
+        <ul>
+          <li><strong>Matched nearby date</strong> &mdash; a counterpart turned up only after the date
+            window widened past the exact day; each row states how far apart the two are. Posting dates drift
+            between sources for several reasons &mdash; pending vs. posted timing, weekend or holiday
+            settlement, and time-zone differences on foreign charges &mdash; so the same transaction can sit
+            several days apart in two sources, and the further apart the pair sits the more it is worth a
+            glance before clearing. Once the pair
+            looks right, <strong>Mark reviewed</strong> clears it from the
+            needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the rows
+            and import both.</li>
+          <li><strong>Possible transfer match</strong> &mdash; nothing matched on this account, but a
+            same-amount transaction naming this account sits on <em>another</em> one, a few days apart. That
+            is the signature of a wallet funding/deposit leg (a PayPal/Venmo "Bank Deposit" row)
+            whose money-movement twin is the funding charge on your bank or card &mdash; already on your
+            books, so the leg is correctly not re-imported. <strong>Mark reviewed</strong> to confirm, or
+            <strong> Import anyway</strong> if they really are separate.</li>
+          <li><strong>No specific match</strong> &mdash; the date is covered but nothing paired with it at
+            all, anywhere in the window or across accounts. That makes it the row to actually investigate: it
+            is usually present in one source and genuinely missing from the other, in which case
+            <strong> Import anyway</strong> keeps it.</li>
+        </ul>
         <p>
           A covered row that paired cleanly on the exact date or &plusmn;1 day stays rejected without being
           flagged.
@@ -1212,7 +1208,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Specifying how amounts are represented',
     surfaces: ['Import mapping', 'Data source editor'],
-    summary: 'Specify how the file represents money in vs out: a single signed column, an amount column plus a separate debit/credit “type” column, or separate debit and credit columns.',
+    summary: 'Specify how the file represents money in vs out: a single signed column, an amount column plus a separate debit/credit "type" column, or separate debit and credit columns.',
     body: () => (
       <>
         <p>
@@ -1223,7 +1219,7 @@ export const HELP_TOPICS = [
           <li><strong>Single column: negative = debit.</strong> One signed amount column where outflows are
             negative.</li>
           <li><strong>An amount column + a debit/credit type column.</strong> One unsigned amount column plus a
-            column that says debit/credit (or deposit/withdrawal). </li>
+            column that says debit/credit (or deposit/withdrawal).</li>
           <li><strong>Two columns: separate debit / credit.</strong> Debits in one column, credits in
             the other.</li>
         </ul>
@@ -1234,10 +1230,9 @@ export const HELP_TOPICS = [
           <strong>Amounts are all in one currency, set on the Settings page.</strong> An amount is stored
           as a plain number with no currency recorded beside it. The setting indicates the currency
           for all of the amounts in the ledger. Changing it relabels existing amounts rather than
-          restating. The only effect setting the currency has outside of choosing the
-          currency symbol is when a connected data source reports that an
-          account is held in a <em>different</em> currency, its transactions are <strong>not
-            imported</strong>. The account mapping screen and syncs indicate this rather than
+          restating them. Outside of choosing the currency symbol, the setting has one other
+          effect: when a connected data source reports that an account is held in a
+          <em>different</em> currency, its transactions are <strong>not imported</strong>. The account mapping screen and syncs indicate this rather than
           leaving the account mysteriously empty. Skipping such an account keeps it out of the way.
           If a data source contains multiple currencies, transactions in a foreign currency
           will be dropped.
@@ -1248,9 +1243,9 @@ export const HELP_TOPICS = [
   {
     id: 'unknown-data-source',
     section: 'importing',
-    title: 'Saved Data sources (import file profiles):',
+    title: 'Saved data sources (import file profiles)',
     surfaces: ['Import / Export (Recent imports)'],
-    summary: "Imported files not linked to a saved mapping are listed under “unknown data source” or “temporary draft”. A data source is a saved mapping which is useful if other files with the same format (eg. from the same source) will be imported later.",
+    summary: 'Imported files not linked to a saved mapping are listed under "unknown data source" or "temporary draft". A data source is a saved mapping which is useful if other files with the same format (eg. from the same source) will be imported later.',
     body: () => (
       <>
         <p>
@@ -1259,7 +1254,7 @@ export const HELP_TOPICS = [
           are organized in the import history section by data source. If there will be future
           imports from the same data source it is useful to save the mapping so it does not
           need to be recreated each time. A file lands under <strong>unknown data source</strong> or a <strong>temporary
-            draft</strong> when it isn’t linked a data source.
+            draft</strong> when it isn't linked to a data source.
         </p>
         <p>
           The saved mapping can be created during the import or afterwards from
@@ -1276,28 +1271,27 @@ export const HELP_TOPICS = [
   {
     id: 'imported-category-cleanup',
     section: 'importing',
-    title: 'Leaning Categories from Imported Transactions',
+    title: 'Learning categories from imported transactions',
     surfaces: ['Group Imported Categories', 'Categories page'],
     summary: 'Workspace for organizing categories imported from transactions into groups and removing any which are no longer wanted.',
     body: () => (
       <>
         <p>
-          The <strong>Group Imported Categories</strong> workspace displays the categories &ldquo;learned&rdquo; from
+          The <strong>Group Imported Categories</strong> workspace displays the categories "learned" from
           imported transactions. The imported categories can be placed into groups or deleted if they are
           no longer interesting.
         </p>
         <p>
           Deleting a category removes it from the existing imported transactions (the categories are
-          learned from transaction which were imported with their categorization) and will be
+          learned from transactions which were imported with their categorization) and will be
           removed from future imports as well. A deleted category moves to the <strong>Inactive</strong> list at the
-          bottom of the Categories page, where <strong>Recover</strong> restores it  back in the
+          bottom of the Categories page, where <strong>Recover</strong> restores it to the
           group it was deleted from, or Unassigned if that group is gone.
-
         </p>
         <p>
           Pending imported categories can also be placed in the <strong>Set aside</strong> list.
-          This moves them out of the &ldquo;needs sorting&rdquo; pool but leaves the category active. They appear
-          up in the Unassigned category. Use this for “I’ve triaged this.”
+          This moves them out of the "needs sorting" pool but leaves the category active. They appear
+          in the Unassigned category. Use this for "I've triaged this."
         </p>
       </>
     ),
@@ -1314,7 +1308,7 @@ export const HELP_TOPICS = [
           Amazon purchases appear in the funding account as some form of <strong>AMAZON.COM</strong> and the amount with no detail
           about the purchase. Amazon order history can be exported to a CSV file using the
           open-source <strong>AZAD</strong> (Amazon Order History Reporter) Chrome browser
-          extension exports. {APP_NAME} reads the <strong>Orders</strong>{' '}
+          extension. {APP_NAME} reads the <strong>Orders</strong>{' '}
           file to create transactions in an Amazon account, links
           it to the matching Amazon charge in the transaction ledger, and excludes the payment from
           totals so it is not counted twice as the order detail contains the purchase price of each item.
@@ -1338,16 +1332,16 @@ export const HELP_TOPICS = [
         <ol>
           <li>
             Sign in to Amazon, load the orders page and then open the AZAD extension.
-            Check <strong>Show totals in csv downloads</strong>{' '}. The other fields are optional.
+            Check <strong>Show totals in csv downloads</strong>. The other fields are optional.
           </li>
           <li>Select the <strong>Orders</strong> option and click the <strong>year</strong> you want.</li>
           <li>
-            A tab may open with a Page Not Found error, something like <i>SORRY we couldn&apos;t find that page, Try searching or go to
-              Amazon&apos;s home page</i>. Just close this tab. The results are on the prior tab where the order page had been opened.
+            A tab may open with a Page Not Found error, something like <i>SORRY we couldn't find that page, Try searching or go to
+              Amazon's home page</i>. Just close this tab. The results are on the prior tab where the order page had been opened.
           </li>
           <li>
             When the table finishes loading, change <strong>Show 10 entries</strong> to <strong>All</strong>,
-            then click <strong>download spreadsheet (&apos;.csv&apos;)</strong>.
+            then click <strong>download spreadsheet ('.csv')</strong>.
           </li>
           <li>
             <em>Optional:</em> The AZAD extension can export both order data and item data.
@@ -1368,15 +1362,15 @@ export const HELP_TOPICS = [
         </ol>
         <p>
           Drop the files on the CSV importer or click on the CSV importer to browse to the files to load. It does not
-          matter whether it is the csv importer on the <strong>Import</strong> tab or on the <strong>Amazon</strong> tab.
-          recognized by their columns and the files are recognized by the date ranges so
+          matter whether it is the CSV importer on the <strong>Import</strong> tab or on the <strong>Amazon</strong> tab.
+          File types are recognized by their columns and the files themselves by their date ranges, so
           upload order and file names do not matter. The tab then shows a
           <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> to import
           into, confirm the <strong>category</strong> used for categorizing the matched card charges (eg. to exclude them
           from spending totals), and map the <strong>payment card(s)</strong> from the import to payment
           account(s). <strong>Import</strong> lights up once the form is complete.
           An <strong>Items</strong> file adds its detail to the matching
-          orders; if the corresponding Orders file hasn&apos;t been brought in yet, the detail
+          orders; if the corresponding Orders file hasn't been brought in yet, the detail
           is set aside and attaches automatically when the Orders file is loaded.
         </p>
         <p>
@@ -1395,22 +1389,22 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Amazon import page',
     surfaces: ['Import / Export — Amazon'],
-    summary: `Configures which account holds the Amazon transactions, which category the excluded amazon payment maps to, and mapping the payment sources in the csv file to accounts in ${APP_NAME}.`,
+    summary: `Configures which account holds the Amazon transactions, which category the excluded Amazon payment maps to, and mapping the payment sources in the CSV file to accounts in ${APP_NAME}.`,
     body: () => (
       <>
         <p>
-          This is the page that appears when Amazon csv files are selected for
+          This is the page that appears when Amazon CSV files are selected for
           import.
         </p>
         <p>
           <strong>Category for the excluded charge.</strong> When the payment for an Amazon purchase is
-          matched, it is re-categorized using this category. This category should be excluded from totals,
-          {APP_NAME} warns if it is not, so that
+          matched, it is re-categorized using this category. This category should be excluded from totals &mdash;
+          {APP_NAME} warns if it is not &mdash; so that
           the spending is not double counted. Changing this category
           applies to <em>future</em> imports only, already-imported charges keep their category.
         </p>
         <p>
-          <strong>Import into account</strong> The imported amazon transactions are tracked in this account which
+          <strong>Import into account.</strong> The imported Amazon transactions are tracked in this account which
           is how they are identified as Amazon purchases. The suggested name is <strong>Amazon</strong>. There can be
           more than one if there are multiple Amazon accounts to separate out purchases for some purpose.
         </p>
@@ -1418,16 +1412,17 @@ export const HELP_TOPICS = [
           <strong> Payment cards in these files</strong> lists all the payment cards
           found in the import set along with the current mapping if these cards have been seen before.
           Any new cards are listed with <strong>Needs mapping</strong>. The mapping is used by {APP_NAME} to
-          locates the matching <strong>AMAZON.COM</strong> charge so it can change the category to the
-          specified <strong>Category for the excluded charge.</strong>     </p>
+          locate the matching <strong>AMAZON.COM</strong> charge so it can change the category to the
+          specified <strong>Category for the excluded charge.</strong>
+        </p>
         <p>
           Each card can be:
         </p>
         <ul>
           <li><strong>Mapped to an account</strong> &mdash; the normal case; the charge is matched and excluded.</li>
           <li>
-            <strong>Untracked</strong> &mdash; a card that isn’t one of your accounts (a spouse’s card, a
-            one-off). Its orders are still recorded and counted, there is no corresponding charge to exclude.
+            <strong>Untracked</strong> &mdash; a card that isn't one of your accounts (a spouse's card, a
+            one-off). Its orders are still recorded and counted; there is no corresponding charge to exclude.
           </li>
         </ul>
 
@@ -1439,14 +1434,14 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Amazon reconciliation report',
     surfaces: ['Import / Export — Amazon', 'Import history (transactions ↗ pill)'],
-    summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in your ledger and includes tools to resolve ambiguous situations',
+    summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in the ledger, and includes tools to resolve ambiguous situations.',
     body: () => (
       <>
         <p>
           After importing Amazon orders, {APP_NAME} pairs each order with the card charge that paid for it and
           excludes that charge so the money counts once. The <strong>reconciliation report</strong> shows how
           that went &mdash; open it from <strong>View reconciliation report </strong> after an import, or from
-          the file’s <strong>transactions ↗</strong> pill in the import history. It floats free of the page
+          the file's <strong>transactions ↗</strong> pill in the import history. It floats free of the page
           (drag, resize, or <strong>Minimize</strong> it to the nav bar), so it can be put aside if there
           is a need to inspect transactions and come back to it.
         </p>
@@ -1458,101 +1453,105 @@ export const HELP_TOPICS = [
             perhaps the same charge imported twice.
             <p>
               Resolve with:
-              <ul>
-                <li>
-                  <strong>Merge, keep one</strong> keeps the richest copy (folding in any detail
-                  the others carried), trashes the rest, and matches the order;
-                </li>
-                <li>
-                  <strong> Not duplicates</strong> marks the copies as distinct purchases instead
-                  (never re-flagged; the order falls back to the unmatched path, and a copy dated on
-                  the order itself is re-suggested for review). When other unmatched orders share the
-                  amount, Merge isn’t offered &mdash; use Not duplicates, or the per-copy
-                </li>
-                <li>
-                  <strong>Discard</strong> for a copy you know is a double import.
-                </li>
-              </ul>
             </p>
+            <ul>
+              <li>
+                <strong>Merge, keep one</strong> keeps the richest copy (folding in any detail
+                the others carried), trashes the rest, and matches the order;
+              </li>
+              <li>
+                <strong> Not duplicates</strong> marks the copies as distinct purchases instead
+                (never re-flagged; the order falls back to the unmatched path, and a copy dated on
+                the order itself is re-suggested for review). When other unmatched orders share the
+                amount, Merge isn't offered &mdash; use Not duplicates, or the per-copy Discard.
+              </li>
+              <li>
+                <strong>Discard</strong> for a copy you know is a double import.
+              </li>
+            </ul>
           </li>
           <li>
-            <strong>Duplicate · review</strong> &mdash; same-amount but it is <em>outside</em> the
+            <strong>Duplicate · review</strong> &mdash; a same-amount charge, but <em>outside</em> the
             strict &plusmn;3-day match window but within two weeks. Likely still a double import, but the dates
-            don’t corroborate it &mdash; so examine each copy (hover for its origin detail), then resolve with
+            don't corroborate it &mdash; so examine each copy (hover for its origin detail), then resolve with
             the same <strong>Merge / Discard / Not duplicates</strong> &mdash; per row, or use bulk-Edit.
             The merged-away copy is restorable from Settings → Trash.
           </li>
           <li>
             <strong>No charge found</strong> &mdash; counted, but no charge was matched to exclude (an untracked
             card, history that predates your imports, an order whose export named no card and whose charge
-            doesn&rsquo;t read as Amazon, or a miss). Sometimes searching for the amount locates the corresponding
-            transaction. These orders count toward the import&rsquo;s needs-attention total so a stray one gets a look;
-            when there&rsquo;s genuinely nothing to link mark it as reviewed.
+            doesn't read as Amazon, or a miss). Sometimes searching for the amount locates the corresponding
+            transaction. These orders count toward the import's needs-attention total so a stray one gets a look;
+            when there's genuinely nothing to link mark it as reviewed.
             <p>
               Resolve with:
-              <ul>
-                <li>
-                  <strong>Link charges…</strong> opens a picker over the unaccounted charges with a running
-                  sum against the order total &mdash; check the charge(s) that paid for it (several, if the
-                  order was split) and link them. A mismatched sum warns but doesn’t block.
-                </li>
-                <li>
-                  <strong>Mark reviewed</strong> acknowledges it &mdash; it stays listed here but drops out of the attention count so it won&rsquo;t
-                  keep nagging (Undo puts it back). Works per row or on a bulk selection.
-                </li>
-                <li>
-                  <strong>Matched · review</strong> &mdash; no single charge equals the order total, but a unique set
-                  of unaccounted charges sums to it: Amazon billed the order per shipment.
-                </li>
-                <li>
-                  <strong>Accept</strong> links the whole set;
-                </li>
-                <li>
-                  <strong>Dismiss</strong> if it’s not a match (it won’t be re-suggested). A set spanning
-                  more than a week is flagged so you can eyeball it first. A <em>single</em>-charge suggestion carries a
-                  note naming why it didn’t match automatically &mdash; outside the ±3-day window, a cent off the
-                  total, or imported after the order was.
-                </li>
-              </ul>
             </p>
+            <ul>
+              <li>
+                <strong>Link charges…</strong> opens a picker over the unaccounted charges with a running
+                sum against the order total &mdash; check the charge(s) that paid for it (several, if the
+                order was split) and link them. A mismatched sum warns but doesn't block.
+              </li>
+              <li>
+                <strong>Mark reviewed</strong> acknowledges it &mdash; it stays listed here but drops out of the attention count so it won't
+                keep nagging (Undo puts it back). Works per row or on a bulk selection.
+              </li>
+            </ul>
+          </li>
+          <li>
+            <strong>Matched · review</strong> &mdash; no single charge equals the order total, but a unique set
+            of unaccounted charges sums to it: Amazon billed the order per shipment. A <em>single</em>-charge
+            suggestion carries a note naming why it didn't match automatically &mdash; outside the
+            ±3-day window, a cent off the total, or imported after the order was.
+            <p>
+              Resolve with:
+            </p>
+            <ul>
+              <li>
+                <strong>Accept</strong> links the whole set.
+              </li>
+              <li>
+                <strong>Dismiss</strong> if it's not a match (it won't be re-suggested). A set spanning
+                more than a week is flagged so it can be eyeballed first.
+              </li>
+            </ul>
           </li>
           <li>
             <strong>Unaccounted · duplicate</strong> &mdash; unaccounted charges that look like <em>copies of each
               other</em> (same account and amount, days apart) with no order for either &mdash; the double import the
-            general dedupe can’t catch. Resolve with <strong>Merge / Discard / Not duplicates</strong> &mdash; per row,
+            general dedupe can't catch. Resolve with <strong>Merge / Discard / Not duplicates</strong> &mdash; per row,
             or use Bulk Edit. The merged-away copy is restorable from Settings → Trash.
           </li>
           <li>
             <strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
-            uses, in this import’s date range, that no order accounts for. Best-effort, but surfaced for a look:
-            these count toward the import&rsquo;s needs-attention total so a stray one (say, a duplicate the
-            report couldn&rsquo;t pair) gets noticed.
+            uses, in this import's date range, that no order accounts for. Best-effort, but surfaced for a look:
+            these count toward the import's needs-attention total so a stray one (say, a duplicate the
+            report couldn't pair) gets noticed.
             <p>
               Resolve with:
-              <ul>
-                <li>
-                  <strong>Trash</strong> sends one to Trash &mdash; the escape
-                  hatch for that unpaired duplicate. It acts on the whole row and also has the bulk
-                  operation, <strong>Move to trash</strong>. Discarded rows land in
-                  Settings → Trash&rsquo;s <em>Transactions</em> section.
-
-                </li>
-                <li>
-                  <strong>Discard</strong> on a stacked duplicate row works per-copy.
-                  Discarded rows land in Settings → Trash&rsquo;s <em>Duplicate transactions</em>.
-                  Useful when a charge is just a purchase the export didn&rsquo;t cover (nothing to fix),
-                </li>
-                <li>
-                  <strong>Mark reviewed</strong> acknowledges it so it drops out of the attention
-                  count (Undo restores it). Works per row or on a bulk selection.
-                </li>
-              </ul>
             </p>
+            <ul>
+              <li>
+                <strong>Trash</strong> sends one to Trash &mdash; the escape
+                hatch for that unpaired duplicate. It acts on the whole row and also has the bulk
+                operation, <strong>Move to trash</strong>. Discarded rows land in
+                Settings → Trash's <em>Transactions</em> section.
+              </li>
+              <li>
+                <strong>Discard</strong> on a stacked duplicate row works per-copy.
+                Discarded rows land in Settings → Trash's <em>Duplicate transactions</em>.
+                Useful when a charge is just a purchase the export didn't cover (nothing to fix).
+              </li>
+              <li>
+                <strong>Mark reviewed</strong> acknowledges it so it drops out of the attention
+                count (Undo restores it). Works per row or on a bulk selection.
+              </li>
+            </ul>
           </li>
           <li>
             <strong>Matched</strong> &mdash; the order and the charge(s) it excluded. If a pairing is wrong
             (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
-            order&rsquo;s), <strong>Unlink</strong> detaches the charge &mdash; its original category is
+            order's), <strong>Unlink</strong> detaches the charge &mdash; its original category is
             restored and the order returns to <em>No charge found</em>, where <strong>Link charges…</strong>
             can pair it correctly.</li>
         </ul>
@@ -1579,7 +1578,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Amazon import detail report',
     surfaces: ['Import history — outcome pills (orders / items matched / no match / …)'],
-    summary: 'The outcome pills on an Amazon file card open a report of what that import actually did — the orders it created, items matched into orders, items with no matching order yet, duplicates, and payments.',
+    summary: 'The outcome pills on an Amazon file card open a report of what that import actually did: the orders it created, items matched into orders, items with no matching order yet, duplicates, and payments.',
     body: () => (
       <>
         <p>
@@ -1600,7 +1599,7 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           Files are recognized by <em>content</em>, not name: re-uploading a file a completed import already took
-          is skipped with an “already imported” notice (no second file card), and undoing an import frees its
+          is skipped with an "already imported" notice (no second file card), and undoing an import frees its
           files to import again.
         </p>
       </>
@@ -1623,13 +1622,13 @@ export const HELP_TOPICS = [
         <p>
           Duplicate detection compares an <em>incoming file</em> against what is already in the ledger. Two
           copies of one purchase sitting inside the same file have nothing to be compared against, so both
-          import and neither is flagged. That is deliberate rather than an oversight, the transaction ledger from
+          import and neither is flagged. That is deliberate rather than an oversight: the transaction ledger from
           a given source is assumed to be accurate.
         </p>
 
         <h4>Spotting it</h4>
         <p>
-          Sorting the imported file&rsquo;s rows by amount brings identical figures together, which is the
+          Sorting the imported file's rows by amount brings identical figures together, which is the
           quickest way to see whether a file is doing this. It tends to be a property of
           the <em>source</em> rather than of one export -- if one file from a source double-lists, later ones
           usually will too, so it is worth checking the first import from any new source. If this is a current
@@ -1664,13 +1663,13 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Where a removed duplicate went',
     surfaces: ['File ledger (↗)'],
-    summary: 'Rows which are replaced or merged as part of duplicate transaction resolution are visible in the “Removed as duplicates” section at the top of each import file card\'s transaction report.',
+    summary: 'Rows which are replaced or merged as part of duplicate transaction resolution are visible in the "Removed as duplicates" section at the top of each import file card\'s transaction report.',
     body: () => (
       <>
         <p>
           When a <HelpLink to="/help/cross-account-duplicates">Replace</HelpLink> or a{' '}
           <HelpLink to="/help/merging-accounts">merge</HelpLink> removes a duplicate, the row is added
-          to the removed duplicates report for the import. Open a file’s ledger (the <strong>↗</strong>) and expand the collapsible
+          to the removed duplicates report for the import. Open a file's ledger (the <strong>↗</strong>) and expand the collapsible
           <strong> Removed as duplicates</strong> list: it shows each removed row and which account the retained
           copy now lives on. Duplicate charge copies merged away on the <em>Amazon reconciliation
             report</em> land here too &mdash; for those the kept copy is usually on the <em>same</em> account (a
@@ -1684,7 +1683,7 @@ export const HELP_TOPICS = [
     section: 'reports',
     title: 'Searching by date or amount',
     surfaces: ['Transactions search', 'File ledger search'],
-    summary: 'The file-ledger and Transactions search boxes match dates and amounts, in addition to merchant names, categories and accounts -- type a year, month, day, or a dollar amount to find the matching transaction(s)',
+    summary: 'The file-ledger and Transactions search boxes match dates and amounts, in addition to merchant names, categories and accounts. Type a year, month, day, or a dollar amount to find the matching transaction(s).',
     body: () => (
       <>
         <p>
@@ -1719,10 +1718,10 @@ export const HELP_TOPICS = [
         </p>
         <p>The flag clears three ways:</p>
         <ul>
-          <li>Editing the transaction’s category clears it. Correcting or setting the category counts as reviewing it.
+          <li>Editing the transaction's category clears it. Correcting or setting the category counts as reviewing it.
           </li>
           <li>
-            <strong>Mark reviewed</strong> on the row’s right-click menu and in the bulk-edit bar, clears it
+            <strong>Mark reviewed</strong>, on the row's right-click menu and in the bulk-edit bar, clears it
             without changing anything else. This covers the common case where everything is correct.
             The transaction filter just above the transaction table has a <em>Needs review</em> option so all the transactions
             to be reviewed can be cleared at once in a bulk-edit option after the ones which needed
@@ -1743,13 +1742,13 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Generating rules from transactions in an imported file',
     surfaces: ['Import / Export (rule suggestions)'],
-    summary: 'Generate rules studies a file whose transactions are already categorized and proposes rules that reproduce that categorization on future data -- the output is rules, not a re-categorization of the file. When one merchant is filed under several categories the suggestions form a conflict set, which can be resolved in different ways for different results.',
+    summary: 'Generate rules studies a file whose transactions are already categorized and proposes rules that reproduce that categorization on future data; the output is rules, not a re-categorization of the file. When one merchant is filed under several categories the suggestions form a conflict set, which can be resolved in different ways for different results.',
     body: () => (
       <>
         <p>
           If the data comes from another tool where the transactions already carry meaningful categories,
-          tell {APP_NAME} the import’s category data is useful (turn on <em>“use the categories present in the data”</em>
-          on the file’s card). {APP_NAME} the transaction categorization on the imported transactions, adds new categories to
+          tell {APP_NAME} the import's category data is useful (turn on <em>"use the categories present in the data"</em>
+          on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
           the pool of categories to be grouped by <strong>Group Imported Categories</strong>, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data.
         </p>
@@ -1761,10 +1760,10 @@ export const HELP_TOPICS = [
         </p>
         <ol type="a">
           <li>
-            Accepting a suggestion applies its rule to exactly the rows that generated it  so an edit
+            Accepting a suggestion applies its rule to exactly the rows that generated it, so an edit
             made to the rule before accepting it (a tweaked category, added tags, a rename) lands on those
             rows too, and they shift from import-locked to
-            rule-governed (see{' '} <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>).
+            rule-governed (see{' '} <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>).
           </li>
           <li>
             Resolving a conflict has various options to re-categorize rows.
@@ -1779,10 +1778,10 @@ export const HELP_TOPICS = [
             under <em>discard and&hellip;</em> choose what happens to the rows it covered:
             <ul>
               <li>
-                <em>keep categorization</em> leaves them exactly as imported -- the file&rsquo;s category
+                <em>keep categorization</em> leaves them exactly as imported -- the file's category
                 sticks as a settled decision, and is still reclaimable later if a
                 matching rule is created and applied. This is the choice for a genuine exception (an annual fee
-                filed under its own category)
+                filed under its own category).
               </li>
               <li>
                 <em>remove categorization</em> clears the category
@@ -1791,7 +1790,7 @@ export const HELP_TOPICS = [
               </li>
             </ul>
           </li>
-        </ul >
+        </ul>
         <h4>Conflict sets, and the different ways to resolve them</h4>
         <p>
           When the same merchant was filed under <strong>several different categories</strong>, a single
@@ -1805,17 +1804,17 @@ export const HELP_TOPICS = [
             one rule for the merchant.</li>
           <li><strong>Pick one category for the merchant and re-categorize the rest.</strong> The
             matching-transactions viewer can set the majority category in bulk to collapse the conflict
-            to a single rule. Re-categorizing here <em>corrects the file’s category</em>, and the rows
+            to a single rule. Re-categorizing here <em>corrects the file's category</em>, and the rows
             keep their trusted-import weight, so they keep informing the suggestions.</li>
           <li><strong>Keep an outlier as a one-off.</strong> <strong>Preserve</strong> a genuinely
             distinct row to record it as a manual exception: rules leave it alone and it drops out of
             the suggestions entirely, rather than re-surfacing as a conflict.</li>
         </ul>
         <p>
-          The the last two produce subtly different results: a bulk re-categorize
+          The last two produce subtly different results: a bulk re-categorize
           keeps rows in the import learning set and re-targets the rule, while Preserve carves a
           row out as an untouchable manual decision. How those properties affect subsequent behavior is covered
-          in <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>.
+          in <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
         </p>
         <h4>Older suggestions, and clearing them out in bulk</h4>
         <p>
@@ -1830,16 +1829,18 @@ export const HELP_TOPICS = [
           Because older suggestions are already out of the way, settling them is optional -- a stale tail
           can simply be left alone. Alternatively, open the <em>older</em> pill, select several
           rows at once, and apply a bulk disposition:
-          <ul>
-            <li><em>Discard, keep categories</em> marks them
-              reviewed while leaving their rows exactly as imported (for a pattern not
-              worth a rule)
-            </li>
-            <li>
-              Discard, clear categories additionally clears those rows so future rules may categorize them
-            </li>
-          </ul>
-          Both choices have the same affect on the row’s import state as the single-suggestion <strong>Discard</strong>.
+        </p>
+        <ul>
+          <li><em>Discard, keep categories</em> marks them
+            reviewed while leaving their rows exactly as imported (for a pattern not
+            worth a rule)
+          </li>
+          <li>
+            <em>Discard, clear categories</em> additionally clears those rows so future rules may categorize them
+          </li>
+        </ul>
+        <p>
+          Both choices have the same effect on the row's import state as the single-suggestion <strong>Discard</strong>.
         </p>
         <p>
           See also:{' '}
@@ -1853,7 +1854,7 @@ export const HELP_TOPICS = [
     section: 'transaction-detail',
     title: 'Attaching receipts and invoices',
     surfaces: ['Transactions (row marker)', 'Transaction detail (Documents)'],
-    summary: 'Receipts and invoices can be attached to the transaction they belong to -- dropped, browsed, or pasted straight out of an email -- and text inside a PDF or a paste is searchable from the ordinary filter box. Images can be added but do not provide searchable text.',
+    summary: 'Receipts and invoices can be attached to the transaction they belong to (dropped, browsed, or pasted straight out of an email), and text inside a PDF or a paste is searchable from the ordinary filter box. Images can be added but do not provide searchable text.',
     body: () => (
       <>
         <p>
@@ -1868,27 +1869,29 @@ export const HELP_TOPICS = [
         </p>
 
         <h4>Attaching a document</h4>
-        In the transaction editor there is a Documents section with two controls to attach files and text.
-        One control is a file browser/file drop target and the other is for pasting the contents of the
-        clipboard. The same document can be attached using either method, the method depends on how it
-        is being attached. For plain text, pasting it from the clipboard allows it to be edited before it
-        is stored.
+        <p>
+          In the transaction editor there is a Documents section with two controls to attach files and text.
+          One control is a file browser/file drop target and the other is for pasting the contents of the
+          clipboard. Either control accepts the same kinds of document; which one to use depends on where
+          the document is coming from. For plain text, pasting it from the clipboard allows it to be edited
+          before it is stored.
+        </p>
         <ul>
           <li>
             <strong>Paste an image</strong> -- a screenshot in a file, or a photo already on the clipboard.
           </li>
           <li>
             <strong>Paste text</strong> from the clipboard. For emailed receipts it is often easier to
-            use copy/paste to rather than saving the email as a file. The pasted text can be edited before it
+            use copy/paste rather than saving the email as a file. The pasted text can be edited before it
             is saved if there is extraneous information to remove.
           </li>
           <li>
-            <strong>Attach a file</strong> The file system browser and file drop zone allow adding files already
+            <strong>Attach a file</strong> -- the file-system browser and file drop zone add files already
             on disk.
           </li>
         </ul>
         <p>
-          An unedited paste keeps the layout it came with. The plain-text flavour of a copied email is its
+          An unedited paste keeps the layout it came with. The plain-text flavor of a copied email is its
           table flattened, one cell to a line, so an amount ends up under the item it prices rather than
           beside it; keeping the original markup preserves the arrangement the sender laid out. Editing
           the box turns that off, since an edit says the text on screen is what was wanted. The panel
@@ -1924,11 +1927,10 @@ export const HELP_TOPICS = [
           of that box.
         </p>
 
-
         <h4>Removing, the trash, and backups</h4>
         <p>
           Documents follow their transaction into the trash and come
-          back intact if the is restored from the trash. When the trash is emptied, the any associated
+          back intact if the transaction is restored from the trash. When the trash is emptied, any associated
           documents are destroyed (deleted off disk).
         </p>
         <p>
@@ -1945,7 +1947,7 @@ export const HELP_TOPICS = [
     section: 'transaction-detail',
     title: 'One purchase paid in several payments',
     surfaces: ['Transactions (link marker, Bulk Edit)', 'Transaction detail (Purchase)'],
-    summary: 'Some purchases are made with multiple payments and it may be interesting to link them together so the purchase price is accurate.  Select the payments under Bulk Edit and choose Link as one purchase.',
+    summary: 'Some purchases are made with multiple payments and it may be interesting to link them together so the purchase price is accurate. Select the payments under Bulk Edit and choose Link as one purchase.',
     body: () => (
       <>
         <p>
@@ -1987,10 +1989,10 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>A payment linked by mistake</strong> is removed by opening the purchase and
-            use the <strong>&times;</strong> beside it the incorrect payment to remove it.
+            using the <strong>&times;</strong> beside the incorrect payment.
             The transaction is untouched -- it simply stops
             counting toward the purchase. Removing one that would leave a single payment behind
-            removed the purchase group.
+            removes the purchase group.
           </li>
           <li>
             <strong>Ungroup this purchase</strong> undoes the grouping altogether.
@@ -2000,7 +2002,7 @@ export const HELP_TOPICS = [
         <h4>Additional use cases</h4>
         <p>
           A refund against the purchase can be linked, and the total then reads as the net.
-          If a transaction linked in a multi-transaction payment is sent to the trash, it stays
+          If a transaction linked into a multi-payment purchase is sent to the trash, it stays
           listed on the payment record, struck through.
         </p>
         <p>
@@ -2051,8 +2053,8 @@ export const HELP_TOPICS = [
         <p>
           The scan groups by the payee name on the statement. Sometimes merchant names come in with different
           variations and the scan cannot determine that it is a single payee. While it is useful for reporting
-          to create rules that generate a single name for a payee, rules can also indicate that the
-          matching transactions for a series. Turn on this flag and every transaction the rule matches
+          to create rules that generate a single name for a payee, rules can also declare that their
+          matching transactions form a series. Turn on this flag and every transaction the rule matches
           becomes a member of one series. A rule matches by keyword -- with optional amount and scope -- so
           it gathers all the spellings at once, and later transactions attach themselves as they arrive. To
           change which transactions belong, edit the rule. It is unusual but if all of the transactions
@@ -2072,7 +2074,7 @@ export const HELP_TOPICS = [
           <li>
             <strong>Remove from the series</strong> -- for a transaction the scan swept in by mistake. It stays
             out across future scans. A removal is reversible: undo it from the prompt, from the removed
-            transaction’s own right-click menu (<em>Restore to recurring series</em>), or from
+            transaction's own right-click menu (<em>Restore to recurring series</em>), or from
             the <em>removed</em> list inside the series.
           </li>
         </ul>
@@ -2136,7 +2138,7 @@ export const HELP_TOPICS = [
             <em> Mark ended</em> is offered as an option. Nothing is ended automatically.
           </li>
           <li>
-            <strong>Amount changed</strong> -- a charge that came in slightly out of range what the series has been
+            <strong>Amount changed</strong> -- a charge that came in slightly out of range of what the series has been
             charging. A series with a steady price reports a modest step; one that moves every month
             reports only a charge beyond anything it has done before. Once a second charge arrives at the
             new price the change is treated as the new normal and stops being reported.
@@ -2156,8 +2158,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           On a bill whose amount moves -- gas, electricity, water -- dismissing an amount also
-          <strong> extends the range</strong>. A heating bill that peaks every January is generates an
-          alert the first winter and dismissing it keeps it from alerting on not the ones after;
+          <strong> extends the range</strong>. A heating bill that peaks every January generates an
+          alert the first winter, and dismissing it keeps the ones after from alerting;
           the later charges up to the amounts already accepted pass without comment, while a charge beyond
           them generates a new alert. Restoring a dismissal restores the prior range. Fixed-price
           subscriptions work differently on purpose -- there a dismissal means the price rose, and the
@@ -2188,7 +2190,7 @@ export const HELP_TOPICS = [
         <p>
           See also:{' '}
           <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink> and{' '}
-          <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>.
+          <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
         </p>
       </>
     ),
@@ -2204,7 +2206,7 @@ export const HELP_TOPICS = [
         <p>
           Almost everything is stored in a local SQLite database (attachments are stored in a documents directory next
           to the database file). Accounts, transactions, categories, tags are all stored in{' '}
-          <strong>plain text</strong>. Protection comes from the computer’s security (disk encryption,
+          <strong>plain text</strong>. Protection comes from the computer's security (disk encryption,
           OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
@@ -2213,7 +2215,6 @@ export const HELP_TOPICS = [
           strongly encrypted backup files. Secrets and credentials for accessing connected data sources
           are already encrypted in the control database, secured by the vault passphrase. All backups
           of the credentials database contain encrypted data.
-
         </p>
         <p>
           If the database files are exposed and there are data connections, even though the credentials
@@ -2236,7 +2237,7 @@ export const HELP_TOPICS = [
     section: 'access-safety',
     title: 'Account security: password and two-factor',
     surfaces: ['Account security (Settings)'],
-    summary: `Sign-in protection is a network perimeter -- it keeps people who aren’t users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
+    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
     body: () => (
       <>
         <p>
@@ -2246,19 +2247,19 @@ export const HELP_TOPICS = [
           the <strong>same shared data</strong>; the password guards <em>network</em> access only: it
           is not disk encryption, so
           it is not a substitute for keeping the machine itself secure (see{' '}
-          <HelpLink to="/help/data-and-backups">your data on disk</HelpLink>).
+          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
         </p>
         <p>
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to
-          all users, and it can tightened or relaxed at any time.
+          all users, and it can be tightened or relaxed at any time.
         </p>
         <p>
           <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
           When it is on, the code is requested <strong>every fresh sign-in</strong> &mdash; a browser
-          with an active session is not asked again until that session ends, but there is no &ldquo;trust
-          this device&rdquo; that skips the code on a new sign-in. If authenticator access is lost, the{' '}
+          with an active session is not asked again until that session ends, but there is no "trust
+          this device" that skips the code on a new sign-in. If authenticator access is lost, the{' '}
           <strong>recovery codes</strong> displayed when authenticator use is enabled
-          are the way back in, so save these in a password manager or somewhere equally as safe.
+          are the way back in, so save these in a password manager or somewhere equally safe.
         </p>
         <p>
           Two-factor is optional and mainly matters if the instance is reachable beyond the trusted
@@ -2271,51 +2272,55 @@ export const HELP_TOPICS = [
   {
     id: 'configuration',
     section: 'access-safety',
-    title: 'Configuration Settings',
+    title: 'Configuration settings',
     surfaces: ['Configuration (Settings)'],
-    summary: `Every setting has a working default, configuration is not required to get started. An .env file is used to overrides the handful of values that need to be known before the app starts (ports, where the database files live).`,
+    summary: `Every setting has a working default; configuration is not required to get started. A .env file overrides the handful of values that need to be known before the app starts (ports, where the database files live).`,
     body: () => (
       <>
         <p>
           Nothing has to be configured before {APP_NAME} runs. Every setting falls back to a working
-          default, a plain installation needs <strong>no configuration file at all</strong>.
+          default, so a plain installation needs <strong>no configuration file at all</strong>.
         </p>
         <p>
-          Three settings worth knowing about.
-          <ul>
-            <li>
-              <strong>Data directory</strong> is where both database
-              files live &mdash; change to move an installation&rsquo;s data, possibly to run a
-              second installation on the same machine. The two database rows beneath it are shown for
-              confirmation and follow it automatically.
-            </li>
-            <li>
-              <strong>Backend port</strong> needs to be an unused port and is used by the frontend
-              to connect to the backend. Users do not need to be aware of this port.
-            </li>
-            <li>
-              <strong>Frontend port</strong> is the browser connects to.
-            </li>
-          </ul>
+          Three settings worth knowing about:
+        </p>
+        <ul>
+          <li>
+            <strong>Data directory</strong> is where both database
+            files live &mdash; change to move an installation's data, possibly to run a
+            second installation on the same machine. The two database rows beneath it are shown for
+            confirmation and follow it automatically.
+          </li>
+          <li>
+            <strong>Backend port</strong> needs to be an unused port and is used by the frontend
+            to connect to the backend. Users do not need to be aware of this port.
+          </li>
+          <li>
+            <strong>Frontend port</strong> is the port the browser connects to.
+          </li>
+        </ul>
+        <p>
           Most users do not need to touch the settings under <strong>Advanced</strong>.
         </p>
         <p>
-          Each setting indicates how the current value is derived.
-          <ul>
-            <li>
-              <strong>Default</strong> is the built-in value.{' '}
-            </li>
-            <li>
-              <strong>Stored</strong> means it was generated once and kept in the database.{' '}
-            </li>
-            <li>
-              <strong>Derived</strong> means it follows another setting. <strong>Set in .env</strong> or{' '}
-            </li>
-            <li>
-              <strong>Set in environment</strong> means an override is in force &mdash; an override always
-              wins, and always takes effect at the next restart.
-            </li>
-          </ul>
+          Each setting indicates how the current value is derived:
+        </p>
+        <ul>
+          <li>
+            <strong>Default</strong> is the built-in value.
+          </li>
+          <li>
+            <strong>Stored</strong> means it was generated once and kept in the database.
+          </li>
+          <li>
+            <strong>Derived</strong> means it follows another setting.
+          </li>
+          <li>
+            <strong>Set in .env</strong> or <strong>Set in environment</strong> means an override is in
+            force &mdash; an override always wins, and always takes effect at the next restart.
+          </li>
+        </ul>
+        <p>
           The <code>.env</code> file lives beside the
           application. If it is present the screen indicates where it lives.
         </p>

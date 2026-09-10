@@ -158,6 +158,17 @@ export default [
     rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions] },
   },
   {
+    // The help registry is prose, and `no-unescaped-entities` objects only to the straight ASCII
+    // forms -- `don't`, `"quoted"` -- which are the ones a keyboard produces. Left on, it pushes
+    // every apostrophe in the copy toward `&rsquo;`, which reads worse in source, and decodes only
+    // in JSX text: the same entity pasted into a `summary:` string renders as its literal
+    // characters. Off here, the topics are written with the punctuation they are typed with. This
+    // lifts nothing else -- `>` and `}` in JSX text stay parse errors, which no rule setting
+    // changes.
+    files: ['src/help/**'],
+    rules: { 'react/no-unescaped-entities': 'off' },
+  },
+  {
     // Build/tool scripts run in Node, not the browser.
     files: ['scripts/**/*.js', 'vite.config.js', 'playwright.config.js', 'eslint.config.js'],
     languageOptions: {
