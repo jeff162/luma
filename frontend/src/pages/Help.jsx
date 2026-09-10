@@ -165,9 +165,8 @@ export default function Help() {
           </div>
         ) : null}
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
-          Short explainers for how features in {APP_NAME} are designed to be used. Each topic also
-          appears as a <strong>?</strong> popover next to the feature it describes, so the same
-          guidance is one click away when you’re actually looking at the thing.
+          Explanations for how features in {APP_NAME} are designed to be used. Topics also
+          appears as a <strong>?</strong> popover next to the feature it describes.
         </div>
 
         <Card style={{ padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -175,7 +174,8 @@ export default function Help() {
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>First-use hints</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
               Tips that appear the first time a situation is encountered (for example a cross-account duplicate).
-              Turning them off leaves the <strong>?</strong> next to each feature, so guidance stays one click away.
+              Turning them off leaves the <strong>?</strong> so they can be revisited later. Resetting clears the
+              tracking of previously encountered situations.
             </div>
           </div>
           <Toggle
