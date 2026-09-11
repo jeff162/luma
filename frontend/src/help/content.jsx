@@ -32,6 +32,16 @@ import { APP_NAME } from '../lib/appConfig.js'
  * topics appear in their HELP_TOPICS order. The inline FeatureExplainer popovers look topics up
  * by `id` and ignore sections entirely. A topic whose `section` matches nothing here still shows
  * (under a trailing "More" group) rather than silently vanishing.
+ *
+ * How the sections are chosen: most mirror a page in the left nav, in nav order, and lead with that
+ * page's `page-*` hub topic -- the one its title's `?` opens, which also collects the page's related
+ * topics as links. The rest are subjects that outgrew a single page and stand on their own
+ * ("Duplicates & reconciliation", "Access & data safety"), because a topic does **not** have to sit
+ * under the hub of the page it is reached from: a topic carries one `section` but several
+ * `surfaces`, so it is filed by *subject* and the other pages' hubs link across to it. Ordering
+ * within a section is deliberate rather than the order topics were written -- hub first, then the
+ * core model, then common tasks, then edge cases -- because array position is the only thing
+ * driving it.
  */
 export const HELP_SECTIONS = [
   {
