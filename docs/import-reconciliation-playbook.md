@@ -35,21 +35,16 @@ The report lists it as a **Cross-account match** ("Review"). Three actions, by o
   is the sole one with that box checked; otherwise it adopts the existing row's category. Use this
   when one source has the right account but another had the better categories.
 
-### One source lumps several real accounts under a single label ("umbrella" account)
-
-e.g. an aggregator records two physical cards under one generic account name. Merging that umbrella
-into *one* of the real cards only resolves that card's overlaps and strands the other's.
-
-- **Do not merge** the umbrella into a single card (merge means "these are the same physical
-  account"). Instead resolve the overlaps per-row in the report — **Replace existing** keeps the
-  correctly-accounted copy — or fix accounts after import.
-
 ### Reconciling by merging accounts — order doesn't matter
 
-Merging two accounts that are genuinely the same physical account auto-confirms the overlapping
-duplicates between them. **Importing then merging** and **merging then importing** reach the same
-state. **Detaching** an account later reverses the merge's auto-confirmations (your explicit
-Reject/Replace decisions are preserved).
+Merging two accounts that are genuinely the same physical account auto-confirms the overlaps **both
+sources describe identically** — the amount always matches, so the wording is what decides — and those
+rows leave the ledger without being asked about, listed as "Duplicate in this account (confirmed)". Two
+descriptions that merely resemble each other, or share only the payee, are never auto-confirmed: the row
+stays in review as "Possible duplicate in this account" (or "Same payee, different wording") and still
+needs Keep both / Discard new / Replace existing. **Importing then
+merging** and **merging then importing** reach the same state. **Detaching** an account later reverses
+the merge's auto-confirmations (your explicit Reject/Replace decisions are preserved).
 
 ### A covered-range row is off by a day or two, matches a transfer, or has no match
 

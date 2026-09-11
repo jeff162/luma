@@ -98,7 +98,7 @@ for (const file of files) {
 if (failed) {
   console.error('\n❌ Personal-data check failed: replace with fabricated values.')
   console.error('   docs/collaboration-notes.md names the vocabulary to use ("Rewards Card",')
-  console.error('   "Cashback Card", "Credit Card"/"Legacy Card" for an umbrella) and the repo already')
+  console.error('   "Cashback Card", "Legacy Card" for cards) and the repo already')
   console.error('   uses Fablecard / Harborline / Riverstone / Northgate with invented masks.')
   console.error('   A path that is a known leftover can be listed in data/personal-data-allow.txt.')
   process.exit(1)

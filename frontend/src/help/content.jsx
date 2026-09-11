@@ -1662,26 +1662,16 @@ export const HELP_TOPICS = [
     section: 'accounts',
     title: 'Merging accounts to reconcile',
     surfaces: ['Accounts page'],
-    summary: "Merging two accounts that represent the same physical account auto-confirms their overlapping duplicates; order doesn't matter and detaching reverses it.",
+    summary: "Merging two accounts that represent the same physical account auto-confirms the overlaps both sources describe identically; order doesn't matter and detaching reverses it.",
     body: () => (
       <>
         <p>
           Merging two accounts on the Accounts page means <strong>"these are the same physical
-            account."</strong> When they genuinely are, merging <strong>auto-confirms the overlapping
-              duplicates</strong> between them. The order is irrelevant: <em>importing then merging</em> and
+            account."</strong> When they genuinely are, merging <strong>auto-confirms the overlaps both
+              sources describe identically</strong>; a pair the two sources worded differently stays in
+          review. The order is irrelevant: <em>importing then merging</em> and
           <em> merging then importing</em> reach the same state. <strong>Detaching</strong> an account
           reverses the merge's auto-confirmations &mdash; your explicit Reject / Replace decisions are kept.
-        </p>
-        <h4>The umbrella-account trap</h4>
-        <p>
-          Some sources record several real accounts under one generic label &mdash; e.g. an aggregator that
-          files two physical cards as one account. <strong>Do not merge an umbrella account into a single
-            card.</strong> Merging it into one card only resolves that card's overlaps and strands the other's.
-        </p>
-        <p>
-          Instead, resolve the overlaps per row in the duplicate report &mdash;{' '}
-          <HelpLink to="/help/cross-account-duplicates">Replace existing</HelpLink> keeps the
-          correctly-accounted copy &mdash; or fix the accounts after import.
         </p>
       </>
     ),
@@ -2351,11 +2341,15 @@ export const HELP_TOPICS = [
           paired up in {APP_NAME}.
         </p>
         <p>
-          If the two accounts get merged, the same pair is described as a <strong>possible
-            duplicate in this account</strong> instead &mdash; the merge settled the account question, so
-          the report stops calling it cross-account. The evidence and the three actions below are
-          unchanged: a near-miss on text is not conclusive on its own, so such a pair stays in review
-          rather than being removed automatically.
+          If the two accounts get merged, the pair is no longer called cross-account, and the wording
+          decides what becomes of it. The amount already matches &mdash; that is what flagged the pair
+          &mdash; so where both sources also describe it identically, the merge confirms the duplicate and
+          the row leaves the active ledger as a <strong>duplicate in this account (confirmed)</strong>.
+          Detaching the accounts reverses that, and a single row can be restored on its own. Where the two
+          descriptions merely resemble each other, or share nothing but the payee, that is not conclusive,
+          so the row stays in review as a <strong>possible duplicate in this
+            account</strong> (or <strong>same payee, different wording</strong>) and still needs one of
+          the three actions below.
         </p>
         <p>
           There are three actions:
