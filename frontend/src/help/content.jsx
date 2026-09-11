@@ -208,7 +208,7 @@ export const HELP_TOPICS = [
     surfaces: ['Getting started'],
     summary: 'A tour of the app, in the order data moves through it: importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each handing off to its own topic.',
     body: () => (
-      <>
+      <><p>*Needs review*</p>
         <p>The major modules, roughly in the order data moves through them:</p>
         <ol>
           <li>
