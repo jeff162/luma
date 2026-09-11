@@ -2052,8 +2052,9 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          This is the page that appears when Amazon CSV files are selected for
-          import.
+          These settings appear once Amazon CSV files have been chosen for import. Producing the files
+          themselves is covered in <HelpLink to="/help/amazon-import">importing Amazon order
+            detail</HelpLink>.
         </p>
         <p>
           <strong>Category for the excluded charge.</strong> When the payment for an Amazon purchase is

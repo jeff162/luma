@@ -4957,9 +4957,14 @@ function AmazonImportTab({ initialFiles }) {
   return (
     <div style={{ maxWidth: 640 }}>
       <Card>
+        {/* The launcher follows the card's state, because the two states pose different questions: an
+            empty card is asking how to produce an AZAD export, a filled one how to fill in the form. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          <FeatureExplainer
+            topic={files.length === 0 ? 'amazon-import' : 'amazon-funding-sources'}
+            placement="bottom-left"
+          />
           <span style={{ fontWeight: 600, color: 'var(--text)' }}>Import Amazon orders</span>
-          <FeatureExplainer topic="amazon-import" />
         </div>
 
         {files.length === 0 ? (

@@ -1026,7 +1026,11 @@ paragraph belongs in the hub it hands off to, not in the tour: "how rules come i
   `<h1>`, the Group Imported Categories modal, the duplicate-report panel header) place the `?` left of
   their title the same way. A `?` that explains *one control* instead stays next to that control (the
   amount-convention picker, the Transactions search box, a Categories group's exclude-from-totals
-  toggle) — those are not page-level and do not move to the title.
+  toggle) — those are not page-level and do not move to the title. A surface that swaps its whole body
+  between states **swaps its topic with it**: the Amazon import card's `?` opens the AZAD export topic
+  while the drop zone is showing and the import-settings topic once files are chosen, since a launcher
+  that stays on the first state answers a question the reader already answered. The topic left behind
+  stays one click away by cross-link, not by leaving the wrong launcher in place.
 
 - **Context-triggered "explain this" (`ContextualExplainer`).** The counterpart for guidance that is only
   relevant when the app *recognizes a situation* — a two-stage affordance so it informs without nagging.
