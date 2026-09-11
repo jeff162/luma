@@ -20,9 +20,15 @@
  * Cross-linking between help topics: use `<HelpLink to="/help/...">` (not the
  * bare react-router `<Link>`) so the "Back to <page>" affordance survives hops
  * between topics; HelpLink forwards the original source path through state.
+ *
+ * A link whose text names a *heading* rather than a whole topic should address
+ * that heading -- `to="/help/<topic>#<anchor>"`, with the heading authored as
+ * `<HelpHeading anchor="...">` instead of a bare `<h4>` -- or the reader lands
+ * at the top of a long body with the promised part out of sight.
  */
 
 import HelpLink from './HelpLink.jsx'
+import HelpHeading from './HelpHeading.jsx'
 import { APP_NAME } from '../lib/appConfig.js'
 
 /*
@@ -200,13 +206,14 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'A tour of the app: what each section is for (Import/Export, accounts & owners, categories & groups, tags, rules, the dashboard) and the two ways rules come into being.',
+    summary: 'A tour of the app, in the order data moves through it: importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each handing off to its own topic.',
     body: () => (
       <>
-        <p>The major modules are:</p>
+        <p>The major modules, roughly in the order data moves through them:</p>
         <ol>
           <li>
-            <strong>Import/Export</strong> Load data, create backups and export data. Transactions come in
+            <strong><HelpLink to="/help/page-import-export">Import / Export</HelpLink>.</strong>{' '}
+            Load data, create backups and export data. Transactions come in
             via a CSV file or a connected data source. There is strong
             duplicate detection to deal with overlapping sources or overlapping imports from a single
             source. When the duplicate-detection code encounters a situation it is not sure how to resolve
@@ -216,7 +223,8 @@ export const HELP_TOPICS = [
             otherwise appear as a generic transaction.
           </li>
           <li>
-            <strong>Accounts and owners.</strong> Transactions arrive tagged with an account or are mapped to an account
+            <strong><HelpLink to="/help/page-accounts">Accounts and owners</HelpLink>.</strong>{' '}
+            Transactions arrive tagged with an account or are mapped to an account
             when they are imported.
             An account can matter on its own, a card used for a specific purpose, or as a way to attribute
             a transaction to an <em>owner</em> for reports and rules. It can be worth bringing in data from
@@ -230,7 +238,16 @@ export const HELP_TOPICS = [
             (<HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink>).
           </li>
           <li>
-            <strong>Categories and groups.</strong> Transactions can be assigned to categories, and categories
+            <strong><HelpLink to="/help/page-transactions">Transactions</HelpLink>.</strong>{' '}
+            The ledger itself, as a list: everything that has been
+            imported, with everything recorded about a transaction reachable from its row. New arrivals are
+            flagged for review, a set of rows can be worked through together, and this is also where the
+            things a single row cannot express are recorded -- a purchase split across several categories,
+            one purchase paid off in several payments, an expense that is owed back.
+          </li>
+          <li>
+            <strong><HelpLink to="/help/page-categories">Categories and groups</HelpLink>.</strong>{' '}
+            Transactions can be assigned to categories, and categories
             are collected into groups, mainly to drive reports and to select related transactions.
             The system contains a seed set of rules and categories which can be used if none are defined.
             <p>
@@ -249,48 +266,43 @@ export const HELP_TOPICS = [
             See <HelpLink to="/help/tags">how tags work</HelpLink>.
           </li>
           <li>
-            <strong>Rules.</strong> Rules have a set of criteria to select the set of
+            <strong><HelpLink to="/help/page-rules">Rules</HelpLink>.</strong>{' '}
+            Rules have a set of criteria to select the set of
             transactions they apply to and a set of actions to take when they apply. The
             actions include setting the merchant name, assigning a category or a tag and indicating
-            whether the transaction is part of a recurring series. More on this below but if categories are
+            whether the transaction is part of a recurring series. Few are written by hand &mdash;
+            see <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink> &mdash;
+            but if categories are
             important, this is how they are maintained on incoming data. Building up a set of rules can make
             the review process of new transactions fairly quick and painless.
           </li>
           <li>
-            <strong>The dashboard.</strong> Reports live here, and it doubles as a way to check
+            <strong><HelpLink to="/help/recurring-transactions">Recurring transactions</HelpLink>.</strong>{' '}
+            Charges that repeat on a schedule, such as
+            subscriptions, utilities and loan payments. Most are found by a scan for similar transactions
+            arriving on a fixed cadence; one the scan cannot see is declared through a rule. Once a series
+            is known, a charge that goes missing or changes amount raises an alert.
+          </li>
+          <li>
+            <strong><HelpLink to="/help/page-dashboard">The dashboard</HelpLink>.</strong>{' '}
+            Reports live here, and it doubles as a way to check
             the data -- drill into the largest groups, see the transactions behind them, fix
             anything misclassified.
           </li>
-        </ol>
-        <h4>How rules come into being</h4>
-        <p>
-          There are three main ways rules get created:
-        </p>
-        <ol>
           <li>
-            Importing data from another tool where the transactions have already been carefully categorized, indicate
-            when importing that the data is clean and the categories will be preserved and imported for use; the <strong>Generate
-              rules</strong> action studies these curated transactions and proposes rules that would
-            reproduce the same categorization on future, uncategorized data -- which get reviewed before
-            anything takes effect.
+            <strong><HelpLink to="/help/page-tasks">Tasks</HelpLink>.</strong>{' '}
+            A short list of things worth a look: transactions with no
+            category, duplicates awaiting a decision, reimbursements outstanding too long, a recurring
+            charge that did not arrive. Nothing there is an error, and nothing has to be dealt with in
+            order.
           </li>
           <li>
-            When a transaction is categorized, {APP_NAME} offers to
-            turn that action into a rule -- give it conditions and actions, apply it to other matching
-            transactions, and save it. From then on it runs automatically against newly imported data
-            (Categorizing imported data can be controlled when importing a file and there is
-            a <em>Categorize</em> button to trigger a pass on demand).
-          </li>
-          <li>
-            When a transaction is marked as part of a recurring series the way that happens is through the
-            Rules editor so the Rules editor is launched filled out with whatever information is available.
+            <strong><HelpLink to="/help/page-settings">Settings</HelpLink>.</strong>{' '}
+            Appearance and currency, the tag manager, sign-in
+            protection, the trash, and the configuration screen. Almost none of it has to be touched to
+            use the app.
           </li>
         </ol>
-        <p>
-          If starting fresh with no curated data, there is a small <strong>starter
-            set</strong> of common categories and rules that can be added via buttons on the Rules and Category pages.
-          Rules alter the data, so the starter rules are shown as a list for approval before adding.
-        </p>
       </>
     ),
   },
@@ -316,7 +328,7 @@ export const HELP_TOPICS = [
             transaction can become a rule that reproduces the same
             decision across every matching transaction and on future imports. Time spent
             refining a few good rules pays off more than re-touching individual rows. See{' '}
-            <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
+            <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink>.
           </li>
           <li>
             <strong>Editing happens where the data is shown.</strong> Wherever a thing is viewed it
@@ -1242,13 +1254,34 @@ export const HELP_TOPICS = [
           against newly imported data, which is what keeps categorization current without repeating
           the work.
         </p>
+        <HelpHeading anchor="how-rules-come-into-being">How rules come into being</HelpHeading>
         <p>
-          Rules are mostly made elsewhere. Categorizing a transaction offers to turn that decision
-          into a rule, an import of already-categorized data
-          can <HelpLink to="/help/generate-rules">generate rules from what it contains</HelpLink>, and
-          a starter set can be added here on a fresh install. Writing one from scratch is rarely the
-          easiest route.
+          There are three main ways rules get created:
         </p>
+        <ol>
+          <li>
+            Importing data from another tool where the transactions have already been carefully categorized, indicate
+            when importing that the data is clean and the categories will be preserved and imported for use;
+            the <strong><HelpLink to="/help/generate-rules">Generate rules</HelpLink></strong> action studies
+            these curated transactions and proposes rules that would reproduce the same categorization on
+            future, uncategorized data -- which get reviewed before anything takes effect.
+          </li>
+          <li>
+            When a transaction is categorized, {APP_NAME} offers to
+            turn that action into a rule -- give it conditions and actions, apply it to other matching
+            transactions, and save it. From then on it runs automatically against newly imported data.
+          </li>
+          <li>
+            When a transaction is marked as part of a recurring series the way that happens is through the
+            Rules editor so the Rules editor is launched filled out with whatever information is available.
+          </li>
+        </ol>
+        <p>
+          If starting fresh with no curated data, there is a small <strong>starter
+            set</strong> of common categories and rules that can be added via buttons on the Rules and Category pages.
+          Rules alter the data, so the starter rules are shown as a list for approval before adding.
+        </p>
+        <HelpHeading anchor="applying-rules">Applying rules, and checking them</HelpHeading>
         <p>
           <strong>Categorize</strong> re-applies every rule across the ledger, changing only rows that
           are not pinned, so work done by hand is left
@@ -1586,7 +1619,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           See also:{' '}
-          <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
+          <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink>.
         </p>
       </>
     ),
@@ -1824,7 +1857,7 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           See also:{' '}
-          <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink> and{' '}
+          <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink> and{' '}
           <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
         </p>
       </>

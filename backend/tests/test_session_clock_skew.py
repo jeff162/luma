@@ -71,9 +71,13 @@ class ClockSkewSignerTests(unittest.TestCase):
 
     def test_tampering_still_fails(self):
         """The parent's signature validation runs in full; only the two age comparisons are taken over."""
+        # The payload is what gets edited, not the signature's last character. A 20-byte HMAC is 27
+        # base64url characters and only 4 bits of the last one are significant, so 4 of the 64 possible
+        # characters decode to the same digest: a tail edit left the cookie valid on 5.8% of signing
+        # timestamps (measured), and since `self.now` moves every run, the test failed that often.
         cookie = self._signed_at(self.now)
         with self.assertRaises(itsdangerous.BadSignature):
-            self._unsign_at(cookie[:-1] + (b"x" if cookie[-1:] != b"x" else b"y"), self.now)
+            self._unsign_at(b"Payload" + cookie[len(b"payload"):], self.now)
 
     def test_a_different_secret_still_fails(self):
         cookie = ClockSkewTolerantSigner("another-secret").sign(b"payload")

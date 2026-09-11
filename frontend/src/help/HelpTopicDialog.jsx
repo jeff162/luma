@@ -1,19 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation } from 'react-router-dom'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
 import { HelpNavContext } from './helpNav.jsx'
 import { HELP_BODY_CSS } from './helpBody.js'
+import { scrollToHelpAnchor } from './helpAnchors.js'
 
 /*
  * In-place help viewer. Renders a topic's full body in a portal'd overlay above everything
  * (z-index past the floating-panel stack), so "Read more" from an inline explainer shows the
  * guidance *on top of* a floating dialog like the duplicate-detection report instead of
  * navigating the page hidden behind it. The user keeps their place; closing the overlay returns
- * to exactly what they were doing. Topic cross-links switch the dialog in place via HelpNavContext.
+ * to exactly what they were doing. Topic cross-links switch the dialog in place via HelpNavContext,
+ * scrolling to the heading they name when the link carries an anchor (helpAnchors.js).
  * The viewer already shows the full body, so its footer links to the /help *index* (a distinct, useful
  * destination) rather than this topic's own /help page, which would just repeat the same text.
  *
@@ -24,12 +26,24 @@ import { HELP_BODY_CSS } from './helpBody.js'
  * can open it inline.
  */
 export default function HelpTopicDialog({ topicId, onClose }) {
-  const [currentId, setCurrentId] = useState(topicId)
+  // Topic and anchor move together: a cross-link picks both at once, and the anchor must not outlive
+  // the topic it was chosen for (a later plain link would otherwise inherit the previous jump).
+  const [current, setCurrent] = useState({ id: topicId, anchor: null })
   const location = useLocation()
   // Where the viewer was opened from (the route behind the overlay), so the Help index can offer a
   // "Return to <page>" link back. /help origins are ignored by the Help page's own guard.
   const fromPath = `${location.pathname}${location.search}${location.hash}`
-  useEffect(() => { setCurrentId(topicId) }, [topicId])
+  useEffect(() => { setCurrent({ id: topicId, anchor: null }) }, [topicId])
+
+  // The overlay is the scroll container and survives an in-place topic switch, so each new body
+  // starts at its own top unless the link asked for a heading inside it.
+  const overlayRef = useRef(null)
+  const bodyRef = useRef(null)
+  useLayoutEffect(() => {
+    const cleanup = current.anchor ? scrollToHelpAnchor(bodyRef.current, current.anchor) : null
+    if (!cleanup && overlayRef.current) overlayRef.current.scrollTop = 0
+    return cleanup ?? undefined
+  }, [current])
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -41,12 +55,13 @@ export default function HelpTopicDialog({ topicId, onClose }) {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [onClose])
 
-  const entry = HELP_TOPICS_BY_ID[currentId]
+  const entry = HELP_TOPICS_BY_ID[current.id]
   if (!entry) return null
   const Body = entry.body
 
   return createPortal(
     <div
+      ref={overlayRef}
       data-modal-overlay
       onMouseDown={onClose}
       style={{
@@ -86,8 +101,8 @@ export default function HelpTopicDialog({ topicId, onClose }) {
             }}
           >&times;</button>
         </div>
-        <HelpNavContext.Provider value={{ navigate: setCurrentId }}>
-          <div className="help-body"><Body /></div>
+        <HelpNavContext.Provider value={{ navigate: (id, anchor = null) => setCurrent({ id, anchor }) }}>
+          <div className="help-body" ref={bodyRef}><Body /></div>
         </HelpNavContext.Provider>
         <div style={{ marginTop: 16, textAlign: 'right' }}>
           <Link

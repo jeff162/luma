@@ -6,8 +6,10 @@ import { createContext, useContext } from 'react'
 /*
  * When a topic body is rendered inside the in-place help viewer dialog (rather than on the
  * standalone /help route), its `<HelpLink>` cross-links should switch the dialog's topic in
- * place instead of routing the page behind it. The viewer provides a `navigate(topicId)` fn
- * here; outside the viewer this context is null and HelpLink falls back to normal routing.
+ * place instead of routing the page behind it. The viewer provides a `navigate(topicId, anchor)` fn
+ * here (`anchor` optional -- a heading within the destination to scroll to, since the viewer never
+ * routes and so never sees a URL hash); outside the viewer this context is null and HelpLink falls
+ * back to normal routing.
  *
  * Kept in its own tiny module (no other imports) so HelpLink and the viewer can both depend on
  * it without an import cycle through the content registry.

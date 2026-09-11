@@ -3,6 +3,7 @@
 
 import { Link, useLocation } from 'react-router-dom'
 import { useHelpNav } from './helpNav.jsx'
+import { parseHelpTarget } from './helpAnchors.js'
 
 /*
  * Cross-link between help topics. Behaves two ways depending on where the topic body is rendered:
@@ -13,6 +14,10 @@ import { useHelpNav } from './helpNav.jsx'
  *  - On the standalone /help route (no context), it routes like a normal link and forwards the
  *    original "Back to <page>" source path so the back affordance survives multiple hops.
  *
+ * `to` may address a heading within the destination (`/help/<topic>#<anchor>`, see helpAnchors.js).
+ * The routing branch needs no help with that -- the hash rides along in the URL and the Help page
+ * reads it -- but the viewer never routes, so the anchor is handed to it as a second argument.
+ *
  * Use this for any internal link inside a topic body in content.jsx.
  */
 export default function HelpLink({ to, children, ...rest }) {
@@ -20,12 +25,11 @@ export default function HelpLink({ to, children, ...rest }) {
   const location = useLocation()
 
   if (helpNav) {
-    const topicId = String(to).replace(/^\/help\//, '')
+    const { topicId, anchor } = parseHelpTarget(to)
     return (
       <a
         href={to}
-        onClick={event => { event.preventDefault(); helpNav.navigate(topicId) }}
-        style={{ color: 'var(--accent2)', cursor: 'pointer' }}
+        onClick={event => { event.preventDefault(); helpNav.navigate(topicId, anchor) }}
         {...rest}
       >
         {children}

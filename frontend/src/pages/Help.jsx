@@ -7,6 +7,7 @@ import { Card, PageHeader, Toggle } from '../components/ui.jsx'
 import { HELP_TOPICS, HELP_TOPICS_BY_ID, HELP_SECTIONS } from '../help/content.jsx'
 import { labelForPath } from '../help/navigation.js'
 import { HELP_BODY_CSS } from '../help/helpBody.js'
+import { scrollToHelpAnchor } from '../help/helpAnchors.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { APP_NAME } from '../lib/appConfig.js'
 import { HELP_HINTS_ENABLED_PREF_KEY, HELP_DISMISSED_TIPS_PREF_KEY } from '../help/preferences.js'
@@ -50,7 +51,7 @@ export default function Help() {
   const returnTo = location.state?.returnTo
   const [highlightId, setHighlightId] = useState(null)
   // The index and topic views share one persistent scroll container, so its scrollTop carries over
-  // between them. Reset to the top whenever a topic is shown (and on topic→topic cross-links).
+  // between them — hence the positioning effect below.
   const scrollRef = useRef(null)
   // The sticky topic index overlaps the top of the scroll area, so section headings jumped to via the
   // pills must clear it. Measure its live height (it changes as the pills rewrap on resize) and offset
@@ -66,9 +67,16 @@ export default function Help() {
     observer.observe(el)
     return () => observer.disconnect()
   }, [entry])
+  // Where a topic opens: at its own top (including on topic→topic cross-links) unless the link named a
+  // heading inside it, in which case that heading is what the reader was promised. An anchor that no
+  // longer resolves falls back to the top.
+  const anchor = location.hash ? location.hash.slice(1) : null
   useLayoutEffect(() => {
-    if (entry && scrollRef.current) scrollRef.current.scrollTop = 0
-  }, [entry, topic])
+    if (!entry || !scrollRef.current) return undefined
+    const cleanup = anchor ? scrollToHelpAnchor(scrollRef.current, anchor) : null
+    if (!cleanup) scrollRef.current.scrollTop = 0
+    return cleanup ?? undefined
+  }, [entry, topic, anchor])
   useLayoutEffect(() => {
     if (entry || !returnTo) return
     const el = document.getElementById(`help-topic-${returnTo}`)

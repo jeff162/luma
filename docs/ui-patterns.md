@@ -970,6 +970,14 @@ Feature guidance is authored once in a single content registry (`frontend/src/he
 and the in-context tip can never drift in copy. Each topic is `{ id, title, surfaces, summary, body }`:
 a one-line `summary` sized for a popover and a longer `body` for the `/help` page.
 
+The getting-started tour (`parts-of-luma`) is the one topic organized around the app rather than a
+subject: one item per nav surface, in the order data moves through them, each item a paragraph of "what
+this is for" whose bold lead-in **links to that page's `page-*` hub topic** and leaves the depth there.
+So a new page needs a tour item as well as a hub — guarded in `content.test.jsx`, since a tour that
+quietly stops covering the app is invisible from the inside. Conversely, guidance that outgrows a
+paragraph belongs in the hub it hands off to, not in the tour: "how rules come into being" lives under
+`page-rules` (where it replaced a thinner restatement of itself) and is reached from the tour by anchor.
+
 - **Standalone Help (`/help`, `/help/:topic`).** `pages/Help.jsx` renders the topic index and each
   full body. A reached-from path is carried in `Link` `state.from` and surfaced as a `Return to <page>`
   link on both the index and a topic page; `HelpLink` (not a bare `<Link>`) and the index/topic links
@@ -984,10 +992,27 @@ a one-line `summary` sized for a popover and a longer `body` for the `/help` pag
   duplicate-detection report) show its full guidance on top of that panel instead of behind it — the
   user keeps their place and closing the overlay returns them to exactly what they were doing. Inside
   the viewer, `HelpLink` cross-links switch the dialog's topic in place (via `HelpNavContext`) instead
-  of routing. The viewer already shows the full body, so its footer links to the `/help` *index* (a
+  of routing, and the overlay — which is the scroll container and outlives the switch — starts each new
+  body at its own top. The viewer already shows the full body, so its footer links to the `/help` *index* (a
   distinct destination, not a repeat of the same text) and stamps the page behind the overlay as
   `state.from` so the index offers a `Return to <page>` link back. The overlay carries
   `data-modal-overlay` so a panel underneath yields Escape to it.
+
+- **A cross-link may address a heading, not just a topic.** Several links name a part of a topic ("how
+  rules come into being", two thirds of the way down "The parts of Luma"), and landing at the top of a
+  long body hides the thing the link promised. Those links are written
+  `to="/help/<topic>#<anchor>"` and the heading is authored as `<HelpHeading anchor="...">` rather than
+  a bare `<h4>` (`help/HelpHeading.jsx`, mechanism in `help/helpAnchors.js`). Both render targets
+  resolve it: the `/help` route reads `location.hash` in place of its reset-to-top, and the in-place
+  viewer — which never routes, so never sees a hash — takes the anchor as a second argument to
+  `HelpNavContext`'s `navigate(topicId, anchor)`. Two constraints shape the mechanism. An anchor is a
+  **`data-help-anchor` attribute found by a query scoped to the element that rendered the body**, never
+  a document-wide `id`: the viewer opens *over* the page behind it, which may be the same topic's
+  `/help` page, so with two copies of one body mounted a document lookup would scroll whichever came
+  first. And a **missing anchor falls back to the top** rather than erroring, so a renamed heading
+  degrades to the old behavior — which is silent, and therefore guarded in `content.test.jsx`
+  (every anchored link must resolve in its destination body; anchors must be unique and
+  lowercase-hyphenated within a body).
 
 - **Always-present `?` (`FeatureExplainer`).** A small `?` button next to a stable feature surface that
   opens the topic's `summary` plus a "Read more" link to `/help/:id`. Use it where the surface is always
