@@ -250,6 +250,19 @@ Groups also carry important reporting behavior:
 
 `Unassigned` exists to keep imported categories usable immediately without forcing the user to stop and redesign their reporting tree during import. Protecting the group keeps that temporary landing zone predictable for imports, undo, and later cleanup.
 
+**Two further groups are protected, and carry a `system_key` rather than being found by name:** the
+seeded, excluded **`Transfers`** — where the app files money movement of its own (the Amazon importer's
+matched card charge, wallet funding-leg suppression) — and **`Reimbursable`**, which holds money owed
+back. The key is their durable identity: each is resolved by key *before* name, so a rename cannot lose
+one, and neither can be deleted or moved inside another group. Every lookup requires `parent_id IS NULL`,
+so an absent or reparented group makes the next write build a **second** one while the existing leaves
+stay behind. Before `Transfers` was keyed (v53 stamps it; the name lookup that follows the key is what
+adopts a group predating it) a rename did exactly that, and silently — both groups are excluded, so no
+total ever looked wrong while the money-movement leaves and their history split in two. The two differ in one
+respect: `Transfers`' `exclude_from_totals` **is** the user's to clear, because filing money movement
+there is a reporting convention that nothing computes against, whereas `Reimbursable`'s is locked
+(see [Reimbursable expenses](#reimbursable-expenses)).
+
 **Seeding model — what a fresh database starts with.** Creating the data database seeds only the **group skeleton**: the top-level reporting groups (with their `category_type` / `exclude_from_totals`) plus the protected `Unassigned` group. It seeds **no leaf categories and no rules**. The built-in starter *leaves* and *rules* are opt-in — added on demand through `POST /categories/generate-starter` (the onboarding "Add starter categories" / "Add starter rules" steps and the equivalent Categories- and Rules-page actions) and seeded directly by the demo dataset. That endpoint is idempotent (it updates/inserts leaves by name and skips existing rule matchers), so the set can be grown later without duplicating anything.
 
 The reason groups ship but leaves and rules do not: a user bringing their own categories should not have our taxonomy — and especially not our *data-mutating* rules — imposed on them, yet the import "Group Imported Categories" workspace still needs visible buckets to drop imported labels into, and the small, easily-deleted group skeleton supplies them. Because the built-in rules target leaves by name, withholding the leaves also withholds the rules, so a bring-your-own install has zero starter rules touching its data until it explicitly asks for them. (The leaf seed is kept consistent with its own legacy renames — e.g. the canonical medical leaf is `Medical Services`, never a `Medical` leaf that would collide with the `Medical` group — so re-running the opt-in seed is a no-op rather than a source of forked duplicates.)

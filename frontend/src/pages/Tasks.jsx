@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Spinner } from '../components/ui.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 
 /*
@@ -225,7 +226,7 @@ export default function Tasks() {
           moment either was centred. */}
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <div style={{ maxWidth: TASK_COLUMN }}>
-          <PageHeader title="Tasks" />
+          <PageHeader title="Tasks" help={<FeatureExplainer topic="page-tasks" placement="bottom-left" />} />
         </div>
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>

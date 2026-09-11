@@ -3086,7 +3086,7 @@ export default function Settings() {
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 28px 0', flexShrink: 0 }}>
         <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
-          <PageHeader title="Settings" />
+          <PageHeader title="Settings" help={<FeatureExplainer topic="page-settings" placement="bottom-left" />} />
         </div>
       </div>
 

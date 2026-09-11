@@ -17,14 +17,18 @@ transactions to it. So a missing group is **recreated** rather than degraded to 
 rule is the reason this is one shared helper rather than a copy per feature: it is subtle, it is silent
 when broken, and a second hand-written copy is where it would drift.
 
-A leaf created here also carries ``exclude_from_totals = 1`` in its own right, so it stays out of
-totals even if the parent group is later changed.
+A leaf created here also carries ``exclude_from_totals = 1`` in its own right. That is a fallback for
+the parentless case above, not a second opinion: exclusion resolves as ``COALESCE(parent, leaf, 0)`` over
+a NOT NULL column, so a leaf that *has* a parent always takes the group's answer and cannot opt itself
+back into totals (``routers/categories.py`` says the same from the other end). Turning the exclusion off
+on the group is therefore what brings its leaves back into totals, and is the intended control.
 
-**The two groups are identified differently, deliberately.** ``Transfers`` is found by name.
-``Reimbursable`` carries a ``system_key`` as well, because its feature has to keep working after the
-user renames the group, and because the empty-category sweep spares only system rows — a receivable
-category is empty exactly when nothing is outstanding, which is its healthy state rather than a sign
-that it is unused.
+**Both groups carry a ``system_key``**, which is their durable identity: the app has to keep finding
+them after a rename, and neither can be deleted. Lookup tries the key first and falls back to the name,
+which is what adopts a group that predates its key — one seeded before the key existed, or one the user
+built by hand under the same name. The key also spares ``Reimbursable`` from the empty-category sweep,
+which skips system rows: a receivable category is empty exactly when nothing is outstanding, which is
+its healthy state rather than a sign that it is unused.
 
 **Only ``Transfers`` gets leaves from here.** Its two are named by the app because the app is what puts
 rows in them. The reimbursable group's leaves are the user's own, named for what the money is rather
@@ -37,7 +41,16 @@ import sqlite3
 import uuid
 from typing import Optional
 
+# The money-movement holding group. Keyed for the same reason ``Reimbursable`` is: the Amazon importer
+# and wallet funding-leg suppression both write leaves into it, and a lookup by name alone would miss a
+# renamed group and silently build a *second* "Transfers" beside it — both excluded, so totals stay
+# right while the leaves and their history split across two groups with nothing visibly wrong.
+#
+# Unlike ``Reimbursable``, its exclusion **is** the user's to turn off. The group is a convention about
+# where money movement is filed rather than a mechanism anything computes against, so counting it is a
+# coherent view; what is locked is only deleting it or moving it inside another group.
 TRANSFERS_GROUP = "Transfers"
+TRANSFERS_SYSTEM_KEY = "transfers"
 
 # The reimbursable-expenses holding group. The key is the durable identity — see the module docstring —
 # and the name is only what it is called today.
@@ -107,7 +120,18 @@ def _ensure_leaf(
 
 def ensure_excluded_transfers_leaf(conn: sqlite3.Connection, leaf_name: str) -> str:
     """An excluded leaf under the ``Transfers`` group — the Amazon charge and money-movement path."""
-    return _ensure_leaf(conn, leaf_name, group_name=TRANSFERS_GROUP)
+    return _ensure_leaf(
+        conn, leaf_name, group_name=TRANSFERS_GROUP, group_system_key=TRANSFERS_SYSTEM_KEY
+    )
+
+
+def find_transfers_group_id(conn: sqlite3.Connection) -> Optional[str]:
+    """The money-movement group's id, or None — the **read** path, which must not create anything.
+
+    Shares ``_find_group_id`` with the write path so both survive a rename identically; a reader that
+    matched on the name alone would start reporting "not set up" the moment the group was renamed.
+    """
+    return _find_group_id(conn, TRANSFERS_GROUP, TRANSFERS_SYSTEM_KEY)
 
 
 def find_reimbursable_group_id(conn: sqlite3.Connection) -> Optional[str]:

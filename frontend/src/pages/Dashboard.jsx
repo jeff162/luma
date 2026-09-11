@@ -2603,7 +2603,7 @@ export default function Dashboard() {
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader
           title="Dashboard"
-          help={<FeatureExplainer topic="how-luma-works" placement="bottom-left" />}
+          help={<FeatureExplainer topic="page-dashboard" placement="bottom-left" />}
           titleAdornment={(
             <DashboardDefaultPeriodGear
               pref={defaultPeriodPref}

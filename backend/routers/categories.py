@@ -17,7 +17,7 @@ from backend.db.database import get_db, _seed_default_categories
 from backend.services.categorizer import DEFAULT_RULE_SEEDS, seed_default_rules
 from backend.json_utils import safe_json_dict
 from backend.services.txn_splits import txn_effective_sql
-from backend.services.excluded_categories import REIMBURSABLE_SYSTEM_KEY
+from backend.services.excluded_categories import REIMBURSABLE_SYSTEM_KEY, TRANSFERS_SYSTEM_KEY
 
 router = APIRouter()
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
@@ -35,6 +35,17 @@ UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
 REIMBURSABLE_GROUP_LOCKED = (
     "The Reimbursable group is used to hold money owed back, so it cannot be %s. "
     "The categories inside it can be renamed, removed or added to freely."
+)
+
+# `Transfers` is guarded more lightly than `Reimbursable`, and the difference is deliberate. The Amazon
+# importer and wallet funding-leg suppression create leaves under it, so the group has to stay findable
+# and has to stay a group — deleting it or moving it inside another group both end with the next import
+# building a second one beside the first. But its exclusion is a *reporting* choice rather than
+# machinery: nothing computes against it, so counting money movement toward totals is a view the user is
+# entitled to, and that checkbox stays open.
+TRANSFERS_GROUP_LOCKED = (
+    "The Transfers group holds the money-movement categories imports file into, so it cannot be %s. "
+    "It can be renamed, and its exclusion from totals can be turned off."
 )
 
 
@@ -557,6 +568,8 @@ def delete_category_preview(category_id: str):
             raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
         if cat["system_key"] == REIMBURSABLE_SYSTEM_KEY:
             raise HTTPException(status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "deleted")
+        if cat["system_key"] == TRANSFERS_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail=TRANSFERS_GROUP_LOCKED % "deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         impact = _collect_delete_impact(conn, affected_ids)
     return {
@@ -579,6 +592,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
             raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
         if cat["system_key"] == REIMBURSABLE_SYSTEM_KEY:
             raise HTTPException(status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "deleted")
+        if cat["system_key"] == TRANSFERS_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail=TRANSFERS_GROUP_LOCKED % "deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         placeholders = ",".join("?" for _ in affected_ids)
         replacement_category_id = body.replacement_category_id if body else None
@@ -902,6 +917,13 @@ def update_category(category_id: str, body: CategoryUpdate):
                 raise HTTPException(
                     status_code=400, detail=REIMBURSABLE_GROUP_LOCKED % "moved inside another group"
                 )
+        if cat["system_key"] == TRANSFERS_SYSTEM_KEY and body.parent_id is not None:
+            # Reparenting has the same consequence here as it does above: every lookup requires
+            # `parent_id IS NULL`, so the next import creates a second Transfers group while the
+            # existing money-movement leaves stay under the moved row. The exclusion is not guarded.
+            raise HTTPException(
+                status_code=400, detail=TRANSFERS_GROUP_LOCKED % "moved inside another group"
+            )
         # Kind for the uniqueness check is the row's kind *after* this edit: a rename keeps the
         # existing kind, while a parent_id change can move a row between leaf and group.
         resulting_parent_id = body.parent_id if body.parent_id is not None else cat["parent_id"]

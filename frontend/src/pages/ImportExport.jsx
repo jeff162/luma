@@ -5112,7 +5112,7 @@ function AmazonImportTab({ initialFiles }) {
               <strong style={{ color: 'var(--text)' }}>{c.items_discarded} order{c.items_discarded === 1 ? '' : 's'} of item detail had no matching order</strong>
               <div style={{ color: 'var(--muted)' }}>
                 These came from an items file whose orders file hasn’t been imported, so there was nothing to
-                attach them to. Import the matching orders file, then re-import the items file to add their detail.
+                attach them to. The detail is saved; importing the matching orders file attaches it automatically.
               </div>
             </div>
           ) : null}
@@ -5211,7 +5211,7 @@ export default function ImportExport() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Import / Export" />
+        <PageHeader title="Import / Export" help={<FeatureExplainer topic="page-import-export" placement="bottom-left" />} />
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>

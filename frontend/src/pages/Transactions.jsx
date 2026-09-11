@@ -895,7 +895,7 @@ export default function Transactions() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
-        <PageHeader title="Transactions">
+        <PageHeader title="Transactions" help={<FeatureExplainer topic="page-transactions" placement="bottom-left" />}>
 
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
               live; it lists only what is still open, so it empties as things are completed. */}

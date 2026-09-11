@@ -7,6 +7,7 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { createPortal } from 'react-dom'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary, RulePreviewDetail } from '../components/RuleForm.jsx'
@@ -826,7 +827,7 @@ export default function Rules() {
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
 
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Rules">
+        <PageHeader title="Rules" help={<FeatureExplainer topic="page-rules" placement="bottom-left" />}>
           <RecategorizeButton
             pendingCount={recategorizePendingCount}
             onRun={async () => { await runRecategorize(); loadRules() }}

@@ -1797,7 +1797,7 @@ export default function Categories() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
-      <PageHeader title="Categories">
+      <PageHeader title="Categories" help={<FeatureExplainer topic="page-categories" placement="bottom-left" />}>
         {/* Empty-state-only offer: a one-time head start, shown only while the tree has no leaf
             categories. Once any leaf exists (starter set added, imported, or hand-made) it's gone, and
             deleting one category won't bring it back while others remain. */}

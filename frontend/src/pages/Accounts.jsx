@@ -4285,7 +4285,7 @@ export default function Accounts() {
             maxWidth: '100%',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <FeatureExplainer topic="merging-accounts" placement="bottom-left" />
+              <FeatureExplainer topic="page-accounts" placement="bottom-left" />
               <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
             </div>
           </div>

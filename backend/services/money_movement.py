@@ -39,7 +39,7 @@ from typing import Optional
 
 from backend.services import txn_links
 from backend.services.account_groups import effective_account_ids
-from backend.services.excluded_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
+from backend.services.excluded_categories import ensure_excluded_transfers_leaf, find_transfers_group_id
 
 LINK_KIND = "wallet_funding"
 MONEY_MOVEMENT_CATEGORY = "Money movement"
@@ -157,14 +157,13 @@ def ensure_paypal_account_type(conn: sqlite3.Connection, account_ids: list[str])
 def money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:
     """The Money movement leaf id if it has been created (read-only — never creates it), else None. Looks
     only under the ``Transfers`` group, mirroring where ``ensure_excluded_transfers_leaf`` creates it, so a
-    missing group means the leaf can't exist yet."""
-    transfers = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id IS NULL", (TRANSFERS_GROUP,)
-    ).fetchone()
-    if not transfers:
+    missing group means the leaf can't exist yet. The group is resolved through the shared finder rather
+    than by name, so a renamed group is still found."""
+    transfers_id = find_transfers_group_id(conn)
+    if not transfers_id:
         return None
     row = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id = ?", (MONEY_MOVEMENT_CATEGORY, transfers["id"])
+        "SELECT id FROM category WHERE name = ? AND parent_id = ?", (MONEY_MOVEMENT_CATEGORY, transfers_id)
     ).fetchone()
     return row["id"] if row else None
 

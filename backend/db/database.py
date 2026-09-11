@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 52
+CURRENT_VERSION = 53
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1366,6 +1366,35 @@ def _a_movement_no_longer_asks_permission(conn):
     # there is no offer left to decline and nothing the table can mean. It exists only on databases that
     # ran an unreleased v51, hence IF EXISTS.
     conn.execute("DROP TABLE IF EXISTS transfer_movement_declined")
+
+
+@migration(53)
+def _transfers_group_gets_a_durable_identity(conn):
+    # `Transfers` was found by name, so renaming it left the Amazon importer and wallet funding-leg
+    # suppression unable to see it: the next import built a *second* "Transfers" group and filed new
+    # money-movement leaves there, while the renamed group kept the old ones. Both stayed excluded, so
+    # totals never looked wrong — the leaves and their history just quietly split in two. The key is the
+    # fix (see `services/excluded_categories.py`), and it also makes the group undeletable, matching
+    # `Reimbursable`.
+    #
+    # Stamped by name because that is what the group is still identified by on an existing database, and
+    # only where nothing is keyed yet, so a tree that somehow already carries one is left alone. A user
+    # who renamed the group before this ran has no row to match: they keep whatever groups they have, and
+    # the first write after this creates a keyed `Transfers` for the app to use from then on — the same
+    # outcome as before this migration, minus the further splitting.
+    # Guarded on the table and the column existing: the isolated per-migration unit tests hand-build
+    # minimal schemas and then run the whole chain, so a migration that assumes the full schema fails
+    # there rather than in anything a real database would hit.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "category" not in tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(category)")}
+    if "system_key" not in columns:
+        return
+    conn.execute(
+        """UPDATE category SET system_key = 'transfers'
+           WHERE name = 'Transfers' AND parent_id IS NULL AND system_key IS NULL"""
+    )
 
 
 def get_db_version(conn) -> int:
@@ -2620,7 +2649,12 @@ def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool =
     # for them either.
     import uuid
 
-    from backend.services.excluded_categories import REIMBURSABLE_GROUP, REIMBURSABLE_SYSTEM_KEY
+    from backend.services.excluded_categories import (
+        REIMBURSABLE_GROUP,
+        REIMBURSABLE_SYSTEM_KEY,
+        TRANSFERS_GROUP,
+        TRANSFERS_SYSTEM_KEY,
+    )
 
     category_columns = {
         row["name"]
@@ -2709,7 +2743,18 @@ def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool =
     transport     = upsert_cat("Auto & Transportation", category_type="expense")
     travel        = upsert_cat("Vacation & Travel", category_type="expense")
     utilities     = upsert_cat("Utilities", category_type="expense")
-    transfers     = upsert_cat("Transfers", category_type="expense", exclude_from_totals=1)
+    # Keyed like the reimbursable group, and stamped the same way for the same reason: adoption. Without
+    # it, upsert_cat matches a keyed group by key alone and would build a *second* top-level "Transfers"
+    # beside the one already holding the user's money-movement leaves.
+    if has_system_key:
+        conn.execute(
+            """UPDATE category SET system_key = ?
+               WHERE name = ? AND parent_id IS NULL AND system_key IS NULL""",
+            (TRANSFERS_SYSTEM_KEY, TRANSFERS_GROUP),
+        )
+    transfers     = upsert_cat(
+        TRANSFERS_GROUP, category_type="expense", exclude_from_totals=1, system_key=TRANSFERS_SYSTEM_KEY
+    )
     # The reimbursable-expenses holding group. Seeded for everyone, like the other top-level reporting
     # groups; its leaves are created on first use (services/excluded_categories.py), so someone who
     # never records a reimbursable is left with one empty group and no stray category.
