@@ -18,4 +18,15 @@ export const HELP_BODY_CSS = `
      targets: nothing else styles anchors app-wide, so a routed <Link> would otherwise fall back to the
      browser's default blue-and-visited-purple while the same link in the viewer drew in the accent. */
   .help-body a { color: var(--accent2); }
+  /* Index tables (the parts-of-the-app tour). The first column is the thing being named, so it does not
+     wrap; the wrapper is what keeps a narrow window scrolling the table instead of the page. */
+  .help-body .help-table-scroll { overflow-x: auto; margin: 0 0 12px; }
+  .help-body table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .help-body th {
+    text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
+    padding: 0 14px 6px 0; border-bottom: 1px solid var(--border);
+  }
+  .help-body td { padding: 9px 14px 9px 0; vertical-align: top; border-bottom: 1px solid var(--border); }
+  .help-body td:first-child { white-space: nowrap; font-weight: 600; }
+  .help-body tr:last-child td { border-bottom: 0; padding-bottom: 0; }
 ${HELP_ANCHOR_CSS}`

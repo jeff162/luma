@@ -25,6 +25,14 @@
  * that heading -- `to="/help/<topic>#<anchor>"`, with the heading authored as
  * `<HelpHeading anchor="...">` instead of a bare `<h4>` -- or the reader lands
  * at the top of a long body with the promised part out of sight.
+ *
+ * Whitespace here is JSX's, not HTML's: a text run that *starts* on a new line has
+ * its leading newline stripped, so `</strong>` (or `)`) followed by a line break
+ * and then a word renders with no space between them. Breaking a line right after
+ * an element therefore needs an explicit `{' '}`. Interior newlines inside one run
+ * of text are fine -- they collapse to a single space. The failure is invisible in
+ * the source and only shows in the rendered body, so check the output rather than
+ * the JSX when a paragraph is reflowed.
  */
 
 import HelpLink from './HelpLink.jsx'
@@ -42,7 +50,7 @@ import { APP_NAME } from '../lib/appConfig.js'
  * How the sections are chosen: most mirror a page in the left nav, in nav order, and lead with that
  * page's `page-*` hub topic -- the one its title's `?` opens, which also collects the page's related
  * topics as links. The rest are subjects that outgrew a single page and stand on their own
- * ("Duplicates & reconciliation", "Access & data safety"), because a topic does **not** have to sit
+ * ("Duplicates & reconciliation", "General concepts"), because a topic does **not** have to sit
  * under the hub of the page it is reached from: a topic carries one `section` but several
  * `surfaces`, so it is filed by *subject* and the other pages' hubs link across to it. Ordering
  * within a section is deliberate rather than the order topics were written -- hub first, then the
@@ -106,9 +114,9 @@ export const HELP_SECTIONS = [
     blurb: 'The one page of preferences, and what each section of it covers.',
   },
   {
-    key: 'access-safety',
-    label: 'Access & data safety',
-    blurb: 'What sign-in protection and two-factor guard, and what stays on the machine: the ledger on disk, and backups.',
+    key: 'general-concepts',
+    label: 'General concepts',
+    blurb: `What holds for the whole ledger rather than one page: the single currency, where the data lives and how it is backed up, and who can reach it.`,
   },
 ]
 
@@ -133,10 +141,29 @@ export const HELP_TOPICS = [
             used</HelpLink>.
         </p>
         <p>
-          All of the data remains local unless you move it somewhere else; {APP_NAME} never makes an outgoing
-          connection unless specifically requested (e.g. downloading
-          transactions from a data provider, storing a backup on a cloud service).
+          A few things hold for the whole ledger rather than for any one page:
         </p>
+        <ul>
+          <li>
+            All of the data remains local unless it is moved somewhere else; {APP_NAME} never makes an
+            outgoing connection unless specifically requested (e.g. downloading transactions from a data
+            provider, storing a backup on a cloud service). Where the data sits and how to keep a copy of
+            it are covered in <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+          </li>
+          <li>
+            Amounts are all in one currency, chosen once for the whole ledger &mdash;
+            see <HelpLink to="/help/single-currency">single-currency support</HelpLink>.
+          </li>
+          <li>
+            Reaching the app over a network can be gated by a password, with an optional code at
+            sign-in. See <HelpLink to="/help/account-security">account security</HelpLink>.
+          </li>
+          <li>
+            Every setting has a working default; the handful that have to be known before the app starts
+            (ports, where the database files live) come from a file beside it. See{' '}
+            <HelpLink to="/help/configuration">configuration settings</HelpLink>.
+          </li>
+        </ul>
         <p>
           To get started:
         </p>
@@ -206,103 +233,72 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'A tour of the app, in the order data moves through it: importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each handing off to its own topic.',
+    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each saying what it is for and handing off to its own topic.',
     body: () => (
       <><p>*Needs review*</p>
-        <p>The major modules, roughly in the order data moves through them:</p>
-        <ol>
-          <li>
-            <strong><HelpLink to="/help/page-import-export">Import / Export</HelpLink>.</strong>{' '}
-            Load data, create backups and export data. Transactions come in
-            via a CSV file or a connected data source. There is strong
-            duplicate detection to deal with overlapping sources or overlapping imports from a single
-            source. When the duplicate-detection code encounters a situation it is not sure how to resolve
-            it surfaces the conflict(s) in a report launched
-            from the file card for the import (on the Import/Export main page). Detailed purchase data from sources
-            such as Amazon can also be imported in a CSV format to provide additional detail for transactions which
-            otherwise appear as a generic transaction.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-accounts">Accounts and owners</HelpLink>.</strong>{' '}
-            Transactions arrive tagged with an account or are mapped to an account
-            when they are imported.
-            An account can matter on its own, a card used for a specific purpose, or as a way to attribute
-            a transaction to an <em>owner</em> for reports and rules. It can be worth bringing in data from
-            the individual spending sources &mdash; credit cards, P2P, loan accounts &mdash; since they
-            carry the richest per-merchant detail. The alternative is that the credit card purchases will be
-            represented by the monthly credit-card payment in the ledger. If the detail
-            is not interesting, there is no need to use more than the bank account. If the transactions from
-            the actual spending account are imported then to avoid double counting, the <strong>Category </strong>
-            which <em>Credit card payment</em>s are assigned to should be a member of a group such
-            as <em>Transfers</em> which is marked <strong>Exclude from totals</strong> {' '}
-            (<HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink>).
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-transactions">Transactions</HelpLink>.</strong>{' '}
-            The ledger itself, as a list: everything that has been
-            imported, with everything recorded about a transaction reachable from its row. New arrivals are
-            flagged for review, a set of rows can be worked through together, and this is also where the
-            things a single row cannot express are recorded -- a purchase split across several categories,
-            one purchase paid off in several payments, an expense that is owed back.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-categories">Categories and groups</HelpLink>.</strong>{' '}
-            Transactions can be assigned to categories, and categories
-            are collected into groups, mainly to drive reports and to select related transactions.
-            The system contains a seed set of rules and categories which can be used if none are defined.
-            <p>
-              Some groups also carry behavior that is useful even when categories are not being used for
-              reporting. A group marked <HelpLink to="/help/exclude-from-totals">Exclude from
-                totals</HelpLink> keeps money movement such as credit-card payments and transfers out of
-              the spending and income figures, and
-              the <HelpLink to="/help/reimbursable-expenses">Reimbursable</HelpLink> group tracks money
-              that is expected to be paid back. Both ship with the exclusion already set.
-            </p>
-          </li>
-          <li>
-            <strong>Tags.</strong> Tags are used to create spending reports that are not otherwise
-            available on the dashboard. These are labels used to identify transactions belonging to some
-            interesting group that is not captured by something else in the application.
-            See <HelpLink to="/help/tags">how tags work</HelpLink>.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-rules">Rules</HelpLink>.</strong>{' '}
-            Rules have a set of criteria to select the set of
-            transactions they apply to and a set of actions to take when they apply. The
-            actions include setting the merchant name, assigning a category or a tag and indicating
-            whether the transaction is part of a recurring series. Few are written by hand &mdash;
-            see <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink> &mdash;
-            but if categories are
-            important, this is how they are maintained on incoming data. Building up a set of rules can make
-            the review process of new transactions fairly quick and painless.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/recurring-transactions">Recurring transactions</HelpLink>.</strong>{' '}
-            Charges that repeat on a schedule, such as
-            subscriptions, utilities and loan payments. Most are found by a scan for similar transactions
-            arriving on a fixed cadence; one the scan cannot see is declared through a rule. Once a series
-            is known, a charge that goes missing or changes amount raises an alert.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-dashboard">The dashboard</HelpLink>.</strong>{' '}
-            Reports live here, and it doubles as a way to check
-            the data -- drill into the largest groups, see the transactions behind them, fix
-            anything misclassified.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-tasks">Tasks</HelpLink>.</strong>{' '}
-            A short list of things worth a look: transactions with no
-            category, duplicates awaiting a decision, reimbursements outstanding too long, a recurring
-            charge that did not arrive. Nothing there is an error, and nothing has to be dealt with in
-            order.
-          </li>
-          <li>
-            <strong><HelpLink to="/help/page-settings">Settings</HelpLink>.</strong>{' '}
-            Appearance and currency, the tag manager, sign-in
-            protection, the trash, and the configuration screen. Almost none of it has to be touched to
-            use the app.
-          </li>
-        </ol>
+        <p>The major parts, roughly in the order data moves through them. Each one has a topic of its
+          own:</p>
+        {/* A table rather than the prose tour this used to be: ten sections described at paragraph length
+            restated their own topics, and what a reader wants here is which part owns which job. Each row
+            earns its place by saying what the part is *for*, which a title cannot. */}
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>Part</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><HelpLink to="/help/page-import-export">Import / Export</HelpLink></td>
+                <td>Where transactions come in and where the ledger goes out, with duplicate detection in
+                  between so overlapping files and sources are safe to import.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-accounts">Accounts &amp; owners</HelpLink></td>
+                <td>Where a transaction came from, and who it belongs to &mdash; the basis for filtering
+                  and reporting by person.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-transactions">Transactions</HelpLink></td>
+                <td>The ledger as a list: finding a row, reviewing what just arrived, and recording what a
+                  row cannot say on its own.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-categories">Categories &amp; groups</HelpLink></td>
+                <td>What a transaction is filed under, and the grouping the dashboard reports on. Some
+                  groups also carry behavior, such as keeping money movement out of the totals.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/tags">Tags</HelpLink></td>
+                <td>Cross-cutting labels for the reports categories cannot express, where the interesting
+                  transactions span categories and accounts.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-rules">Rules</HelpLink></td>
+                <td>How categorization is kept current without repeating the work on every import, along
+                  with merchant names, tags and recurring series.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/recurring-transactions">Recurring transactions</HelpLink></td>
+                <td>Charges that repeat on a schedule, and an alert when one changes or does not
+                  arrive.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-dashboard">Dashboard</HelpLink></td>
+                <td>Reports, and the quickest way to notice something filed in the wrong place.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-tasks">Tasks</HelpLink></td>
+                <td>A short list of things worth a look. Nothing there is an error, and nothing has to be
+                  dealt with in order.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-settings">Settings</HelpLink></td>
+                <td>Appearance and currency, the tag manager, sign-in protection, the trash, and the
+                  configuration screen.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </>
     ),
   },
@@ -1640,6 +1636,15 @@ export const HELP_TOPICS = [
           owner. A tag attached to an account reaches every transaction on it.
         </p>
         <p>
+          Bringing in the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
+          usually worth it, since they carry the richest per-merchant detail; a bank account on its own
+          represents a month of card purchases as the single payment that settled them. If both ends are
+          imported, the category that <em>credit-card payment</em>s are filed under belongs in a group
+          marked <HelpLink to="/help/exclude-from-totals">Exclude from totals</HelpLink> (the
+          supplied <em>Transfers</em> group ships that way) so the spending is not counted twice. Where
+          that detail is not interesting, the bank account alone is enough.
+        </p>
+        <p>
           Two accounts that turn out to be the same physical account can
           be <HelpLink to="/help/merging-accounts">merged</HelpLink>, which also settles the
           duplicates between them. Detaching reverses it.
@@ -1945,15 +1950,8 @@ export const HELP_TOPICS = [
           {APP_NAME} tries to infer the convention.
         </p>
         <p>
-          <strong>Amounts are all in one currency, set on the Settings page.</strong> An amount is stored
-          as a plain number with no currency recorded beside it. The setting indicates the currency
-          for all of the amounts in the ledger. Changing it relabels existing amounts rather than
-          restating them. Outside of choosing the currency symbol, the setting has one other
-          effect: when a connected data source reports that an account is held in a
-          <em>different</em> currency, its transactions are <strong>not imported</strong>. The account mapping screen and syncs indicate this rather than
-          leaving the account mysteriously empty. Skipping such an account keeps it out of the way.
-          If a data source contains multiple currencies, transactions in a foreign currency
-          will be dropped.
+          Amounts are all in one currency, chosen on the Settings page &mdash;
+          see <HelpLink to="/help/single-currency">single-currency support</HelpLink>.
         </p>
       </>
     ),
@@ -2541,8 +2539,9 @@ export const HELP_TOPICS = [
         <p>Settings is one page of collapsible sections. The ones worth knowing about:</p>
         <ul>
           <li>
-            <strong>Appearance</strong> and <strong>Currency</strong> set the theme, and the currency
-            symbol every amount is shown with.
+            <strong>Appearance</strong> sets the theme, and <strong>Currency</strong> what every amount is
+            taken to mean &mdash; one choice for the whole ledger,
+            see <HelpLink to="/help/single-currency">single-currency support</HelpLink>.
           </li>
           <li>
             <strong>Transaction tags</strong> is the tag manager, where tags are renamed and removed.
@@ -2571,82 +2570,8 @@ export const HELP_TOPICS = [
     ),
   },
   {
-    id: 'data-and-backups',
-    section: 'access-safety',
-    title: 'Data on disk, and backups',
-    surfaces: ['Intended usage (Settings)'],
-    summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
-    body: () => (
-      <>
-        <p>
-          Almost everything is stored in a local SQLite database (attachments are stored in a documents directory next
-          to the database file). Accounts, transactions, categories, tags are all stored in{' '}
-          <strong>plain text</strong>. Protection comes from the computer's security (disk encryption,
-          OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
-          A sign-in password is available to restrict <em>network</em> access to the app.
-        </p>
-        <p>
-          If the contents of the database are considered sensitive, {APP_NAME} can generate key pairs to build
-          strongly encrypted backup files. Secrets and credentials for accessing connected data sources
-          are already encrypted in the control database, secured by the vault passphrase. All backups
-          of the credentials database contain encrypted data.
-        </p>
-        <p>
-          If the database files are exposed and there are data connections, even though the credentials
-          are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
-          and issue new ones. Some providers support revoking the credentials via their API in which case
-          disconnecting the account(s) from within {APP_NAME} revokes the lost credentials. For other providers
-          it is necessary to remove the existing credential on the provider side and issue a new one. Even with
-          providers which support revocation via the API, there is a secret worth rotating on the
-          provider side which was used to authorize the connections in the first place.
-        </p>
-        <p>
-          Once the provider stops accepting the stored credential, the connection card
-          reports <strong>reconnect needed</strong> rather than counting failed syncs.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: 'account-security',
-    section: 'access-safety',
-    title: 'Account security: password and two-factor',
-    surfaces: ['Account security (Settings)'],
-    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
-    body: () => (
-      <>
-        <p>
-          Sign-in protection exists to keep <strong>non-users out</strong> and to control access to
-          certain administrator functions (users can be designated an administrator or not).
-          Everyone who signs in sees and edits
-          the <strong>same shared data</strong>; the password guards <em>network</em> access only: it
-          is not disk encryption, so
-          it is not a substitute for keeping the machine itself secure (see{' '}
-          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
-        </p>
-        <p>
-          <strong>Password policy</strong> sets how strong account passwords must be. It applies to
-          all users, and it can be tightened or relaxed at any time.
-        </p>
-        <p>
-          <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
-          When it is on, the code is requested <strong>every fresh sign-in</strong> &mdash; a browser
-          with an active session is not asked again until that session ends, but there is no "trust
-          this device" that skips the code on a new sign-in. If authenticator access is lost, the{' '}
-          <strong>recovery codes</strong> displayed when authenticator use is enabled
-          are the way back in, so save these in a password manager or somewhere equally safe.
-        </p>
-        <p>
-          Two-factor is optional and mainly matters if the instance is reachable beyond the trusted
-          network. On a trusted home network it adds little and leaving it turned off is
-          reasonable.
-        </p>
-      </>
-    ),
-  },
-  {
     id: 'configuration',
-    section: 'access-safety',
+    section: 'settings',
     title: 'Configuration settings',
     surfaces: ['Configuration (Settings)'],
     summary: `Every setting has a working default; configuration is not required to get started. A .env file overrides the handful of values that need to be known before the app starts (ports, where the database files live).`,
@@ -2699,12 +2624,109 @@ export const HELP_TOPICS = [
           The <code>.env</code> file lives beside the
           application. If it is present the screen indicates where it lives.
         </p>
+      </>
+    ),
+  },
+  {
+    id: 'single-currency',
+    section: 'general-concepts',
+    title: 'Single-currency support',
+    surfaces: ['Settings \u2014 Currency'],
+    summary: 'A ledger holds one currency at a time, chosen on the Settings page. Amounts are stored as plain numbers, so changing the setting relabels every figure rather than converting it, and an account a data source reports in another currency is skipped rather than imported.',
+    body: () => (
+      <>
         <p>
-          Stored values can be cleared but not typed. <strong>Reset</strong> forgets a stored value so the
-          current default applies again, and <strong>Regenerate</strong> replaces the session signing key
-          &mdash; worth doing if it may have been exposed, such as in a shared backup. Both take effect at
-          the next restart, and both end every active session, so everyone signs in again. Neither is
-          offered while an override is in force, because the override would still win.
+          Every amount in {APP_NAME} is stored as a plain number, with no currency recorded beside it.
+          The <strong>Currency</strong> setting says what all of those numbers mean, and it is one choice
+          for the whole ledger rather than a property of an account or a transaction.
+        </p>
+        <p>
+          Changing it <em>relabels</em> every existing amount; nothing is converted or rewritten. That
+          makes a wrong choice cheap to correct and equally cheap to reverse, which is why the change asks
+          for confirmation rather than being refused.
+        </p>
+        <p>
+          The consequence worth knowing about is at the edge, where data arrives. An account that a
+          connected data source reports as held in another currency is <strong>skipped</strong> &mdash; its
+          transactions are not imported, and the account-mapping screen says so rather than letting the
+          account sync cleanly and sit permanently empty. Where one source carries several currencies, the
+          transactions in a foreign one are dropped the same way. A CSV file is taken at face value: its
+          amounts are read as plain numbers, so a file holding another currency imports figures that do not
+          mean what the rest of the ledger means.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'data-and-backups',
+    section: 'general-concepts',
+    title: 'Data on disk, and backups',
+    surfaces: ['Intended usage (Settings)'],
+    summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
+    body: () => (
+      <>
+        <p>
+          Almost everything is stored in a local SQLite database (attachments are stored in a documents directory next
+          to the database file). Accounts, transactions, categories, tags are all stored in{' '}
+          <strong>plain text</strong>. Protection comes from the computer's security (disk encryption,
+          OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
+          A sign-in password is available to restrict <em>network</em> access to the app.
+        </p>
+        <p>
+          If the contents of the database are considered sensitive, {APP_NAME} can generate key pairs to build
+          strongly encrypted backup files. Secrets and credentials for accessing connected data sources
+          are already encrypted in the control database, secured by the vault passphrase. All backups
+          of the credentials database contain encrypted data.
+        </p>
+        <p>
+          If the database files are exposed and there are data connections, even though the credentials
+          are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
+          and issue new ones. Some providers support revoking the credentials via their API in which case
+          disconnecting the account(s) from within {APP_NAME} revokes the lost credentials. For other providers
+          it is necessary to remove the existing credential on the provider side and issue a new one. Even with
+          providers which support revocation via the API, there is a secret worth rotating on the
+          provider side which was used to authorize the connections in the first place.
+        </p>
+        <p>
+          Once the provider stops accepting the stored credential, the connection card
+          reports <strong>reconnect needed</strong> rather than counting failed syncs.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'account-security',
+    section: 'general-concepts',
+    title: 'Account security: password and two-factor',
+    surfaces: ['Account security (Settings)'],
+    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
+    body: () => (
+      <>
+        <p>
+          Sign-in protection exists to keep <strong>non-users out</strong> and to control access to
+          certain administrator functions (users can be designated an administrator or not).
+          Everyone who signs in sees and edits
+          the <strong>same shared data</strong>; the password guards <em>network</em> access only: it
+          is not disk encryption, so
+          it is not a substitute for keeping the machine itself secure (see{' '}
+          <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
+        </p>
+        <p>
+          <strong>Password policy</strong> sets how strong account passwords must be. It applies to
+          all users, and it can be tightened or relaxed at any time.
+        </p>
+        <p>
+          <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
+          When it is on, the code is requested <strong>every fresh sign-in</strong> &mdash; a browser
+          with an active session is not asked again until that session ends, but there is no "trust
+          this device" that skips the code on a new sign-in. If authenticator access is lost, the{' '}
+          <strong>recovery codes</strong> displayed when authenticator use is enabled
+          are the way back in, so save these in a password manager or somewhere equally safe.
+        </p>
+        <p>
+          Two-factor is optional and mainly matters if the instance is reachable beyond the trusted
+          network. On a trusted home network it adds little and leaving it turned off is
+          reasonable.
         </p>
       </>
     ),

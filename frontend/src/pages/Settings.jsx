@@ -3106,6 +3106,7 @@ export default function Settings() {
             title="Currency"
             description="Define the currency used by the ledger."
             scrollContainerRef={settingsScrollRef}
+            actions={<FeatureExplainer topic="single-currency" placement="bottom-left" />}
             {...bindSection('currency')}
           >
             <CurrencySection />

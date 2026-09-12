@@ -970,13 +970,35 @@ Feature guidance is authored once in a single content registry (`frontend/src/he
 and the in-context tip can never drift in copy. Each topic is `{ id, title, surfaces, summary, body }`:
 a one-line `summary` sized for a popover and a longer `body` for the `/help` page.
 
-The getting-started tour (`parts-of-luma`) is the one topic organized around the app rather than a
-subject: one item per nav surface, in the order data moves through them, each item a paragraph of "what
-this is for" whose bold lead-in **links to that page's `page-*` hub topic** and leaves the depth there.
-So a new page needs a tour item as well as a hub — guarded in `content.test.jsx`, since a tour that
-quietly stops covering the app is invisible from the inside. Conversely, guidance that outgrows a
-paragraph belongs in the hub it hands off to, not in the tour: "how rules come into being" lives under
-`page-rules` (where it replaced a thinner restatement of itself) and is reached from the tour by anchor.
+Getting started is three beats: `how-luma-works` (what the app is for, and the facts that hold
+everywhere), `parts-of-luma` (which part owns which job), `design-principles` (how it is meant to be
+worked). The middle one is the only topic organized around the app rather than a subject, and it is a
+**table** — one row per nav surface in the order data moves through them, the name linking to that page's
+`page-*` hub, the second column saying what the part is *for*. That second column is the whole
+justification for the topic: the Help index already lists every title and summary, so a row that only
+restates its own title makes the tour a shorter copy of the index. Prose belongs in the hub, not here —
+when the table replaced a paragraph-per-part tour, the one piece of guidance no hub carried (which
+accounts are worth importing, and filing the card payment in a group excluded from totals) moved into
+`page-accounts` rather than being dropped. A new page needs a table row as well as a hub, guarded in
+`content.test.jsx`, since a tour that quietly stops covering the app is invisible from the inside. The
+table's styling lives in `HELP_BODY_CSS` with the rest of the body rules, so both render targets get it.
+
+Facts that hold for the whole ledger rather than one page are their own section — **General concepts**
+(`general-concepts`), placed **last**: the single currency, the data on disk and its backups, and
+sign-in protection. A topic that explains one *section of a page* stays with that page instead —
+`configuration` is filed under Settings, where its `?` lives. A section holding a single topic is normal
+and not a sign the index needs consolidating: `recurring`, `tasks` and `settings` each have one, because
+the sections mirror the nav rather than balancing sizes.
+
+A topic covers what the screen cannot say for itself. Where a control already carries a help line, a
+button tooltip and a confirm dialog stating the consequence, a paragraph repeating all three is the
+fourth telling and gets deleted rather than improved — what survives in the topic is what the reader
+cannot get from the screen (what the thing *is*, and when it would ever be touched). Last because the index order is also a reading order, and none of these is
+what a new reader should meet first; they are background to go looking for. Two rules keep it from being an appendix. A topic
+here is one no page owns, so *where* it is surfaced is a `?` on the control it describes (the Currency
+setting) rather than a page hub. And `how-luma-works` links every one of them, because before they were
+grouped the same topics sat at the foot of the index with nothing pointing at them — a section of
+whole-app facts that nothing references is indistinguishable from one that does not exist.
 
 - **Standalone Help (`/help`, `/help/:topic`).** `pages/Help.jsx` renders the topic index and each
   full body. A reached-from path is carried in `Link` `state.from` and surfaced as a `Return to <page>`
