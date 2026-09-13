@@ -451,12 +451,32 @@ def bump_rule_effect_dates(conn, dates_by_rule) -> None:
         )
 
 
+def category_lock_for(category_source, category_overridden) -> int:
+    """The `category_overridden` value to write when a *stashed* categorization is put back — an Amazon or
+    wallet link's prior, a reimbursement's captured state, an Undo snapshot, a held duplicate's payload.
+
+    Those snapshots outlive the rule that produced them: every one taken before trusted-import rows stopped
+    being locked records `import` with the bit set, and writing it back verbatim would re-lock the row
+    against the rules, silently and for good. An `import` row is never locked, so the bit is derived for
+    it; every other source keeps the bit it was stashed with, which is what preserves a legacy manual row
+    that carries the lock with no source recorded."""
+    if category_source == "import":
+        return 0
+    return 1 if category_overridden else 0
+
+
 def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] = None,
                      retain_unmatched: bool = True) -> int:
-    """Re-run the rules over the `category_overridden = 0` rows (so manual and import edits — the locked
-    sources — are left alone, along with feature-owned `enrichment` rows: an excluded Amazon funding
-    charge or a suppressed wallet leg that a feature moved into an excluded category and stashed a prior
-    for; letting a rule reclaim or clear one would un-exclude it and double-count the spend).
+    """Re-run the rules over the `category_overridden = 0` rows — `rule`, uncategorized, `cleared`, and
+    **trusted `import`** rows — so a manual edit (and a split, which is locked too) is left alone, along
+    with feature-owned `enrichment` rows: an excluded Amazon funding charge or a suppressed wallet leg that
+    a feature moved into an excluded category and stashed a prior for; letting a rule reclaim or clear one
+    would un-exclude it and double-count the spend.
+
+    Trusted-import rows are included because a file's categories rank *below* the rules: at import a rule
+    beats the file's label, so a rule created after the import must beat it too, or the outcome would
+    depend on whether the rule or the file arrived first. A matched `import` row becomes `rule` — and so
+    leaves the rule-suggestion learning set, exactly as a row a rule claimed at import never entered it.
 
     **`retain_unmatched` decides what happens to a rule-categorized row that now matches nothing** — the
     behavior a user hits after deleting a rule, narrowing its scope, or renaming a transaction:
@@ -466,8 +486,11 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
         rule-applied tags) even though no rule claims it now; the row stays `category_overridden = 0`, so a
         future rule can still reclaim it. This is why the routine "Run categorization" can never strip a
         category a rule once set — deleting an obsolete rule does not silently un-categorize its history.
-      * **`False` (reconcile):** a no-match rule row is cleared back to uncategorized (a `cleared` row keeps
-        its marker) and its rule-tags removed — the old projection behavior. Reserved for a **scoped** pass
+      * **`False` (reconcile):** a no-match rule row falls back to what import would have given it with no
+        rule in the way — its **file category**, when its batch is trusted for categories and the label
+        still names an active category — and otherwise to uncategorized (a `cleared` row keeps its marker);
+        its rule-tags are removed either way. A no-match `import` row is left as it is: nothing claimed
+        it, so it already holds exactly that fallback. Reserved for a **scoped** pass
         (`txn_ids` set) invoked deliberately: the opt-in "re-evaluate this rule's transactions" on a rule
         edit/delete, and the money-movement "remove a type" path. Scoping it to one rule's rows is what
         keeps this from mass-reverting the orphaned-rule rows retain has accumulated across the ledger.
@@ -503,6 +526,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                t.category_source,
                t.display_name_source,
                t.import_evidence_json,
+               t.imported_category,
                COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
@@ -520,6 +544,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     needs_source_text = any(rule["match_source_text"] for rule in rules)
     updated = 0
     effect_dates: dict = {}  # rule_id -> newest txn date it supplies a live effect for (last_effect_date)
+    label_fallback_ids: list[str] = []  # reconcile-cleared rows that still carry a file label
     for txn in txns:
         source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
@@ -545,14 +570,17 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
         # Category: a rule match sets/changes it to 'rule'; on no match we retain (leave it) or, in a
         # reconcile pass, clear it (a `cleared` row keeps its marker so a rename/tag-only match doesn't
-        # silently drop it — see set_rejected_suggestion_disposition).
+        # silently drop it — see set_rejected_suggestion_disposition). A reconcile never clears an
+        # `import` row: it is already the fallback a cleared row is about to be offered below.
         if cat_id is not None:
             next_category_id, next_source = cat_id, "rule"
-        elif retain_unmatched:
+        elif retain_unmatched or txn["category_source"] == "import":
             next_category_id, next_source = txn["category_id"], txn["category_source"]
         else:
             next_category_id = None
             next_source = "cleared" if txn["category_source"] == "cleared" else None
+            if next_source is None and str(txn["imported_category"] or "").strip():
+                label_fallback_ids.append(txn["id"])
         category_changed = next_category_id != txn["category_id"] or next_source != txn["category_source"]
 
         display_name_changed = display_name != current_name
@@ -586,6 +614,13 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                 if rid not in effect_dates or txn_date > effect_dates[rid]:
                     effect_dates[rid] = txn_date
 
+    if label_fallback_ids:
+        # Deferred import: the label adoption is the import pipeline's own (it mints the Unassigned leaf a
+        # label names, honours the batch's owner/account scope and a deleted label's suppression), and
+        # that module imports this one. Reusing it is what keeps "what import would have done" one rule.
+        from backend.routers.import_export.core import adopt_file_categories
+
+        adopt_file_categories(conn, label_fallback_ids)
     bump_rule_effect_dates(conn, effect_dates)
     return updated
 

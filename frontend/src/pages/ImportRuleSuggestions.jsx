@@ -851,7 +851,7 @@ export default function ImportRuleSuggestions() {
   }
 
   // Banner action: re-apply each merged/replaced rule to the transactions it already matches. Uses the
-  // preserve-manual mode (reclaims import-locked and rule-owned rows, leaves manual edits alone), since a
+  // preserve-manual mode (reclaims trusted-import and rule-owned rows, leaves manual edits alone), since a
   // merge/replace deliberately changes the governing rule but a manual per-transaction edit still wins.
   async function recategorizeReconciledMatches() {
     const ids = resolveSummary?.reconciledRuleIds || []
@@ -1407,7 +1407,7 @@ export default function ImportRuleSuggestions() {
       }
 
       // Apply the rule to every row it should own (winner's rows + non-winners retargeted to it),
-      // preserve-manual so import-locked rows are reclaimed but deliberate manual edits are spared.
+      // preserve-manual so trusted-import rows are reclaimed but deliberate manual edits are spared.
       // Capture those rows' prior categorization too, so undo restores them as well as the disposed ones.
       if (createdRuleId && ruleRowIds.length) {
         try {

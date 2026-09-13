@@ -86,6 +86,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
 
 from backend.json_utils import safe_json_dict
+from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import reimbursable_leaf_ids
 from backend.services.preferences import get_shared_preference, set_shared_preference
 from backend.services.txn_links import (
@@ -859,7 +860,7 @@ def _restore_state(conn: sqlite3.Connection, txn_id: str, state: dict) -> None:
             1 if state.get("is_split") else 0,
             state.get("category_id"),
             state.get("category_source"),
-            1 if state.get("category_overridden") else 0,
+            category_lock_for(state.get("category_source"), state.get("category_overridden")),
             txn_id,
         ),
     )

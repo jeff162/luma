@@ -168,7 +168,8 @@ class ImportUncategorizedPlaceholderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(transactions[0]["category_id"])
         self.assertEqual(transactions[0]["imported_category"], "Subscription")
         self.assertEqual(transactions[0]["category_source"], "import")
-        self.assertEqual(transactions[0]["category_overridden"], 1)
+        # Unlocked: a file's categories rank below the rules, so a later rule may still claim the row.
+        self.assertEqual(transactions[0]["category_overridden"], 0)
 
         self.assertEqual(self._fetch_unassigned_children(), [{"id": transactions[0]["category_id"], "name": "Subscription"}])
 

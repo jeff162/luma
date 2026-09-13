@@ -1297,22 +1297,22 @@ export const HELP_TOPICS = [
     section: 'rules',
     title: 'How transactions get categorized',
     surfaces: ['Rules page'],
-    summary: 'Imported and synced transactions are categorized by the rules as they arrive, with a file\'s own categories filling in only what the rules leave. Afterward, Categorize re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
+    summary: 'Imported and synced transactions are categorized by the rules as they arrive, with a file\'s own categories filling in only what the rules leave. The rules always come first, so it does not matter whether a rule or the file arrived first. Afterward, Categorize re-applies rules but never disturbs a category set by hand; applying a rule to its matching transactions is full-force and overrides even that. A closing section ranks the categorization sources for anyone who wants the full model.',
     body: () => (
       <>
         <h4>As transactions arrive</h4>
-        <p>
+        <p>*needs review*
           Most categorization happens automatically as transactions arrive. Each imported or synced
-          transaction runs through the categorization rules -- the same matching the{' '}
-          <strong>Categorize</strong> button on the Rules page uses -- and the most specific matching rule
-          sets its category, along with any rename or tags. A CSV import does this while{' '}
-          <em>Apply categorization rules on import</em> is checked, which it is by default.
+          transaction runs through the categorization rules -- the same process triggered by
+          the <strong>Categorize</strong> button on the Rules page. For CSV import this only happens
+          if <em>Apply categorization rules on import</em> is selected, which it is by default.
         </p>
         <p>
           A file imported with <em>use the categories present in the data</em> can also bring its own
           categories, generally as part of an initial seeding from another tool. Rules still come first:
-          the file's category fills in only rows no rule claims, and a row that keeps it is protected from
-          later automatic re-runs. The file's label stays on every row either way.
+          the file's category fills in only rows no rule claims. That stays true afterward -- a rule
+          created later takes those rows the next time <strong>Categorize</strong> runs, just as it would
+          have at import. The file's label stays on every row either way.
         </p>
         <h4>Once transactions are in</h4>
         <p>
@@ -1325,8 +1325,8 @@ export const HELP_TOPICS = [
         <p>
           The <strong>Categorize</strong> button (on the Rules page) re-applies every rule
           across the whole ledger, but only to rows that are <strong>not pinned</strong> -- those
-          categorized by a rule, and those still uncategorized. It deliberately leaves alone anything
-          categorized <em>by hand</em> or kept from a <em>trusted import</em>. It only ever <em>sets</em>
+          categorized by a rule or by a trusted import, and those still uncategorized. It deliberately
+          leaves alone anything categorized <em>by hand</em>. It only ever <em>sets</em>
           or <em>changes</em> a category, never removes one: a rule-assigned row that no longer matches
           any rule <strong>keeps</strong> its category, so deleting or narrowing a rule doesn't
           silently un-categorize the transactions it already handled. It is the pass to run after adding
@@ -1336,7 +1336,9 @@ export const HELP_TOPICS = [
           To deliberately <em>undo</em> a rule's categorizations -- when a rule was wrong -- use the{' '}
           <em>re-evaluate this rule's transactions</em> option offered when a rule is deleted or
           edited. It re-runs just those rows against the remaining rules, so they fall to another matching
-          rule or to uncategorized, rather than keeping the removed rule's category.
+          rule, rather than keeping the removed rule's category. A row no remaining rule claims goes back to
+          the category its file gave it, when it came from a file imported with <em>use the categories
+          present in the data</em>, and otherwise to uncategorized.
         </p>
         <h4>Apply a rule to its matching transactions</h4>
         <p>
@@ -1355,29 +1357,30 @@ export const HELP_TOPICS = [
         <ul>
           <li><strong>Manual</strong> -- set by hand on the transaction. Protected from automatic
             re-runs; changed afterward only by another manual edit or a full-force rule apply.</li>
-          <li><strong>Trusted import</strong> -- the category came from a file imported with
-            <em> use the categories present in the data</em>. Also protected from automatic re-runs, but
-            a rule apply can reclaim it (turning it into a rule categorization), and the Generate-rules
-            conflict screen can re-categorize it in place -- see below.</li>
           <li><strong>Rule</strong> -- assigned by a matching rule. Not pinned, so Categorize
             re-evaluates it (it can move to another rule, but is never cleared) and a full-force apply
             overwrites it; it is reverted only by the opt-in <em>re-evaluate</em> when the rule is deleted
             or edited.</li>
+          <li><strong>Trusted import</strong> -- the category came from a file imported with
+            <em> use the categories present in the data</em>, and no rule claims the row. Not pinned: any
+            matching rule takes it, whether through Categorize or a rule apply, turning it into a rule
+            categorization. The Generate-rules conflict screen can also re-categorize it in place -- see
+            below.</li>
           <li><strong>Uncategorized</strong> -- no category yet; any rule is free to claim it. (A row whose
             imported category was <em>cleared</em> when a suggested rule was rejected sits here too: rules
             can categorize it, but the discarded file label is kept on the row and never re-applied.)</li>
         </ul>
         <p>
-          The asymmetry is the part to remember: <strong>Categorize</strong> respects the two
-          protected origins, while a rule's <strong>apply to matching</strong> does not.
+          The asymmetry is the part to remember: <strong>Categorize</strong> respects a manual
+          category, while a rule's <strong>apply to matching</strong> does not.
         </p>
         <p>
           One deliberate exception lives on the{' '}
           <HelpLink to="/help/generate-rules">Generate-rules conflict screen</HelpLink>:
-          re-categorizing a row there corrects the file's category and the row <em>keeps</em> its
-          trusted-import weight (and keeps informing rule suggestions). Only <strong>Preserve</strong>
-          turns such a row into a manual exception. It is the one place a trusted-import categorization
-          is edited while staying trusted-import.
+          re-categorizing a row there corrects the file's category and the row <em>stays</em> a
+          trusted-import categorization (and keeps informing rule suggestions until a rule claims it).
+          Only <strong>Preserve</strong> turns such a row into a manual exception. It is the one place a
+          trusted-import categorization is edited while staying trusted-import.
         </p>
         <p>
           A <HelpLink to="/help/transaction-splits">split transaction</HelpLink> sits outside all of this.
@@ -1385,9 +1388,9 @@ export const HELP_TOPICS = [
           even a full-force rule apply, which reports how many it skipped rather than overwriting them.
         </p>
         <p>
-          To check a single transaction's current source, open its detail panel: a small pinned label
-          sits beside the category, and the details show a <em>Categorized by</em> line naming the
-          source -- a rule, a manual edit, or the category present in the source data.
+          To check a single transaction's current source, open its detail panel: a small <em>manual</em>
+          label sits beside a pinned category, and the details show a <em>Categorized by</em> line naming
+          the source -- a rule, a manual edit, or the category present in the source data.
         </p>
       </>
     ),
@@ -1548,7 +1551,7 @@ export const HELP_TOPICS = [
           <li>
             Accepting a suggestion applies its rule to exactly the rows that generated it, so an edit
             made to the rule before accepting it (a tweaked category, added tags, a rename) lands on those
-            rows too, and they shift from import-locked to
+            rows too, and they shift from their file category to
             rule-governed (see{' '} <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>).
           </li>
           <li>
@@ -1565,9 +1568,10 @@ export const HELP_TOPICS = [
             <ul>
               <li>
                 <em>keep categorization</em> leaves them exactly as imported -- the file's category
-                sticks as a settled decision, and is still reclaimable later if a
-                matching rule is created and applied. This is the choice for a genuine exception (an annual fee
-                filed under its own category).
+                stays, and a matching rule created later still takes them, as it would any imported row.
+                This is the choice for a file category that is right but not worth a rule (an annual fee
+                filed under its own category). To keep a row out of every rule's reach, set its category by
+                hand instead.
               </li>
               <li>
                 <em>remove categorization</em> clears the category
@@ -1591,7 +1595,7 @@ export const HELP_TOPICS = [
           <li><strong>Pick one category for the merchant and re-categorize the rest.</strong> The
             matching-transactions viewer can set the majority category in bulk to collapse the conflict
             to a single rule. Re-categorizing here <em>corrects the file's category</em>, and the rows
-            keep their trusted-import weight, so they keep informing the suggestions.</li>
+            stay trusted-import categorizations, so they keep informing the suggestions.</li>
           <li><strong>Keep an outlier as a one-off.</strong> <strong>Preserve</strong> a genuinely
             distinct row to record it as a manual exception: rules leave it alone and it drops out of
             the suggestions entirely, rather than re-surfacing as a conflict.</li>

@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 53
+CURRENT_VERSION = 54
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1397,6 +1397,32 @@ def _transfers_group_gets_a_durable_identity(conn):
     )
 
 
+def _unlock_trusted_import_categories(conn):
+    """A file's categories rank below the rules, so a trusted-import row is no longer locked against them.
+
+    At import a rule already beat the file's label, but once a row had taken its label it carried
+    `category_overridden = 1` — the manual lock — and Run categorization left it alone for good. The outcome
+    therefore depended on whether a rule or the file arrived first. Writers now store `import` unlocked;
+    this clears the bit on the rows written before that. Keyed on the source, so a manual edit or a split
+    keeps its lock, and it is safe to run once on any data that predates it — a restore of an older backup
+    brings the old bit back with it, which is why this is also a data-init step."""
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "txn" not in tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if not {"category_source", "category_overridden"} <= columns:
+        return
+    conn.execute(
+        "UPDATE txn SET category_overridden = 0 WHERE category_source = 'import' AND category_overridden <> 0"
+    )
+
+
+@migration(54)
+def _trusted_imports_yield_to_rules(conn):
+    # Guarded inside the step, like v53: the isolated per-migration tests hand-build minimal schemas.
+    _unlock_trusted_import_categories(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1432,6 +1458,7 @@ POST_RESTORE_DATA_INIT = {
     15: _seed_rule_cleanup_data,
     24: _backfill_connection_account_mapping,
     25: _widen_unset_csv_terminal_window,
+    54: _unlock_trusted_import_categories,
 }
 
 

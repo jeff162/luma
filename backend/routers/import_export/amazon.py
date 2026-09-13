@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
+from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.amazon_import import (
     AmazonItem,
@@ -1802,7 +1803,7 @@ def _detach_charge(conn: sqlite3.Connection, link_id: str, charge_id: str) -> No
         conn.execute(
             "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
             (prior.get("category_id"), prior.get("category_source"),
-             int(prior.get("category_overridden") or 0), charge_id),
+             category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
         )
     txn_links.remove_member(conn, link_id, charge_id)
     priors = meta.get("charge_priors")
@@ -2370,7 +2371,7 @@ def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
                 conn.execute(
                     "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
                     (prior.get("category_id"), prior.get("category_source"),
-                     int(prior.get("category_overridden") or 0), charge_id),
+                     category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
                 )
         txn_links.delete_link(conn, link_id)
     # An items-only import parks its per-item detail for a later orders file; undoing that import must remove
@@ -2693,7 +2694,7 @@ def reverse_amazon_order(conn: sqlite3.Connection, link_id: str) -> dict:
             conn.execute(
                 "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
                 (prior.get("category_id"), prior.get("category_source"),
-                 int(prior.get("category_overridden") or 0), charge_id),
+                 category_lock_for(prior.get("category_source"), prior.get("category_overridden")), charge_id),
             )
     # Delete the link first so its members' FK rows go, then the order transaction itself.
     txn_links.delete_link(conn, link_id)

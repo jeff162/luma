@@ -199,24 +199,26 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(other["category_id"])
 
     async def test_proposal_counts_split_affected_and_extra(self):
-        # A rule-eligible row (overridden=0) and an import-locked row (overridden=1) carrying the same Type
-        # on the source's account: the proposal counts the first as `count` (affected) and the second as
-        # `extra_count` (the rule doesn't override imported/manual categories).
+        # Rows carrying the same Type on the source's account: a rule-eligible row and a trusted-import row
+        # (a file's categories rank below the rules, so it is not locked) are both `count` (affected); a
+        # manual row (overridden=1) is `extra_count`, because the rule doesn't override a hand-set category.
         result = await self._import()  # PAYPAL_CSV carries "Account Hold for Open Authorization" (overridden=0)
+        hold_evidence = json.dumps({"extra_text_fields": [{"header": "Type", "value": "Account Hold for Open Authorization"}]})
         with self._use_db_path(), get_db() as conn:
-            conn.execute(
-                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date,
-                                    is_pending, category_overridden, category_source, import_evidence_json)
-                   VALUES (?, ?, ?, 9.0, 'Hertz', 'Hertz', 'Hertz', '2019-12-25', 0, 1, 'import', ?)""",
-                (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID,
-                 json.dumps({"extra_text_fields": [{"header": "Type", "value": "Account Hold for Open Authorization"}]})),
-            )
+            for merchant, overridden, source in (("Hertz", 0, "import"), ("Avis", 1, "manual")):
+                conn.execute(
+                    """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date,
+                                        is_pending, category_overridden, category_source, import_evidence_json)
+                       VALUES (?, ?, ?, 9.0, ?, ?, ?, '2019-12-25', 0, ?, ?, ?)""",
+                    (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID, merchant, merchant, merchant,
+                     overridden, source, hold_evidence),
+                )
         # Separate block so the insert commits before the endpoint (its own connection) reads.
         with self._use_db_path(), get_db() as conn:
             props = {p["type"]: p for p in get_money_movement_types(result["batch_id"])["proposals"]}
         hold = props["Account Hold for Open Authorization"]
-        self.assertEqual(hold["count"], 1, "one rule-eligible row is affected")
-        self.assertEqual(hold["extra_count"], 1, "the import-locked row is counted as extra, not affected")
+        self.assertEqual(hold["count"], 2, "the rule-eligible row and the trusted-import row are affected")
+        self.assertEqual(hold["extra_count"], 1, "the manual row is counted as extra, not affected")
 
     async def test_import_evidence_type_filter_selects_matching_rows(self):
         from backend.routers.transactions import _build_transaction_filter

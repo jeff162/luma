@@ -9,9 +9,9 @@ import { Button } from './ui.jsx'
 
 // Shared "re-run categorization" control, used by the Rules page and the imported rule-suggestions
 // page. Retroactive recategorization (services/categorizer.recategorize_all) is global and
-// override-skipping: it runs every rule in one pass but never touches manually edited or import-locked
-// rows (category_overridden = 1), so it cannot clobber user edits or the imported categories that rule
-// suggestions are learned from. The hook owns the pending-count preview and the transient result note;
+// override-skipping: it runs every rule in one pass but never touches manually edited rows
+// (category_overridden = 1), so it cannot clobber user edits. A trusted import's category is not locked —
+// a file's categories rank below the rules, so a matching rule reclaims it here too. The hook owns the pending-count preview and the transient result note;
 // the presentational pieces render the button/banner so each page can place them in its own layout.
 export function useRecategorize() {
   const [pendingCount, setPendingCount] = useState(0)

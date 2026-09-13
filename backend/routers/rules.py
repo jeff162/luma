@@ -234,7 +234,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # `capture_prior` (optional): when given, the prior (category_id, category_source, category_overridden)
     # of each row whose category this apply changes is appended to it — the same snapshot shape
     # `/restore-categorization` consumes — so an accept can stash it for Undo and put the rows back.
-    # `preserve_manual` reclaims the rows a rule should own — including import-locked ones
+    # `preserve_manual` reclaims the rows a rule should own — including trusted-import ones
     # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
     # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
     # the rule's prior matches should follow it, but a manual override is the user's final say.
@@ -263,7 +263,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
 
     where_clauses, where_params = [], []
     if preserve_manual:
-        # Preserve-manual reclaims import-locked rows but spares a deliberate manual edit — and,
+        # Preserve-manual reclaims trusted-import rows but spares a deliberate manual edit — and,
         # for the same reason recategorize_all does, spares `enrichment` rows: a feature-owned
         # excluded Amazon charge / suppressed funding leg must not be pulled into a rule's category
         # by an automatic reclaim (it would un-exclude and double-count). The unscoped full-force

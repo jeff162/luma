@@ -522,7 +522,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                   />
                   {detailTxn.category_overridden && !detailTxn.is_split ? (
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      {detailTxn.category_source === 'import' ? 'imported' : 'manual'}
+                      manual
                     </span>
                   ) : null}
                   {!detailTxn.is_split ? (

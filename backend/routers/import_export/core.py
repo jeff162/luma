@@ -57,6 +57,7 @@ from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services.categorizer import (
     categorize_transaction,
+    category_lock_for,
     extract_source_match_text,
     load_categorization_rules,
     load_rule_tags_by_id,
@@ -757,7 +758,9 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         batch_id,
         payload.get("imported_category"),
         payload.get("notes"),
-        int(payload.get("category_overridden") or 0),
+        # A held duplicate's payload was captured when it was rejected, so it can predate trusted-import
+        # rows being unlocked — see category_lock_for.
+        category_lock_for(payload.get("category_source"), payload.get("category_overridden")),
         payload.get("category_source"),
         payload.get("display_name_source") or "import",
     ))
@@ -2535,7 +2538,10 @@ def stamp_batch_rule_effects(conn, batch_id: str) -> None:
     bump_rule_effect_dates(conn, effect_dates)
 
 
-def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) -> None:
+def _adopt_batch_file_labels(conn, batch_id: str, txn_ids: Optional[list[str]] = None) -> None:
+    """Give a batch's unclaimed rows the category their file label names — the last step of import's
+    precedence (mapping -> rule -> file label -> uncategorized), run after the fact. `txn_ids` narrows it
+    to specific rows; None is the whole batch. The caller decides the batch is trusted for categories."""
     batch = conn.execute(
         "SELECT config_snapshot FROM import_batch WHERE id = ?",
         (batch_id,),
@@ -2558,55 +2564,96 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
         if not account_id or not csv_value:
             continue
         batch_account_tokens_by_id.setdefault(account_id, []).append(csv_value)
+    row_scope, row_params = "", []
+    if txn_ids is not None:
+        if not txn_ids:
+            return
+        row_scope = f"AND id IN ({','.join('?' * len(txn_ids))})"
+        row_params = list(txn_ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, imported_category, owner_id, account_id, category_source
+        FROM   txn
+        WHERE  import_batch_id = ?
+          AND  imported_category IS NOT NULL
+          AND  TRIM(imported_category) <> ''
+          {row_scope}
+        """,
+        (batch_id, *row_params),
+    ).fetchall()
+    for row in rows:
+        # Same precedence as import: the file label only fills rows nothing else has claimed.
+        # Skip manual mappings, rule-categorized rows, AND user-cleared rows — adopting file labels
+        # must not override a category the user's rules already chose, must not mint an unused label
+        # category for a row a rule has placed, and must not resurrect a label the user deliberately
+        # discarded (`category_source = 'cleared'`; see set_rejected_suggestion_disposition). The label is
+        # only a bootstrap fallback for rows nothing else owns; `cleared` is a distinct source from NULL
+        # precisely so this re-grab can tell "user discarded this" apart from "ordinary uncategorized"
+        # (which it still fills). A feature-owned row is skipped for the reason every automatic pass
+        # skips it: an `enrichment` row's excluded category is reversible link state, and a `split` row's
+        # category is only the pre-split value its allocations replaced.
+        if row["category_source"] in ("manual", "rule", "cleared", "enrichment", "split"):
+            continue
+        scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
+            _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
+        ]
+        if not any(
+            _row_uses_imported_categories(True, imported_category_settings, row["owner_id"], token)
+            for token in scope_tokens
+            if token
+        ):
+            continue
+        category = _ensure_imported_batch_category(conn, batch_id, str(row["imported_category"] or "").strip())
+        if not category:
+            continue
+        conn.execute(
+            """
+            UPDATE txn
+            SET    category_id = ?,
+                   category_overridden = 0,
+                   category_source = 'import'
+            WHERE  id = ?
+            """,
+            (category["id"], row["id"]),
+        )
+
+
+def adopt_file_categories(conn, txn_ids: list[str]) -> None:
+    """Fall the given uncategorized rows back to their file category wherever their batch is trusted for
+    categories — what import would have given them had no rule claimed them. Used by the scoped reconcile
+    in `recategorize_all`, so a row a deleted or narrowed rule lets go of lands where the import would have
+    put it rather than in the uncategorized pile, whichever of the rule and the file arrived first."""
+    ids = [str(i) for i in txn_ids if i]
+    if not ids:
+        return
+    ids_by_batch: dict[str, list[str]] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        for row in conn.execute(
+            f"""SELECT t.id, t.import_batch_id
+                FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
+                WHERE  t.id IN ({','.join('?' * len(chunk))})
+                  AND  b.use_imported_categories = 1""",
+            chunk,
+        ).fetchall():
+            ids_by_batch.setdefault(row["import_batch_id"], []).append(row["id"])
+    for batch_id, batch_ids in ids_by_batch.items():
+        _adopt_batch_file_labels(conn, batch_id, batch_ids)
+
+
+def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) -> None:
+    batch = conn.execute(
+        "SELECT config_snapshot FROM import_batch WHERE id = ?",
+        (batch_id,),
+    ).fetchone()
+    snapshot = safe_json_dict(batch["config_snapshot"]) if batch else {}
     conn.execute(
         "UPDATE import_batch SET use_imported_categories = ? WHERE id = ?",
         (1 if is_enabled else 0, batch_id),
     )
     if is_enabled:
         _apply_imported_batch_categories(conn, batch_id)
-        rows = conn.execute(
-            """
-            SELECT id, imported_category, owner_id, account_id, category_source
-            FROM   txn
-            WHERE  import_batch_id = ?
-              AND  imported_category IS NOT NULL
-              AND  TRIM(imported_category) <> ''
-            """,
-            (batch_id,),
-        ).fetchall()
-        for row in rows:
-            # Same precedence as import: the file label only fills rows nothing else has claimed.
-            # Skip manual mappings, rule-categorized rows, AND user-cleared rows — enabling imported
-            # categories must not override a category the user's rules already chose, must not mint an
-            # unused label category for a row a rule has placed, and must not resurrect a label the
-            # user deliberately discarded (`category_source = 'cleared'`; see
-            # set_rejected_suggestion_disposition). The label is only a bootstrap fallback for rows
-            # nothing else owns; `cleared` is a distinct source from NULL precisely so this re-grab
-            # can tell "user discarded this" apart from "ordinary uncategorized" (which it still fills).
-            if row["category_source"] in ("manual", "rule", "cleared"):
-                continue
-            scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
-                _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
-            ]
-            if not any(
-                _row_uses_imported_categories(True, imported_category_settings, row["owner_id"], token)
-                for token in scope_tokens
-                if token
-            ):
-                continue
-            category = _ensure_imported_batch_category(conn, batch_id, str(row["imported_category"] or "").strip())
-            if not category:
-                continue
-            conn.execute(
-                """
-                UPDATE txn
-                SET    category_id = ?,
-                       category_overridden = 1,
-                       category_source = 'import'
-                WHERE  id = ?
-                """,
-                (category["id"], row["id"]),
-            )
+        _adopt_batch_file_labels(conn, batch_id)
     else:
         conn.execute(
             """
@@ -3377,7 +3424,6 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     if imported_category:
                         cat_id = imported_category["id"]
                         category_source = "import"
-                        category_overridden = 1
 
             name_effects = rule_scalar_effects(rule_result, fallback_name=display_desc)
             txn_payload = {

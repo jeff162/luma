@@ -39,6 +39,7 @@ from typing import Optional
 
 from backend.services import txn_links
 from backend.services.account_groups import effective_account_ids
+from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf, find_transfers_group_id
 
 LINK_KIND = "wallet_funding"
@@ -195,8 +196,9 @@ def profile_effective_account_ids(conn: sqlite3.Connection, profile_id: str) -> 
 def _type_row_counts_for_accounts(conn: sqlite3.Connection, account_ids: list[str]) -> dict[str, dict]:
     """Per captured `Type`, the rows on the review's (data source's) accounts split by whether a
     money-movement rule can affect them: **affected** (`category_overridden = 0` — rule-eligible, what the
-    rule moves to Money movement) vs **extra** (`category_overridden = 1` — import/manual-locked, which the
-    rule deliberately leaves alone; e.g. a category a cross-source import fixed onto the row). Keyed by
+    rule moves to Money movement, including a row holding a trusted import's category, since a file's
+    categories rank below the rules) vs **extra** (`category_overridden = 1` — a manual edit or a split,
+    which the rule deliberately leaves alone). Keyed by
     lowercased Type. Scoped to the source's *effective* accounts (not `account_type='paypal'`) so the count
     is right even before approval types those accounts, and so it catches rows on the same account that
     arrived via another import. The review's count is the affected count; the extras surface in the report."""
@@ -423,7 +425,7 @@ def reverse_batch_money_movement_links(conn: sqlite3.Connection, batch_id: str) 
                 conn.execute(
                     "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
                     (prior.get("category_id"), prior.get("category_source"),
-                     int(prior.get("category_overridden") or 0), leg_id),
+                     category_lock_for(prior.get("category_source"), prior.get("category_overridden")), leg_id),
                 )
         txn_links.delete_link(conn, link_id)
     return len(link_ids)

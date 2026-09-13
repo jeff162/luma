@@ -43,7 +43,12 @@ from backend.services.transaction_tags import (
 )
 from backend.json_utils import safe_json_dict
 from backend.services.amazon_import import parse_item_evidence
-from backend.services.categorizer import categorize_transaction, load_categorization_rules, recategorize_all
+from backend.services.categorizer import (
+    categorize_transaction,
+    category_lock_for,
+    load_categorization_rules,
+    recategorize_all,
+)
 from backend.services.documents import (
     INGEST_GRACE_SECONDS,
     documents_map_for,
@@ -1360,7 +1365,7 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
         conn.execute(
             """
             UPDATE txn
-            SET category_id = ?, imported_category = ?, category_overridden = 1, category_source = 'import'
+            SET category_id = ?, imported_category = ?, category_overridden = 0, category_source = 'import'
             WHERE id = ?
             """,
             (body.category_id, cat["name"], txn_id),
@@ -1463,7 +1468,8 @@ def restore_categorization(body: CategorizationRestore):
                 continue
             conn.execute(
                 "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
-                (row.category_id, row.category_source, int(row.category_overridden or 0), row.id),
+                (row.category_id, row.category_source,
+                 category_lock_for(row.category_source, row.category_overridden), row.id),
             )
             restored += 1
         rescan_edited_transactions(conn, [r.id for r in body.rows])

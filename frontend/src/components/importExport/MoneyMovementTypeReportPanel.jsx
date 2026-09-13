@@ -16,11 +16,11 @@ import TransactionListTable from '../TransactionListTable.jsx'
  *     (the user opened the report for an ordinary type), they carry whatever category they have and a
  *     money-movement rule *would* claim them — so the heading is worded conditionally rather than claiming
  *     "in Money movement" for a type that isn't ruled.
- *   - **Not affected** — rows that already carry an *imported* or *manual* category (`category_overridden
- *     = 1`). The rule deliberately never overrides those (see recategorize's import/manual protection), so
- *     they keep whatever category an import or a hand-edit gave them — which is why a Type's total row
- *     count can exceed how many actually moved to Money movement. Each row shows that category, and opening
- *     it reveals its Origin/source.
+ *   - **Not affected** — rows whose category was set by hand (`category_overridden = 1`). The rule
+ *     deliberately never overrides those (see recategorize's manual protection), so they keep the category
+ *     a hand-edit gave them — which is why a Type's total row count can exceed how many actually moved to
+ *     Money movement. A trusted import's category is not protected: a matching rule takes it. Each row
+ *     shows that category, and opening it reveals its Origin/source.
  *
  * Stacked above the review dialog (a second FloatingPanel), matching the drill-down affordance used
  * elsewhere rather than turning the count into a link.
@@ -88,11 +88,11 @@ export function MoneyMovementTypeReportPanel({ type, alreadyRuled = false, accou
               {notAffected.length ? (
                 <>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', margin: '16px 2px 4px' }}>
-                    Not affected · {notAffected.length} keep an imported or manual category
+                    Not affected · {notAffected.length} keep a manual category
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--muted)', margin: '0 2px 6px', lineHeight: 1.5 }}>
-                    These already have a category from an import or a manual edit, which the money-movement
-                    rule doesn&apos;t override. Open a row to see where its category came from.
+                    These already have a category set by hand, which the money-movement rule doesn&apos;t
+                    override. Open a row to see where its category came from.
                   </div>
                   <TransactionListTable
                     rows={notAffected}

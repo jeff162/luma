@@ -6,8 +6,8 @@ intent differs by case. `set_rejected_suggestion_disposition` settles them:
 
   - 'keep' (no category, or the row's own category) -> KEEP AS IMPORTED: leave the row at `import`.
               Keeping the file's category is not an override, so it stays re-derivable and reclaimable by
-              a later explicit "apply to existing" (a manual row would be spared by that). Survives an
-              automatic Run categorization because import rows are `category_overridden = 1`.
+              a later explicit "apply to existing" (a manual row would be spared by that) — and by an
+              automatic Run categorization, since a file's categories rank below the rules.
   - 'keep' with a *different* category -> RE-POINT AS MANUAL: a genuine override at the chosen category,
               spared by Run categorization and by an explicit apply.
   - 'clear' -> discard the category to the `cleared` source: rule-eligible again, but the raw
@@ -102,7 +102,7 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
         return batch_id
 
     def _import_txn(self, *, account_id, merchant, imported_category, category_id=None,
-                    source="import", overridden=1, batch_id=None):
+                    source="import", overridden=0, batch_id=None):
         txn_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
@@ -134,26 +134,29 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
 
     # -- keep -------------------------------------------------------------------------------------
 
-    def test_keep_leaves_import_keeps_category_and_survives_recategorize(self):
+    def test_keep_leaves_import_which_a_matching_rule_later_reclaims(self):
         account = self._account()
         membership = self._leaf("Membership")
         # An import-curated annual-fee row the user wants to keep but not build a rule for. Keeping the
         # file's own category is NOT an override, so the row stays `import` (re-derivable and still
-        # reclaimable by an explicit "apply to existing" later) rather than becoming a sticky manual lock.
+        # reclaimable by a rule later) rather than becoming a sticky manual lock.
         txn = self._import_txn(account_id=account, merchant="ANNUAL FEE", imported_category="Membership", category_id=membership)
-        # A rule that *would* match the merchant — to prove an automatic Run categorization doesn't reclaim it.
-        self._rule(category_id=self._leaf("Fees"), keyword="annual fee")
+        fees = self._leaf("Fees")
+        self._rule(category_id=fees, keyword="annual fee")
 
         result = self._dispose([txn], "keep")
         self.assertEqual(result["rows"], [])  # nothing changed, so nothing to snapshot for undo
         row = self._get(txn)
         self.assertEqual(row["category_source"], "import")  # left as imported, not manual
         self.assertEqual(row["category_id"], membership)  # category value unchanged
+        self.assertEqual(row["category_overridden"], 0)
 
+        # Discarding the suggestion is not a decision against every rule: a file's categories rank below
+        # the rules, so an automatic Run categorization lets the matching rule take the row.
         self._recategorize()
         row = self._get(txn)
-        self.assertEqual(row["category_source"], "import")  # import is skipped by automatic Run categorization
-        self.assertEqual(row["category_id"], membership)
+        self.assertEqual(row["category_source"], "rule")
+        self.assertEqual(row["category_id"], fees)
 
     def test_keep_with_same_category_is_not_an_override(self):
         # Re-affirming the row's own category (e.g. an unchanged conflict-set member kept at its imported
@@ -256,7 +259,7 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
         restored = self._get(txn)
         self.assertEqual(restored["category_source"], "import")
         self.assertEqual(restored["category_id"], membership)
-        self.assertEqual(restored["category_overridden"], 1)
+        self.assertEqual(restored["category_overridden"], 0)  # an import row is never locked
         self.assertEqual(self._get(kept)["category_source"], "manual")  # untouched throughout
 
     def test_clear_survives_trust_flag_re_toggle(self):
