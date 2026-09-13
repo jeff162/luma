@@ -182,6 +182,29 @@ class ReportSignFiltersTests(unittest.TestCase):
         self.assertEqual(sum(r["total"] for r in in_group_rows), group_row["total"])
         self.assertEqual(sum(r["count"] for r in in_group_rows), group_row["count"])
 
+    def test_the_reconciliation_survives_a_category_moving_to_the_other_side(self):
+        # A move across the income/expense boundary used to leave the leaf's explicit type behind. The group
+        # then signed the moved money as one side and its own slice signed it as the other, so the two
+        # disagreed by twice that money. The leaf is typed the way creating it under a group types it.
+        from backend.routers.categories import CategoryUpdate, update_category
+
+        account_id = self._insert_account("Checking")
+        income_group_id = self._insert_category(name="Income Fixture", parent_id=None, category_type="income")
+        expense_group_id = self._insert_category(name="Shopping Fixture", parent_id=None, category_type="expense")
+        resale_id = self._insert_category(name="Resale Fixture", parent_id=income_group_id, category_type="income")
+        clothing_id = self._insert_category(name="Clothing Fixture", parent_id=expense_group_id, category_type="expense")
+        self._insert_transaction(account_id=account_id, category_id=clothing_id, amount=40.0, date="2026-04-03")
+        self._insert_transaction(account_id=account_id, category_id=resale_id, amount=-250.0, date="2026-04-08")
+
+        with self._use_db_path():
+            update_category(resale_id, CategoryUpdate(parent_id=expense_group_id))
+            group_rows = spending_by_group(month="2026-04", date_start=None, date_end=None, account_id=None)
+            in_group_rows = self._by_category_in_group(expense_group_id)
+
+        group_row = next(r for r in group_rows if r["group_id"] == expense_group_id)
+        self.assertEqual(group_row["total"], -210.0)
+        self.assertEqual(sum(r["total"] for r in in_group_rows), group_row["total"])
+
     def test_an_untyped_leaf_under_an_expense_group_stays_an_expense(self):
         # The inheritance is not "NULL means income": a leaf parked under an expense group takes that,
         # so its credits read negative. Guards the COALESCE against being read as a special case for

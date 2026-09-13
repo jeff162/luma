@@ -22,7 +22,7 @@ from backend.db.control_database import auth_required
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id, upsert_connection_accounts
-from backend.routers.auth import _require_admin_or_local
+from backend.authorization import require_admin_or_local
 from backend.services import crypto_service
 from backend.services.connection_mapping import unmapped_count
 from backend.services.providers import (
@@ -291,7 +291,7 @@ def list_providers(request: Request):
     # `connect_spec` and `requires_app_config` travel with each provider so the Connections tab can render
     # the right affordances — a paste field vs. a Link button, a Configure action or none — without keeping
     # its own list of which provider works which way.
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     out = []
     for p in supported_providers():
         adapter = get_adapter(p)
@@ -313,14 +313,14 @@ def list_providers(request: Request):
 
 @router.get("/{provider}/config")
 def get_config(provider: str, request: Request):
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     _validate_provider(provider)
     return get_provider_config_status(provider)
 
 
 @router.post("/{provider}/config")
 def save_config(provider: str, body: ProviderConfigRequest, request: Request):
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     _validate_provider(provider)
     if not get_adapter(provider).requires_app_config:
         raise HTTPException(status_code=409, detail={
@@ -346,8 +346,8 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     result = get_provider_config_status(provider)
-    # Configuring a provider puts a live bank secret in play; warn (don't force) when this instance is
-    # reachable over a cleartext network link — the connect gate is where HTTPS is actually enforced.
+    # Configuring a provider puts a live bank secret in play; warn when this instance is reachable over a
+    # cleartext network link. Nothing refuses the request for it yet — HTTPS enforcement is still to be built.
     warning = transport.cleartext_warning(request, perimeter_on=auth_required(), provider_intended=True)
     if warning:
         result["transport_warning"] = warning
@@ -372,7 +372,7 @@ def get_secret(provider: str, request: Request):
     Reuses `resolve_app_config` — the same decryption path a sync takes — so there is one way to turn a
     stored credential back into plaintext, and the vault gate cannot be bypassed by asking here.
     """
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     _validate_provider(provider)
     try:
         app_config = resolve_app_config(request.state.user, provider)

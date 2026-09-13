@@ -64,6 +64,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from backend.authorization import require_admin_or_local
 from backend.db.database import (
     CURRENT_VERSION,
     current_db_path,
@@ -360,7 +361,7 @@ def _reject_duplicate_recipient_label(conn, label: str, exclude_id: Optional[str
         raise HTTPException(status_code=400, detail=f'A backup key named "{label.strip()}" already exists.')
 
 
-@router.post("/backup/recipients")
+@router.post("/backup/recipients", dependencies=[Depends(require_admin_or_local)])
 def create_backup_recipient(body: BackupRecipientCreate):
     public_key, fingerprint = _validate_backup_recipient_key(body.public_key)
     rid = str(uuid.uuid4())
@@ -386,7 +387,7 @@ def create_backup_recipient(body: BackupRecipientCreate):
     }
 
 
-@router.patch("/backup/recipients/{recipient_id}")
+@router.patch("/backup/recipients/{recipient_id}", dependencies=[Depends(require_admin_or_local)])
 def update_backup_recipient(recipient_id: str, body: BackupRecipientUpdate):
     with get_db() as conn:
         existing = conn.execute(
@@ -414,7 +415,7 @@ def update_backup_recipient(recipient_id: str, body: BackupRecipientUpdate):
     return dict(row)
 
 
-@router.delete("/backup/recipients/{recipient_id}")
+@router.delete("/backup/recipients/{recipient_id}", dependencies=[Depends(require_admin_or_local)])
 def delete_backup_recipient(recipient_id: str):
     with get_db() as conn:
         conn.execute("DELETE FROM backup_recipient WHERE id = ?", (recipient_id,))
@@ -1649,7 +1650,7 @@ def restore_state_status():
         }
 
 
-@router.post("/restore/resume-documents")
+@router.post("/restore/resume-documents", dependencies=[Depends(require_admin_or_local)])
 def resume_restore_documents():
     """Finish the documents phase of a restore that was interrupted after its ledger committed.
 
@@ -1683,7 +1684,7 @@ def resume_restore_documents():
     return {"ok": True, "documents": documents}
 
 
-@router.post("/restore")
+@router.post("/restore", dependencies=[Depends(require_admin_or_local)])
 def restore_backup(body: RestoreRequest):
     """Destructive restore from a payload held in memory: version 7-9 backups, whose entire payload is one
     JSON object, and any caller posting one directly. Credentials are never touched.
@@ -2150,7 +2151,7 @@ def _foreign_backup_prompt(vault: dict, user) -> str:
             "created it.")
 
 
-@router.post("/restore/credentials")
+@router.post("/restore/credentials", dependencies=[Depends(require_admin_or_local)])
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     # Blocked while demo data is loaded, like every other path that brings data in. This one is not merely
     # for consistency: it inserts `connection` rows, and a linked connection is exactly what
@@ -2302,7 +2303,7 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     return {"ok": True, "restored": len(connections) + len(provider_configs)}
 
 
-@router.post("/restore-file")
+@router.post("/restore-file", dependencies=[Depends(require_admin_or_local)])
 async def restore_backup_file(
     file: UploadFile = File(...),
     private_key_file: UploadFile | None = File(None),
@@ -2345,7 +2346,7 @@ async def restore_backup_file(
         _discard_unclaimed_staging(staged_path)
 
 
-@router.post("/restore/credentials-file")
+@router.post("/restore/credentials-file", dependencies=[Depends(require_admin_or_local)])
 async def restore_credentials_file(request: Request, file: UploadFile = File(...),
                                    passphrase: str | None = Form(None)):
     with backup_temp_file() as staged:

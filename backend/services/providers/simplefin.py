@@ -181,6 +181,43 @@ _ACCOUNT_ID_PREFIX = "simplefin:"
 # urllib's default agent outright (see `_http`), so an anonymous request never reaches SimpleFIN at all.
 _USER_AGENT = "Luma (+https://github.com/jeff162/luma)"
 
+# The only servers this adapter sends a request to. A setup token is a base64 URL the user pastes, and the
+# access URL it is exchanged for comes back from whatever answered the claim, so without a fixed list either
+# one could aim the server's own request anywhere — an address on the private network, or a host that echoes
+# its reply back through an error message. SimpleFIN Bridge is one service run by SimpleFIN rather than a
+# family of compatible servers: `bridge` serves real accounts and `beta-bridge` the demo token its setup page
+# hands out. If SimpleFIN moves or adds a host, it is added here; a different server speaking the protocol
+# would be a different product, and gets its own entry if one ever needs supporting.
+SIMPLEFIN_BRIDGE_HOSTS = ("bridge.simplefin.org", "beta-bridge.simplefin.org")
+
+
+def _is_bridge_address(url: str) -> bool:
+    parts = urllib.parse.urlsplit((url or "").strip())
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme.lower() == "https"
+        and (parts.hostname or "").lower() in SIMPLEFIN_BRIDGE_HOSTS
+        and port in (None, 443)
+    )
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Report a redirect as the HTTP error it is, instead of following it.
+
+    Following one sends the request, `Authorization` header included, to wherever the redirect names — an
+    address the host list never saw. The Bridge has no reason to redirect an API call, so a redirect surfaces
+    as a failure carrying its status.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_open = urllib.request.build_opener(_RefuseRedirects).open
+
 # Ceilings on provider-supplied text before it is stored or shown. The Bridge's messages are meant for
 # display and are short, but nothing in the protocol *bounds* them, and everything here ends up in a DB
 # column and on a connection card. React escapes the content, so the risk is not injection but volume: an
@@ -277,6 +314,11 @@ def _basic_auth_header(username: str, password: str) -> str:
 
 
 def _http(url: str, *, method: str = "GET", headers: dict | None = None) -> bytes:
+    if not _is_bridge_address(url):
+        # Checked here as well as by the callers, because every request passes through this function: a
+        # future call that forgets its own check still cannot reach another host. The callers check first
+        # only so they can say something more useful.
+        raise SimpleFinError("That address is not SimpleFIN Bridge, so no request was sent.")
     request = urllib.request.Request(url, method=method, headers=headers or {})
     # Identify the client explicitly. urllib's default (`Python-urllib/x.y`) is blocked outright by the
     # CDN in front of the SimpleFIN Bridge, which answers 403 `error code: 1010` — a browser-signature
@@ -286,7 +328,7 @@ def _http(url: str, *, method: str = "GET", headers: dict | None = None) -> byte
     # client to one request per interval — the limiter this protects against counts requests, not walks.
     _pace_request()
     try:
-        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+        with _open(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
             return response.read()
     except urllib.error.HTTPError as exc:
         detail = ""
@@ -627,6 +669,8 @@ class SimpleFinAdapter(ProviderAdapter):
             raise SimpleFinError("That does not look like a SimpleFIN setup token.") from exc
         if not decoded.lower().startswith("https://"):
             raise SimpleFinError("That does not look like a SimpleFIN setup token.")
+        if not _is_bridge_address(decoded):
+            raise SimpleFinError("That setup token is not from SimpleFIN Bridge, so it was not used.")
         return decoded
 
     def connect(self, app_config: dict, payload: dict) -> dict:
@@ -651,6 +695,10 @@ class SimpleFinAdapter(ProviderAdapter):
             ) from exc
         if not access_url.lower().startswith("https://"):
             raise SimpleFinError("SimpleFIN did not return an access URL for that setup token.")
+        if not _is_bridge_address(_split_access_url(access_url)[0]):
+            raise SimpleFinError(
+                "SimpleFIN returned an access address that is not SimpleFIN Bridge, so it was not saved."
+            )
         return {
             # The access URL is the credential, so it cannot also be the public handle: `external_id` is
             # stored in the clear and used as the encryption AAD. A hash gives a stable identity for the
@@ -680,12 +728,12 @@ class SimpleFinAdapter(ProviderAdapter):
         query = list(params.items())
         for key, values in (repeated or {}).items():
             query.extend((key, v) for v in values)
-        if not base.lower().startswith("https://"):
-            # Re-checked here and not only at connect time. The scheme is validated when the access URL is
-            # claimed, but this reads it back out of the vault on every call, and the protocol's rule is
-            # about the *request*: a stored value that somehow became http:// would put a credential on
-            # the wire in the clear, which no later validation can undo.
-            raise SimpleFinError("This connection's SimpleFIN address is not HTTPS; reconnect it.")
+        if not _is_bridge_address(base):
+            # Re-checked here and not only at connect time. The address is validated when it is claimed, but
+            # this reads it back out of the vault on every call, and a stored value that somehow became
+            # http://, or names another host, would put a credential on the wire to the wrong place — which
+            # no later validation can undo.
+            raise SimpleFinError("This connection's address is not an HTTPS SimpleFIN Bridge address; reconnect it.")
         url = f"{base}/accounts?{urllib.parse.urlencode(query)}"
         try:
             body = _http(url, headers={"Authorization": _basic_auth_header(username, password)})

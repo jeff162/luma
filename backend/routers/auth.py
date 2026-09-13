@@ -64,6 +64,7 @@ from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_
 from backend.services import crypto_service
 from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
+from backend.authorization import require_admin, require_admin_or_local
 
 
 router = APIRouter()
@@ -200,26 +201,10 @@ class SelectIdentityRequest(BaseModel):
     user_id: str
 
 
-def _require_admin(request: Request):
-    user = getattr(request.state, "user", None)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
-
-
-def _require_admin_or_local(request: Request):
-    if not auth_required():
-        # Environment settings are global app config, not tenant data, so local
-        # mode does not need a control-db user record just to read/write them.
-        user = getattr(request.state, "user", None)
-        return user or {"role": "admin", "local_mode": True}
-    return _require_admin(request)
-
-
 def _session_can_manage_config(user: dict | None) -> bool:
     """Whether this session may be *told* the configuration, as opposed to being able to demand it.
 
-    The same reach `_require_admin_or_local` grants, phrased as a question rather than a guard: the
+    The same reach `require_admin_or_local` grants, phrased as a question rather than a guard: the
     status payload has to decide whether to include a field, and a 403 is not an answer it can use. Both
     must stay in step — the database locations are admin-or-local information, and a field that leaked
     them into a member's status payload would widen that boundary without any endpoint appearing to
@@ -507,7 +492,7 @@ def reset_config_value(key: str, request: Request):
     """Forget a stored configuration value so its default applies again after a restart. Both settings
     this can reach (the session secret, the session cookie name) generate or derive themselves, so this
     is a reset rather than an edit."""
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     try:
         return app_config.clear_stored_value(key)
     except KeyError:
@@ -522,7 +507,7 @@ def get_effective_config(request: Request):
     the settings that can be changed in the app have their own endpoints, and the rest are consumed
     before the app exists (ports, database locations), so this exists to answer "what is in effect and
     where did it come from" rather than to edit anything."""
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     return {
         "settings": app_config.effective_config(),
         "env_file_path": str(env_file_path()),
@@ -532,7 +517,7 @@ def get_effective_config(request: Request):
 
 @router.post("/password-policy")
 def save_password_policy(body: PasswordPolicyRequest, request: Request):
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     try:
         set_password_policy(body.policy)
     except ValueError as exc:
@@ -546,7 +531,7 @@ def save_password_policy(body: PasswordPolicyRequest, request: Request):
 
 @router.post("/security-profile")
 def save_security_profile(body: SecurityProfileRequest, request: Request):
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     try:
         set_security_profile(body.profile)
     except ValueError as exc:
@@ -564,7 +549,7 @@ def save_security_profile(body: SecurityProfileRequest, request: Request):
 
 @router.post("/data-provider-intent")
 def save_data_provider_intent(body: DataProviderIntentRequest, request: Request):
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     set_data_provider_intended(bool(body.intended))
     return {"data_provider_intended": get_data_provider_intended()}
 
@@ -573,7 +558,7 @@ def save_data_provider_intent(body: DataProviderIntentRequest, request: Request)
 def suppress_https_warning(body: HttpsWarningSuppressRequest, request: Request):
     # Only the *recommended* (plain client-server, no provider) HTTPS nag is suppressible — the
     # required (provider configured) case ignores this and self-clears only over real HTTPS.
-    _require_admin_or_local(request)
+    require_admin_or_local(request)
     set_https_warning_suppressed(bool(body.suppressed))
     return {"https_warning_suppressed": get_https_warning_suppressed()}
 
@@ -621,7 +606,7 @@ def disable_auth(request: Request):
     # stays signed in as a now-perimeter-off (pwless) identity.
     if not auth_required():
         return _auth_status_payload(request)
-    _require_admin(request)
+    require_admin(request)
     disable_auth_mode()
     session = request.scope.get("session")
     if session is not None and session.get("user_id"):
@@ -1079,7 +1064,7 @@ def vault_reset(body: VaultResetRequest, request: Request):
     name, and a consequence reported back (`also_locked_out`) — not a refusal. See the note above
     `reset_vault` for why the block was removed.
     """
-    user = _require_admin_or_local(request)
+    user = require_admin_or_local(request)
     if body.confirm.strip().upper() != RESET_CONFIRM_PHRASE:
         raise HTTPException(status_code=400, detail={
             "code":    "confirmation_required",
@@ -1177,9 +1162,9 @@ def vault_approve_access(slot_id: str, request: Request):
 def vault_revoke_access(user_id: str, request: Request):
     """Remove someone's vault access. Admin-gated, unlike granting: this is the removal half of user
     management, and it is the one direction that can be performed against a person who is not present.
-    Perimeter-off installs fall through the usual `_require_admin_or_local` seam — with no sign-in there
+    Perimeter-off installs fall through the usual `require_admin_or_local` seam — with no sign-in there
     is no admin boundary to enforce, since anyone can already select any identity."""
-    admin = _require_admin_or_local(request)
+    admin = require_admin_or_local(request)
     if admin.get("id") == user_id:
         # Revoking your own last slot is the "remove my only unlock method" footgun wearing another
         # label, and there is no recovery path behind it.
@@ -1336,13 +1321,13 @@ def vault_discard_recovery_code(request: Request):
 
 @router.get("/users")
 def users(request: Request):
-    _require_admin(request)
+    require_admin(request)
     return {"users": list_users()}
 
 
 @router.post("/users")
 def add_user(body: UserCreateRequest, request: Request):
-    admin = _require_admin(request)
+    admin = require_admin(request)
     try:
         user = create_user(
             body.username,
@@ -1358,7 +1343,7 @@ def add_user(body: UserCreateRequest, request: Request):
 
 @router.patch("/users/{user_id}")
 def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
-    admin = _require_admin(request)
+    admin = require_admin(request)
     if admin["id"] == user_id:
         # Do not let the currently signed-in admin remove their own ability to finish
         # the session; role/status changes require a second admin for recoverability.
@@ -1389,7 +1374,7 @@ def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
 
 @router.delete("/users/{user_id}")
 def remove_user(user_id: str, request: Request):
-    admin = _require_admin(request)
+    admin = require_admin(request)
     if admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete the account you are currently signed into")
     try:

@@ -315,6 +315,11 @@ def claimed_amounts(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[st
     }
 
 
+def links_claiming(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> set[str]:
+    """The reimbursements holding a claim against any of these transactions, open or completed."""
+    return {claim["link_id"] for claims in _claims_by_txn(conn, txn_ids).values() for claim in claims}
+
+
 def unclaimed_amounts(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dict[str, float]:
     """Per transaction, the receivable money no reimbursement has claimed yet.
 

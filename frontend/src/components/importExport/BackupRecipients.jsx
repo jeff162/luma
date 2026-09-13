@@ -39,7 +39,9 @@ function isNameTaken(existingNames, label) {
   return (existingNames || []).some(name => (name || '').trim().toLowerCase() === candidate)
 }
 
-export function BackupRecipients({ onRecipientsChange }) {
+// `canManage` is false for a member once sign-in protection is on. The keys decide who can read a backup,
+// so changing them needs an admin (the server refuses it regardless); the list and Export stay readable.
+export function BackupRecipients({ onRecipientsChange, canManage = true }) {
   const [recipients, setRecipients] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -179,28 +181,33 @@ export function BackupRecipients({ onRecipientsChange }) {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-                <EditableRecipientLabel
-                  recipient={recipient}
-                  onCommit={async next => {
-                    try {
-                      const updated = await api.updateBackupRecipient(recipient.id, { label: next })
-                      setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
-                      setError('')
-                    } catch (err) {
-                      setError(err.message || 'Failed to update recipient')
-                      throw err
-                    }
-                  }}
-                />
+                {canManage ? (
+                  <EditableRecipientLabel
+                    recipient={recipient}
+                    onCommit={async next => {
+                      try {
+                        const updated = await api.updateBackupRecipient(recipient.id, { label: next })
+                        setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
+                        setError('')
+                      } catch (err) {
+                        setError(err.message || 'Failed to update recipient')
+                        throw err
+                      }
+                    }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{recipient.label}</span>
+                )}
                 <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
                   {recipient.fingerprint}
                 </div>
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: canManage ? 'pointer' : 'default' }}>
                 <input
                   name={`backup-recipient-enabled-${recipient.id}`}
                   type="checkbox"
                   checked={!!recipient.enabled}
+                  disabled={!canManage}
                   onChange={() => toggleRecipient(recipient)}
                 />
                 Enabled
@@ -215,32 +222,40 @@ export function BackupRecipients({ onRecipientsChange }) {
               >
                 Export
               </Button>
-              <button
-                type="button"
-                aria-label={`Delete backup key ${recipient.label}`}
-                onClick={() => setPendingDeleteRecipient(recipient)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--danger)',
-                  cursor: 'pointer',
-                  fontSize: 16,
-                  lineHeight: 1,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 999,
-                }}
-              >
-                ×
-              </button>
+              {canManage ? (
+                <button
+                  type="button"
+                  aria-label={`Delete backup key ${recipient.label}`}
+                  onClick={() => setPendingDeleteRecipient(recipient)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--danger)',
+                    cursor: 'pointer',
+                    fontSize: 16,
+                    lineHeight: 1,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 999,
+                  }}
+                >
+                  ×
+                </button>
+              ) : <span />}
             </div>
           ))
         )}
 
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: 16, borderTop: '1px solid var(--border)' }}>
-          <Button small variant="ghost" onClick={() => setAddOpen(true)}>Add a key</Button>
-          <Button small variant="ghost" onClick={() => setGenerateOpen(true)}>Generate a key pair</Button>
-        </div>
+        {canManage ? (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: 16, borderTop: '1px solid var(--border)' }}>
+            <Button small variant="ghost" onClick={() => setAddOpen(true)}>Add a key</Button>
+            <Button small variant="ghost" onClick={() => setGenerateOpen(true)}>Generate a key pair</Button>
+          </div>
+        ) : (
+          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', color: 'var(--muted)', fontSize: 12 }}>
+            Adding, changing or removing backup keys needs an admin.
+          </div>
+        )}
       </Card>
     </>
   )

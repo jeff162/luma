@@ -112,8 +112,13 @@ class VaultAccessEndpointTests(unittest.TestCase):
     def _add_identity(self, client, name: str) -> str:
         return client.post("/api/auth/identities", json={"name": name}).json()["identity"]["id"]
 
-    def _become(self, client, user_id: str):
+    def _become(self, client, user_id: str, *, unlock_with: str | None = None):
         client.post("/api/auth/select-identity", json={"user_id": user_id})
+        # Picking an identity starts a new browser session, and an unlock belongs to the session that made
+        # it (`test_vault_session_scope.py`), so switching back to someone does not find them unlocked.
+        if unlock_with:
+            opened = client.post("/api/auth/vault/unlock", json={"passphrase": unlock_with})
+            assert opened.status_code == 200, opened.text
 
     def test_a_second_user_enrolls_and_is_approved(self):
         with api_client() as (client, _):
@@ -134,7 +139,7 @@ class VaultAccessEndpointTests(unittest.TestCase):
             self.assertEqual(blocked.status_code, 409)
             self.assertEqual(blocked.json()["detail"]["code"], "vault_access_pending")
 
-            self._become(client, owner)
+            self._become(client, owner, unlock_with=STRONG_PASSPHRASE)
             requests = client.get("/api/auth/vault/access-requests").json()["requests"]
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["user_id"], joiner)
@@ -171,7 +176,7 @@ class VaultAccessEndpointTests(unittest.TestCase):
             joiner = self._add_identity(client, "Joiner")
             self._become(client, joiner)
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
-            self._become(client, owner)
+            self._become(client, owner, unlock_with=STRONG_PASSPHRASE)
             slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
             client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
 
@@ -292,7 +297,7 @@ class VaultAccessEndpointTests(unittest.TestCase):
                 [m["user_id"] for m in client.get("/api/auth/vault/members").json()["members"]], [owner],
             )
 
-            self._become(client, owner)
+            self._become(client, owner, unlock_with=STRONG_PASSPHRASE)
             slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
             client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
             self.assertEqual(

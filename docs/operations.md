@@ -194,7 +194,8 @@ so a Linux run still catches it.
 **The operator always retains a working admin login.** Where a restore includes identity data, the
 current admin is preserved and the backup's accounts merged in, rather than the perimeter being
 silently overwritten. Restoring requires admin in the first place — it is a destructive act somebody
-has to be able to authorize.
+has to be able to authorize. That covers every restore route, resuming an interrupted one, and changing
+the backup keys; with sign-in protection off there is no role to check, and any session may.
 
 **A restore covers one of the two databases, so its outcome depends on state it never touched.** The
 regular backup is the *data* database; identities, the sign-in perimeter and the vault slots live in the

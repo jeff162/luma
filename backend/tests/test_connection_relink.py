@@ -30,7 +30,7 @@ from backend.services import crypto_service as cs
 from backend.services.providers import get_adapter
 from backend.services.providers.base import ProviderAdapter
 from backend.services.source_capabilities import REJECT_ZERO_AMOUNT
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
 
 PROVIDER = "simplefin"
 
@@ -194,11 +194,12 @@ class RelinkAdoptionTests(unittest.TestCase):
                     "SELECT external_id, credential, credential_enc FROM connection WHERE id = ?",
                     (first_id,)).fetchone())
             user = {"id": cs.cdb.list_vault_slots()[0]["user_id"]}
-            self.assertEqual(
-                cs.decrypt_connection_credential(user, PROVIDER, row["external_id"],
-                                                 row["credential"], row["credential_enc"]),
-                "https://user:pass@bridge.example/second",
-            )
+            with in_browser_session(client):
+                self.assertEqual(
+                    cs.decrypt_connection_credential(user, PROVIDER, row["external_id"],
+                                                     row["credential"], row["credential_enc"]),
+                    "https://user:pass@bridge.example/second",
+                )
 
     # --- staleness: absorbed, never refused, because the authorization is already spent ------------
 

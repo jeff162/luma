@@ -26,7 +26,7 @@ from backend.routers.import_export.backup import (
     CONTENT_HASH_FIELD, read_payload_bytes, _stamp_content_hash,
 )
 from backend.services import crypto_service as cs
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
 
 PASSPHRASE = STRONG_PASSPHRASE
 OTHER_PASSPHRASE = "a-different-strong-passphrase"
@@ -50,9 +50,10 @@ class CredentialsBackupTests(unittest.TestCase):
         """A vaulted install holding one connection credential and one app-level provider secret."""
         client.post("/api/auth/vault/set-passphrase", json={"passphrase": PASSPHRASE})
         user_id = self._user_id(client)
-        credential, credential_enc = cs.encrypt_connection_credential(
-            {"id": user_id}, "plaid", "ext-1", TOKEN,
-        )
+        with in_browser_session(client):
+            credential, credential_enc = cs.encrypt_connection_credential(
+                {"id": user_id}, "plaid", "ext-1", TOKEN,
+            )
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)"
@@ -67,15 +68,16 @@ class CredentialsBackupTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return read_payload_bytes(r.content)
 
-    def _stored_secrets(self, user_id) -> tuple[str, str]:
-        """What the live DB's credentials decrypt to under THIS install's DEK."""
+    def _stored_secrets(self, client, user_id) -> tuple[str, str]:
+        """What the live DB's credentials decrypt to under THIS install's DEK, read as that browser."""
         with get_db() as conn:
             c = conn.execute("SELECT * FROM connection WHERE external_id = 'ext-1'").fetchone()
             pc = conn.execute("SELECT * FROM provider_config WHERE provider = 'plaid'").fetchone()
-        return (
-            cs.decrypt_connection_credential({"id": user_id}, "plaid", "ext-1", c["credential"], c["credential_enc"]),
-            cs.decrypt_app_credential({"id": user_id}, "plaid", pc["secret"], pc["secret_enc"]),
-        )
+        with in_browser_session(client):
+            return (
+                cs.decrypt_connection_credential({"id": user_id}, "plaid", "ext-1", c["credential"], c["credential_enc"]),
+                cs.decrypt_app_credential({"id": user_id}, "plaid", pc["secret"], pc["secret_enc"]),
+            )
 
     # ---- the reported bug -----------------------------------------------
 
@@ -180,7 +182,7 @@ class CredentialsBackupTests(unittest.TestCase):
 
             r = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
 
     def test_a_backup_predating_a_passphrase_change_still_restores_here(self):
         # Changing a passphrase re-wraps the SAME workspace DEK and leaves stored ciphertext untouched, so
@@ -201,7 +203,7 @@ class CredentialsBackupTests(unittest.TestCase):
             r = client.post("/api/import-export/restore/credentials", json={"data": payload})
 
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
 
     def test_another_members_backup_restores_without_their_passphrase(self):
         # Every member's slot seals the same workspace DEK, so whether a restore is a byte copy is a
@@ -218,7 +220,7 @@ class CredentialsBackupTests(unittest.TestCase):
             r = client.post("/api/import-export/restore/credentials", json={"data": _stamp_content_hash(payload)})
 
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(user_id)[0], TOKEN)
+            self.assertEqual(self._stored_secrets(client, user_id)[0], TOKEN)
 
     def test_a_genuinely_foreign_backup_still_asks_and_says_whose_passphrase(self):
         # The DEK does not open it, so a passphrase really is needed — and the message has to say *which*,
@@ -254,7 +256,7 @@ class CredentialsBackupTests(unittest.TestCase):
                 files={"file": ("luma_credentials-2026-08-23.zip", exported.content, "application/zip")},
             )
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
 
     def test_a_data_backup_uploaded_here_is_named_for_what_it_is(self):
         # The complaint that started this: picking the wrong one of the two backups answered with a
@@ -289,7 +291,7 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
 
             client.post("/api/auth/vault/unlock", json={"passphrase": PASSPHRASE})
-            self.assertEqual(self._stored_secrets(user_id)[0], TOKEN)
+            self.assertEqual(self._stored_secrets(client, user_id)[0], TOKEN)
 
     def test_restoring_onto_a_foreign_install_re_keys_under_the_local_vault(self):
         # Machine loss, the reason to take one of these at all. A fresh install with its own user id and
@@ -311,7 +313,7 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
 
             # Readable under the LOCAL dek, and the local vault slot is untouched.
-            self.assertEqual(self._stored_secrets(local_user), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
             self.assertEqual(cs.export_vault_slot(local_user), local_slot_before)
             with get_db() as conn:
                 stored = conn.execute("SELECT credential_enc FROM connection WHERE external_id='ext-1'").fetchone()
@@ -359,7 +361,7 @@ class CredentialsBackupTests(unittest.TestCase):
                 json={"data": payload, "passphrase": PASSPHRASE},
             )
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(local_user), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, local_user), (TOKEN, APP_SECRET))
 
     # ---- refusals -------------------------------------------------------
 
@@ -413,7 +415,7 @@ class CredentialsBackupTests(unittest.TestCase):
             }
             r = client.post("/api/import-export/restore/credentials", json={"data": legacy})
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(self._stored_secrets(user_id), (TOKEN, APP_SECRET))
+            self.assertEqual(self._stored_secrets(client, user_id), (TOKEN, APP_SECRET))
 
     def test_a_v1_legacy_plaid_backup_still_restores(self):
         with api_client() as (client, _):
@@ -427,11 +429,12 @@ class CredentialsBackupTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)
             with get_db() as conn:
                 row = conn.execute("SELECT * FROM connection WHERE external_id = 'ext-1'").fetchone()
-            self.assertEqual(
-                cs.decrypt_connection_credential(
-                    {"id": user_id}, "plaid", "ext-1", row["credential"], row["credential_enc"]),
-                TOKEN,
-            )
+            with in_browser_session(client):
+                self.assertEqual(
+                    cs.decrypt_connection_credential(
+                        {"id": user_id}, "plaid", "ext-1", row["credential"], row["credential_enc"]),
+                    TOKEN,
+                )
 
     def test_a_v2_backup_still_needs_the_local_vault_unlocked(self):
         with api_client() as (client, _):

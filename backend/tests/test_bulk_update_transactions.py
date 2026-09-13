@@ -150,6 +150,17 @@ class BulkUpdateTransactionTests(unittest.TestCase):
         self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2026-03-15")])
         self.assertEqual(self._row(a)["date"], "2026-03-15")
 
+    def test_set_date_refuses_a_day_the_calendar_does_not_have(self):
+        # The right shape is not enough: these sort and bucket as dates that do not exist.
+        a = self._insert_txn(date="2026-01-02")
+        for impossible in ("2026-02-30", "2026-13-01", "2025-02-29"):
+            with self.subTest(impossible), self.assertRaises(HTTPException) as ctx:
+                self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date=impossible)])
+            self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(self._row(a)["date"], "2026-01-02")
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2028-02-29")])
+        self.assertEqual(self._row(a)["date"], "2028-02-29")
+
     def test_set_review_status_both_directions(self):
         a = self._insert_txn()
         self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_review_status", needs_review=True)])

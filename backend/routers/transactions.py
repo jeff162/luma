@@ -1025,6 +1025,20 @@ def _reject_group_category_assignment(conn, category_id: Optional[str]) -> None:
         )
 
 
+def _require_calendar_date(value: Optional[str]) -> str:
+    # A hand-entered date has to name a real day, not merely look like one: `2026-02-31` passes the shape
+    # check and then sorts and buckets as a date that does not exist. `strptime` is the same calendar check
+    # the import path parses every file date with.
+    text = (value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{text} is not a real date")
+    return text
+
+
 def _resolved_tags_response(conn, txn_id: str) -> dict:
     """A transaction's effective tags, for an endpoint that just changed what they resolve from.
 
@@ -1085,9 +1099,7 @@ def create_transaction(body: TransactionCreate):
     payee = (body.payee or "").strip()
     if not payee:
         raise HTTPException(status_code=400, detail="A payee or description is required")
-    date = (body.date or "").strip()
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    date = _require_calendar_date(body.date)
     amount = round(float(body.amount), 2)
     if amount == 0:
         raise HTTPException(status_code=400, detail="A transaction needs an amount")
@@ -1692,9 +1704,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
                 [name, *chunk],
             )
     elif kind == "set_date":
-        date = (action.date or "").strip()
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+        date = _require_calendar_date(action.date)
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
             conn.execute(f"UPDATE txn SET date = ? WHERE id IN ({placeholders})", [date, *chunk])

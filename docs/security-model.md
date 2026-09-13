@@ -91,9 +91,14 @@ deliberate revocation reads as broken rather than as closed.
 
 **Login is an authentication perimeter, not an authorization system.** Its only job is to keep *non-users*
 out. Once inside, every user sees and edits the same data with no row- or scope-level restriction, and no
-data route checks role. **Admin gates settings, not data** — user management and provider/environment
-settings only. Do not add an authorization check at the data layer expecting it to mean something; there
-is no scoping model behind it for it to enforce.
+data route checks role. **Admin gates settings, not data** — user management, provider/environment
+settings, and the operations that replace the workspace wholesale: every restore path, and the backup keys
+that decide who can read a backup. A restore is not a data edit. It swaps out every row, the connections
+and the provider configuration at once, so it is a settings-scale act somebody has to be able to
+authorize, and before it was gated any signed-in member could replace the global provider configuration
+through the legacy credentials restore. The guards live in `backend/authorization.py`; with sign-in
+protection off there is no role to hold, and they pass. Do not add an authorization check at the data
+layer expecting it to mean something; there is no scoping model behind it for it to enforce.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity
 has a password and another does not, anyone on the LAN picks the passwordless one and reads the same
@@ -111,6 +116,18 @@ shared data is incoherent, so the optionality lives one level up.
   and can operate none of them.
 - *An app password* is **network-access control** — it establishes who is at the browser, never authority
   over encrypted data.
+
+**An unlock belongs to the browser session that presented the secret, not to the identity.** Picking an
+identity takes no credential while sign-in protection is off, so an unlock filed under the user alone was
+inherited by anyone who picked that name on another browser while its owner was unlocked — and inside the
+five-minute proof window, with it the authority to add a passkey of their own to the owner's slot, which is
+durable access. The unlock cache and the proof stamp are therefore keyed by user *and* a random scope token
+kept in the signed session cookie (`crypto_service` → the unlock cache), and selecting an identity, signing
+in and signing out each start a new token. Each browser unlocks for itself and tabs share. Signing out or
+locking affects only that browser; revoking someone's access, or re-enrolling them, ends it in every
+session; a key rotation locks every session but the one that ran it, since the key they hold opens nothing
+afterwards. The same keying applies with sign-in on, where sharing would let a stolen app password reach the
+vault while its owner was unlocked elsewhere.
 
 A trusting household can therefore be entirely passwordless and still need vault grants, so **no design
 may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
@@ -258,6 +275,9 @@ Two further findings generalize past the vault:
   resenting the feature. A five-minute window (`PROOF_TTL_SECONDS`) covers a run of related actions in one
   sitting while leaving an unattended session two orders of magnitude less exposed than the unlock cache's
   own eight hours.
+- **The stamp belongs to the session that presented the secret**, exactly like the unlock (see *Identity
+  and the network perimeter*): a proof earned in one browser authorizes nothing in another, including a
+  browser that has picked the same identity.
 - **The stamp must be absolute, not sliding.** The unlock cache's TTL is pushed out on every read, so a
   proof stamp riding on it would be renewed by ordinary decryption and never expire at all. This is the
   property the whole control rests on.

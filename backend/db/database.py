@@ -8,8 +8,8 @@ This file owns the durable model the routers and services share. Its key guarant
 are that fresh databases are created directly in the current shape, existing ones are
 advanced in place by `run_migrations`, and core invariants like leaf-only transaction
 categories and the built-in shared owner are re-established on startup. The migration
-chain is currently empty — it was reset to the baseline (v1) at the Luma rebrand (see
-CURRENT_VERSION); future schema changes register migrations from there.
+chain was reset to the baseline (v1) at the Luma rebrand and has grown from there; the
+notes above `CURRENT_VERSION` say what the registered migrations do.
 """
 
 import json

@@ -146,3 +146,18 @@ describe('exporting a public key', () => {
     expect(await blob.text()).toBe('PUBLIC-PEM')
   })
 })
+
+// A member sees the keys a backup is sealed to, and can export one, but cannot change them.
+describe('BackupRecipients without authority to change the keys', () => {
+  it('lists and exports the keys but offers nothing that changes them', async () => {
+    render(<BackupRecipients canManage={false} />)
+    await screen.findByText('test2')
+    expect(screen.getByText('Adding, changing or removing backup keys needs an admin.')).toBeTruthy()
+    expect(screen.queryByText('Add a key')).toBeNull()
+    expect(screen.queryByText('Generate a key pair')).toBeNull()
+    expect(screen.queryByLabelText('Delete backup key test2')).toBeNull()
+    expect(screen.getByRole('checkbox').disabled).toBe(true)
+    await userEvent.click(screen.getByText('Export'))
+    expect(saveBlob).toHaveBeenCalled()
+  })
+})

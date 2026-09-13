@@ -28,7 +28,7 @@ from backend.services import crypto_service as cs
 from backend.services.providers import PlaidAdapter, UnknownProviderError, get_adapter
 from backend.services.providers.base import ProviderAdapter
 from backend.services.providers.simplefin import SimpleFinError
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, in_browser_session
 
 
 @contextmanager
@@ -492,8 +492,8 @@ class GenericConnectTests(unittest.TestCase):
     def tearDown(self):
         cs.lock_all()
 
-    ACCESS_URL = "https://u:p@bridge.example/simplefin"
-    TOKEN = base64.b64encode(b"https://bridge.example/simplefin/claim/DEMO-abc").decode()
+    ACCESS_URL = "https://u:p@bridge.simplefin.org/simplefin"
+    TOKEN = base64.b64encode(b"https://bridge.simplefin.org/simplefin/claim/DEMO-abc").decode()
 
     def _connect(self, client):
         with mock.patch("backend.services.providers.simplefin._http") as http:
@@ -524,7 +524,7 @@ class GenericConnectTests(unittest.TestCase):
             with get_db() as conn:
                 row = conn.execute("SELECT external_id, credential, credential_enc FROM connection").fetchone()
         self.assertTrue(row["external_id"].startswith("sfin_"))
-        self.assertNotIn("bridge.example", row["external_id"])
+        self.assertNotIn("bridge.simplefin.org", row["external_id"])
         self.assertEqual(row["credential"], "", "no plaintext credential may be stored")
         self.assertTrue(row["credential_enc"])
 
@@ -544,7 +544,7 @@ class GenericConnectTests(unittest.TestCase):
         # Patched at `ready_for_production` rather than by fabricating that slot: its own answer to a weak
         # slot is pinned in test_vault.py, and what needs proving here is that connect consults it and
         # refuses — the seam, not the slot plumbing.
-        real_token = base64.b64encode(b"https://bridge.example/simplefin/claim/REAL-abc").decode()
+        real_token = base64.b64encode(b"https://bridge.simplefin.org/simplefin/claim/REAL-abc").decode()
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             with mock.patch.object(cs, "ready_for_production", return_value=False):
@@ -723,9 +723,10 @@ class CredentialBackupTests(unittest.TestCase):
             row = conn.execute(
                 "SELECT * FROM connection WHERE external_id = ?", (external_id,)
             ).fetchone()
-        return cs.decrypt_connection_credential(
-            {"id": user_id}, "plaid", external_id, row["credential"], row["credential_enc"],
-        )
+        with in_browser_session(client):
+            return cs.decrypt_connection_credential(
+                {"id": user_id}, "plaid", external_id, row["credential"], row["credential_enc"],
+            )
 
     def test_credentials_export_restore_roundtrip(self):
         with api_client() as (client, _):

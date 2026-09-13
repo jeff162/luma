@@ -204,7 +204,7 @@ _documents.documents_dir = _guarded_documents_dir
 
 
 # The SimpleFIN adapter throttles its own outbound requests (see `_throttle`), which is correct against
-# the Bridge's CDN and meaningless against a mocked `urlopen` — no test in this suite makes a real
+# the Bridge's CDN and meaningless against a mocked opener — no test in this suite makes a real
 # request. Left alone it cost the suite real seconds of `time.sleep`, spread across ten modules that
 # never mention the throttle at all.
 #

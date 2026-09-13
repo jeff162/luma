@@ -472,6 +472,9 @@ deleted.
    requests in a server-side dependency shared by all provider and credential-bearing vault operations.
    Derive loopback from the trusted peer/proxy boundary rather than the Host header. Keep
    `security-model.md` → *Transport security* accurate to the enforced rule.
+   **Deferred to the client-server deployment work (decided 2026-09-13).** That topology has not been built
+   yet, and the decisions this needs — which proxy is trusted, and how loopback is recognized behind it —
+   belong to it. It remains a requirement for public visibility of a client-server install.
 2. **Bind vault authority to an authenticated session, not only `user_id`.** In passwordless mode, one
    client can select another identity, then inherit its cached unlock and proof state. That can grant an
    attacker a durable vault slot while the holder is active. Separate authenticated principal selection

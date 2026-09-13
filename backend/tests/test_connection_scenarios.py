@@ -135,7 +135,7 @@ class ConnectionScenarioTests(unittest.TestCase):
             with mock.patch.object(sync_module.crypto_service, "is_unlocked", return_value=True), \
                  mock.patch.object(sync_module.crypto_service, "decrypt_connection_credential",
                                    side_effect=credential_error,
-                                   return_value="https://u:p@bridge.example/simplefin"), \
+                                   return_value="https://u:p@bridge.simplefin.org/simplefin"), \
                  mock.patch.object(sync_module, "get_adapter", return_value=self.adapter), \
                  mock.patch.object(sync_module, "date", _Clock), \
                  mock.patch("backend.services.providers.simplefin._http", transport or self.sim), \

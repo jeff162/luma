@@ -43,6 +43,7 @@ import os
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Callable
 
@@ -199,32 +200,57 @@ def _sealed_dek_aad(user_id: str, slot_id: str) -> bytes:
 
 # --- The server-side unlock cache (never the cookie) ---------------------------------------------
 #
-# Keyed by user_id: unlocking your own slot populates *your* entry, so another user's unlock does not
-# grant you the DEK — the per-user boundary is "who unlocked their slot," exactly as designed. Process
-# memory only: lost on restart (re-unlock) and shared across a user's own sessions/devices (fine for a
-# household). A raw DEK must never enter the signed session cookie.
+# Keyed by **user and browser session**. Unlocking your own slot populates *your* entry, so another user's
+# unlock never grants you the DEK — and it populates it only for the session that presented the secret, so
+# choosing the same identity from another browser does not inherit it either. That second half is what
+# makes a vault grant mean something with sign-in protection off, where picking an identity takes no
+# credential: keyed on the user alone, anyone who picked a name while its owner was unlocked elsewhere got
+# the owner's DEK, and inside the proof window the authority to add a passkey of their own to the owner's
+# slot. The cost is one unlock per browser; tabs share a session, and so share an unlock.
+#
+# The session is named by a random `vault_scope` token the tenant middleware keeps in the signed session
+# cookie and publishes through `_vault_scope` for the length of a request, the way the tenant DB path
+# travels. Code running outside a request (the service tests, a script) has no scope and shares the `None`
+# one. Process memory only: lost on restart (re-unlock). A raw DEK must never enter the signed cookie.
 #
 # An entry holds a *list* of DEKs, newest first. It has more than one only mid-rotation, where the
 # outgoing key must stay readable until the last ciphertext has been rewritten — see `rotate_dek`.
 # Encryption always uses the first; decryption tries them in order.
 
+_vault_scope: ContextVar[str | None] = ContextVar("luma_vault_scope", default=None)
+
+
+def set_vault_scope(scope: str | None):
+    """Bind the unlock cache to one browser session for the rest of this request. Returns a reset token."""
+    return _vault_scope.set(scope)
+
+
+def reset_vault_scope(token) -> None:
+    _vault_scope.reset(token)
+
+
+def _cache_key(user_id: str) -> tuple[str, str | None]:
+    return (user_id, _vault_scope.get())
+
+
 _unlock_lock = threading.Lock()
-_unlocked: dict[str, dict] = {}
+_unlocked: dict[tuple[str, str | None], dict] = {}
 
 
 def _cache_put(user_id: str, deks: bytes | list[bytes]) -> None:
     keys = [deks] if isinstance(deks, bytes) else [d for d in deks if d]
     with _unlock_lock:
-        _unlocked[user_id] = {"deks": keys, "expires_at": time.monotonic() + UNLOCK_TTL_SECONDS}
+        _unlocked[_cache_key(user_id)] = {"deks": keys, "expires_at": time.monotonic() + UNLOCK_TTL_SECONDS}
 
 
 def _cache_get_all(user_id: str) -> list[bytes] | None:
+    key = _cache_key(user_id)
     with _unlock_lock:
-        entry = _unlocked.get(user_id)
+        entry = _unlocked.get(key)
         if not entry:
             return None
         if entry["expires_at"] < time.monotonic():
-            _unlocked.pop(user_id, None)
+            _unlocked.pop(key, None)
             return None
         entry["expires_at"] = time.monotonic() + UNLOCK_TTL_SECONDS  # sliding idle window
         return list(entry["deks"])
@@ -236,10 +262,20 @@ def _cache_get(user_id: str) -> bytes | None:
 
 
 def lock(user_id: str) -> None:
-    """Drop this user's unlocked DEK from the cache (logout, explicit lock)."""
+    """Drop this session's unlocked DEK and proof for the user (sign-out, an explicit lock)."""
+    key = _cache_key(user_id)
     with _unlock_lock:
-        _unlocked.pop(user_id, None)
-        _proved_at.pop(user_id, None)
+        _unlocked.pop(key, None)
+        _proved_at.pop(key, None)
+
+
+def lock_everywhere(user_id: str) -> None:
+    """Drop the user's unlock and proof in every session — for when their access itself changed."""
+    with _unlock_lock:
+        for key in [k for k in _unlocked if k[0] == user_id]:
+            _unlocked.pop(key, None)
+        for key in [k for k in _proved_at if k[0] == user_id]:
+            _proved_at.pop(key, None)
 
 
 def lock_all() -> None:
@@ -247,6 +283,14 @@ def lock_all() -> None:
     with _unlock_lock:
         _unlocked.clear()
         _proved_at.clear()
+
+
+def _lock_every_other_session(user_id: str) -> None:
+    """Drop every unlock except this session's own. Proof stamps are left alone: they carry no key."""
+    keep = _cache_key(user_id)
+    with _unlock_lock:
+        for key in [k for k in _unlocked if k != keep]:
+            _unlocked.pop(key, None)
 
 
 # --- Recent proof ---------------------------------------------------------------------------------
@@ -262,7 +306,7 @@ def lock_all() -> None:
 # same entry would be renewed by ordinary decryption and would never expire — a control that reads as
 # enforced and is not. Storing it separately also means `_cache_put`, which rewrites the whole cache
 # entry, cannot silently reset it.
-_proved_at: dict[str, float] = {}
+_proved_at: dict[tuple[str, str | None], float] = {}
 
 
 def _stamp_proof(user_id: str) -> None:
@@ -273,7 +317,7 @@ def _stamp_proof(user_id: str) -> None:
     merely *uses* the DEK.
     """
     with _unlock_lock:
-        _proved_at[user_id] = time.monotonic()
+        _proved_at[_cache_key(user_id)] = time.monotonic()
 
 
 def proof_seconds_remaining(user_id: str) -> int:
@@ -284,7 +328,7 @@ def proof_seconds_remaining(user_id: str) -> int:
     clock agreement with the server, and can run its own countdown from it.
     """
     with _unlock_lock:
-        stamped = _proved_at.get(user_id)
+        stamped = _proved_at.get(_cache_key(user_id))
     if stamped is None:
         return 0
     return max(0, int(PROOF_TTL_SECONDS - (time.monotonic() - stamped)))
@@ -971,7 +1015,7 @@ def revoke_access(user_id: str) -> None:
     functions have to be called in, since rotation deliberately re-seals for whatever slots remain.
     """
     cdb.delete_vault_slots(user_id)
-    lock(user_id)
+    lock_everywhere(user_id)
 
 
 @dataclass(frozen=True)
@@ -1066,6 +1110,9 @@ def rotate_dek(user_id: str) -> dict:
     # Phase 3 — the old key has no ciphertext left to open.
     cdb.clear_vault_slot_previous_deks()
     _cache_put(user_id, new_dek)
+    # Every other session holds only keys that now open nothing. Dropping them makes those sessions read as
+    # locked rather than failing to decrypt, and their next unlock picks up the new key.
+    _lock_every_other_session(user_id)
     return {"slots_resealed": len(granted), "secrets_reencrypted": rewritten, "resumed": resuming}
 
 
@@ -1213,8 +1260,8 @@ def request_reenrolment(user_id: str, new_passphrase: str) -> dict:
         meets_production_min=passphrase_meets_production_min(new_passphrase),
         replaces_access=True,
     )
-    # The old wrapping is gone either way; dropping any cached DEK keeps the session honest about it.
-    lock(user_id)
+    # The old wrapping is gone either way; dropping every cached DEK keeps each session honest about it.
+    lock_everywhere(user_id)
     return {"pending": True}
 
 

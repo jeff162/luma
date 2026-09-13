@@ -12,6 +12,9 @@ identity and selecting it. That identity adopts the temp data DB (its tenant db_
 path, which the harness has patched), so data endpoints reach exactly the temp DB the test seeds.
 """
 
+import base64
+import binascii
+import json
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +22,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.db import control_database, database
+from backend.services import crypto_service
 
 # A vault passphrase that actually clears the floor `crypto_service` enforces on every slot. Shared so a
 # test setting one up says what it means rather than restating the policy — and because the literal it
@@ -63,3 +67,28 @@ def api_client():
             control_database.CONTROL_DB_PATH,
         ) = originals
         tmp.cleanup()
+
+
+@contextmanager
+def in_browser_session(client):
+    """Run service-level vault calls as part of this test client's browser session.
+
+    An unlock belongs to the browser session that presented the secret (`crypto_service` -> the unlock
+    cache). A test that unlocks over HTTP and then calls the vault service directly is, to the service, a
+    different session with nothing unlocked — so this joins the client's session for the block. The scope
+    is read out of the session cookie, whose payload is signed but not encrypted.
+    """
+    scope = None
+    for value in client.cookies.values():
+        try:
+            payload = json.loads(base64.b64decode(value.split(".")[0]))
+        except (ValueError, binascii.Error):
+            continue
+        if isinstance(payload, dict) and payload.get("vault_scope"):
+            scope = payload["vault_scope"]
+            break
+    token = crypto_service.set_vault_scope(scope)
+    try:
+        yield
+    finally:
+        crypto_service.reset_vault_scope(token)

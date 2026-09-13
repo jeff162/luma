@@ -17,7 +17,13 @@ from backend.db.database import get_db, _seed_default_categories
 from backend.services.categorizer import DEFAULT_RULE_SEEDS, seed_default_rules
 from backend.json_utils import safe_json_dict
 from backend.services.txn_splits import txn_effective_sql
-from backend.services.excluded_categories import REIMBURSABLE_SYSTEM_KEY, TRANSFERS_SYSTEM_KEY
+from backend.services.excluded_categories import (
+    REIMBURSABLE_SYSTEM_KEY,
+    TRANSFERS_SYSTEM_KEY,
+    find_reimbursable_group_id,
+    reimbursable_leaf_ids,
+)
+from backend.services.reimbursements import links_claiming
 
 router = APIRouter()
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
@@ -105,6 +111,62 @@ def _ensure_category_name_is_unique(conn, name: str | None, exclude_id: str | No
     raise HTTPException(
         status_code=400,
         detail=f'A {noun} named "{conflict["name"]}" already exists{location}.',
+    )
+
+
+def _require_group_parent(conn, parent_id: str):
+    """The row a category is being placed under, refused unless it is an active group.
+
+    The tree is two levels by construction, not by convention: reports roll a leaf up into its group and
+    stop, so a category nested under another leaf would count in neither. Requiring every parent to be
+    top-level rules out depth and cycles together, because a row that has a parent can never be one.
+    """
+    parent = conn.execute(
+        "SELECT id, parent_id, is_active, system_key, COALESCE(category_type, 'expense') AS category_type "
+        "FROM category WHERE id = ?",
+        (parent_id,),
+    ).fetchone()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent category not found")
+    if parent["parent_id"] is not None or not parent["is_active"]:
+        raise HTTPException(status_code=400, detail="A category can only be placed inside a group.")
+    return parent
+
+
+def _reimbursements_holding(conn, category_ids) -> int:
+    """How many reimbursements claim money currently allocated to any of these categories.
+
+    A reimbursement stores its claims as amounts against transactions and reads the money behind them from
+    whatever sits in a Reimbursable leaf. Moving that leaf out of the group, or deleting it, takes the money
+    out from under claims that survive, and the outstanding balance silently disappears. Split parts count
+    as much as whole rows, since a claim is usually on a portion of a transaction.
+    """
+    ids = list(category_ids)
+    if not ids:
+        return 0
+    places = ",".join("?" for _ in ids)
+    txn_ids = [
+        row["id"]
+        for row in conn.execute(
+            f"SELECT id FROM txn WHERE category_id IN ({places}) "
+            f"UNION SELECT txn_id FROM txn_split WHERE category_id IN ({places})",
+            [*ids, *ids],
+        )
+    ]
+    return len(links_claiming(conn, txn_ids))
+
+
+def _claims_held_detail(count: int, *, moving: bool) -> str:
+    tracked = f"{count} reimbursement{'' if count == 1 else 's'}"
+    if moving:
+        return (
+            f"This category holds money tracked by {tracked}, so it has to stay in the Reimbursable group. "
+            "Move those transactions to another category in the group, or remove them from their "
+            "reimbursements, first."
+        )
+    return (
+        f"This category holds money tracked by {tracked}. Choose another category in the Reimbursable group "
+        "to move its transactions to, or remove them from their reimbursements first."
     )
 
 
@@ -496,13 +558,7 @@ def create_category(body: CategoryCreate):
         if body.parent_id:
             # Child categories inherit the parent's type so a group cannot silently mix
             # income and expense semantics inside one reporting branch.
-            parent = conn.execute(
-                "SELECT COALESCE(category_type, 'expense') AS category_type FROM category WHERE id = ?",
-                (body.parent_id,),
-            ).fetchone()
-            if not parent:
-                raise HTTPException(status_code=404, detail="Parent category not found")
-            category_type = parent["category_type"]
+            category_type = _require_group_parent(conn, body.parent_id)["category_type"]
         elif category_type is None:
             category_type = "expense"
 
@@ -597,6 +653,14 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
         affected_ids = _get_affected_category_ids(conn, category_id)
         placeholders = ",".join("?" for _ in affected_ids)
         replacement_category_id = body.replacement_category_id if body else None
+        # Replacing into another Reimbursable category keeps the claimed money inside the group, which is
+        # the one delete that leaves every claim with something to stand on.
+        reimbursable_leaves = set(reimbursable_leaf_ids(conn))
+        held_ids = [cid for cid in affected_ids if cid in reimbursable_leaves]
+        if held_ids and replacement_category_id not in reimbursable_leaves:
+            held = _reimbursements_holding(conn, held_ids)
+            if held:
+                raise HTTPException(status_code=400, detail=_claims_held_detail(held, moving=False))
         if replacement_category_id:
             replacement = conn.execute(
                 "SELECT id FROM category WHERE id = ?",
@@ -924,35 +988,66 @@ def update_category(category_id: str, body: CategoryUpdate):
             raise HTTPException(
                 status_code=400, detail=TRANSFERS_GROUP_LOCKED % "moved inside another group"
             )
+        moving = body.parent_id is not None and body.parent_id != cat["parent_id"]
+        target_parent = None
+        if body.parent_id is not None:
+            if body.parent_id == category_id:
+                raise HTTPException(status_code=400, detail="A category cannot be placed inside itself.")
+            target_parent = _require_group_parent(conn, body.parent_id)
+        if moving:
+            if conn.execute("SELECT 1 FROM category WHERE parent_id = ? LIMIT 1", (category_id,)).fetchone():
+                raise HTTPException(
+                    status_code=400,
+                    detail="A group that still holds categories cannot be placed inside another group. "
+                           "Move its categories out first.",
+                )
+            if cat["parent_id"] and cat["parent_id"] == find_reimbursable_group_id(conn):
+                held = _reimbursements_holding(conn, [category_id])
+                if held:
+                    raise HTTPException(status_code=400, detail=_claims_held_detail(held, moving=True))
         # Kind for the uniqueness check is the row's kind *after* this edit: a rename keeps the
         # existing kind, while a parent_id change can move a row between leaf and group.
         resulting_parent_id = body.parent_id if body.parent_id is not None else cat["parent_id"]
         is_group = not resulting_parent_id
+        # A leaf's type is its group's. Reports decide which side a bucket is on by inheritance, and a leaf
+        # carrying the other side's type makes a group's total stop equalling the sum of its own slices. So a
+        # move rewrites the leaf to its new group's type, a retyped group carries its categories with it, and
+        # a leaf cannot be given a type of its own.
+        group_type = None
+        if not is_group:
+            group_row = target_parent or conn.execute(
+                "SELECT COALESCE(category_type, 'expense') AS category_type FROM category WHERE id = ?",
+                (resulting_parent_id,),
+            ).fetchone()
+            group_type = group_row["category_type"] if group_row else "expense"
+            if body.category_type is not None and body.category_type != group_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="A category takes its type from its group. Change the group's type, or move the "
+                           "category into a group of the other type.",
+                )
         fields, params = [], []
         if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id, is_group=is_group))
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
         # Moving a category into a real (non-Unassigned) group organizes it — it has left the
         # import workspace for good, so clear the pending flag. Moving into Unassigned does not
         # re-add it to the workspace (a category never returns once it has left).
-        if body.parent_id:
-            new_parent = conn.execute("SELECT system_key FROM category WHERE id = ?", (body.parent_id,)).fetchone()
-            if new_parent and new_parent["system_key"] != UNASSIGNED_CATEGORY_SYSTEM_KEY:
-                fields.append("import_pending = 0")
-        if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)
+        if target_parent and target_parent["system_key"] != UNASSIGNED_CATEGORY_SYSTEM_KEY:
+            fields.append("import_pending = 0")
+        if is_group and body.category_type is not None:
+            fields.append("category_type = ?"); params.append(body.category_type)
+        elif not is_group and (moving or body.category_type is not None):
+            fields.append("category_type = ?"); params.append(group_type)
         if body.sort_order          is not None: fields.append("sort_order = ?");           params.append(body.sort_order)
         if body.exclude_from_totals is not None: fields.append("exclude_from_totals = ?");  params.append(body.exclude_from_totals)
         if fields:
             params.append(category_id)
             conn.execute(f"UPDATE category SET {', '.join(fields)} WHERE id = ?", params)
-    return {"ok": True}
-
-
-@router.patch("/{category_id}/ungroup")
-def ungroup_category(category_id: str):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE category SET parent_id = NULL WHERE id = ?", (category_id,)
-        )
+        if is_group and body.category_type is not None:
+            # Inactive children too, so a recovered category comes back on the side its group is on.
+            conn.execute(
+                "UPDATE category SET category_type = ? WHERE parent_id = ?", (body.category_type, category_id)
+            )
     return {"ok": True}
 
 

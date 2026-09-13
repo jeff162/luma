@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+Authority checks for the operations that are not ordinary data work.
+
+The login perimeter keeps non-users out and nothing more: once inside, every user reads and edits the same
+data, and no data route checks role. Admin gates the few things that are not data edits — user management,
+provider and environment settings, and the operations that replace the workspace wholesale: every restore
+path, and the backup keys that decide who can read a backup. See `docs/security-model.md` → *Identity and
+the network perimeter*.
+
+Kept out of `routers/auth.py` because routers that the auth router itself imports need these too, and a
+guard reached through a lazy import is one that is easy to leave off the next route.
+"""
+
+from fastapi import HTTPException, Request
+
+from backend.db.control_database import auth_required
+
+
+def require_admin(request: Request) -> dict:
+    user = getattr(request.state, "user", None)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def require_admin_or_local(request: Request) -> dict:
+    if not auth_required():
+        # With sign-in protection off there is no perimeter to hold a role against, and environment
+        # settings are global app config rather than tenant data, so local mode needs no control-db user
+        # record to pass.
+        user = getattr(request.state, "user", None)
+        return user or {"role": "admin", "local_mode": True}
+    return require_admin(request)

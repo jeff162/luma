@@ -78,6 +78,10 @@ export function BackupRestoreTab() {
   // Restoring credentials re-keys them under this workspace's DEK, so it needs the vault open. The gate
   // prompts and the action resumes itself — see lib/useVaultGate.js.
   const { mode: vaultDialog, ensureVault, closeVault } = useVaultGate(vault)
+  // Every restore path, and the backup keys below, need an admin once sign-in protection is on: a restore
+  // replaces the whole workspace. Assumed allowed until the status says otherwise, so an admin never sees
+  // the refusal flash past on load; the server enforces it either way.
+  const [canRestore, setCanRestore] = useState(true)
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
   const hasStoredCredentials = !!credentialBackupStatus?.has_credentials
   // What the chosen file turned out to be. Everything below the picker — which inputs appear, what the
@@ -91,12 +95,14 @@ export function BackupRestoreTab() {
   // non-demo can have been added.
   const restoreBlocked = !restoreFile || restoring || inspectingRestore || !!inspectError || !restoreKind
     || demoLoaded
+    || !canRestore
     || (restoreKind === 'data' && restoreInspection?.encrypted && !privateKeyFile)
 
   async function refreshVault() {
     const status = await api.getAuthStatus().catch(() => null)
     const u = status?.user || {}
     setVault({ configured: !!u.vault_configured, unlocked: !!u.vault_unlocked })
+    setCanRestore(!status?.auth_enabled || u.role === 'admin')
   }
 
   useEffect(() => {
@@ -403,11 +409,15 @@ export function BackupRestoreTab() {
               aria-label="Choose backup file to restore"
               accept=".json,.zip,application/json,application/zip"
               onChange={e => handleRestoreFileChange(e.target.files[0])}
+              disabled={!canRestore}
               style={{ fontSize: 13 }}
             />
           </div>
           {demoLoaded && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{demoRestoreMessage}</div>
+          )}
+          {!canRestore && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>Restoring a backup needs an admin.</div>
           )}
           {inspectingRestore && (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
@@ -522,7 +532,7 @@ export function BackupRestoreTab() {
           it goes where growth pushes nothing off the page. It is also the least-visited of the three —
           configuration for the encrypted backup above rather than an action in its own right. */}
       <SectionTitle>Backup Encryption Keys</SectionTitle>
-      <BackupRecipients onRecipientsChange={setBackupRecipients} />
+      <BackupRecipients onRecipientsChange={setBackupRecipients} canManage={canRestore} />
 
       {pendingConfirm && (
         <div

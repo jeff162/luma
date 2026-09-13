@@ -15,6 +15,9 @@ const downloadUrl = vi.fn()
 // Mutable so a test can decide how many recipients exist before rendering: the picker's whole contract is
 // that it appears only when there is more than one, so both sides of that need a different fixture.
 let recipients = []
+// Mutable for the same reason: whether restore is offered depends on who is signed in.
+const SIGN_IN_OFF = { user: { vault_configured: true, vault_unlocked: true } }
+let authStatus = SIGN_IN_OFF
 
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
@@ -22,7 +25,7 @@ vi.mock('../../../lib/api.js', () => ({
     getDemoDataStatus:          async () => ({ loaded: false }),
     getBackupRecipients:        async () => recipients,
     getCredentialsBackupStatus: async () => ({ has_credentials: true, credential_count: 2 }),
-    getAuthStatus:              async () => ({ user: { vault_configured: true, vault_unlocked: true } }),
+    getAuthStatus:              async () => authStatus,
     exportBackup:               (encrypted, ids) => (
       encrypted
         ? `/api/import-export/backup?encrypted=true${ids?.length ? `&recipients=${ids.join(',')}` : ''}`
@@ -34,7 +37,7 @@ vi.mock('../../../lib/api.js', () => ({
 
 const { BackupRestoreTab } = await import('../BackupRestoreTab.jsx')
 
-afterEach(() => { cleanup(); downloadUrl.mockReset(); recipients = [] })
+afterEach(() => { cleanup(); downloadUrl.mockReset(); recipients = []; authStatus = SIGN_IN_OFF })
 
 const KEYS = [
   { id: 'r1', label: 'Home NAS', fingerprint: 'SHA256:aaa', enabled: 1 },
@@ -140,5 +143,30 @@ describe('section order', () => {
     // Node.compareDocumentPosition: 4 === the argument follows this node in the document.
     expect(backup.compareDocumentPosition(restore) & 4).toBeTruthy()
     expect(restore.compareDocumentPosition(keys) & 4).toBeTruthy()
+  })
+})
+
+// Restore replaces the whole workspace, so with sign-in on it needs an admin. The server refuses a member
+// regardless; what the tab owes them is not offering a picker that can only end in a refusal.
+describe('BackupRestoreTab restore authority', () => {
+  const member = { auth_enabled: true, user: { role: 'member', vault_configured: true, vault_unlocked: true } }
+  const admin = { auth_enabled: true, user: { role: 'admin', vault_configured: true, vault_unlocked: true } }
+
+  it('tells a member that restoring needs an admin, and does not take a file from them', async () => {
+    authStatus = member
+    recipients = KEYS
+    render(<BackupRestoreTab />)
+    await screen.findByText('Restoring a backup needs an admin.')
+    expect(screen.getByLabelText('Choose backup file to restore').disabled).toBe(true)
+    await screen.findByText('Adding, changing or removing backup keys needs an admin.')
+    expect(screen.queryByText('Add a key')).toBeNull()
+  })
+
+  it('offers an admin the restore and the key controls', async () => {
+    authStatus = admin
+    render(<BackupRestoreTab />)
+    await screen.findByText('Add a key')
+    expect(screen.queryByText('Restoring a backup needs an admin.')).toBeNull()
+    expect(screen.getByLabelText('Choose backup file to restore').disabled).toBe(false)
   })
 })

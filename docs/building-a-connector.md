@@ -50,6 +50,7 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 * [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
 * [Coverage claims](#coverage-claims)
 * [Reporting what was refused](#reporting-what-was-refused)
+* [Where requests may go](#where-requests-may-go)
 * [Considered and rejected](#considered-and-rejected)
 * [Obstacles](#obstacles)
 * [Open](#open)
@@ -541,6 +542,27 @@ rejects. The alternative is CSV's rule — delete the batch when nothing was imp
 would keep the card list clean at the price of making the refusals invisible and of having rejects and
 duplicates behave differently on the same card. **This is expected to be revisited once the effect is
 visible in practice; it is not settled.**
+
+## Where requests may go
+
+**An adapter sends requests only to its provider's own servers, named in a fixed list.** Any part of a
+request address that arrives from outside — a setup token the user pastes, an access URL a claim returns, a
+credential read back out of the vault — could otherwise aim the server's own request anywhere, including an
+address on the private network, and an error message that quotes the reply turns that into a way to read
+it. SimpleFIN keeps its list in `SIMPLEFIN_BRIDGE_HOSTS` (the real-account Bridge and the demo one) and
+checks it at three points: before a claim is sent, before a returned access URL is stored, and inside
+`_http`, which every request passes through, so a future call that forgets its own check still cannot reach
+another host. The list is the place to extend if SimpleFIN moves or adds a server.
+
+**Redirects are refused, not followed.** A followed redirect carries the `Authorization` header to an address
+no check has seen; `_RefuseRedirects` reports it as the HTTP error it is.
+
+**With the destination fixed, quoting a failed response back is safe, and it is kept.** Stripping the reply
+text was the other half of the original finding, but its danger was reading from an arbitrary host, which the
+list removes — while the text itself has been the only evidence of a cause (the CDN's `error code: 1010`).
+
+A provider whose addresses come only from its SDK's own environment settings, as Plaid's do, takes no
+address from outside and needs no list.
 
 ## Considered and rejected
 

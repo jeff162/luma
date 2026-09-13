@@ -677,6 +677,7 @@ export default function Categories() {
   // Notice surface shared by the category-delete-skip path and the (controller-owned) bulk-edit flow's
   // sibling actions. The matching-list bulk edit itself is the shared controller, wired up below.
   const [bulkNotice, setBulkNotice] = useState('')
+  const [moveNotice, setMoveNotice] = useState('')
   const [starterNotice, setStarterNotice] = useState('')
   const [addingStarter, setAddingStarter] = useState(false)
   const [rulePrompt, setRulePrompt] = useState(null)
@@ -1160,8 +1161,24 @@ export default function Categories() {
     setBulkSelectMode(false)
   }
 
-  async function handleDropRow(dragged, targetCat, dropPosition = 'after') {
+  // The server refuses some moves — a category holding money a reimbursement claims, a group that still
+  // holds categories. Each drop persists several rows at once, so a refusal can leave sibling order half
+  // written: the tree is reloaded before the reason is shown.
+  async function runMove(move) {
+    try {
+      await move()
+    } catch (err) {
+      setMoveNotice(err?.message || 'The category could not be moved.')
+      await loadCategories()
+    }
+  }
+
+  function handleDropRow(dragged, targetCat, dropPosition = 'after') {
     cancelAnimationFrame(dragScrollRef.current)
+    return runMove(() => placeDroppedRow(dragged, targetCat, dropPosition))
+  }
+
+  async function placeDroppedRow(dragged, targetCat, dropPosition) {
     if (dragged.childIds?.length > 1) {
       const targetParentId = targetCat.parent_id || targetCat.id
       if (!targetParentId) return
@@ -1190,8 +1207,12 @@ export default function Categories() {
     await moveChild(dragged, targetCat.id, 0)
   }
 
-  async function handleGroupDropEnd(dragged, group) {
+  function handleGroupDropEnd(dragged, group) {
     cancelAnimationFrame(dragScrollRef.current)
+    return runMove(() => placeAtGroupEnd(dragged, group))
+  }
+
+  async function placeAtGroupEnd(dragged, group) {
     if (dragged.childIds?.length > 1) {
       await moveChildrenBatch(dragged.childIds, group.id)
       return
@@ -1200,10 +1221,10 @@ export default function Categories() {
     await moveChild(dragged, group.id)
   }
 
-  async function handleSectionDropEnd(dragged, sectionType) {
+  function handleSectionDropEnd(dragged, sectionType) {
     cancelAnimationFrame(dragScrollRef.current)
     if (!dragged.isGroup) return
-    await moveGroup(dragged, sectionType)
+    return runMove(() => moveGroup(dragged, sectionType))
   }
 
   async function handleRename(id, name) {
@@ -1589,7 +1610,7 @@ export default function Categories() {
       return
     }
     setContextMenu(null)
-    await moveChildrenBatch(selectedCategoryIds, targetParentId)
+    await runMove(() => moveChildrenBatch(selectedCategoryIds, targetParentId))
   }
 
   // Bulk delete only deletes selected categories that hold no transactions (the immediate,
@@ -2665,6 +2686,9 @@ export default function Categories() {
         </AppConfirmDialog>
       )}
 
+      {moveNotice ? (
+        <AppNoticeDialog title="Could not move category" description={moveNotice} onClose={() => setMoveNotice('')} />
+      ) : null}
       {bulkNotice ? (
         <AppNoticeDialog title="Bulk action" description={bulkNotice} onClose={() => setBulkNotice('')} />
       ) : null}

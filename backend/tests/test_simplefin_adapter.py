@@ -20,10 +20,12 @@ itself with a CDN that rejects unnamed HTTP clients outright.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import time
 import urllib.error
+import urllib.request
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
@@ -35,6 +37,7 @@ from backend.services.providers.simplefin import (
     BUDGET_PAUSED,
     EMPTY_WINDOWS_END_HISTORY,
     RATE_LIMITED,
+    SIMPLEFIN_BRIDGE_HOSTS,
     _merge_advisories,
     FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
@@ -445,7 +448,7 @@ class SimpleFinTransportTests(unittest.TestCase):
     Every other test here patches `_http`, so nothing exercises what actually goes on the wire — which is
     precisely where a real outage came from: urllib's default `Python-urllib/x.y` User-Agent is rejected by
     the CDN in front of the Bridge with a 403 that says only `error code: 1010`, so no request ever reached
-    SimpleFIN. These tests hold the transport itself, using a fake `urlopen` rather than the network.
+    SimpleFIN. These tests hold the transport itself, using a fake opener rather than the network.
     """
 
     def _capture_request(self, response=b"ok"):
@@ -482,9 +485,9 @@ class SimpleFinTransportTests(unittest.TestCase):
 
         with mock.patch.object(sfin, "_MIN_REQUEST_INTERVAL_SECONDS", 0.05), \
                 mock.patch.object(sfin, "_last_request_at", 0.0), \
-                mock.patch("urllib.request.urlopen", urlopen):
+                mock.patch("backend.services.providers.simplefin._open", urlopen):
             for _ in range(3):
-                sfin._http("https://bridge.example/accounts")
+                sfin._http("https://bridge.simplefin.org/accounts")
                 stamps.append(time.monotonic())
 
         gaps = [b - a for a, b in zip(stamps, stamps[1:])]
@@ -516,16 +519,16 @@ class SimpleFinTransportTests(unittest.TestCase):
             raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {},
                                          io.BytesIO(b"error code: 1015"))
 
-        with mock.patch("urllib.request.urlopen", _urlopen):
+        with mock.patch("backend.services.providers.simplefin._open", _urlopen):
             with self.assertRaises(SimpleFinRateLimited) as caught:
-                _http("https://bridge.example/accounts")
+                _http("https://bridge.simplefin.org/accounts")
         self.assertEqual(caught.exception.status, 429)
 
     def test_every_request_names_the_client(self):
         from backend.services.providers.simplefin import _http
         captured, urlopen = self._capture_request()
-        with mock.patch("urllib.request.urlopen", urlopen):
-            _http("https://bridge.example/simplefin/accounts")
+        with mock.patch("backend.services.providers.simplefin._open", urlopen):
+            _http("https://bridge.simplefin.org/simplefin/accounts")
         agent = captured["request"].get_header("User-agent")
         self.assertTrue(agent, "an unnamed request is refused by the CDN before SimpleFIN ever sees it")
         self.assertNotIn("Python-urllib", agent)
@@ -533,14 +536,14 @@ class SimpleFinTransportTests(unittest.TestCase):
     def test_the_caller_can_still_add_its_own_headers(self):
         from backend.services.providers.simplefin import _http
         captured, urlopen = self._capture_request()
-        with mock.patch("urllib.request.urlopen", urlopen):
-            _http("https://bridge.example/simplefin/accounts", headers={"Authorization": "Basic abc"})
+        with mock.patch("backend.services.providers.simplefin._open", urlopen):
+            _http("https://bridge.simplefin.org/simplefin/accounts", headers={"Authorization": "Basic abc"})
         self.assertEqual(captured["request"].get_header("Authorization"), "Basic abc")
         self.assertTrue(captured["request"].get_header("User-agent"))
 
     def _http_error(self, code, body):
         import urllib.error
-        return urllib.error.HTTPError("https://bridge.example/simplefin/claim/X", code, "Forbidden", {},
+        return urllib.error.HTTPError("https://bridge.simplefin.org/simplefin/claim/X", code, "Forbidden", {},
                                       io.BytesIO(body))
 
     def test_a_403_reports_what_the_server_said_rather_than_guessing_why(self):
@@ -548,9 +551,9 @@ class SimpleFinTransportTests(unittest.TestCase):
         # plausible and was flatly wrong for a CDN block sending the same status. The reader then goes off
         # to fix something that was never broken, which is worse than being told nothing.
         from backend.services.providers.simplefin import _http
-        with mock.patch("urllib.request.urlopen", side_effect=self._http_error(403, b"error code: 1010")):
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=self._http_error(403, b"error code: 1010")):
             with self.assertRaises(SimpleFinError) as caught:
-                _http("https://bridge.example/simplefin/claim/X", method="POST")
+                _http("https://bridge.simplefin.org/simplefin/claim/X", method="POST")
         message = str(caught.exception)
         self.assertIn("1010", message, "the server's own words are the only real evidence of the cause")
         self.assertNotIn("can only be claimed once", message)
@@ -561,9 +564,9 @@ class SimpleFinTransportTests(unittest.TestCase):
         # pins that neither leaks back down here: a hint added at this level would attach itself to every
         # request that ever gets the same status.
         from backend.services.providers.simplefin import _http
-        for url in ("https://bridge.example/simplefin/claim/X",
-                    "https://bridge.example/simplefin/accounts"):
-            with mock.patch("urllib.request.urlopen", side_effect=self._http_error(403, b"")):
+        for url in ("https://bridge.simplefin.org/simplefin/claim/X",
+                    "https://bridge.simplefin.org/simplefin/accounts"):
+            with mock.patch("backend.services.providers.simplefin._open", side_effect=self._http_error(403, b"")):
                 with self.assertRaises(SimpleFinError) as caught:
                     _http(url, method="POST")
             self.assertNotIn("intercepted", str(caught.exception))
@@ -573,9 +576,9 @@ class SimpleFinTransportTests(unittest.TestCase):
         # So a caller can act on 403 without recognizing it by parsing English. The reconnect signal reads
         # this; matching on message text would break the first time the server rewords itself.
         from backend.services.providers.simplefin import _http
-        with mock.patch("urllib.request.urlopen", side_effect=self._http_error(403, b"")):
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=self._http_error(403, b"")):
             with self.assertRaises(SimpleFinError) as caught:
-                _http("https://bridge.example/simplefin/accounts")
+                _http("https://bridge.simplefin.org/simplefin/accounts")
         self.assertEqual(caught.exception.status, 403)
 
     def test_provider_text_is_clipped_before_it_can_reach_a_card(self):
@@ -583,10 +586,104 @@ class SimpleFinTransportTests(unittest.TestCase):
         # card. React escapes the content, so the exposure is volume rather than injection — an unbounded
         # message would push a card off the screen and sit in `last_sync_error` until the next sync.
         from backend.services.providers.simplefin import _MAX_MESSAGE_CHARS, _http
-        with mock.patch("urllib.request.urlopen", side_effect=self._http_error(500, b"x" * 5000)):
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=self._http_error(500, b"x" * 5000)):
             with self.assertRaises(SimpleFinError) as caught:
-                _http("https://bridge.example/simplefin/accounts")
+                _http("https://bridge.simplefin.org/simplefin/accounts")
         self.assertLessEqual(len(str(caught.exception)), _MAX_MESSAGE_CHARS)
+
+
+class SimpleFinDestinationTests(unittest.TestCase):
+    """Requests go to SimpleFIN Bridge and nowhere else.
+
+    A setup token is a pasted base64 URL, so before the host list it could aim the server's own request at any
+    HTTPS address, including one on the private network, and a followed redirect could carry the
+    `Authorization` header somewhere no check had seen. Each refusal asserts that nothing was sent, not only
+    that an error came back.
+    """
+
+    def setUp(self):
+        self.adapter = SimpleFinAdapter()
+
+    @staticmethod
+    def _token(url: str) -> str:
+        return base64.b64encode(url.encode()).decode()
+
+    def test_both_bridge_hosts_are_accepted(self):
+        for host in SIMPLEFIN_BRIDGE_HOSTS:
+            with self.subTest(host):
+                url = f"https://{host}/simplefin/claim/X"
+                self.assertEqual(self.adapter._claim_url(self._token(url)), url)
+
+    def test_a_token_for_any_other_address_is_refused_before_a_request(self):
+        for url in (
+            "https://bridge.simplefin.org.collector.example/simplefin/claim/X",
+            "https://10.0.0.5/simplefin/claim/X",
+            "https://localhost/simplefin/claim/X",
+            "https://bridge.simplefin.org:8443/simplefin/claim/X",
+        ):
+            with self.subTest(url), mock.patch("backend.services.providers.simplefin._open") as opened:
+                with self.assertRaises(SimpleFinError):
+                    self.adapter.connect({}, {"setup_token": self._token(url)})
+                opened.assert_not_called()
+
+    def test_an_access_url_naming_another_host_is_not_stored(self):
+        with mock.patch("backend.services.providers.simplefin._http",
+                        return_value=b"https://u:p@collector.example/simplefin"):
+            with self.assertRaises(SimpleFinError) as caught:
+                self.adapter.connect({}, {"setup_token": DEMO_TOKEN})
+        self.assertIn("not saved", str(caught.exception))
+
+    def test_a_stored_credential_for_another_host_is_never_used(self):
+        with mock.patch("backend.services.providers.simplefin._open") as opened:
+            for credential in ("https://u:p@collector.example/simplefin", "http://u:p@bridge.simplefin.org/simplefin"):
+                with self.subTest(credential), self.assertRaises(SimpleFinError):
+                    self.adapter.fetch_accounts({}, credential)
+            opened.assert_not_called()
+
+    def test_the_transport_refuses_another_host_even_when_a_caller_does_not_check(self):
+        from backend.services.providers.simplefin import _http
+        with mock.patch("backend.services.providers.simplefin._open") as opened:
+            with self.assertRaises(SimpleFinError):
+                _http("https://collector.example/simplefin/accounts")
+            opened.assert_not_called()
+
+    def test_a_redirect_is_reported_instead_of_followed(self):
+        # Driven through the real opener against a local server, since what matters is that the second
+        # request is never made, which only a real handler chain can show.
+        import http.server
+        import threading
+        from backend.services.providers.simplefin import _open
+
+        landed = []
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/start":
+                    self.send_response(302)
+                    self.send_header("Location", "/landing")
+                    self.end_headers()
+                else:
+                    landed.append(self.headers.get("Authorization"))
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"followed")
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/start", headers={"Authorization": "Basic abc"}
+            )
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                _open(request, timeout=5)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(caught.exception.code, 302)
+        self.assertEqual(landed, [], "the redirect target must never be requested")
 
 
 class SimpleFinConnectTests(unittest.TestCase):
@@ -633,8 +730,8 @@ class SimpleFinConnectTests(unittest.TestCase):
         # in which case they now hold live, unrevokable read access, and only the user can disable it at
         # the Bridge. "Generate a new one" is the reassuring interpretation of exactly the same evidence.
         import urllib.error
-        error = urllib.error.HTTPError("https://bridge.example/claim/X", 403, "Forbidden", {}, io.BytesIO(b""))
-        with mock.patch("urllib.request.urlopen", side_effect=error):
+        error = urllib.error.HTTPError("https://bridge.simplefin.org/claim/X", 403, "Forbidden", {}, io.BytesIO(b""))
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=error):
             with self.assertRaises(SimpleFinError) as caught:
                 self.adapter.connect({}, {"setup_token": DEMO_TOKEN})
         self.assertIn("intercepted", str(caught.exception))
@@ -647,10 +744,10 @@ class SimpleFinConnectTests(unittest.TestCase):
         # mistake is the account.
         import urllib.error
         for error in (
-            urllib.error.HTTPError("https://bridge.example/claim/X", 500, "Server Error", {}, io.BytesIO(b"")),
+            urllib.error.HTTPError("https://bridge.simplefin.org/claim/X", 500, "Server Error", {}, io.BytesIO(b"")),
             urllib.error.URLError("connection reset"),
         ):
-            with mock.patch("urllib.request.urlopen", side_effect=error):
+            with mock.patch("backend.services.providers.simplefin._open", side_effect=error):
                 with self.assertRaises(SimpleFinError) as caught:
                     self.adapter.connect({}, {"setup_token": DEMO_TOKEN})
             self.assertIn("intercepted", str(caught.exception))
@@ -1247,12 +1344,12 @@ class SimpleFinRevokedAccessTests(unittest.TestCase):
 
     def _refuse(self, code):
         import urllib.error
-        return urllib.error.HTTPError("https://bridge.example/simplefin/accounts", code, "Forbidden", {},
+        return urllib.error.HTTPError("https://bridge.simplefin.org/simplefin/accounts", code, "Forbidden", {},
                                       io.BytesIO(b""))
 
     def test_a_403_on_a_data_call_asks_for_a_reconnect(self):
         from backend.services.providers.base import ProviderCredentialRejected
-        with mock.patch("urllib.request.urlopen", side_effect=self._refuse(403)):
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=self._refuse(403)):
             with self.assertRaises(ProviderCredentialRejected):
                 self.adapter.fetch_accounts({}, ACCESS_URL)
 
@@ -1261,7 +1358,7 @@ class SimpleFinRevokedAccessTests(unittest.TestCase):
         # tell the user to redo their setup over a blip — and the flag is sticky, so it would stay wrong.
         from backend.services.providers.base import ProviderCredentialRejected
         for code in (429, 500, 503):
-            with mock.patch("urllib.request.urlopen", side_effect=self._refuse(code)):
+            with mock.patch("backend.services.providers.simplefin._open", side_effect=self._refuse(code)):
                 with self.assertRaises(SimpleFinError) as caught:
                     self.adapter.fetch_accounts({}, ACCESS_URL)
             self.assertNotIsInstance(caught.exception, ProviderCredentialRejected)
@@ -1271,9 +1368,9 @@ class SimpleFinRevokedAccessTests(unittest.TestCase):
         # every call and the protocol's rule is about the *request*. No later validation can un-send a
         # credential that went out in the clear.
         called = []
-        with mock.patch("urllib.request.urlopen", side_effect=lambda *a, **k: called.append(1)):
+        with mock.patch("backend.services.providers.simplefin._open", side_effect=lambda *a, **k: called.append(1)):
             with self.assertRaises(SimpleFinError):
-                self.adapter.fetch_accounts({}, "http://user:pass@bridge.example/simplefin")
+                self.adapter.fetch_accounts({}, "http://user:pass@bridge.simplefin.org/simplefin")
         self.assertEqual(called, [])
 
 

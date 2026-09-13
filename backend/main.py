@@ -51,6 +51,7 @@ except Exception as error:  # noqa: BLE001 - see below
 
 import base64
 import json
+import secrets
 from contextlib import asynccontextmanager
 
 import itsdangerous
@@ -65,6 +66,7 @@ from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
+from backend.services import crypto_service
 from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
@@ -188,8 +190,31 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
 
+def _vault_scope_for(request: Request) -> str | None:
+    """The browser session's vault scope: minted the first time a session carries an identity, and gone
+    whenever the session is cleared, so selecting an identity, signing in and signing out each start a
+    scope no earlier unlock is filed under. See `crypto_service` -> the unlock cache."""
+    session = request.scope.get("session")
+    if session is None or not session.get("user_id"):
+        return None
+    scope = session.get("vault_scope")
+    if not scope:
+        scope = secrets.token_urlsafe(32)
+        session["vault_scope"] = scope
+    return scope
+
+
 class TenantSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # Bound before the public-path check, because `/api/auth/status` is public and reports whether this
+        # session is unlocked.
+        vault_scope = crypto_service.set_vault_scope(_vault_scope_for(request))
+        try:
+            return await self._resolve_tenant(request, call_next)
+        finally:
+            crypto_service.reset_vault_scope(vault_scope)
+
+    async def _resolve_tenant(self, request: Request, call_next):
         # Tenant selection is request-scoped: the control DB authenticates the user, then
         # the app DB context is switched for just this request and always reset afterward.
         public_paths = {

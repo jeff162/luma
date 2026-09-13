@@ -172,6 +172,11 @@ class ManualTransactionTests(unittest.TestCase):
                 self.assertEqual(refused.status_code, 400)
                 self.assertIn("YYYY-MM-DD", refused.json()["detail"])
 
+            with self.subTest("the date has to be a day that exists"):
+                refused = client.post("/api/transactions", json={**base, "date": "2026-02-31"})
+                self.assertEqual(refused.status_code, 400)
+                self.assertIn("2026-02-31", refused.json()["detail"])
+
             with self.subTest("zero is not an amount"):
                 refused = client.post("/api/transactions", json={**base, "amount": 0})
                 self.assertEqual(refused.status_code, 400)
