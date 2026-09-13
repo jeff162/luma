@@ -74,7 +74,7 @@ really one backend's quirk.
 ## Phases
 
 - **Phase 2 — text and search.** Tier 2 as a declared capability. The search surface already exists (the
-  `doc:` prefix in the Transactions quick filter), so this is extraction only.
+  `doc:` prefix in the Transactions search box), so this is extraction only.
 - **Phase 3 — itemization.** The tier-3 adapter and its approval screen, designed jointly with the
   online categorizer.
 - **Phase 4 — feed the splits.** An approved itemization is exactly the pre-fill

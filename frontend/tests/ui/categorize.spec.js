@@ -12,7 +12,7 @@ import { expect, test } from '@playwright/test'
 // asserting against a fixture that says the opposite. This one carries its category from the import.
 test('changing a transaction category via the inline picker persists', async ({ page }) => {
   await page.goto('/transactions')
-  await page.getByPlaceholder('Quick filter…').fill('Interest Payment')
+  await page.getByPlaceholder('Search…', { exact: true }).fill('Interest Payment')
 
   const categoryCell = page.locator('[title="Click to change category"]')
   await expect(categoryCell).toHaveCount(1)

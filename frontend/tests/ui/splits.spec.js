@@ -12,7 +12,7 @@ import { expect, test } from '@playwright/test'
 // the specs running beside this one.
 test('a split transaction is marked in the ledger and opens on its parts', async ({ page }) => {
   await page.goto('/transactions')
-  await page.getByLabel('Quick filter transactions').fill('Warehouse Club')
+  await page.getByLabel('Search transactions', { exact: true }).fill('Warehouse Club')
 
   // The category cell carries the part count rather than a category, because no single category is the
   // truth about this row.

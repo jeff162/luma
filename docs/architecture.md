@@ -192,7 +192,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Serving is the one endpoint that returns bytes a user supplied**, so it sends the media type recorded at ingest (never one derived from the request), `X-Content-Type-Options: nosniff`, and a sandbox CSP — a PDF viewer is a scripting host, and a stored document has no business running script against this origin
 
-- **Search:** text held on a document (a PDF's extracted layer, or pasted text verbatim) is indexed in `document_fts` and reached from the Transactions quick filter — from the plain box, with `doc:<terms>` to narrow to documents only. A row matched inside an attachment carries `matched_document` so the ledger can show *why* it came back, which is what makes the plain-box behaviour readable — see `data-model.md`
+- **Search:** text held on a document (a PDF's extracted layer, or pasted text verbatim) is indexed in `document_fts` and reached from the Transactions search box — from the plain box, with `doc:<terms>` to narrow to documents only. A row matched inside an attachment carries `matched_document` so the ledger can show *why* it came back, which is what makes the plain-box behaviour readable — see `data-model.md`
 
 - **Used by:** the transaction detail panel (attach/view/detach) and the ledger row's document marker, which opens the viewer directly. The list feed carries slim document rows (`documents` — id, filename, media type, no extracted text) plus `document_count`, so the marker opens without a fetch
 

@@ -923,9 +923,9 @@ export default function Transactions() {
             <Input
               value={quickFilter}
               onChange={setQuickFilter}
-              placeholder="Quick filter…"
-              aria-label="Quick filter transactions"
-              title="Quick filter matches date, merchant, category, account, amount, and the text inside attached receipts. Prefix with a field name to restrict the match, e.g. merchant:transfer or doc:brake pads."
+              placeholder="Search…"
+              aria-label="Search transactions"
+              title="Matches names, imported text, category, account, date, amount, and the text inside attached documents. -42.10 is money paid out, +42.10 money received. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or doc:brake pads."
               style={{ width: 180 }}
             />
             {quickFilter.trim() && (

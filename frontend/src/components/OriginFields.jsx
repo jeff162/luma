@@ -84,6 +84,11 @@ export function MerchantOriginHoverCard({ txn, onPin = null, copyable = false })
           </button>
         ) : null}
       </div>
+      {/* Set by the ledger's search when the row matched on text the name does not show — this card is
+          then the only place the reason for the row being listed is visible. */}
+      {txn.matched_hidden_text ? (
+        <div style={{ fontSize: 12, color: 'var(--accent)' }}>Matched the search in the imported text below.</div>
+      ) : null}
       <OriginFieldList rows={rows} />
     </div>
   )

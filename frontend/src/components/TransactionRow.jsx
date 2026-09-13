@@ -257,6 +257,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
   const [nameTruncated, setNameTruncated] = useState(false)
   const importedName = getTxnImportedMerchantLabel(txn)
   const renamed = Boolean(txn.display_name && txn.display_name !== importedName)
+  const matchedHiddenText = !!txn.matched_hidden_text
 
   const {
     editing,
@@ -342,6 +343,10 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
         flex: '0 1 auto',
         display: 'inline-block',
         maxWidth: '100%',
+        // Found by the search through text this name does not show (the bank's raw wording, a memo
+        // column). The underline says there is more behind the name; the hover below shows what matched.
+        // Such a row always has that text to show, so the hover is attached whenever this is set.
+        ...(matchedHiddenText ? { textDecoration: 'underline dotted var(--accent)', textUnderlineOffset: 3 } : null),
       }}
     >
       {name}

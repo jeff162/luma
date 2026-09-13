@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import re
 import uuid
 from backend.db.database import get_db
@@ -86,7 +86,7 @@ TRIM(
 )
 """
 QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS = {"check", "checking", "saving", "savings", "credit", "debit"}
-QUICK_FILTER_FIELD_PREFIXES = {"merchant", "category", "account", "date", "amount", "doc"}
+QUICK_FILTER_FIELD_PREFIXES = {"merchant", "raw", "category", "account", "date", "amount", "doc"}
 TRANSACTION_SORT_SQL = {
     "date": "t.date",
     "merchant": "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))",
@@ -332,15 +332,21 @@ def _append_require_all_attributes_filter(clauses, params, *, require_all_attrib
             params.extend(membership[1])
 
 
-# Quick filter parsing keeps the Transactions page's one-box workflow lightweight:
-# - merchant and category stay broad substring matches so partial labels still work naturally
+# `quick_filter` is the ledger *search box* (the Transactions page and import-card ledgers). The name predates
+# the Transactions toolbar's quick-filter control (`AttributeFilterControl`), which is a different thing.
+# Parsing keeps the one-box workflow lightweight:
+# - merchant and category stay broad substring matches so partial labels still work naturally; merchant reads
+#   every name the row carries, raw reads the imported text (the raw name and the import's captured free text),
+#   and an unprefixed search reads both
 # - account labels match normalized whole words/phrases so generic fragments like `check` do not expand to every
 #   `Checking` account and drown out rows whose merchant is actually `CHECK`
 # - date and amount parsing add more precise matches when the input looks like those domains; a full
 #   date / year / month jumps to that exact slot, while a year-less partial (a bare month, or month/day)
 #   matches that calendar slot across every year
-# - a `<field>:<value>` prefix (merchant/category/account/date/amount) restricts the search to that one field;
-#   when the prefix is explicit we also drop the account-term exclusion list because the user has asked specifically
+# - a `<field>:<value>` prefix (merchant/raw/category/account/date/amount/doc) restricts the search to that one field;
+#   when the prefix is explicit we also drop the account-term exclusion list because the user has asked specifically.
+#   The prefix is recognized only at the start and its value is the whole rest of the box, so there is no way to
+#   combine two — a precise combination belongs to a page-local control like the amount filter (ui-patterns.md)
 # - the result stays additive with the normal ledger filters instead of replacing them
 def _split_quick_filter_field(value: str):
     match = re.match(r"^([A-Za-z]+)\s*:\s*(.*)$", value)
@@ -373,11 +379,18 @@ def _build_quick_filter_clause(value: str):
     def want(name: str) -> bool:
         return field is None or field == name
 
-    if want("merchant"):
-        or_clauses.append(
-            "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '')) LIKE ?"
-        )
-        params.append(f"%{lowered}%")
+    if field in (None, "merchant", "raw"):
+        # Every name the row carries, not only the one on screen. A rule's clean name or a manual rename
+        # replaces what the bank sent, and a search for words from the bank's own text has to keep finding
+        # the row afterwards — the rule matcher reads all three names for the same reason. Split into the
+        # visible name and the rest so `hidden_text_match_sql` can say which one matched. `raw:` is the
+        # imported text alone, so it leaves the visible name out unless that name *is* the raw one.
+        if field != "raw":
+            or_clauses.append(f"{VISIBLE_NAME_SQL} LIKE ?")
+            params.append(f"%{lowered}%")
+        hidden_sql, hidden_params = _hidden_text_sql(f"%{lowered}%", field)
+        or_clauses.append(hidden_sql)
+        params.extend(hidden_params)
 
     if want("category"):
         or_clauses.append("LOWER(COALESCE(c.name, '')) LIKE ?")
@@ -432,14 +445,16 @@ def _build_quick_filter_clause(value: str):
             params.append(match_query)
 
     if want("amount"):
-        amount_value = _parse_quick_filter_amount(search_text)
-        if amount_value is not None:
-            if amount_value < 0:
-                or_clauses.append("ROUND(t.amount, 2) = ?")
-                params.append(float(amount_value))
-            else:
+        amount = _parse_quick_filter_amount(search_text)
+        if amount is not None:
+            magnitude, direction = amount
+            if direction is None:
                 or_clauses.append("ROUND(ABS(t.amount), 2) = ?")
-                params.append(float(amount_value))
+                params.append(float(magnitude))
+            else:
+                # Stored money out is positive (docs/data-model.md), the reverse of how it is typed.
+                or_clauses.append("ROUND(t.amount, 2) = ?")
+                params.append(float(magnitude if direction == "out" else -magnitude))
 
     if not or_clauses:
         # The user explicitly asked for `field:value` but the value did not produce any constraint
@@ -458,6 +473,84 @@ DOCUMENT_MATCH_SQL = (
     "        JOIN document d ON d.rowid = document_fts.rowid "
     "        WHERE document_fts MATCH ? AND d.txn_id = t.id)"
 )
+
+
+# The name the ledger shows for a row — the first non-empty of the rename, the cleaned name and the raw
+# name, as `visibleMerchant` in lib/importSourceFields.js resolves it.
+VISIBLE_NAME_SQL = "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))"
+
+# The free text an import captured beyond the names: the file's description cell and its extra text columns
+# (a memo, an "Original Statement"). The same set `match_source_text` rules read
+# (`categorizer.extract_source_match_text`) and the merchant hover lists, so a row found through it can be
+# explained by hovering its name. Both reads sit behind CASE guards because SQLite's JSON functions raise on
+# malformed input — a single bad value would otherwise fail the whole list query rather than just not match
+# — and CASE is the one construct whose branches SQLite guarantees not to evaluate.
+IMPORTED_TEXT_MATCH_SQL = (
+    "(CASE WHEN json_valid(t.import_evidence_json) THEN ("
+    "LOWER(COALESCE(json_extract(t.import_evidence_json, '$.description.value'), '')) LIKE ? "
+    "OR EXISTS (SELECT 1 FROM json_each(t.import_evidence_json, '$.extra_text_fields') je "
+    "WHERE CASE WHEN je.type = 'object' "
+    "THEN LOWER(COALESCE(json_extract(je.value, '$.value'), '')) LIKE ? ELSE 0 END)"
+    ") ELSE 0 END)"
+)
+
+
+def _imported_text_match_sql(pattern: str):
+    """`IMPORTED_TEXT_MATCH_SQL` for one LIKE pattern, behind a cheap substring test where that test is sound.
+
+    Parsing every row's JSON is most of what an unprefixed search costs, and most rows cannot match. A plain
+    LIKE over the stored string rules them out first — roughly eight times faster on a ledger-sized copy for
+    a term few rows contain. It can only rule out, never admit, and it is sound only when the term appears
+    verbatim in serialized JSON: printable ASCII with no quote or backslash, since JSON escapes those and a
+    writer may escape all non-ASCII. Any other term goes straight to the parse.
+    """
+    if pattern.isascii() and pattern.isprintable() and '"' not in pattern and "\\" not in pattern:
+        return f"(CASE WHEN t.import_evidence_json LIKE ? THEN {IMPORTED_TEXT_MATCH_SQL} ELSE 0 END)", [
+            pattern, pattern, pattern,
+        ]
+    return IMPORTED_TEXT_MATCH_SQL, [pattern, pattern]
+
+
+def _hidden_text_sql(pattern: str, field: Optional[str]):
+    """The row's searchable text beyond its visible name, as `(sql, params)` for one LIKE pattern, for an
+    unprefixed search (`field` None), `merchant:` or `raw:`.
+
+    The raw name is in all three. The cleaned name is a *name*, so `raw:` leaves it out; the import's captured
+    free text is not a name, so `merchant:` leaves that out. Used by the filter and by the match-reason
+    projection, which have to ask the same question or a row could match without being marked.
+    """
+    clauses = ["LOWER(COALESCE(t.raw_name, '')) LIKE ?"]
+    params = [pattern]
+    if field != "raw":
+        clauses.append("LOWER(COALESCE(t.merchant_name, '')) LIKE ?")
+        params.append(pattern)
+    if field != "merchant":
+        imported_sql, imported_params = _imported_text_match_sql(pattern)
+        clauses.append(imported_sql)
+        params.extend(imported_params)
+    return f"({' OR '.join(clauses)})", params
+
+
+def hidden_text_match_sql(quick_filter: Optional[str]):
+    """`(sql, params)` for whether a row matched a quick filter on text its visible name does not show, or
+    None when the filter searches no names.
+
+    The sibling of `document_match_query`, for the same reason: a row found through its raw bank text or a
+    memo column has no visible cause on screen, so the list feed marks it rather than leaving it to read as
+    a wrong result. A row whose visible name also matches is not marked — the name already explains it.
+    """
+    text = (quick_filter or "").strip()
+    if not text:
+        return None
+    field, remainder = _split_quick_filter_field(text)
+    if field not in (None, "merchant", "raw"):
+        return None
+    value = remainder if field is not None else text
+    if not value:
+        return None
+    pattern = f"%{value.lower()}%"
+    hidden_sql, hidden_params = _hidden_text_sql(pattern, field)
+    return f"({hidden_sql} AND {VISIBLE_NAME_SQL} NOT LIKE ?)", [*hidden_params, pattern]
 
 
 def document_match_query(quick_filter: Optional[str]) -> Optional[str]:
@@ -563,18 +656,30 @@ def _parse_quick_filter_month(value: str) -> Optional[str]:
     return None
 
 
-def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
-    raw = (value or "").strip()
-    if not raw:
+_QUICK_FILTER_AMOUNT_RE = re.compile(r"([+-]?)(\d+(?:\.\d*)?|\.\d+)")
+
+
+def _parse_quick_filter_amount(value: str) -> Optional[tuple[Decimal, Optional[str]]]:
+    """`(magnitude, direction)` for text that reads as an amount, else None; direction is "out", "in" or None.
+
+    **The sign is read the way a person writes it**, not the way it is stored: `-42.10` is money paid out,
+    `+42.10` money received, and a bare `42.10` either. Accounting parentheses mean a minus. Storage runs the
+    other way round (`amount > 0` is money out), and the flip belongs to the clause that compares against it.
+
+    **Matched against a strict pattern rather than handed to `Decimal`**, which also accepts `inf`, `nan` and
+    `1e3`: the first two then raised out of the list query, so typing the start of a name like "Nantucket"
+    returned a server error, and the third silently searched for $1,000.
+    """
+    text = (value or "").strip().replace(",", "").replace("$", "")
+    parenthesized = len(text) > 2 and text.startswith("(") and text.endswith(")")
+    if parenthesized:
+        text = text[1:-1]
+    match = _QUICK_FILTER_AMOUNT_RE.fullmatch(text)
+    if not match or (parenthesized and match.group(1)):
         return None
-    normalized = raw.replace(",", "").replace("$", "")
-    if normalized.startswith("(") and normalized.endswith(")"):
-        normalized = f"-{normalized[1:-1]}"
-    try:
-        amount = Decimal(normalized)
-    except InvalidOperation:
-        return None
-    return amount.copy_abs().quantize(Decimal("0.01")) if amount >= 0 else amount.quantize(Decimal("0.01"))
+    sign = "-" if parenthesized else match.group(1)
+    magnitude = Decimal(match.group(2)).quantize(Decimal("0.01"))
+    return magnitude, {"-": "out", "+": "in"}.get(sign)
 
 
 def _build_transaction_filter(
@@ -874,11 +979,15 @@ def list_transactions(
     order_by_parts.append("t.id DESC")
     order_by = ", ".join(order_by_parts)
 
-    # Why a row came back, for the rows whose reason is invisible. Projected only when the filter
-    # actually has a document component, so the ordinary listing pays nothing for it.
+    # Why a row came back, for the rows whose reason is invisible. Each is projected only when the filter
+    # actually has that component, so the ordinary listing pays nothing for it.
     doc_query = document_match_query(quick_filter)
     document_match_column = f"{DOCUMENT_MATCH_SQL} AS matched_document," if doc_query else ""
     document_match_params = [doc_query] if doc_query else []
+    hidden_text_match = hidden_text_match_sql(quick_filter)
+    if hidden_text_match:
+        document_match_column += f" {hidden_text_match[0]} AS matched_hidden_text,"
+        document_match_params += hidden_text_match[1]
 
     with get_db() as conn:
         _src = txn_effective_sql(conn, expand=expand_splits)

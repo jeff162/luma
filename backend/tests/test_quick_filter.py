@@ -66,10 +66,34 @@ class QuickFilterParsingTests(unittest.TestCase):
         self.assertIn(9.0, params)
 
     def test_amount(self):
-        self.assertEqual(str(_parse_quick_filter_amount("68")), "68.00")
-        self.assertEqual(str(_parse_quick_filter_amount("$1,234.5")), "1234.50")
-        self.assertEqual(str(_parse_quick_filter_amount("(20.22)")), "-20.22")
-        self.assertIsNone(_parse_quick_filter_amount("not-a-number"))
+        def parsed(value):
+            result = _parse_quick_filter_amount(value)
+            return None if result is None else (str(result[0]), result[1])
+
+        self.assertEqual(parsed("68"), ("68.00", None))
+        self.assertEqual(parsed("$1,234.5"), ("1234.50", None))
+        self.assertEqual(parsed(".5"), ("0.50", None))
+        # The sign as a person writes it: minus is money paid out, plus is money received.
+        self.assertEqual(parsed("-20.22"), ("20.22", "out"))
+        self.assertEqual(parsed("-$20.22"), ("20.22", "out"))
+        self.assertEqual(parsed("(20.22)"), ("20.22", "out"))
+        self.assertEqual(parsed("+20.22"), ("20.22", "in"))
+        self.assertIsNone(parsed("(-20.22)"))
+        self.assertIsNone(parsed("not-a-number"))
+        # `Decimal` reads all three of these; none of them is an amount anyone typed.
+        self.assertIsNone(parsed("inf"))
+        self.assertIsNone(parsed("nan"))
+        self.assertIsNone(parsed("1e3"))
+
+    def test_signed_amount_flips_to_the_stored_sign(self):
+        # Stored money out is positive, so a typed "-" compares against a positive amount.
+        clause, params = _build_quick_filter_clause("amount:-20.22")
+        self.assertEqual(clause, "(ROUND(t.amount, 2) = ?)")
+        self.assertEqual(params, [20.22])
+        clause, params = _build_quick_filter_clause("amount:+20.22")
+        self.assertEqual(params, [-20.22])
+        clause, params = _build_quick_filter_clause("amount:20.22")
+        self.assertEqual(clause, "(ROUND(ABS(t.amount), 2) = ?)")
 
     def test_bare_year_builds_date_year_clause(self):
         clause, params = _build_quick_filter_clause("2023")

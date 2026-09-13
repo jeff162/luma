@@ -29,7 +29,7 @@ test('category tags inherit onto transactions (leaf and group level)', async ({ 
 // Read-only: the menu's first item opens the editor panel and nothing is saved.
 test('right-clicking a row dismisses the merchant hover instead of covering the menu', async ({ page }) => {
   await page.goto('/transactions')
-  await page.getByPlaceholder('Quick filter…').fill('Lakeside Taverna')
+  await page.getByPlaceholder('Search…', { exact: true }).fill('Lakeside Taverna')
 
   // Every demo transaction is imported from a file, so the merchant hover always has origin detail to
   // show and is attached (see hasFileOriginDetail).

@@ -17,9 +17,9 @@
  *     payload-carried mechanism as `_dateFilter`): narrows the card to just the rows one
  *     sync delivered, so newly arrived transactions can be categorized where they arrived
  *     rather than amid a whole month of the card they landed on
- *   - the user's debounced search input (the backend quick-filter: merchant / category / account /
- *     amount, plus date jumps — a full date, year, or month, or a year-less partial like a bare
- *     month or month/day that matches that calendar slot across every year)
+ *   - the user's debounced search input — the same backend search (`quick_filter`) as the Transactions page, so
+ *     its grammar (keywords, dates, signed amounts) is documented once, in the `searching-transactions`
+ *     help topic and `_build_quick_filter_clause`
  *
  * The panel itself is read-write for categories: changes the user makes from this drawer
  * (via the inline CategoryPicker) update the underlying txn rows directly, the same way the
@@ -181,7 +181,7 @@ export default function ImportBatchDetail({
   }, [batch.id])
   const visibleDeduped = useMemo(() => {
     // Best-effort merchant-substring filter on the small removed-rows audit list; the main table's
-    // quick filter is backend-resolved (date/amount/etc.) and this list isn't, so a non-name query
+    // search is backend-resolved (date/amount/etc.) and this list isn't, so a non-name query
     // (e.g. a date) simply hides it.
     const term = debouncedFilter.toLowerCase()
     if (!term) return dedupedRows
@@ -236,9 +236,9 @@ export default function ImportBatchDetail({
             type="search"
             value={filterInput}
             onChange={(e) => setFilterInput(e.target.value)}
-            placeholder="Search merchant, amount, or date (2023, 03, 03/15, 03/2023, 03/15/2023)…"
-            aria-label="Search transactions by merchant, amount, or date"
-            title="Matches merchant, category, account, amount, or date. Date jumps support a year (2023), month-in-year (03/2023), or day (03/15/2023); a year-less month (03) or month/day (03/15) matches that slot across every year. Prefix to restrict, e.g. amount:68 or date:03/2023."
+            placeholder="Search names, imported text, amounts, or dates (2023, 03/15, -42.10)…"
+            aria-label="Search this file's transactions"
+            title="Matches names, imported text, category, account, amount, or date. -42.10 is money paid out, +42.10 money received. Dates can be a year (2023), month-in-year (03/2023), or day (03/15/2023); a month (03) or month/day (03/15) matches every year. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or amount:-68."
             style={{
               flex: '0 1 360px',
               minWidth: 240,

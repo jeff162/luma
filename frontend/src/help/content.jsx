@@ -511,12 +511,15 @@ export const HELP_TOPICS = [
     summary: 'The transaction ledger itself, as a list. Everything recorded about a transaction is reachable from its row, and the same list is where a set of them is worked through together.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Every transaction in the ledger is listed here. The quick filter above the table narrows to
-          a working set such as <HelpLink to="/help/reviewing-transactions">Needs review</HelpLink> or
-          uncategorized rows, while the filter bar at the top of the page narrows by account, owner,
-          category, tag, date or amount. The two combine.
+          Every transaction in the ledger is listed here. The search box above the table finds
+          transactions by name, amount, date and more &mdash; see{' '}
+          <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>. Beside it, the
+          quick filter narrows to one working set such as{' '}
+          <HelpLink to="/help/reviewing-transactions">Needs review</HelpLink> or uncategorized rows. The
+          button carries the name of its current choice: clicking it switches that filter on or off, and
+          its &#9662; picks a different one. The filter bar at the top of the page narrows by account,
+          owner, category, tag, date or amount. All three combine.
         </p>
         <p>
           <strong>Bulk Edit</strong> turns the list into a selectable set, for categorizing, tagging,
@@ -544,8 +547,8 @@ export const HELP_TOPICS = [
     id: 'reviewing-transactions',
     section: 'transactions',
     title: 'Needs Review',
-    surfaces: ['Transactions (Only… filter)', 'Import / Export (file card)'],
-    summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Needs review transaction filter, and bulk Mark reviewed are tools to help with this process.',
+    surfaces: ['Transactions (quick filter)', 'Import / Export (file card)'],
+    summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Needs review quick filter, and bulk Mark reviewed are tools to help with this process.',
     body: () => (
       <>
         <p>
@@ -562,7 +565,7 @@ export const HELP_TOPICS = [
           <li>
             <strong>Mark reviewed</strong>, on the row's right-click menu and in the bulk-edit bar, clears it
             without changing anything else. This covers the common case where everything is correct.
-            The transaction filter just above the transaction table has a <em>Needs review</em> option so all the transactions
+            The quick filter beside the search box, just above the transaction table, has a <em>Needs review</em> choice so all the transactions
             to be reviewed can be cleared at once in a bulk-edit option after the ones which needed
             editing have been dealt with. The main filter at the top of the page can be used to limit
             the display to a particular owner, account (or any other set of criteria) if only some of the entries
@@ -579,23 +582,102 @@ export const HELP_TOPICS = [
   {
     id: 'searching-transactions',
     section: 'transactions',
-    title: 'Searching by date or amount',
+    title: 'Searching transactions',
     surfaces: ['Transactions search', 'File ledger search'],
-    summary: 'The file-ledger and Transactions search boxes match dates and amounts, in addition to merchant names, categories and accounts. Type a year, month, day, or a dollar amount to find the matching transaction(s).',
+    summary: 'The search boxes on the Transactions page and on an import card\'s ledger match names, imported text, categories, accounts, dates, amounts and the text of attached documents. Starting a search with a keyword such as merchant: or amount: limits it to one kind of match.',
     body: () => (
       <>
         <p>
-          The file-ledger and Transactions search boxes accept more than text. To find a
-          transaction in a long ledger, type any of:
+          The search box above the Transactions ledger, and the one on an import card&apos;s ledger, list
+          every transaction the search matches in <em>any</em> of these ways:
         </p>
         <ul>
-          <li>a <strong>year</strong> &mdash; <code>2023</code></li>
-          <li>a <strong>month in a year</strong> &mdash; <code>03/2023</code></li>
-          <li>a <strong>day</strong> &mdash; <code>03/15/2023</code></li>
-          <li>a <strong>month</strong> or <strong>month/day</strong> with no year &mdash; <code>03</code> or <code>03/15</code> &mdash; matches that date in every year</li>
-          <li>an <strong>amount</strong> &mdash; <code>68</code></li>
+          <li>
+            <strong>Name</strong> &mdash; part of the merchant name. The name as imported keeps matching
+            after a rule or a rename replaces it, so words from the bank&apos;s original description still
+            find the transaction.
+          </li>
+          <li>
+            <strong>Imported text</strong> &mdash; the description and the extra text columns an import
+            captured, such as a memo or an original statement line.
+          </li>
+          <li>
+            <strong>Category</strong> &mdash; part of the category&apos;s name. <code>uncategorized</code> finds
+            transactions without one.
+          </li>
+          <li>
+            <strong>Account</strong> &mdash; whole words of the account&apos;s name. On their own, the words
+            <em> check</em>, <em>checking</em>, <em>saving</em>, <em>savings</em>, <em>credit</em> and <em>debit</em> are
+            not matched against accounts, since they would list every account of that kind;
+            <code> account:checking</code> matches them.
+          </li>
+          <li><strong>Date</strong> and <strong>amount</strong> &mdash; described below.</li>
+          <li>
+            <strong>Attached documents</strong> &mdash; words in the text of an attached receipt or invoice.
+            Each word matches from its start, and every word typed has to be present.
+          </li>
         </ul>
-        <p>and the list jumps to matching rows.</p>
+        <p>
+          A transaction found by text that is not on screen is marked. A match in the imported text
+          underlines the name with a dotted line, and hovering the name shows that text. A match inside an
+          attachment highlights the row&apos;s 📎 marker, which opens the document.
+        </p>
+
+        <HelpHeading anchor="keywords">Keywords</HelpHeading>
+        <p>Starting the search with a keyword limits it to one kind of match:</p>
+        <ul>
+          <li><code>merchant:</code> &mdash; names only, not the imported text</li>
+          <li>
+            <code>raw:</code> &mdash; imported text only: the name exactly as the bank or file sent it, and
+            the extra text columns the import captured. A rename or a rule&apos;s cleaned-up name is not
+            matched.
+          </li>
+          <li><code>category:</code></li>
+          <li><code>account:</code></li>
+          <li><code>date:</code></li>
+          <li><code>amount:</code></li>
+          <li><code>doc:</code> &mdash; attached documents only</li>
+        </ul>
+        <p>
+          <strong>Everything after the keyword is its value.</strong> <code>merchant:city water</code> searches
+          names for <em>city water</em>. No quotes are needed, and quotes that are typed are searched for as
+          part of the name. A search holds one keyword, and only at the very start:
+          <code> +5.00 merchant:city water</code> is not an amount and a merchant, but one piece of text
+          searched for as written. To narrow by a name and an amount together on the Transactions page,
+          put the name in the search box and the amount in the <strong>💲 Amount</strong> filter beside it.
+        </p>
+        <p>A keyword whose value cannot be read that way, such as <code>date:soon</code>, finds nothing.</p>
+
+        <HelpHeading anchor="dates">Dates</HelpHeading>
+        <ul>
+          <li>a <strong>year</strong> &mdash; <code>2023</code></li>
+          <li>a <strong>month in a year</strong> &mdash; <code>03/2023</code> or <code>2023-03</code></li>
+          <li>a <strong>day</strong> &mdash; <code>03/15/2023</code>, <code>3/15/23</code>, <code>2023-03-15</code> or <code>Mar 15, 2023</code></li>
+          <li>a <strong>month</strong> or <strong>month/day</strong> with no year &mdash; <code>03</code> or <code>03/15</code> &mdash; matches that date in every year</li>
+        </ul>
+        <p>
+          A number is also tried as an amount, so <code>2023</code> finds a $2,023.00 transaction as well,
+          and <code>03</code> a $3.00 one. <code>date:2023</code> searches dates alone.
+        </p>
+
+        <HelpHeading anchor="amounts">Amounts</HelpHeading>
+        <ul>
+          <li><code>42.10</code> &mdash; money paid out or received</li>
+          <li><code>-42.10</code> &mdash; money paid out</li>
+          <li><code>+42.10</code> &mdash; money received</li>
+        </ul>
+        <p>
+          An amount matches to the cent. A dollar sign and thousands separators are fine
+          (<code>$1,250.00</code>), and parentheses read as a minus, the way a statement writes a payment:
+          <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter beside the
+          Transactions search box.
+        </p>
+
+        <HelpHeading anchor="not-searched">What is not searched</HelpHeading>
+        <p>
+          Tags, category groups and notes are not searched. Tags and groups are narrowed with the filter
+          bar at the top of the page.
+        </p>
       </>
     ),
   },
@@ -941,7 +1023,7 @@ export const HELP_TOPICS = [
     section: 'transactions',
     title: 'Attaching receipts and invoices',
     surfaces: ['Transactions (row marker)', 'Transaction detail (Documents)'],
-    summary: 'Receipts and invoices can be attached to a transaction. Parsable text is searchable from the quick-filter box.',
+    summary: 'Receipts and invoices can be attached to a transaction. Parsable text is searchable from the Transactions search box.',
     body: () => (
       <>
         <p>
@@ -1014,11 +1096,11 @@ export const HELP_TOPICS = [
           stored and viewable, but not findable by their contents.
         </p>
         <p>
-          Text found in an attachment is searched by the quick-filter box on the Transactions
+          Text found in an attachment is searched by the search box on the Transactions
           page. Search results where the match is from an attachment are flagged so it is clear why
           they matched even though the search term is not visibly present.
-          Tagging the search term with the <code>doc:</code> prefix narrows a search to only the attachments. See{' '}
-          <HelpLink to="/help/searching-transactions">searching by date or amount</HelpLink>.
+          Starting the search with the <code>doc:</code> keyword narrows it to only the attachments. See{' '}
+          <HelpLink to="/help/searching-transactions#keywords">searching transactions</HelpLink>.
         </p>
 
         <h4>Storage</h4>

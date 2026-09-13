@@ -223,7 +223,7 @@ scale — rather than by feature.
   2026-08-08 and its model is in [`../data-model.md`](../data-model.md) — including why currency is
   tenant-wide while a date format is per-user `ui_preference`. What stays: **Bucket A** (the `en-US`
   formatter, a date-format preference, and the ~9 raw ISO renders the central helpers never reach —
-  cosmetic) and **Bucket B**, the only correctness risk: the quick filter parses dates MDY-first and
+  cosmetic) and **Bucket B**, the only correctness risk: the ledger search parses dates MDY-first and
   amounts with fixed separator roles, and CSV amount parsing carries the same hazard, where `1.234,56`
   silently imports as `1.234`.
 - [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the

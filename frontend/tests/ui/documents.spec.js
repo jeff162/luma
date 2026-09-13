@@ -13,7 +13,7 @@ import { expect, test } from '@playwright/test'
 
 // One row, matched on words that appear in no field of it — only inside the attachment.
 async function expectOnlyMatch(page, query, merchant) {
-  await page.getByLabel('Quick filter transactions').fill(query)
+  await page.getByLabel('Search transactions', { exact: true }).fill(query)
   await expect(page.getByText(merchant).first()).toBeVisible()
   await expect(page.getByRole('button', { name: /attached document/ })).toHaveCount(1)
 }

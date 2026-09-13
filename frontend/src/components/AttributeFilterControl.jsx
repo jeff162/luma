@@ -14,7 +14,7 @@
  * The split-button shape preserves the ergonomics of the two toggles it replaces: the body turns the
  * filter on and off while *keeping* the choice, so the ledger can be flipped between filtered and
  * unfiltered without re-picking, and the caret changes which attribute that is. A page-local filter,
- * like the quick filter and the amount popover beside it — it narrows this ledger and never touches the
+ * like the ledger search and the amount popover beside it — it narrows this ledger and never touches the
  * shared FilterBar.
  *
  * **There is no "clear".** A choice that is switched off already shows everything, so clearing would be
