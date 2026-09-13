@@ -1233,13 +1233,17 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             conn.execute(
                 """
                 INSERT INTO txn
-                    (id, external_transaction_id, account_id, owner_id, category_id,
+                    (id, external_transaction_id, account_id, owner_id, category_id, category_source,
                      amount, merchant_name, display_name, raw_name, date, authorized_date, is_pending,
                      display_name_source, content_hash, import_evidence_json, import_batch_id,
                      suspect_duplicate_of, suspect_duplicate_reason, needs_review)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 """,
-                (txn_id, t["external_transaction_id"], acc["id"], acc["owner_id"], cat_id, t["amount"],
+                # A rule is the only thing that can categorize a synced row, so its provenance is `rule`
+                # whenever a category was set — the same stamp the CSV import writes, which is what the
+                # row's "Categorized by" line reads.
+                (txn_id, t["external_transaction_id"], acc["id"], acc["owner_id"], cat_id,
+                 "rule" if cat_id else None, t["amount"],
                  merchant_name, display_name, t["raw_name"], t["date"], t.get("authorized_date"),
                  1 if t["is_pending"] else 0, display_name_source, content_hash, evidence_json, card_id,
                  verdict.suspect_of if verdict.soft_flag else None,

@@ -699,7 +699,7 @@ export const HELP_TOPICS = [
           Automatic categorization leaves a split alone. <strong>Categorize</strong> skips it, and
           even applying a rule to its matching transactions -- which otherwise overrides a category set by
           hand -- will not overwrite one, reporting how many it left instead.
-          See{' '}<HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
+          See{' '}<HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
         </p>
       </>
     ),
@@ -1281,7 +1281,7 @@ export const HELP_TOPICS = [
         <p>
           <strong>Categorize</strong> re-applies every rule across the ledger, changing only rows that
           are not pinned, so work done by hand is left
-          alone. <HelpLink to="/help/re-categorizing">What changes a transaction's category</HelpLink> covers
+          alone. <HelpLink to="/help/re-categorizing">How transactions get categorized</HelpLink> covers
           which rows each action is allowed to touch.
         </p>
         <p>
@@ -1295,15 +1295,30 @@ export const HELP_TOPICS = [
   {
     id: 're-categorizing',
     section: 'rules',
-    title: "What changes a transaction's category",
+    title: 'How transactions get categorized',
     surfaces: ['Rules page'],
-    summary: 'Categorize re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
+    summary: 'Imported and synced transactions are categorized by the rules as they arrive, with a file\'s own categories filling in only what the rules leave. Afterward, Categorize re-applies rules but never disturbs a category set by hand or kept from a trusted import; applying a rule to its matching transactions is full-force and overrides them. A closing section ranks the categorization sources for anyone who wants the full model.',
     body: () => (
       <>
+        <h4>As transactions arrive</h4>
         <p>
-          A transaction's category can come from a few different places, and the two bulk actions that
+          Most categorization happens automatically as transactions arrive. Each imported or synced
+          transaction runs through the categorization rules -- the same matching the{' '}
+          <strong>Categorize</strong> button on the Rules page uses -- and the most specific matching rule
+          sets its category, along with any rename or tags. A CSV import does this while{' '}
+          <em>Apply categorization rules on import</em> is checked, which it is by default.
+        </p>
+        <p>
+          A file imported with <em>use the categories present in the data</em> can also bring its own
+          categories, generally as part of an initial seeding from another tool. Rules still come first:
+          the file's category fills in only rows no rule claims, and a row that keeps it is protected from
+          later automatic re-runs. The file's label stays on every row either way.
+        </p>
+        <h4>Once transactions are in</h4>
+        <p>
+          After that, a category can change in a few ways, and the two bulk actions that
           re-categorize -- <strong>Categorize</strong> and a rule's <strong>apply to matching
-            transactions</strong> -- treat those origins differently. The practical effect of each is
+            transactions</strong> -- treat a row's origin differently. The practical effect of each is
           below; a closing section ranks the sources in full for anyone who wants it.
         </p>
         <h4>Categorize</h4>
@@ -1319,8 +1334,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           To deliberately <em>undo</em> a rule's categorizations -- when a rule was wrong -- use the{' '}
-          <em>re-evaluate this rule's transactions</em> option offered when you delete or edit a
-          rule. It re-runs just those rows against the remaining rules, so they fall to another matching
+          <em>re-evaluate this rule's transactions</em> option offered when a rule is deleted or
+          edited. It re-runs just those rows against the remaining rules, so they fall to another matching
           rule or to uncategorized, rather than keeping the removed rule's category.
         </p>
         <h4>Apply a rule to its matching transactions</h4>
@@ -1534,7 +1549,7 @@ export const HELP_TOPICS = [
             Accepting a suggestion applies its rule to exactly the rows that generated it, so an edit
             made to the rule before accepting it (a tweaked category, added tags, a rename) lands on those
             rows too, and they shift from import-locked to
-            rule-governed (see{' '} <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>).
+            rule-governed (see{' '} <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>).
           </li>
           <li>
             Resolving a conflict has various options to re-categorize rows.
@@ -1585,7 +1600,7 @@ export const HELP_TOPICS = [
           The last two produce subtly different results: a bulk re-categorize
           keeps rows in the import learning set and re-targets the rule, while Preserve carves a
           row out as an untouchable manual decision. How those properties affect subsequent behavior is covered
-          in <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
+          in <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
         </p>
         <h4>Older suggestions, and clearing them out in bulk</h4>
         <p>
@@ -1853,7 +1868,7 @@ export const HELP_TOPICS = [
         <p>
           See also:{' '}
           <HelpLink to="/help/page-rules#how-rules-come-into-being">how rules come into being</HelpLink> and{' '}
-          <HelpLink to="/help/re-categorizing">what changes a transaction's category</HelpLink>.
+          <HelpLink to="/help/re-categorizing">how transactions get categorized</HelpLink>.
         </p>
       </>
     ),

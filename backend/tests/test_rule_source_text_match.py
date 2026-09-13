@@ -265,7 +265,8 @@ class SyncedRowSourceTextTests(unittest.TestCase):
             reset_current_db_path(token)
         with self._db() as conn:
             return conn.execute(
-                "SELECT category_id, import_evidence_json FROM txn WHERE account_id = 'acct-1'"
+                "SELECT category_id, category_source, category_overridden, import_evidence_json"
+                " FROM txn WHERE account_id = 'acct-1'"
             ).fetchone()
 
     def test_a_source_text_rule_categorizes_a_synced_row_as_it_arrives(self):
@@ -273,6 +274,10 @@ class SyncedRowSourceTextTests(unittest.TestCase):
         row = self._sync_one_row()
         self.assertIn(ORIGINAL_STATEMENT, row["import_evidence_json"])
         self.assertEqual(row["category_id"], self.membership)
+        # Provenance is recorded exactly as the CSV import records it, so the row's "Categorized by" line
+        # names the rule — and the row stays unpinned, open to Categorize like any rule row.
+        self.assertEqual(row["category_source"], "rule")
+        self.assertEqual(row["category_overridden"], 0)
 
     def test_a_name_only_rule_leaves_the_same_synced_row_alone(self):
         # The guard: proves the match above came from the evidence rather than from the row's own names.
@@ -280,3 +285,4 @@ class SyncedRowSourceTextTests(unittest.TestCase):
         row = self._sync_one_row()
         self.assertIn(ORIGINAL_STATEMENT, row["import_evidence_json"])
         self.assertIsNone(row["category_id"])
+        self.assertIsNone(row["category_source"])
