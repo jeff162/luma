@@ -199,6 +199,13 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(false)
   const [batches, setBatches] = useState([])
+  // A dropped file is matched and mapped against the saved sources and accounts, and both arrive with
+  // the page's initial load — while the file input is usable from the first render. A file dropped before
+  // that load settles is held here and handled by the effect beside handleDrop once it does. Handling it
+  // at once would run the whole detect-and-apply chain inside the render it was dropped into, whose lists
+  // are still empty, and the file would silently take a temporary draft even though its source exists.
+  const [initialDataStatus, setInitialDataStatus] = useState('loading')
+  const [filesAwaitingInitialData, setFilesAwaitingInitialData] = useState(null)
   const dropRef = useRef(null)
   const fileInputRef = useRef(null)
   const [selectedUploadSource, setSelectedUploadSource] = useState('')
@@ -367,7 +374,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
       setAccounts(a)
       setCategories(c)
       setBatches(b)
-    })
+      setInitialDataStatus('ready')
+    }).catch(() => setInitialDataStatus('failed'))
   }, [])
 
   useEffect(() => {
@@ -1925,6 +1933,17 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   async function handleFiles(fileList) {
     const files = Array.from(fileList || [])
     if (!files.length) return
+    if (initialDataStatus === 'loading') {
+      setFilesAwaitingInitialData(files)
+      return
+    }
+    if (initialDataStatus === 'failed') {
+      setNoticeDialog({
+        title: 'Could not load data sources',
+        description: 'The saved data sources and accounts could not be loaded, so the file cannot be matched to a data source. Reload the page and try again.',
+      })
+      return
+    }
     // Route any AZAD Amazon exports to the Amazon flow (which already accepts multiple); the rest are CSV.
     let csvFiles = files
     if (onAmazonDetected) {
@@ -2105,6 +2124,16 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setMappingBaselineSnapshot(stableSerialize(buildImportSnapshot()))
     setPendingMappingBaselineCapture(false)
   }, [pendingMappingBaselineCapture, stage, preview, buildImportSnapshot])
+
+  useEffect(() => {
+    if (initialDataStatus === 'loading' || !filesAwaitingInitialData) return
+    setFilesAwaitingInitialData(null)
+    handleFiles(filesAwaitingInitialData)
+    // handleFiles is a plain function redeclared every render. The instance called here belongs to the
+    // render that committed the settled load, which is the whole point, so listing it would only re-run
+    // this effect for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDataStatus, filesAwaitingInitialData])
 
   function handleDrop(e) {
     e.preventDefault()
@@ -3364,7 +3393,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
             fileInputRef={fileInputRef}
             handleDrop={handleDrop}
             handleFiles={handleFiles}
-            loading={loading}
+            loading={loading || !!filesAwaitingInitialData}
           />
         </div>
         <DataConnectionsPanel

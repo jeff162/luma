@@ -201,6 +201,34 @@ test('a dropped file matching one saved source applies it without asking', async
   }
 })
 
+// The file input is there from the page's first render, but the saved sources it is matched against
+// arrive with the initial load. Holding one of that load's requests open makes the drop land first on
+// every run — the ordering CI once hit by chance, where a file set ~15ms after the data arrived was matched
+// against the empty list of the render it had been dropped into and silently took a temporary draft.
+test('a file dropped before the saved sources load still applies the matching one', async ({ page, request }) => {
+  const profileName = uniqueDataSourceName('PW early drop source')
+  const profileId = await createImportProfile(request, { name: profileName })
+  let releaseInitialLoad
+  const initialLoadHeld = new Promise(resolve => { releaseInitialLoad = resolve })
+  await page.route(/\/api\/import-export\/batches(\?|$)/, async route => {
+    await initialLoadHeld
+    await route.continue()
+  })
+
+  try {
+    await page.goto('/import-export')
+    await page.locator('#csv-file-input').setInputFiles(sampleCsvFile())
+    releaseInitialLoad()
+
+    await expect(page.getByRole('button', { name: profileName, exact: true })).toBeVisible()
+    await expect(page.getByText('Which data source?')).toHaveCount(0)
+    await expect(page.getByText(/^Accept /)).toHaveCount(0)
+  } finally {
+    releaseInitialLoad()
+    await deleteImportProfile(request, profileId)
+  }
+})
+
 test('a dropped file matching several saved sources asks which to use', async ({ page, request }) => {
   const firstName = uniqueDataSourceName('PW ambiguous A')
   const secondName = uniqueDataSourceName('PW ambiguous B')
