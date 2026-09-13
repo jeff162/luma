@@ -765,6 +765,7 @@ export default function Recurring() {
   })
   const [dismissedSignals, setDismissedSignals] = useState(null)  // null = dialog closed
   const [signalUndo, setSignalUndo] = useState(null)              // { key, kind } of the last dismissal
+  const [excludeUndo, setExcludeUndo] = useState(null)            // the charge a finding last excluded from its series
   const [confirmUndo, setConfirmUndo] = useState(null)            // { id, name } of the last accepted series
   // Transfers and card payments the detector found but has not matched up, and what is stopping each.
   // Fetched once on load for the count on the button; re-fetched when the report opens so it reflects
@@ -1057,6 +1058,30 @@ export default function Recurring() {
     loadSignals()
   }
 
+  // A finding's charge taken out of its series: the same scan-durable exclusion as the row menu's "Remove
+  // from recurring series". The series' stats change with it, so the findings and any open report reload
+  // rather than patching in place, and the finding itself goes because its charge no longer belongs.
+  async function excludeSignalCharge(signal) {
+    const updated = await api.setRecurringMembership(signal.series_id, signal.txn_id, 'excluded')
+    if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
+    setExcludeUndo({
+      seriesId: signal.series_id, txnId: signal.txn_id, seriesName: signal.series_name,
+      amount: signal.amount, date: signal.txn_date,
+    })
+    loadSignals()
+    setReportNonce(n => n + 1)
+  }
+
+  async function undoExcludeCharge() {
+    const snap = excludeUndo
+    if (!snap) return
+    setExcludeUndo(null)
+    const updated = await api.setRecurringMembership(snap.seriesId, snap.txnId, 'clear')
+    if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
+    loadSignals()
+    setReportNonce(n => n + 1)
+  }
+
   async function restoreSignal(key) {
     await api.restoreRecurringSignal(key)
     setSignalUndo(null)
@@ -1115,6 +1140,7 @@ export default function Recurring() {
   // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable — an inline arrow
   // restarts the countdown on every render and the toast never closes on its own.
   const dismissUndoToast = useCallback(() => setSignalUndo(null), [])
+  const dismissExcludeToast = useCallback(() => setExcludeUndo(null), [])
 
   async function showDismissedSignals() {
     setDismissedSignals([])
@@ -1280,6 +1306,7 @@ export default function Recurring() {
                   onSeriesAction={signalSeriesAction}
                   onOpenSeries={openSignalTarget}
                   onAcceptPrice={acceptPriceChange}
+                  onExcludeCharge={excludeSignalCharge}
                   onShowDismissed={showDismissedSignals}
                 />
               )
@@ -1414,6 +1441,15 @@ export default function Recurring() {
           description="It stays hidden; a new finding about the same series still appears."
           onUndo={() => restoreSignal(signalUndo.key)}
           onDismiss={dismissUndoToast}
+        />
+      )}
+
+      {excludeUndo && (
+        <UndoToast
+          title="Excluded from series"
+          description={`${formatCurrency(Math.abs(excludeUndo.amount))} on ${formatDate(excludeUndo.date)} is no longer part of ${excludeUndo.seriesName || 'the series'}, and stays out after future scans.`}
+          onUndo={undoExcludeCharge}
+          onDismiss={dismissExcludeToast}
         />
       )}
 

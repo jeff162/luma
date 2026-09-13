@@ -1889,7 +1889,8 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             <strong>Remove from the series</strong> -- for a transaction the scan swept in by mistake. It stays
-            out across future scans. A removal is reversible: undo it from the prompt, from the removed
+            out across future scans. An <em>Amount changed</em> finding offers the same thing
+            as <em>Exclude from series</em>. A removal is reversible: undo it from the prompt, from the removed
             transaction's own right-click menu (<em>Restore to recurring series</em>), or from
             the <em>removed</em> list inside the series.
           </li>
@@ -1954,10 +1955,8 @@ export const HELP_TOPICS = [
             <em> Mark ended</em> is offered as an option. Nothing is ended automatically.
           </li>
           <li>
-            <strong>Amount changed</strong> -- a charge that came in slightly out of range of what the series has been
-            charging. A series with a steady price reports a modest step; one that moves every month
-            reports only a charge beyond anything it has done before. Once a second charge arrives at the
-            new price the change is treated as the new normal and stops being reported.
+            <strong>Amount changed</strong> -- a charge that differs from what the series normally charges.
+            See <em>When an amount changes</em> below.
           </li>
           <li>
             <strong>Newly detected</strong> -- a series found for the first time in the last month.
@@ -1972,14 +1971,53 @@ export const HELP_TOPICS = [
           finding only -- a later missed cycle, or a different charge, is reported again. Anything
           dismissed stays listed at the foot of the section and can be brought back.
         </p>
+        <h4>When an amount changes</h4>
         <p>
-          On a bill whose amount moves -- gas, electricity, water -- dismissing an amount also
-          <strong> extends the range</strong>. A heating bill that peaks every January generates an
-          alert the first winter, and dismissing it keeps the ones after from alerting;
-          the later charges up to the amounts already accepted pass without comment, while a charge beyond
-          them generates a new alert. Restoring a dismissal restores the prior range. Fixed-price
-          subscriptions work differently on purpose -- there a dismissal means the price rose, and the
-          next increase is still reported.
+          An <strong>Amount changed</strong> finding means the latest charge differs from what the series
+          normally charges. What counts as a change depends on the series:
+        </p>
+        <ul>
+          <li>
+            <strong>Fixed price</strong> (a subscription) -- a change of about 15% or more from the last few
+            charges.
+          </li>
+          <li>
+            <strong>Varying amount</strong> (gas, electricity, water) -- a charge well outside anything the
+            series has charged recently.
+          </li>
+        </ul>
+        <p>
+          A change is reported once. When the next charge arrives at the same new amount, it is treated as
+          the new normal and nothing more is reported, whatever was done with the first finding.
+        </p>
+        <p>
+          Each finding offers a choice, depending on what the charge is:
+        </p>
+        <ul>
+          <li>
+            <strong>Dismiss</strong> -- the amount is correct. The finding is hidden and the charge stays in
+            the series. On a bill whose amount varies, dismissing also teaches the series that the amount is
+            normal: a heating bill that peaks every January is reported the first winter, and once dismissed,
+            later bills up to that amount pass quietly while a higher one is still reported. Restoring the
+            dismissed finding takes that amount back out. On a fixed price, dismissing accepts that the price
+            went up, and a further increase is reported as usual.
+          </li>
+          <li>
+            <strong>Accept new amount</strong> -- offered only on a series that matches charges by amount. It
+            widens the series' amount range to include the new price. Without it, later charges at the new
+            price are not matched to the series.
+          </li>
+          <li>
+            <strong>Exclude from series</strong> -- the charge does not belong, such as a one-off purchase
+            from the same merchant. The charge is taken out of the series and stays out after future scans;
+            the transaction itself is unchanged. This covers that one charge only. If more charges like it
+            keep arriving, the series is matching too broadly, and the fix is under <em>Which transactions
+              belong</em> above.
+          </li>
+        </ul>
+        <p>
+          An excluded charge can be put back from the prompt that appears, from its right-click menu
+          (<em>Restore to recurring series</em>), or from the <em>removed</em> list inside the series.
         </p>
 
         <h4>What is coming up</h4>

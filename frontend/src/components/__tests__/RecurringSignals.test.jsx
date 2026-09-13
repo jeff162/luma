@@ -38,7 +38,7 @@ const UPCOMING = {
 function renderSection(props = {}) {
   const handlers = {
     onKindChange: vi.fn(), onDismiss: vi.fn(), onSeriesAction: vi.fn(),
-    onOpenSeries: vi.fn(), onShowDismissed: vi.fn(), onAcceptPrice: vi.fn(),
+    onOpenSeries: vi.fn(), onShowDismissed: vi.fn(), onAcceptPrice: vi.fn(), onExcludeCharge: vi.fn(),
   }
   const signals = props.signals || []
   const counts = props.counts || signals.reduce((acc, s) => ({ ...acc, [s.kind]: (acc[s.kind] || 0) + 1 }), {})
@@ -136,6 +136,25 @@ describe('RecurringSignals', () => {
   it('offers no such action when the charge is already inside the band', () => {
     renderSection({ signals: [{ ...PRICE, amount_mode: 'fixed', band_min: 12, band_max: 22 }] })
     expect(screen.queryByRole('button', { name: 'Accept new amount' })).toBeNull()
+  })
+
+  it('offers to exclude the charge an amount finding names, handing back the finding', async () => {
+    // Offered whether or not amount gates membership: a charge that does not belong is a different answer
+    // from "the price changed", and before this the only route to it was the series report's row menu.
+    const { onExcludeCharge } = renderSection({ signals: [{ ...PRICE, amount_mode: 'variable' }] })
+    await userEvent.click(screen.getByRole('button', { name: 'Exclude from series' }))
+    expect(onExcludeCharge).toHaveBeenCalledWith({ ...PRICE, amount_mode: 'variable' })
+  })
+
+  it('offers exclusion only where the finding names a charge in a series', () => {
+    // A missing charge has no transaction to exclude, and a finding without a series has nothing to exclude
+    // it from.
+    renderSection({ signals: [MISSED] })
+    expect(screen.queryByRole('button', { name: 'Exclude from series' })).toBeNull()
+    cleanup()
+
+    renderSection({ signals: [{ ...PRICE, series_id: undefined }] })
+    expect(screen.queryByRole('button', { name: 'Exclude from series' })).toBeNull()
   })
 
   it('never shows an upcoming charge among the findings', () => {

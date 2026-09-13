@@ -503,7 +503,10 @@ Important behavior:
   was first written beside, and sharing their dismissal store (`services/signal_dismissals.py`) rather
   than a table of its own. A charge missing a bound by up to 25% is a **warning** with a one-click
   *Widen to include* (the bound has one right answer; the row then takes the category back, and the
-  detector returns it to the series on its next pass); one sitting within 10% *inside* a bound is the
+  detector returns it to the series on its next pass). **Widening is one transaction** (`POST
+  /rules/{id}/widen`): as a rule update followed by a separate apply, a failure between the two left the
+  bound moved and the charge unclaimed, which the panel then showed as a near-edge warning at 0% with
+  nothing to say the fix was half done. One sitting within 10% *inside* a bound is the
   same warning one occurrence earlier, **information**, with no widen offered since the rule still claims
   it. A row already carrying the rule's own category is never reported, and each rule reports at most its
   three most recent near-misses, since a drifted range says one thing however many rows hit it — a
@@ -809,7 +812,8 @@ Key invariants:
   `_load_overrides` filters on `'excluded'`, so nothing can write one; the index is vestigial. Don't
   re-propose it. Stats derive from the effective (override-adjusted) set, so
   `occurrence_count` still equals the linked-row count. Surfaced as the row menu's "Remove from recurring
-  series" (`POST /recurring/{id}/membership`). A removal is recoverable three ways: an immediate **Undo**
+  series" and as **Exclude from series** on an *Amount changed* finding, the one finding that names a
+  charge (`POST /recurring/{id}/membership` for both). A removal is recoverable three ways: an immediate **Undo**
   toast (clears the override right away); the removed row's own right-click menu, which offers **Restore
   to recurring series** because the transaction payload carries the `recurring_excluded_series_id`/name it
   was removed from; and — to browse all of a series' removals — the series drill-down's **"N removed"**

@@ -685,6 +685,11 @@ export const api = {
   // (used after a merge/replace changes the governing rule); omitted = full force, overwriting all matches.
   applyRule: (id, { preserveManual } = {}) =>
     request(`/rules/${id}/apply${preserveManual ? '?preserve_manual=true' : ''}`, { method: 'POST' }),
+  // The Rule checkup's *Widen to include*: moves one bound out to the charge (the server rounds it outwards
+  // to the cent) and re-applies the rule in one transaction, so a failure cannot leave the bound moved and
+  // the charge unclaimed.
+  widenRuleRange: (id, bound, amount) =>
+    request(`/rules/${id}/widen`, { method: 'POST', body: JSON.stringify({ bound, amount }) }),
   // Apply a rule's outputs to a specific set of transactions (the rows that generated an accepted
   // import-rule suggestion), leaving conflicting rows and manual exceptions alone.
   applyRuleToTransactions: (id, transaction_ids) =>

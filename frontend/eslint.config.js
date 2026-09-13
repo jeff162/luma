@@ -22,6 +22,7 @@ const txnMutationRestrictions = [
   { object: 'api', property: 'overrideCategory', message: 'Use txnMutations.setCategory so derived counts (Tasks badge, etc.) get invalidated.' },
   { object: 'api', property: 'clearOverride', message: 'Use txnMutations.uncategorize so derived counts get invalidated.' },
   { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
+  { object: 'api', property: 'widenRuleRange', message: 'Use txnMutations.widenRuleRange so derived counts get invalidated.' },
   { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
   { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
 ]

@@ -8,6 +8,7 @@ This router also exposes previews and retroactive apply paths, so its matching
 order needs to stay in lockstep with the categorizer used during sync/import.
 """
 import uuid
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
@@ -827,6 +828,28 @@ def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
     }
 
 
+def _colliding_rule(conn, rule_id: str, resulting: dict):
+    """Another live rule whose matcher would be identical to `resulting` — the collision `update_rule`
+    reports instead of writing, and `widen_rule_range` refuses. `IS` is null-safe."""
+    return conn.execute(
+        """SELECT id, category_id, clean_name FROM category_rule
+           WHERE id != ?
+             AND keyword = ?
+             AND match_expr   IS ?
+             AND owner_id     IS ?
+             AND account_id   IS ?
+             AND account_type IS ?
+             AND amount_min   IS ?
+             AND amount_max   IS ?
+             AND debit_credit IS ?
+             AND match_source_text IS ?
+             AND deleted_at IS NULL""",
+        (rule_id, resulting["keyword"], resulting["match_expr"], resulting["owner_id"], resulting["account_id"],
+         resulting["account_type"], resulting["amount_min"], resulting["amount_max"],
+         resulting["debit_credit"], resulting["match_source_text"]),
+    ).fetchone()
+
+
 @router.patch("/{rule_id}")
 def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "merge"] = "reject",
                 reconcile: bool = False):
@@ -866,24 +889,8 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
             list(body.tag_ids) if body.tag_ids is not None
             else [r["tag_id"] for r in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()]
         )
-        # Another rule (not this one) that the edited matcher would now collide with. `IS` is null-safe.
-        other = conn.execute(
-            """SELECT id, category_id, clean_name FROM category_rule
-               WHERE id != ?
-                 AND keyword = ?
-                 AND match_expr   IS ?
-                 AND owner_id     IS ?
-                 AND account_id   IS ?
-                 AND account_type IS ?
-                 AND amount_min   IS ?
-                 AND amount_max   IS ?
-                 AND debit_credit IS ?
-                 AND match_source_text IS ?
-                 AND deleted_at IS NULL""",
-            (rule_id, resulting["keyword"], resulting["match_expr"], resulting["owner_id"], resulting["account_id"],
-             resulting["account_type"], resulting["amount_min"], resulting["amount_max"],
-             resulting["debit_credit"], resulting["match_source_text"]),
-        ).fetchone()
+        # Another rule (not this one) that the edited matcher would now collide with.
+        other = _colliding_rule(conn, rule_id, resulting)
         if other:
             other_tag_ids = {
                 r["tag_id"] for r in
@@ -1005,6 +1012,74 @@ def apply_rule(rule_id: str, preserve_manual: bool = False):
     # category — surfaced rather than silent, because an apply that reports "updated 12" while quietly
     # declining 3 rows is telling the user something that is not true.
     return {
+        "updated": len(affected_ids),
+        "transaction_ids": affected_ids,
+        "skipped_splits": len(skipped_splits),
+    }
+
+
+class RuleWidenBody(BaseModel):
+    bound: Literal["min", "max"]
+    amount: float
+
+
+@router.post("/{rule_id}/widen")
+def widen_rule_range(rule_id: str, body: RuleWidenBody):
+    """Move one amount bound out to a charge and re-apply the rule, in one transaction — the Rule checkup's
+    *Widen to include*.
+
+    It used to be two requests from the browser, a rule update and then an apply, and a failure between
+    them left the bound moved and the charge still unclaimed. Nothing in the panel could say so: the
+    charge then sat at 0% inside the new bound and read as a near-edge warning rather than as a fix half
+    done, and a retry could not reproduce how it got there. Both halves under one `get_db()` make it all
+    or nothing, whatever interrupts it.
+
+    The bound is rounded outwards to the cent here, from the decimal the caller sent rather than from its
+    float, so the charge the finding names is inside the result. Hand categorizations are preserved, as the
+    rule list's own re-apply after an edit preserves them: widening says which rows the rule should claim,
+    not that a per-row decision was wrong. Narrowing is refused, and so is a bound that would make the
+    matcher identical to another rule's, which `update_rule` reports and this endpoint cannot resolve."""
+    column = "amount_max" if body.bound == "max" else "amount_min"
+    cents = Decimal(str(abs(body.amount))) * 100
+    rounding = ROUND_CEILING if body.bound == "max" else ROUND_FLOOR
+    new_bound = float(cents.to_integral_value(rounding=rounding) / 100)
+    skipped_splits: list = []
+    prior_keys: set = set()
+    with get_db() as conn:
+        current = conn.execute(
+            """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
+                      amount_min, amount_max, debit_credit, match_source_text, is_recurring
+               FROM category_rule WHERE id = ? AND deleted_at IS NULL""",
+            (rule_id,),
+        ).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        existing = current[column]
+        if existing is None:
+            label = "maximum" if body.bound == "max" else "minimum"
+            raise HTTPException(status_code=400, detail=f"This rule has no {label} to widen.")
+        # Equal is allowed: re-applying at the bound the charge already sits on is how a range left moved
+        # without its apply gets finished.
+        if (new_bound < existing) if body.bound == "max" else (new_bound > existing):
+            raise HTTPException(status_code=400, detail="That amount is already inside the rule's range.")
+        resulting = _resulting_rule_state(current, RuleUpdate(**{column: new_bound}))
+        if _colliding_rule(conn, rule_id, resulting):
+            raise HTTPException(
+                status_code=409,
+                detail="Widening would make this rule match exactly what another rule matches. "
+                       "Edit the rules to settle which one should apply.",
+            )
+        conn.execute(f"UPDATE category_rule SET {column} = ? WHERE id = ?", (new_bound, rule_id))
+        # What `update_rule` does for any edit to a recurring rule, since the range decides its membership.
+        if current["is_recurring"]:
+            _ensure_recurring_series(conn, rule_id, None)
+        affected_ids = _apply_rule_to_existing(
+            conn, rule_id, preserve_manual=True, skipped_splits=skipped_splits, capture_prior_keys=prior_keys,
+        )
+    _rescan_recurring(affected_ids, prior_payee_keys=prior_keys)
+    return {
+        "rule_id": rule_id,
+        column: new_bound,
         "updated": len(affected_ids),
         "transaction_ids": affected_ids,
         "skipped_splits": len(skipped_splits),

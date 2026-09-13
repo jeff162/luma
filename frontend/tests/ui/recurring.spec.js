@@ -8,8 +8,9 @@ import { expect, test } from '@playwright/test'
 // kinds it found, each finding offers the action that settles it, and switching views does not blank
 // the page.
 //
-// Read-only: no signal is dismissed and no series is confirmed, ended or deleted, so the shared demo
-// ledger is unchanged for the specs running beside this one.
+// Read-only apart from one exclusion, which the test undoes itself and clears again in a `finally`: no
+// signal is dismissed and no series is confirmed, ended or deleted, so the shared demo ledger is unchanged
+// for the specs running beside this one.
 
 // Series have to exist before signals can be computed over them, and detection is a catch-up the app
 // runs itself on load (App.jsx calls this endpoint on mount). Called explicitly here so the page is not
@@ -54,6 +55,37 @@ test('the review view reports the anomalies the demo data was built to raise', a
   // The drifted water bill the demo also seeds is *not* here: it is a finding about a rule, and it
   // belongs to the Rules page's checkup (tests/ui/rule-checkup.spec.js).
   await expect(page.getByRole('button', { name: /Outside a rule/ })).toHaveCount(0)
+})
+
+test('an amount finding can exclude its charge from the series, and Undo puts it back', async ({ page, request }) => {
+  // The unit test pins that the button hands back its finding; what only the page can show is the wiring
+  // behind it — the exclusion lands, the finding goes because its charge no longer belongs, and the
+  // prompt's Undo brings both back.
+  const response = await request.get('/api/recurring/signals')
+  expect(response, `recurring signals failed (${response.status()})`).toBeOK()
+  const finding = ((await response.json()).signals || []).find(s => s.kind === 'price_change')
+  expect(finding, 'the demo ledger should carry a price step to exclude').toBeTruthy()
+
+  await page.goto('/recurring')
+  await page.getByRole('button', { name: /Needs attention/ }).first().click()
+  await page.getByRole('button', { name: /Amount changed/ }).click()
+  const excludeButtons = page.getByRole('button', { name: 'Exclude from series' })
+  const before = await excludeButtons.count()
+  expect(before).toBeGreaterThan(0)
+
+  try {
+    await excludeButtons.first().click()
+    await expect(page.getByText('Excluded from series')).toBeVisible()
+    await expect(excludeButtons).toHaveCount(before - 1)
+
+    await page.getByRole('button', { name: /Undo/ }).click()
+    await expect(excludeButtons).toHaveCount(before)
+  } finally {
+    // Whatever happened above, leave the charge in its series for the specs that read the demo ledger.
+    await request.post(`/api/recurring/${finding.series_id}/membership`, {
+      data: { transaction_id: finding.txn_id, state: 'clear' },
+    })
+  }
 })
 
 test('a transfer between two accounts is one series, not two', async ({ page }) => {

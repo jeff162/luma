@@ -5,8 +5,8 @@
 // otherwise, and because two of them come from a different endpoint than the third.
 //
 // The range-drift half is the one with a fix attached, and the fix has two halves that must stay
-// together: widening moves the bound *and* re-applies the rule, since a bound that moves without a
-// re-apply leaves the charge exactly where it was while the panel reports success. It is offered on the
+// together: widening moves the bound *and* re-applies the rule, in one request, since a bound that moves
+// without a re-apply leaves the charge exactly where it was. A failed action has to say so. It is offered on the
 // outside-the-range kind alone — a charge still inside the range is already being claimed, so widening
 // out to it would loosen the rule for nothing.
 //
@@ -44,7 +44,7 @@ vi.mock('../../lib/api.js', () => ({
     dismissRuleRangeDrift: vi.fn(), restoreRuleRangeDrift: vi.fn(),
   },
 }))
-vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn() } }))
+vi.mock('../../lib/txnMutations.js', () => ({ txnMutations: { applyRule: vi.fn(), widenRuleRange: vi.fn() } }))
 
 // Call counts are asserted below (a re-run of the check, a delete that must not fire), so the shared api
 // mock has to be reset between tests as well as the DOM.
@@ -126,6 +126,7 @@ function renderDialog(findings, { dismissedCount = 0, drift = [], driftDismissed
   api.restoreRuleOverlap.mockResolvedValue({ ok: true })
   api.dismissRuleRangeDrift.mockResolvedValue({ ok: true })
   api.restoreRuleRangeDrift.mockResolvedValue({ ok: true })
+  txnMutations.widenRuleRange.mockResolvedValue({ updated: 1 })
   const onEditRule = vi.fn()
   const onRulesChanged = vi.fn()
   render(<RuleFindingsDialog onClose={vi.fn()} onEditRule={onEditRule} onRulesChanged={onRulesChanged} />)
@@ -308,30 +309,34 @@ describe('RuleFindingsDialog', () => {
     expect(await screen.findByText(/It dropped out of the Town of Harborline series too/)).toBeTruthy()
   })
 
-  it('widens the bound and re-applies the rule, as one action', async () => {
-    // Both halves or neither: a bound that moves without a re-apply leaves the charge exactly where it
-    // was, while the panel reports the fix as done.
+  it('widens the bound and re-applies the rule in one request', async () => {
+    // Both halves or neither. As a rule update followed by a separate apply, a failure between the two left
+    // the bound moved and the charge unclaimed, and the panel then showed it as a near-edge warning.
     const { onRulesChanged } = renderDialog([], { drift: [DRIFT] })
     await userEvent.click(await screen.findByText('Widen to include'))
-    await waitFor(() => {
-      expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_max: 224 })
-      expect(txnMutations.applyRule).toHaveBeenCalledWith('broad', { preserveManual: true })
-    })
+    await waitFor(() => expect(txnMutations.widenRuleRange).toHaveBeenCalledWith('broad', 'max', 224))
+    expect(api.updateRule).not.toHaveBeenCalled()
+    expect(txnMutations.applyRule).not.toHaveBeenCalled()
     expect(onRulesChanged).toHaveBeenCalled()
     // The whole checkup re-runs: widening can settle an overlap as well as this finding.
     await waitFor(() => expect(api.getRuleRangeDrift).toHaveBeenCalledTimes(2))
   })
 
-  it('rounds the widened bound outwards, so the charge it names actually matches', async () => {
-    renderDialog([], { drift: [{ ...DRIFT, amount: 224.005 }] })
+  it('moves the minimum when that is the bound the charge missed', async () => {
+    // The charge's own magnitude is sent; rounding outwards to the cent is the server's (test_rule_widen.py).
+    renderDialog([], { drift: [{ ...DRIFT, bound: 'min', amount_min: 300, amount_max: null, amount: -245.845 }] })
     await userEvent.click(await screen.findByText('Widen to include'))
-    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_max: 224.01 }))
+    await waitFor(() => expect(txnMutations.widenRuleRange).toHaveBeenCalledWith('broad', 'min', 245.845))
   })
 
-  it('moves the minimum when that is the bound the charge missed', async () => {
-    renderDialog([], { drift: [{ ...DRIFT, bound: 'min', amount_min: 300, amount_max: null, amount: 245.845 }] })
+  it('says so when an action fails, and still re-runs the check', async () => {
+    // A failed fix used to leave the panel exactly as it was, with no word that anything had gone wrong.
+    const { onRulesChanged } = renderDialog([], { drift: [DRIFT] })
+    txnMutations.widenRuleRange.mockRejectedValue(new Error('database is locked'))
     await userEvent.click(await screen.findByText('Widen to include'))
-    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith('broad', { amount_min: 245.84 }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Could not save that change: database is locked/)
+    await waitFor(() => expect(api.getRuleRangeDrift).toHaveBeenCalledTimes(2))
+    expect(onRulesChanged).not.toHaveBeenCalled()
   })
 
   it('offers no widening on a charge still inside the range', async () => {

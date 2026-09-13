@@ -383,6 +383,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   const [drift, setDrift] = useState(null)
   const [busy, setBusy] = useState(false)
   const [showDismissed, setShowDismissed] = useState(false)
+  const [actionError, setActionError] = useState(null)
 
   // Two checks, fetched together and kept apart. They answer different questions over different inputs —
   // one pairwise over the rule set, one over the recent ledger — so merging them server-side would have
@@ -408,13 +409,21 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   // appeared in, widening a range can settle an overlap, and a dismissal changes the counts the header
   // reports. Previous results stay on screen while it re-runs, so the list does not blink back through a
   // spinner.
+  //
+  // A failed action says so, and the check re-runs anyway, so the panel shows what is actually saved. It
+  // used to do neither: a failure left the list as it was with no word that anything had gone wrong, and
+  // whatever half of a change had landed only surfaced the next time the panel opened.
   async function withRefresh(action) {
     if (busy) return
     setBusy(true)
+    setActionError(null)
     try {
       await action()
-      await load()
+    } catch (err) {
+      setActionError(`Could not save that change: ${err?.message || 'the request failed.'}`)
     } finally {
+      // `load` catches its own failures, so this always settles.
+      await load()
       setBusy(false)
     }
   }
@@ -425,17 +434,13 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
   })
 
   // Move the bound out to this charge and re-apply the rule, which is the whole maintenance action the
-  // finding exists to offer. Manual per-row edits are preserved: widening a range says which rows the
-  // rule should claim, not that someone's hand-categorization was wrong. What happens to the rule's
-  // series follows on its own — the row takes the category back, and the detector claims it on its next
-  // pass.
+  // finding exists to offer. One request, so it cannot stop halfway: as a rule update followed by a
+  // separate apply, a failure between them left the bound moved and the charge unclaimed. The server
+  // rounds the bound outwards and preserves hand categorizations (`widen_rule_range`). What happens to
+  // the rule's series follows on its own — the row takes the category back, and the detector claims it on
+  // its next pass.
   const widenRange = finding => withRefresh(async () => {
-    const amount = Math.abs(Number(finding.amount) || 0)
-    const patch = finding.bound === 'max'
-      ? { amount_max: Math.ceil(amount * 100) / 100 }
-      : { amount_min: Math.floor(amount * 100) / 100 }
-    await api.updateRule(finding.rule_id, patch)
-    await txnMutations.applyRule(finding.rule_id, { preserveManual: true })
+    await txnMutations.widenRuleRange(finding.rule_id, finding.bound, Math.abs(Number(finding.amount) || 0))
     onRulesChanged?.()
   })
 
@@ -481,6 +486,20 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1 }}>×</button>
         </FloatingPanelHeader>
+
+        {actionError ? (
+          <div
+            role="alert"
+            style={{
+              margin: '12px 18px 0', padding: '8px 12px', borderRadius: 8, fontSize: 13,
+              background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
+              border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
+              color: 'var(--danger)',
+            }}
+          >
+            {actionError}
+          </div>
+        ) : null}
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 18 }}>
           {loading ? (

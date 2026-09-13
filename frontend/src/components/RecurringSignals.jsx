@@ -7,8 +7,8 @@
  * Signals are derived server-side on every read (services/recurring_signals.py), so this component
  * holds no state about them beyond what the user is looking at: there is nothing to reconcile in place
  * after an action, because the next fetch recomputes the truth. Every action a row offers is an
- * existing endpoint — confirm/suppress/end a series — plus the one action that belongs to the signal
- * itself, dismissal.
+ * existing endpoint — confirm/suppress/end a series, accept a new amount, exclude a charge from its
+ * series — plus the one action that belongs to the signal itself, dismissal.
  *
  * Dismissal is per signal, not per kind: each finding names a specific charge or a specific missed date,
  * so "seen it" is an answer about that one thing. It is keyed by the signal's fingerprint rather than any
@@ -107,7 +107,7 @@ function subject(signal) {
   return [signal.category_name, signal.account_name].filter(Boolean).join(' · ')
 }
 
-function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice }) {
+function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge }) {
   const tone = SIGNAL_KINDS[signal.kind]?.tone || 'var(--accent2)'
   const target = signalTarget(signal)
   const actions = []
@@ -129,6 +129,20 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
           title="Widen this series' matching range to take in the new amount"
         >
           Accept new amount
+        </SignalAction>,
+      )
+    }
+    // The one finding that names a charge, so the one place a finding can say the charge does not belong.
+    // The same scan-durable exclusion as the row menu's "Remove from recurring series"; without it here,
+    // saying so meant opening the series report and finding the row.
+    if (signal.txn_id && signal.series_id) {
+      actions.push(
+        <SignalAction
+          key="exclude"
+          onClick={() => onExcludeCharge(signal)}
+          title="This charge is not part of the series. It stays out after future scans."
+        >
+          Exclude from series
         </SignalAction>,
       )
     }
@@ -217,7 +231,7 @@ function TabButton({ label, count, on, onClick, tone }) {
  */
 export function RecurringSignalsView({
   signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
-  onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onShowDismissed,
+  onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, onShowDismissed,
 }) {
   const anomalies = (signals || []).filter(s => s.kind !== 'upcoming')
   const activeKinds = ANOMALY_KIND_ORDER.filter(k => (counts?.[k] || 0) > 0)
@@ -258,6 +272,7 @@ export function RecurringSignalsView({
               onSeriesAction={onSeriesAction}
               onOpenSeries={onOpenSeries}
               onAcceptPrice={onAcceptPrice}
+              onExcludeCharge={onExcludeCharge}
             />
           ))}
         </div>

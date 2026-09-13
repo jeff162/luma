@@ -64,6 +64,13 @@ export const txnMutations = {
     return result
   },
 
+  // Move one of a rule's amount bounds out to a charge and re-apply the rule, as one request.
+  async widenRuleRange(ruleId, bound, amount) {
+    const result = await api.widenRuleRange(ruleId, bound, amount)
+    notifyTransactionsChanged()
+    return result
+  },
+
   // Apply a rule's outputs to the specific rows that generated an accepted import-rule suggestion.
   async applyRuleToTransactions(ruleId, transactionIds) {
     const result = await api.applyRuleToTransactions(ruleId, transactionIds)
