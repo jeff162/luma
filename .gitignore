@@ -15,6 +15,7 @@ data/
 *.db-shm
 *.db-wal
 *.db-journal
+documents/
 
 # ── Database Backups ─────────────────────────────────────────────────────────
 # Your personal financial data — never commit these

@@ -788,6 +788,7 @@ export const HELP_TOPICS = [
     summary: 'Concert tickets bought for friends, a work expense claimed afterwards. The reimbursable part goes into a category under the Reimbursable group, which keeps it out of spending totals. Linking the expense to the repayment tracks what is still owed; completing it closes the record and moves any difference into a real category. Anything outstanding longer than expected is raised on Tasks, so an expense that is never closed isn\'t excluded from totals indefinitely.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           Some money leaves as an expense and comes back weeks or months later. Three concert tickets on
           one card charge with two of them bought for friends, a work expense paid personally and claimed
@@ -801,24 +802,25 @@ export const HELP_TOPICS = [
           that is a member of the system's <em>Reimbursable</em> group.
           A system group, {' '}
           <strong>Reimbursable</strong>, sits alongside the other category groups and is excluded
-          from totals, exactly as <strong>Transfers</strong> is. This group cannot be deleted although
-          it can be renamed.
+          from totals, exactly as <strong>Transfers</strong> is. Also similar to the <strong>Transfers</strong> group,
+          the <strong>Reimbursable</strong> group can be renamed but not deleted.
         </p>
 
         <h4>Creating categories</h4>
         <p>
-          The <em>Reimbursable</em> group ships empty. A useful naming scheme for the categories is to
+          The <em>Reimbursable</em> group ships empty. It may be useful to name the categories so that they
           indicate <em>what the money is for</em> -- Concert tickets, Work expenses, Health care expense, etc.
           Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy to enter them when assigning
           categories.
         </p>
         <h4>Recording one</h4>
         <p>
-          A wholly reimbursable expense is categorized straight into one of those categories. If the
+          A wholly reimbursable expense is categorized entirely into one of the categories in
+          the <em>Reimbursable</em> group. If the
           transaction is only partially reimbursable, one ticket kept, two bought for friends, {' '}
           <HelpLink to="/help/transaction-splits">split the transaction</HelpLink> and put the reimbursable
-          portion in the reimbursable category and categorize the remainder. Splitting is also useful
-          within the pieces in the reimbursable category when the expense belongs to multiple people:
+          portion in a reimbursable category and categorize the remainder. Splitting can also be used
+          for the reimbursable portion of an expense when the repayment comes from multiple sources:
           a group dinner for instance.
         </p>
         <p>
@@ -938,7 +940,7 @@ export const HELP_TOPICS = [
     section: 'transactions',
     title: 'Attaching receipts and invoices',
     surfaces: ['Transactions (row marker)', 'Transaction detail (Documents)'],
-    summary: 'Receipts and invoices can be attached to the transaction they belong to (dropped, browsed, or pasted straight out of an email), and text inside a PDF or a paste is searchable from the ordinary filter box. Images can be added but do not provide searchable text.',
+    summary: 'Receipts and invoices can be attached to a transaction. Parsable text is searchable from the quick-filter box.',
     body: () => (
       <>
         <p>
@@ -947,27 +949,29 @@ export const HELP_TOPICS = [
           can be easily located later.
         </p>
         <p>
-          Attachments live on the transaction detail panel under <strong>Documents</strong>, and a row
-          that carries any shows a paperclip marker which opens them. Multiple documents can be attached
-          to a single transaction.
+          Attachments are kept in the <strong>Documents</strong> section of the transaction editor, which
+          opens from the pencil at the end of a transaction row or from <strong>Edit transaction&hellip;</strong> in
+          the row's menu. Multiple documents can be attached to a single transaction.
+        </p>
+        <p>
+          A row with attachments also shows a paperclip marker. Clicking it opens the document directly
+          when there is only one, or lists them to choose from when there are several.
         </p>
 
         <h4>Attaching a document</h4>
         <p>
-          In the transaction editor there is a Documents section with two controls to attach files and text.
+          The Documents section has two controls to attach files and text.
           One control is a file browser/file drop target and the other is for pasting the contents of the
           clipboard. Either control accepts the same kinds of document; which one to use depends on where
-          the document is coming from. For plain text, pasting it from the clipboard allows it to be edited
-          before it is stored.
+          the document is coming from.
         </p>
         <ul>
           <li>
             <strong>Paste an image</strong> -- a screenshot in a file, or a photo already on the clipboard.
           </li>
           <li>
-            <strong>Paste text</strong> from the clipboard. For emailed receipts it is often easier to
-            use copy/paste rather than saving the email as a file. The pasted text can be edited before it
-            is saved if there is extraneous information to remove.
+            <strong>Paste text</strong> from the clipboard. For emailed receipts it may be easier to
+            use copy/paste rather than saving the email as a file.
           </li>
           <li>
             <strong>Attach a file</strong> -- the file-system browser and file drop zone add files already
@@ -975,16 +979,14 @@ export const HELP_TOPICS = [
           </li>
         </ul>
         <p>
-          An unedited paste keeps the layout it came with. The plain-text flavor of a copied email is its
-          table flattened, one cell to a line, so an amount ends up under the item it prices rather than
-          beside it; keeping the original markup preserves the arrangement the sender laid out. Editing
-          the box turns that off, since an edit says the text on screen is what was wanted. The panel
-          states which of the two will be stored.
+          Using copy/paste with an email usually brings its HTML formatting along, so an itemized table keeps
+          each price beside its item. What the preview shows is what gets attached. A careful text selection
+          keeps anything extraneous out of the attachment.
         </p>
 
         <h4>What is accepted, and scaling</h4>
         <p>
-          PDFs, images, plain text, and saved email.
+          PDFs, images, plain text, HTML files, and saved email.
           Large photographs are scaled down -- a receipt shot at twelve megapixels carries
           nothing legible above roughly 300 DPI -- and
           the original is not kept. Screenshots and small images pass through untouched.
@@ -995,31 +997,38 @@ export const HELP_TOPICS = [
           Attaching the same file to the same transaction twice is reported rather than stored twice.
         </p>
 
-        <h4>Searching what is inside</h4>
+        <h4>Searchable attachments</h4>
         <p>
-          Text is available for a PDF carrying a text layer, for an <code>.eml</code> file, and for
-          anything pasted or uploaded as text. There is no OCR facility so
+          Searchable text is generated from:
+        </p>
+        <ul>
+          <li>PDFs carrying a text layer</li>
+          <li>HTML files</li>
+          <li>exported <code>.eml</code> email files</li>
+          <li>anything pasted or uploaded as text</li>
+        </ul>
+        <p>
+          There is no OCR capability, so
           text cannot be extracted from a <em>photograph</em> of a receipt. Pictures are
-          stored and viewable, but not findable by the contents.
+          stored and viewable, but not findable by their contents.
         </p>
         <p>
-          Text found in an attachment is searched by the ordinary quick-filter box on the Transactions
-          page. A transaction whose match came from an attachment is flagged so it is clear why
-          it was matched even though the search term is not present in the visible fields.
-          Typing <code>doc:</code> before the terms narrows a search to attachments only. See{' '}
-          <HelpLink to="/help/searching-transactions">searching by date or amount</HelpLink> for the rest
-          of that box.
+          Text found in an attachment is searched by the quick-filter box on the Transactions
+          page. Search results where the match is from an attachment are flagged so it is clear why
+          they matched even though the search term is not visibly present.
+          Tagging the search term with the <code>doc:</code> prefix narrows a search to only the attachments. See{' '}
+          <HelpLink to="/help/searching-transactions">searching by date or amount</HelpLink>.
         </p>
 
-        <h4>Removing, the trash, and backups</h4>
+        <h4>Storage</h4>
         <p>
           Documents follow their transaction into the trash and come
           back intact if the transaction is restored from the trash. When the trash is emptied, any associated
           documents are destroyed (deleted off disk).
         </p>
         <p>
-          Attached files are stored as individual files on disk rather than inside the database. They
-          travel inside the <strong>Financial data</strong> backup along with the transactions that
+          Attached files are stored as individual files in a directory next to the database file rather
+          than inside the database. Attachments are included in backups along with the transactions that
           reference them -- so a backup taken after attaching a receipt contains the receipt. See{' '}
           <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
         </p>
@@ -1338,7 +1347,7 @@ export const HELP_TOPICS = [
           edited. It re-runs just those rows against the remaining rules, so they fall to another matching
           rule, rather than keeping the removed rule's category. A row no remaining rule claims goes back to
           the category its file gave it, when it came from a file imported with <em>use the categories
-          present in the data</em>, and otherwise to uncategorized.
+            present in the data</em>, and otherwise to uncategorized.
         </p>
         <h4>Apply a rule to its matching transactions</h4>
         <p>

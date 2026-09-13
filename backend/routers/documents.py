@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from backend.db.database import get_db
 from backend.services.documents import (
@@ -37,9 +38,14 @@ from backend.services.documents import (
     find_duplicate_attachment,
     list_documents,
     prepare_document,
+    replace_document_text,
 )
 
 router = APIRouter()
+
+
+class DocumentText(BaseModel):
+    text: str
 
 
 def _require_transaction(conn, txn_id: str) -> None:
@@ -152,6 +158,21 @@ def _ascii_filename(filename: str) -> str:
     """
     cleaned = "".join(ch for ch in (filename or "") if ch.isprintable() and ch not in '"\\' and ord(ch) < 128)
     return cleaned.strip() or "document"
+
+
+@router.put("/{document_id}/text")
+def edit_document_text(document_id: str, body: DocumentText):
+    """Edit a text document, which replaces it: the response is the document now in its place, under a
+    new id (see `replace_document_text` for why). The old file goes only once the swap has committed."""
+    with get_db() as conn:
+        try:
+            document = replace_document_text(conn, document_id, body.text)
+        except DocumentRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if document is None:
+            raise HTTPException(status_code=404, detail="No such document")
+    delete_document_file(document_id)
+    return {"document": document}
 
 
 @router.delete("/{document_id}")

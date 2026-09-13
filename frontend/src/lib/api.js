@@ -797,6 +797,19 @@ export const api = {
   },
   detachDocument: (documentId) =>
     request(`/documents/${documentId}`, { method: 'DELETE' }),
+  // Editing replaces the document, so the response carries a new id that callers must swap in.
+  editDocumentText: (documentId, text) =>
+    request(`/documents/${documentId}/text`, { method: 'PUT', body: JSON.stringify({ text }) }),
+  // The one read of a document's bytes through JavaScript: a text document about to be edited, which is
+  // small by nature and has to be in a textarea to be changed at all.
+  getDocumentText: (documentId) =>
+    trackedFetch(`${BASE}/documents/${documentId}/file`).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      return res.text()
+    }),
   // A URL rather than a fetch: the viewer points an <img>/<iframe> straight at it, so the bytes never
   // pass through JavaScript. `download` swaps the disposition for a save.
   documentFileUrl: (documentId, { download = false } = {}) =>

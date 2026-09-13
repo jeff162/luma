@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
+import { buildPastedHtmlPreview } from '../lib/pastedHtmlPreview.js'
 import DropZone from './DropZone.jsx'
 import DocumentViewerDialog from './DocumentViewerDialog.jsx'
 import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
@@ -37,7 +38,6 @@ export default function DocumentsPanel({ txnId, onDocumentsChange }) {
   const [pendingDetach, setPendingDetach] = useState(null)
   const [pastedText, setPastedText] = useState('')
   const [richPaste, setRichPaste] = useState(null)
-  const pasteJustLanded = useRef(false)
 
   // `onDocumentsChange` is a *notification*, not an input to the fetch, so it is held in a ref rather
   // than depended on. Hosts pass an inline arrow — a new function every render — and depending on its
@@ -105,43 +105,43 @@ export default function DocumentsPanel({ txnId, onDocumentsChange }) {
       attach(files)
       return
     }
-    // Plain text lands in the box, where it can be trimmed. The *rich* flavour is kept aside: a
-    // receipt copied out of an email carries its table as `text/html`, and the plain flavour a
-    // textarea receives is that table flattened — every cell on its own line, so an amount ends up
-    // under the thing it is the price of rather than beside it. Keeping the markup is what preserves
-    // the layout the sender actually laid out.
+    // A receipt copied out of an email carries its table as `text/html`, and the plain flavour a textarea
+    // receives is that table flattened — every cell on its own line, so an amount ends up under the thing
+    // it is the price of rather than beside it. So a paste with real markup is shown *as formatted* and
+    // attached as such.
+    //
+    // That is shown rather than described because the textarea cannot display the markup, and a note
+    // saying "the layout you cannot see will be kept, unless you edit what you can see" left no way to
+    // know what was about to be stored.
     const html = event.clipboardData?.getData?.('text/html') || ''
     const plain = event.clipboardData?.getData?.('text/plain') || ''
     // Only when the rich flavour actually carries markup. A source can offer a `text/html` flavour that
     // is just the same words again, and storing *that* as HTML would be strictly worse: it renders as a
     // web page while holding nothing the plain text did not, so there is no layout being preserved.
-    if (!plain || !/<[a-z!/]/i.test(html)) {
-      setRichPaste(null)
-      return
-    }
-    // The browser's own insertion of the plain flavour is about to fire a change; it is not an edit, so
-    // it is marked here to be skipped. Whether the markup still matches what is on screen is tracked
-    // this way rather than by comparing the two flavours as strings, which does not survive contact
-    // with a real clipboard: line endings and trailing whitespace routinely differ between what
-    // `getData('text/plain')` returns and what the textarea ends up holding, and every one of those
-    // differences read as "the user edited it" and silently threw the layout away.
-    pasteJustLanded.current = true
-    setRichPaste({ html })
+    // And only into an empty box: pasting into text already being edited is an insertion into that text,
+    // not a new document, so the browser is left to insert the plain flavour as it normally would.
+    if (pastedText.trim() || !plain || !/<[a-z!/]/i.test(html)) return
+    // The preview takes the box's place, so the browser's own insertion of the plain flavour is not wanted.
+    event.preventDefault()
+    setRichPaste({ html, preview: buildPastedHtmlPreview(html) })
   }
 
-  async function attachPastedText() {
-    const body = pastedText.trim()
-    if (!body) return
-    const stamp = new Date().toISOString().slice(0, 10)
-    // Untouched, the rich flavour is the better record and is stored instead. Edited, it is not — the
-    // edit is an unambiguous statement that the text is what was wanted, and silently attaching markup
-    // carrying the *un*edited content would store the very thing that was just removed. `richPaste` is
-    // cleared by the first real edit, so its presence here *is* the "untouched" test.
-    const file = richPaste
-      ? new File([richPaste.html], `Pasted ${stamp}.html`, { type: 'text/html' })
-      : new File([body], `Pasted ${stamp}.txt`, { type: 'text/plain' })
+  function discardPaste() {
     setPastedText('')
     setRichPaste(null)
+  }
+
+  async function attachPaste() {
+    const stamp = new Date().toISOString().slice(0, 10)
+    let file
+    if (richPaste) {
+      file = new File([richPaste.html], `Pasted ${stamp}.html`, { type: 'text/html' })
+    } else {
+      const body = pastedText.trim()
+      if (!body) return
+      file = new File([body], `Pasted ${stamp}.txt`, { type: 'text/plain' })
+    }
+    discardPaste()
     await attach([file])
   }
 
@@ -190,40 +190,49 @@ export default function DocumentsPanel({ txnId, onDocumentsChange }) {
         Drop a receipt or invoice here, or click to browse. A saved email (.eml) works too.
       </DropZone>
 
-      <textarea
-        value={pastedText}
-        onChange={e => {
-          setPastedText(e.target.value)
-          // The change a paste itself causes is not an edit; anything after it is, and an edit means
-          // the text on screen is what was wanted rather than the markup behind it.
-          if (pasteJustLanded.current) pasteJustLanded.current = false
-          else setRichPaste(null)
-        }}
-        onPaste={handlePaste}
-        placeholder="…or paste a receipt here — an image attaches straight away, text can be trimmed first."
-        rows={pastedText ? 5 : 2}
-        style={{
-          width: '100%', boxSizing: 'border-box', resize: 'vertical',
-          background: 'var(--surface2)', color: 'var(--text)',
-          border: '1px solid var(--border)', borderRadius: 6,
-          padding: '6px 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
-        }}
-      />
-      {pastedText.trim() ? (
+      {richPaste ? (
+        // `sandbox` with no tokens: no scripts, and an origin that is not this app's. The document it is
+        // given carries the rest of the protection — see `lib/pastedHtmlPreview.js`. The white ground is the
+        // page an email is written against; the frame is otherwise transparent, and unstyled black text on
+        // a dark theme's panel would be unreadable.
+        <iframe
+          sandbox=""
+          srcDoc={richPaste.preview}
+          title="Preview of the pasted receipt"
+          style={{
+            width: '100%', height: 260, boxSizing: 'border-box',
+            border: '1px solid var(--border)', borderRadius: 6, background: '#fff',
+          }}
+        />
+      ) : (
+        <textarea
+          value={pastedText}
+          onChange={e => setPastedText(e.target.value)}
+          onPaste={handlePaste}
+          placeholder="…or paste a receipt here — an image attaches straight away, text can be trimmed first."
+          rows={pastedText ? 5 : 2}
+          style={{
+            width: '100%', boxSizing: 'border-box', resize: 'vertical',
+            background: 'var(--surface2)', color: 'var(--text)',
+            border: '1px solid var(--border)', borderRadius: 6,
+            padding: '6px 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
+          }}
+        />
+      )}
+      {richPaste || pastedText.trim() ? (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
-          {richPaste ? (
-            // Says which of the two will be stored, because the box necessarily shows the flattened
-            // flavour and would otherwise imply that is what gets kept.
-            <span style={{ fontSize: 11, color: 'var(--muted)', marginRight: 'auto' }}>
-              Keeps the layout from the original. Editing stores the text instead.
-            </span>
-          ) : null}
-          <Button variant="ghost" small onClick={() => { setPastedText(''); setRichPaste(null) }}>Discard</Button>
-          <Button small onClick={attachPastedText}>Attach</Button>
+          <Button variant="ghost" small onClick={discardPaste}>Discard</Button>
+          <Button small onClick={attachPaste}>Attach</Button>
         </div>
       ) : null}
 
-      {viewing ? <DocumentViewerDialog document={viewing} onClose={() => setViewing(null)} /> : null}
+      {viewing ? (
+        <DocumentViewerDialog
+          document={viewing}
+          onClose={() => setViewing(null)}
+          onDocumentReplaced={(_, replacement) => { setViewing(replacement); load() }}
+        />
+      ) : null}
 
       {pendingDetach ? (
         <AppConfirmDialog

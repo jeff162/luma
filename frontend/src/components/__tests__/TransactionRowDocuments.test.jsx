@@ -4,16 +4,20 @@
 // transaction, and it is the natural next action after a search that matched inside one — so what is
 // pinned here is that it opens, and that the two counts open different things.
 
+import { useState } from 'react'
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { TransactionMarkersCell } from '../TransactionRow.jsx'
+import { api } from '../../lib/api.js'
 
 vi.mock('../../lib/api.js', () => ({
   api: {
     getTags: vi.fn().mockResolvedValue([]),
     documentFileUrl: id => `/api/documents/${id}/file`,
+    getDocumentText: vi.fn(),
+    editDocumentText: vi.fn(),
   },
 }))
 
@@ -64,6 +68,35 @@ describe('the ledger document marker', () => {
     renderRow({ documents: [INVOICE], document_count: 1, matched_document: true })
 
     expect(screen.getByLabelText('Matched inside an attached document — open it')).toBeTruthy()
+  })
+
+  it('opens the edited document, not the one it replaced, after an edit made from the row', async () => {
+    // An edit replaces the document under a new id. The row opens documents from its own copy, so unless
+    // that copy is swapped the next click reaches for a document that no longer exists.
+    const NOTE = { id: 'doc-1', filename: 'Pasted 2026-03-14.txt', mime_type: 'text/plain' }
+    api.getDocumentText.mockResolvedValue('Brake pads 249.50\n-- signature')
+    api.editDocumentText.mockResolvedValue({ document: { ...NOTE, id: 'doc-9', txn_id: 't1' } })
+
+    function Host() {
+      const [txn, setTxn] = useState({ id: 't1', tags: [], documents: [NOTE], document_count: 1 })
+      return (
+        <MemoryRouter>
+          <TransactionMarkersCell txn={txn} onUpdateDocuments={(_, documents) => setTxn(prev => ({ ...prev, documents }))} />
+        </MemoryRouter>
+      )
+    }
+    const user = userEvent.setup()
+    render(<Host />)
+
+    await user.click(screen.getByLabelText('Open the attached document'))
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByLabelText('Document text'), ' edited')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.getByTitle(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file'))
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByLabelText('Open the attached document'))
+    expect(screen.getByTitle(NOTE.filename).getAttribute('src')).toBe('/api/documents/doc-9/file')
   })
 
   it('is absent when the transaction carries nothing', () => {

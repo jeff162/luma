@@ -22,8 +22,10 @@ from fastapi import HTTPException, UploadFile
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.documents import (
+    DocumentText,
     attach_transaction_document,
     detach_document,
+    edit_document_text,
     get_document_file,
     list_transaction_documents,
 )
@@ -172,7 +174,7 @@ class AttachAndServeTests(DocumentsApiTestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.attach("txn-repair", b"MZ\x90\x00 not a receipt", "setup.exe", "application/octet-stream")
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertIn("PDF, an image, text, or an exported email", ctx.exception.detail)
+        self.assertIn("PDF, an image, text, an HTML file, or an exported email", ctx.exception.detail)
 
     def test_pasted_text_is_a_document_and_is_searchable_immediately(self):
         # The email story: a receipt forwarded by mail is pasted rather than saved first. No extraction
@@ -310,6 +312,74 @@ class ServeAndDetachTests(DocumentsApiTestCase):
         self.assertEqual(list_transaction_documents("txn-repair")["documents"], [])
         with self.assertRaises(HTTPException) as ctx:
             detach_document(document["id"])
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class EditTextTests(DocumentsApiTestCase):
+    """Editing an attached text document, which replaces it rather than rewriting its file."""
+
+    def attach_text(self, content, filename="Pasted 2026-03-14.txt"):
+        return self.attach("txn-repair", content.encode(), filename, "text/plain")["document"]
+
+    def edit(self, document_id, text):
+        return edit_document_text(document_id, DocumentText(text=text))["document"]
+
+    def test_an_edit_replaces_the_document_under_a_new_id_in_the_same_place(self):
+        first = self.attach_text("Brake pads 249.50\nThanks for your business, see signature below")
+        second = self.attach_text("Rotor resurfacing 80.00", filename="second.txt")
+
+        edited = self.edit(first["id"], "Brake pads 249.50")
+
+        # A new id, because the file cannot be rewritten in place without a moment where its digest and
+        # its row disagree; the old file goes once the swap has committed.
+        self.assertNotEqual(edited["id"], first["id"])
+        self.assertFalse(document_file_path(first["id"]).exists())
+        self.assertEqual(document_file_path(edited["id"]).read_bytes(), b"Brake pads 249.50")
+        # Still the same entry to the person looking at the list: same name, same place.
+        self.assertEqual(edited["filename"], first["filename"])
+        self.assertEqual(edited["created_at"], first["created_at"])
+        self.assertEqual(edited["text_source"], "verbatim")
+        listed = list_transaction_documents("txn-repair")["documents"]
+        self.assertEqual([doc["id"] for doc in listed], [edited["id"], second["id"]])
+
+    def test_search_follows_the_edit(self):
+        document = self.attach_text("Brake pads and a signature from the service advisor")
+        self.edit(document["id"], "Brake pads only")
+
+        self.assertEqual(self.quick_filter("doc:advisor"), [])
+        self.assertEqual(self.quick_filter("doc:only"), ["txn-repair"])
+
+    def test_an_edit_matching_another_document_is_saved_all_the_same(self):
+        # The duplicate check is for the same file dropped twice by accident; an edit is deliberate.
+        self.attach_text("Brake pads 249.50")
+        draft = self.attach_text("Brake pads 249.50 plus notes", filename="draft.txt")
+
+        edited = self.edit(draft["id"], "Brake pads 249.50")
+
+        self.assertEqual(len(list_transaction_documents("txn-repair")["documents"]), 2)
+        self.assertTrue(document_file_path(edited["id"]).exists())
+
+    def test_only_text_documents_can_be_edited_and_a_refusal_changes_nothing(self):
+        pdf = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+        html = self.attach("txn-repair", b"<table><tr><td>Tube</td></tr></table>", "r.html", "text/html")["document"]
+
+        for document in (pdf, html):
+            with self.assertRaises(HTTPException) as ctx:
+                self.edit(document["id"], "replacement")
+            self.assertEqual(ctx.exception.status_code, 400)
+            self.assertTrue(document_file_path(document["id"]).exists())
+        self.assertEqual(len(list_transaction_documents("txn-repair")["documents"]), 2)
+
+    def test_an_edit_to_nothing_is_refused_rather_than_leaving_an_empty_document(self):
+        document = self.attach_text("Brake pads 249.50")
+        with self.assertRaises(HTTPException) as ctx:
+            self.edit(document["id"], "  \n ")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(list_transaction_documents("txn-repair")["documents"][0]["id"], document["id"])
+
+    def test_editing_an_unknown_document_is_a_404(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self.edit(str(uuid.uuid4()), "anything")
         self.assertEqual(ctx.exception.status_code, 404)
 
 

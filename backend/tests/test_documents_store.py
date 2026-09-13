@@ -26,6 +26,7 @@ from backend.services.documents import (
     IMAGE_LONG_EDGE_PX,
     IMAGE_PASSTHROUGH_BYTES,
     MAX_DOCUMENT_BYTES,
+    TEXT_SOURCE_HTML_TEXT,
     TEXT_SOURCE_PDF_LAYER,
     DocumentRejected,
     copy_document_file_from,
@@ -185,6 +186,59 @@ class ExtractTextTests(unittest.TestCase):
         text, source = extract_text(make_text_pdf(["x"]), "application/pdf")
         self.assertIsNone(text)
         self.assertIsNone(source)
+
+
+class HtmlTextTests(unittest.TestCase):
+    """Markup from an emailed receipt, read back as text with each table row still on one line.
+
+    The fixtures copy the shape point-of-sale receipts actually arrive in, which is what the first version
+    of this extractor was never tested against: the item name wrapped in a `<div>` *inside* its cell. A
+    block boundary there is not a line break in the receipt, and treating it as one put every price on the
+    line below the item it prices.
+    """
+
+    RECEIPT = (
+        "<table><tbody><tr><th>Items</th><th>#</th><th>Price</th></tr></tbody><tbody>"
+        "<tr><td><div>Work order #1001, Item: Harborline Tourer</div><div>front tire worn</div></td>"
+        "<td>1</td><td>$0.00</td></tr>"
+        "<tr><td><div>Install Chain*</div></td><td>1</td><td>$50.00</td></tr>"
+        "<tr><td><div>Northgate Tube, 700x32</div></td><td>2</td><td>$16.00</td></tr>"
+        "</tbody></table><style>td { color: red }</style>"
+    )
+
+    @staticmethod
+    def search_text(markup):
+        text, source = extract_text(markup.encode(), "text/html")
+        assert source == TEXT_SOURCE_HTML_TEXT
+        return text
+
+    def test_a_cells_own_blocks_do_not_break_its_row(self):
+        self.assertEqual(
+            self.search_text(self.RECEIPT),
+            "Items # Price\n"
+            "Work order #1001, Item: Harborline Tourer\nfront tire worn 1 $0.00\n"
+            "Install Chain* 1 $50.00\n"
+            "Northgate Tube, 700x32 2 $16.00",
+        )
+
+    def test_cells_whose_end_tags_were_omitted_still_close_at_the_next_cell_or_row(self):
+        # HTML lets `</td>` and `</tr>` go unwritten, and mail clients take it up on that.
+        markup = "<table><tr><td>Tube<td>2<td>$16.00<tr><td>Tire<td>1<td>$45.00</table>"
+        self.assertEqual(self.search_text(markup), "Tube 2 $16.00\nTire 1 $45.00")
+
+    def test_a_layout_table_around_the_receipt_does_not_join_it_to_the_letterhead(self):
+        # Email is laid out in tables, so the itemized table is usually a cell inside another one.
+        markup = (
+            "<table><tr><td><p>Riverstone Cycles</p><p>Sales Receipt</p>"
+            "<table><tr><td><div>Tube</div></td><td>$8.00</td></tr></table>"
+            "</td></tr></table>"
+        )
+        self.assertEqual(self.search_text(markup), "Riverstone Cycles\nSales Receipt\nTube $8.00")
+
+    def test_source_whitespace_is_not_layout(self):
+        # A newline in the markup is a space to a browser; only elements break lines.
+        markup = "<table><tr>\n  <td>  Fee&nbsp;&nbsp;total\n </td>\n  <td>\n$0.00\n</td>\n</tr></table>"
+        self.assertEqual(self.search_text(markup), "Fee total $0.00")
 
 
 class WriteAndReconcileTests(DocumentStoreTestCase):

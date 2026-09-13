@@ -644,7 +644,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, onUpdateDocuments, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -931,7 +931,18 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
           </RowPopoverPortal>
         ) : null}
         {viewingDocument ? (
-          <DocumentViewerDialog document={viewingDocument} onClose={() => setViewingDocument(null)} />
+          <DocumentViewerDialog
+            document={viewingDocument}
+            onClose={() => setViewingDocument(null)}
+            // An edit replaces the document under a new id, and this row opens documents from its own
+            // copy, so the id is swapped there too — otherwise the next click opens a document that is gone.
+            onDocumentReplaced={(previousId, replacement) => {
+              setViewingDocument(replacement)
+              onUpdateDocuments?.(txn.id, documents.map(doc => (doc.id === previousId
+                ? { id: replacement.id, filename: replacement.filename, mime_type: replacement.mime_type }
+                : doc)))
+            }}
+          />
         ) : null}
         {editingPurchase ? (
           /* Owned here rather than threaded down from a row-actions controller, the way the document

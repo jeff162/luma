@@ -589,6 +589,16 @@ export default function Transactions() {
     }))
   }
 
+  // An edited text document comes back under a new id, which the row's marker opens from.
+  function updateDocuments(txnId, documents) {
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === txnId ? { ...t, documents } : t
+      ),
+    }))
+  }
+
   function addCategory(cat) {
     setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])
   }
@@ -878,6 +888,7 @@ export default function Transactions() {
             onUpdateNote={updateNote}
             onUpdateTags={updateTags}
             onUpdatePurchase={updatePurchase}
+            onUpdateDocuments={updateDocuments}
           />
         )
       case 'amount':

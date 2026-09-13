@@ -54,13 +54,19 @@ function pasteInto(element, flavours) {
       value: { files: [], getData: type => flavours[type] || '' },
     })
     element.dispatchEvent(event)
-    // The textarea would receive the plain flavour itself; jsdom does not do that for a synthetic event.
+    // Unless the panel took the paste over, the textarea would insert the plain flavour itself at the
+    // caret; jsdom does not do that for a synthetic event, so it is appended here in its place.
+    if (event.defaultPrevented) return
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
-    setValue.call(element, flavours['text/plain'] || '')
+    setValue.call(element, element.value + (flavours['text/plain'] || ''))
     element.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 
+const RICH_RECEIPT = {
+  'text/plain': 'Professional Tune Up\n1\n$350.00',
+  'text/html': '<table><tr><td>Professional Tune Up</td><td>1</td><td>$350.00</td></tr></table>',
+}
 function pdfFile(name = 'invoice.pdf') {
   return new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], name, { type: 'application/pdf' })
 }
@@ -151,47 +157,60 @@ describe('DocumentsPanel', () => {
     expect(await sent.text()).toBe('ACME Auto Repair — brake pads 249.50')
   })
 
-  it('keeps the layout when a paste carries a rich flavour and is left alone', async () => {
+  it('shows a formatted paste as it will be attached, in a sandboxed preview', async () => {
     // A receipt copied out of an email carries its table as text/html; the plain flavour a textarea
-    // receives is that table flattened, with every amount on a line below the thing it prices.
-    render(<DocumentsPanel txnId="t1" />)
-    const box = await screen.findByPlaceholderText(/paste a receipt here/i)
-
-    pasteInto(box, {
-      'text/plain': 'Professional Tune Up\n1\t$350.00',
-      'text/html': '<table><tr><td>Professional Tune Up</td><td>1</td><td>$350.00</td></tr></table>',
-    })
-
-    await screen.findByText(/Keeps the layout from the original/)
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Attach' }))
-
-    await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
-    const sent = api.attachTransactionDocument.mock.calls[0][1]
-    expect(sent.type).toBe('text/html')
-    expect(await sent.text()).toContain('<table>')
-  })
-
-  it('stores the edited text once the box has been touched', async () => {
-    // Editing is an unambiguous statement that the text is what was wanted; attaching markup that still
-    // carries the unedited content would store the very thing just removed.
+    // receives is that table flattened. The textarea cannot show the markup, so the markup is what is shown.
     const user = userEvent.setup()
     render(<DocumentsPanel txnId="t1" />)
     const box = await screen.findByPlaceholderText(/paste a receipt here/i)
 
-    pasteInto(box, {
-      'text/plain': 'Professional Tune Up\n1\t$350.00',
-      'text/html': '<table><tr><td>Professional Tune Up</td><td>1</td><td>$350.00</td></tr></table>',
-    })
-    await screen.findByText(/Keeps the layout from the original/)
+    pasteInto(box, RICH_RECEIPT)
 
-    await user.type(box, ' — front derailleur')
+    const preview = await screen.findByTitle('Preview of the pasted receipt')
+    // No tokens at all: a token-less sandbox is what withholds scripts and this app's origin.
+    expect(preview.getAttribute('sandbox')).toBe('')
+    expect(preview.getAttribute('srcdoc')).toContain('<td>$350.00</td>')
+    expect(preview.getAttribute('srcdoc')).toContain('Content-Security-Policy')
+    expect(screen.queryByPlaceholderText(/paste a receipt here/i)).toBeNull()
+    // Attached as shown or not at all: the formatting is the point, and it is not editable.
+    expect(screen.queryByRole('button', { name: /edit/i })).toBeNull()
 
-    expect(screen.queryByText(/Keeps the layout from the original/)).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Attach' }))
 
+    await waitFor(() => expect(api.attachTransactionDocument).toHaveBeenCalledTimes(1))
+    const sent = api.attachTransactionDocument.mock.calls[0][1]
+    expect(sent.type).toBe('text/html')
+    // The stored copy is the paste itself, not the preview's rewritten document.
+    expect(await sent.text()).toBe(RICH_RECEIPT['text/html'])
+  })
+
+  it('inserts a formatted paste as text when the box already holds text', async () => {
+    // Pasting into text being edited adds to that text; it is not a new document to preview.
+    const user = userEvent.setup()
+    render(<DocumentsPanel txnId="t1" />)
+    const box = await screen.findByPlaceholderText(/paste a receipt here/i)
+    await user.type(box, 'Order notes: ')
+
+    pasteInto(box, RICH_RECEIPT)
+
+    expect(screen.queryByTitle('Preview of the pasted receipt')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Attach' }))
     const sent = api.attachTransactionDocument.mock.calls[0][1]
     expect(sent.type).toBe('text/plain')
-    expect(await sent.text()).toContain('front derailleur')
+    expect(await sent.text()).toBe(`Order notes: ${RICH_RECEIPT['text/plain']}`)
+  })
+
+  it('discards a formatted paste and returns to an empty box', async () => {
+    const user = userEvent.setup()
+    render(<DocumentsPanel txnId="t1" />)
+    pasteInto(await screen.findByPlaceholderText(/paste a receipt here/i), RICH_RECEIPT)
+    await screen.findByTitle('Preview of the pasted receipt')
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(api.attachTransactionDocument).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText(/paste a receipt here/i).value).toBe('')
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
   })
 
   it('discards pasted text without attaching it', async () => {

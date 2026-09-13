@@ -54,6 +54,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -390,7 +391,7 @@ def prepare_document(data: bytes, filename: Optional[str], declared_mime_type: O
 
     mime_type = _sniff_mime_type(data, declared_mime_type)
     if mime_type not in ACCEPTED_UPLOAD_MIME_TYPES:
-        raise DocumentRejected("A document has to be a PDF, an image, text, or an exported email.")
+        raise DocumentRejected("A document has to be a PDF, an image, text, an HTML file, or an exported email.")
     if mime_type == EMAIL_MIME_TYPE:
         # Becomes the document it carries, so everything below this line sees an ordinary HTML or text
         # upload and no later stage needs to know an email was involved.
@@ -477,51 +478,98 @@ def extract_text(data: bytes, mime_type: str) -> tuple[Optional[str], Optional[s
 
 
 class _HtmlTextExtractor(HTMLParser):
-    """Markup in, readable text out — enough to index, not to re-render.
+    """Markup in, text out, with a receipt's rows still reading as rows — enough to index, not to re-render.
 
-    Two things it has to get right and a naive tag-strip does not. **Script and style bodies are text
-    to a parser but not to a reader**, so their content is dropped rather than indexed; a receipt whose
-    search hits were all CSS selectors would be worse than one with no text at all. And **block
-    boundaries become line breaks**, because an HTML table flattened without them runs every cell into
-    one line — which is the exact loss of structure that made storing the HTML worth doing.
+    What it has to get right and a naive tag-strip does not:
+
+    - **Script and style bodies are text to a parser but not to a reader**, so their content is dropped; a
+      receipt whose search hits were all CSS selectors would be worse than one with no text at all.
+    - **Whitespace in the markup is not layout.** Source newlines collapse to spaces, as a browser treats
+      them, and only elements produce line breaks (except inside `<pre>`, where the text *is* the layout).
+    - **A table row is one line, cells tab-separated.** That is what keeps an amount beside the item it
+      prices, and it has to hold against how receipts are actually written: the item name sits in a
+      `<div>` *inside* its cell, so a cell's content is gathered on its own and only its edges are
+      trimmed. Breaks inside a cell survive (a work order's notes stay on their lines, with the price on
+      the last), while the block wrapped around a lone item name no longer splits its row in two.
+    - **Cells close themselves.** HTML lets `</td>` and `</tr>` go unwritten, so a cell also ends at the
+      next cell or row *of its own table*. Each open cell records the table depth it was opened at, which is
+      what stops an inner row from closing the outer cell a whole itemized table sits in — email is laid
+      out in tables, so the receipt is usually exactly such a cell.
     """
 
     _SKIP = {"script", "style", "head", "title"}
-    _BREAK = {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody"}
+    _BREAK = {"br", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "thead", "tbody", "tfoot"}
+    _CELL = {"td", "th"}
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self._parts: list[str] = []
+        # The document's text, then one buffer per open cell, innermost last.
+        self._buffers: list[list[str]] = [[]]
+        self._cell_depths: list[int] = []
+        self._table_depth = 0
         self._skipping = 0
+        self._preformatted = 0
+
+    def _emit(self, text: str) -> None:
+        self._buffers[-1].append(text)
+
+    def _close_cells(self, depth: int) -> None:
+        while self._cell_depths and self._cell_depths[-1] >= depth:
+            self._cell_depths.pop()
+            content = "".join(self._buffers.pop()).strip()
+            if content:
+                self._emit("\t" + content)
 
     def handle_starttag(self, tag, attrs):
         if tag in self._SKIP:
             self._skipping += 1
+        elif tag == "table":
+            self._table_depth += 1
+            self._emit("\n")
+        elif tag == "tr":
+            self._close_cells(self._table_depth)
+            self._emit("\n")
+        elif tag in self._CELL:
+            self._close_cells(self._table_depth)
+            self._cell_depths.append(self._table_depth)
+            self._buffers.append([])
+        elif tag == "pre":
+            self._preformatted += 1
+            self._emit("\n")
         elif tag in self._BREAK:
-            self._parts.append("\n")
-        elif tag in ("td", "th"):
-            # A cell separator rather than a line break: a row's cells belong together on one line, which
-            # is what keeps an amount beside the thing it is the price of.
-            self._parts.append("\t")
+            self._emit("\n")
 
     def handle_endtag(self, tag):
-        if tag in self._SKIP and self._skipping:
-            self._skipping -= 1
+        if tag in self._SKIP:
+            self._skipping = max(0, self._skipping - 1)
+        elif tag in self._CELL:
+            self._close_cells(self._table_depth)
+        elif tag in ("tr", "table"):
+            self._close_cells(self._table_depth)
+            if tag == "table":
+                self._table_depth = max(0, self._table_depth - 1)
+            self._emit("\n")
+        elif tag == "pre":
+            self._preformatted = max(0, self._preformatted - 1)
+            self._emit("\n")
         elif tag in self._BREAK:
-            self._parts.append("\n")
+            self._emit("\n")
 
     def handle_data(self, data):
-        if not self._skipping:
-            self._parts.append(data)
+        if self._skipping:
+            return
+        self._emit(data if self._preformatted else re.sub(r"\s+", " ", data))
 
     def text(self) -> str:
-        return "".join(self._parts)
+        self._close_cells(0)
+        return "".join(self._buffers[0])
 
 
 def html_to_text(markup: str) -> str:
-    """The readable text inside HTML markup. Parser-based rather than a regex over angle brackets, which
-    is wrong on attributes, comments and entities alike — and this runs on markup from an email, so it
-    meets every malformed shape a mail client can produce."""
+    """The text inside HTML markup, rows on their own lines with tab-separated cells and whitespace left
+    untidied. Parser-based rather than a regex over angle brackets, which is wrong on attributes, comments
+    and entities alike — and this runs on markup from an email, so it meets every malformed shape a mail
+    client can produce."""
     parser = _HtmlTextExtractor()
     try:
         parser.feed(markup)
@@ -745,6 +793,58 @@ def attach_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDoc
     there is nothing to schedule. A document whose text could not be read is stored all the same; the
     file is the point and the index is the bonus.
     """
+    return _store_document(conn, txn_id, prepared, utcnow_iso())
+
+
+def replace_document_text(conn: sqlite3.Connection, document_id: str, text: str) -> Optional[dict]:
+    """Replace a text document's content, returning the document that now stands in its place (None when
+    there is no such document).
+
+    **An edit is a new document in the old one's place, not a rewrite of its file.** Rewriting in place
+    cannot keep the store's one invariant: the row's digest describes the file on disk, and file and row
+    cannot change together, so there would be a moment where they disagree — and a crash in it leaves a
+    document that a restore and a backup both read as torn. As a replacement it is ordinary ingest: the new
+    file is written first, then the new row goes in and the old one comes out in the caller's transaction,
+    and the old file is removed only after that commits (by the router, or by the next sweep if the
+    request dies first). The cost is that **the document's id changes**, so anything holding the old one
+    has to swap it — the ledger row's own copy of its documents above all.
+
+    The name and `created_at` carry over, so the document keeps its place in the list and is still the
+    same entry to the person looking at it. There is deliberately no duplicate check against the other
+    documents on the transaction: that check exists for the same file dropped twice by accident, and an edit
+    is a deliberate statement of what the text should be.
+
+    Only `text/plain` is editable. A PDF or a photograph is not text to edit, and HTML is not edited either:
+    its formatting is the reason it was kept, and editing markup safely is out of proportion to trimming a
+    receipt.
+    """
+    row = conn.execute(
+        "SELECT txn_id, filename, mime_type, created_at FROM document WHERE id = ?", (document_id,)
+    ).fetchone()
+    if not row:
+        return None
+    if row["mime_type"] != TEXT_MIME_TYPE:
+        raise DocumentRejected("Only a text document can be edited.")
+    data = text.encode("utf-8")
+    if not data.strip():
+        raise DocumentRejected("A text document cannot be empty. Remove it instead.")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        limit_mb = MAX_DOCUMENT_BYTES // (1024 * 1024)
+        raise DocumentRejected(f"That text is larger than the {limit_mb} MB limit for an attached document.")
+
+    prepared = PreparedDocument(
+        data=data,
+        filename=row["filename"],
+        mime_type=TEXT_MIME_TYPE,
+        byte_size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    conn.execute("DELETE FROM document WHERE id = ?", (document_id,))
+    return _store_document(conn, row["txn_id"], prepared, row["created_at"])
+
+
+def _store_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDocument, created_at: str) -> dict:
+    """Write the file, then insert the row — the order both attaching and replacing depend on."""
     document_id = new_document_id()
     text, text_source = extract_text(prepared.data, prepared.mime_type)
     write_document_file(document_id, prepared.data)
@@ -752,7 +852,7 @@ def attach_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDoc
         "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at, text, text_source) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (document_id, txn_id, prepared.filename, prepared.mime_type, prepared.byte_size,
-         prepared.sha256, utcnow_iso(), text, text_source),
+         prepared.sha256, created_at, text, text_source),
     )
     row = conn.execute(
         f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE id = ?", (document_id,)
