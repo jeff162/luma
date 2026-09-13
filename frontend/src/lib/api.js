@@ -482,6 +482,8 @@ export const api = {
   runEmptyCleanup: () => request('/categories/empty-cleanup', { method: 'POST' }),
   setCategoryAside: (id) => request(`/categories/${id}/set-aside`, { method: 'POST' }),
   restoreCategoryToPool: (id) => request(`/categories/${id}/restore-to-pool`, { method: 'POST' }),
+  // One transaction for the whole Group Imported Categories draft; returns the resulting flat category list.
+  applyImportedCategoryWorkspace: (plan) => request('/categories/imported-workspace/apply', { method: 'POST', body: JSON.stringify(plan) }),
   updateCategory: (id, data) =>
     request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   getCategoryTags: (id) => request(`/categories/${id}/tags`),
@@ -936,7 +938,7 @@ export const api = {
   // Shared (tenant-wide) "Group Imported Categories" workspace draft. Not a per-user preference — it
   // stages the one shared category tree, so it lives in import_workflow_state, not ui_preference.
   getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),
-  saveCategoryWorkspaceDraft: (draft) => request('/import-export/category-workspace-draft', { method: 'PUT', body: JSON.stringify({ draft }) }),
+  saveCategoryWorkspaceDraft: (draft, baseRevision = 0) => request('/import-export/category-workspace-draft', { method: 'PUT', body: JSON.stringify({ draft, base_revision: baseRevision }) }),
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),

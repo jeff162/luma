@@ -12,12 +12,12 @@
 // The workspace is a full-screen modal, so "minimize then navigate then restore" is how it coexists
 // with other pages (it can't be seen through). Its entire dataset derives from the category list, which
 // the provider fetches on open and on restore so the draft reconciles against the current tree each time
-// it becomes visible. The in-progress grouping draft is persisted (useUserPreference), so minimize /
-// navigate never loses it.
+// it becomes visible. The in-progress grouping draft is shared tenant state saved to the backend, so
+// minimize / navigate never loses it.
 
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
+import { AppConfirmDialog, AppDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import { UNASSIGNED_CATEGORY_SYSTEM_KEY } from '../lib/importExport/constants.js'
 import {
@@ -55,8 +55,24 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
   // per-user preference, so it loads from the backend (import_workflow_state) rather than ui_preference.
   // A ref tracks the current value so setDraft can support functional updaters and write through without
   // a side effect inside the state updater.
+  //
+  // Saving is revisioned, because the draft is one record that two tabs or two members can be editing at
+  // once. Each save names the revision it was edited from, and the server refuses a stale one with what it
+  // holds. Saves run one at a time, and edits made while one is in flight coalesce into the next, so a burst
+  // of drags sends the latest arrangement once instead of racing several requests. A refusal stops saving
+  // and asks which version to keep (`draftConflict`); any other failure is shown, and the next edit retries.
   const [draft, setDraftState] = useState(null)
   const draftRef = useRef(null)
+  const revisionRef = useRef(0)
+  const pendingSaveRef = useRef(undefined)
+  const savingRef = useRef(false)
+  const draftConflictRef = useRef(null)
+  const [draftConflict, setDraftConflict] = useState(null)
+  // Bumped when the other version of a conflicting draft is loaded, so an open workspace re-seeds from it
+  // instead of keeping the arrangement it was initialized with.
+  const [draftEpoch, setDraftEpoch] = useState(0)
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const [notice, setNotice] = useState(null)
   const applyDraftValue = useCallback((value) => {
     draftRef.current = value ?? null
     setDraftState(value ?? null)
@@ -64,17 +80,71 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
   useEffect(() => {
     let cancelled = false
     api.getCategoryWorkspaceDraft()
-      .then(res => { if (!cancelled) applyDraftValue(res?.draft ?? null) })
+      .then(res => {
+        if (cancelled) return
+        revisionRef.current = Number(res?.revision) || 0
+        applyDraftValue(res?.draft ?? null)
+      })
       .catch(() => { /* keep null on failure; the workspace re-seeds from the live category flags */ })
     return () => { cancelled = true }
   }, [applyDraftValue])
+  const flushDraftSaves = useCallback(async () => {
+    if (savingRef.current) return
+    savingRef.current = true
+    try {
+      while (pendingSaveRef.current !== undefined && !draftConflictRef.current) {
+        const next = pendingSaveRef.current
+        pendingSaveRef.current = undefined
+        try {
+          const saved = await api.saveCategoryWorkspaceDraft(next, revisionRef.current)
+          revisionRef.current = Number(saved?.revision) || revisionRef.current + 1
+        } catch (error) {
+          if (error?.status === 409 && error?.detail?.code === 'draft_conflict') {
+            const conflict = { draft: error.detail.draft ?? null, revision: Number(error.detail.revision) || 0 }
+            draftConflictRef.current = conflict
+            setDraftConflict(conflict)
+          } else {
+            // Keep the unsaved arrangement queued, so the next edit carries it.
+            if (pendingSaveRef.current === undefined) pendingSaveRef.current = next
+            setNotice(prev => prev || {
+              title: 'Could not save the category draft',
+              description: error?.message || 'The arrangement is kept here and is saved again with the next change.',
+            })
+          }
+          break
+        }
+      }
+    } finally {
+      savingRef.current = false
+    }
+  }, [])
   const setDraft = useCallback((nextOrUpdater) => {
     const next = (typeof nextOrUpdater === 'function' ? nextOrUpdater(draftRef.current) : nextOrUpdater) ?? null
     applyDraftValue(next)
-    api.saveCategoryWorkspaceDraft(next).catch(() => { /* optimistic; ignore transient save errors */ })
+    pendingSaveRef.current = next
+    flushDraftSaves()
+  }, [applyDraftValue, flushDraftSaves])
+  // Resolving a refused save. Keeping this window's arrangement saves it again over the revision the refusal
+  // reported; loading the other one adopts what the server holds and re-seeds the open workspace from it.
+  const keepMyDraft = useCallback(() => {
+    const conflict = draftConflictRef.current
+    if (!conflict) return
+    revisionRef.current = conflict.revision
+    draftConflictRef.current = null
+    setDraftConflict(null)
+    pendingSaveRef.current = draftRef.current
+    flushDraftSaves()
+  }, [flushDraftSaves])
+  const loadOtherDraft = useCallback(() => {
+    const conflict = draftConflictRef.current
+    if (!conflict) return
+    revisionRef.current = conflict.revision
+    draftConflictRef.current = null
+    pendingSaveRef.current = undefined
+    setDraftConflict(null)
+    applyDraftValue(conflict.draft)
+    setDraftEpoch(epoch => epoch + 1)
   }, [applyDraftValue])
-  const [pendingDelete, setPendingDelete] = useState(null)
-  const [notice, setNotice] = useState(null)
 
   // The workspace inputs derive entirely from the live category list (same memos that used to live in
   // ImportExport): the protected Unassigned group, its still-pending imported leaves (the pool), and the
@@ -120,74 +190,64 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
     }
   }, [])
 
-  const open = useCallback(() => {
+  // The workspace saves its draft as soon as it mounts, so a window that sat idle while someone else arranged
+  // would be refused on that very first save. Showing it re-reads the shared draft first — unless this window
+  // has an unsaved change or an unresolved refusal of its own, which a re-read must not paper over.
+  const reloadDraft = useCallback(async () => {
+    const busy = () => pendingSaveRef.current !== undefined || savingRef.current || !!draftConflictRef.current
+    if (busy()) return
+    try {
+      const res = await api.getCategoryWorkspaceDraft()
+      if (busy()) return
+      revisionRef.current = Number(res?.revision) || 0
+      applyDraftValue(res?.draft ?? null)
+    } catch {
+      // Keep this window's copy; a stale one is caught by the revision check on its next save.
+    }
+  }, [applyDraftValue])
+  const open = useCallback(async () => {
     refreshCategories()
+    await reloadDraft()
     setPanel({ open: true, minimized: false })
-  }, [refreshCategories])
+  }, [refreshCategories, reloadDraft])
   const close = useCallback(() => setPanel({ open: false, minimized: false }), [])
   const minimize = useCallback(() => setPanel(prev => (prev.open ? { ...prev, minimized: true } : prev)), [])
-  const restore = useCallback(() => {
+  const restore = useCallback(async () => {
     refreshCategories()
+    await reloadDraft()
     setPanel(prev => (prev.open ? { ...prev, minimized: false } : prev))
-  }, [refreshCategories])
+  }, [refreshCategories, reloadDraft])
 
-  // Commit a draft: create/rename groups, move leaves into them, reconcile the set-aside flag, then
-  // refresh categories, re-anchor the persisted draft, close, and fan out the category change. Moved
-  // verbatim from ImportExport; the page's global spinner is replaced by the workspace's own apply state.
+  // Commit a draft as one server transaction: the groups it names, the categories placed in them, and the
+  // set-aside list land together or not at all (`POST /categories/imported-workspace/apply`). Parking is
+  // not deletion — a parked leaf stays active — and any leaf not listed as parked is un-parked by the same
+  // call. The plan names categories by id, resolved from the draft's labels against this window's copy of
+  // the tree; one that stopped waiting after that copy was taken is refused by the server rather than
+  // applied around, and a refusal reloads the tree so the next attempt starts from what is really there.
   const applyDraft = useCallback(async (draftToApply) => {
+    const sourceCategoryMap = new Map(
+      workspaceUnassignedCategories.map(category => [normalizeImportCategoryValue(category.name), category]),
+    )
+    const groups = []
+    for (const sectionType of ['income', 'expense']) {
+      for (const draftGroup of draftToApply?.snapshot?.tree?.[sectionType] || []) {
+        const groupName = String(draftGroup.name || '').trim()
+        if (!groupName) continue
+        const categories = []
+        for (const draftChild of draftGroup.children || []) {
+          const liveCategory = sourceCategoryMap.get(normalizeImportCategoryValue(draftChild.sourceValue || draftChild.name))
+          if (!liveCategory) continue
+          categories.push({ id: liveCategory.id, name: String(draftChild.name || draftChild.sourceValue || '').trim() || null })
+        }
+        groups.push({ name: groupName, category_type: sectionType, categories })
+      }
+    }
+    const setAsideIds = (draftToApply?.snapshot?.setAsideOrder || [])
+      .map(value => sourceCategoryMap.get(normalizeImportCategoryValue(value))?.id)
+      .filter(Boolean)
     try {
-      const sourceCategoryMap = new Map(
-        workspaceUnassignedCategories.map(category => [normalizeImportCategoryValue(category.name), category]),
-      )
-      const groupKeyToCategory = new Map(
-        existingCategories
-          .filter(category => !category.parent_id)
-          .map(category => [
-            `${category.category_type === 'income' ? 'income' : 'expense'}::${String(category.name || '').trim().toLowerCase()}`,
-            category,
-          ]),
-      )
-
-      for (const sectionType of ['income', 'expense']) {
-        for (const draftGroup of draftToApply?.snapshot?.tree?.[sectionType] || []) {
-          const groupName = String(draftGroup.name || '').trim()
-          if (!groupName) continue
-          const groupKey = `${sectionType}::${groupName.toLowerCase()}`
-          let liveGroup = groupKeyToCategory.get(groupKey)
-          if (!liveGroup) {
-            liveGroup = await api.createCategory({ name: groupName, category_type: sectionType })
-            groupKeyToCategory.set(groupKey, liveGroup)
-          }
-          for (const draftChild of draftGroup.children || []) {
-            const sourceKey = normalizeImportCategoryValue(draftChild.sourceValue || draftChild.name)
-            const liveCategory = sourceCategoryMap.get(sourceKey)
-            if (!liveCategory) continue
-            const nextName = String(draftChild.name || draftChild.sourceValue || '').trim()
-            const patch = {}
-            if (liveCategory.parent_id !== liveGroup.id) patch.parent_id = liveGroup.id
-            if (nextName && nextName !== liveCategory.name) patch.name = nextName
-            if (Object.keys(patch).length > 0) await api.updateCategory(liveCategory.id, patch)
-          }
-        }
-      }
-
-      // Parking ("set aside") is NOT a deletion: it moves a pending leaf out of the "needs sorting" pool
-      // but leaves it active. Reconcile the flag from the parked list — listed leaves get parked; any
-      // currently-parked leaf no longer listed (restored to the pool, or grouped) is un-parked.
-      const setAsideKeys = new Set(
-        (draftToApply?.snapshot?.setAsideOrder || []).map(value => normalizeImportCategoryValue(value)),
-      )
-      for (const key of setAsideKeys) {
-        const liveCategory = sourceCategoryMap.get(key)
-        if (liveCategory && !liveCategory.set_aside) await api.setCategoryAside(liveCategory.id)
-      }
-      for (const liveCategory of workspaceUnassignedCategories) {
-        if (liveCategory.set_aside && !setAsideKeys.has(normalizeImportCategoryValue(liveCategory.name))) {
-          await api.restoreCategoryToPool(liveCategory.id)
-        }
-      }
-
-      const refreshedCategories = await api.getCategories()
+      const result = await api.applyImportedCategoryWorkspace({ groups, set_aside_ids: setAsideIds })
+      const refreshedCategories = Array.isArray(result?.categories) ? result.categories : await api.getCategories()
       const refreshedUnassignedGroup = refreshedCategories.find(category => (
         !category.parent_id && category.system_key === UNASSIGNED_CATEGORY_SYSTEM_KEY
       )) || null
@@ -202,12 +262,13 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
       setPanel({ open: false, minimized: false })
       notifyCategoriesChanged()
     } catch (error) {
+      refreshCategories()
       setNotice({
         title: 'Could not organize imported categories',
         description: error?.message || 'Please try again.',
       })
     }
-  }, [workspaceUnassignedCategories, existingCategories, setDraft])
+  }, [workspaceUnassignedCategories, refreshCategories, setDraft])
 
   // Delete a pending leaf from the workspace (the Delete… action) — same delete flow as the Categories
   // page (clears its transactions). The confirm shows the affected transaction count.
@@ -260,6 +321,10 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
     draft,
     effectiveDraft,
     setDraft,
+    draftConflict,
+    keepMyDraft,
+    loadOtherDraft,
+    draftEpoch,
     applyDraft,
     requestDelete,
     confirmDelete,
@@ -271,6 +336,7 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
   }), [
     panel.open, panel.minimized, open, close, minimize, restore, counts.pending, counts.total,
     sourceValues, parkedSourceValues, workspaceUnassignedCategories, existingCategories, draft, effectiveDraft, setDraft,
+    draftConflict, keepMyDraft, loadOtherDraft, draftEpoch,
     applyDraft, requestDelete, confirmDelete, pendingDelete, handleCategoriesChanged, notice,
   ])
 
@@ -290,6 +356,7 @@ export function ImportedCategoryWorkspaceRenderer() {
       {ctx.isOpen && !ctx.minimized ? (
         <Suspense fallback={null}>
           <CategoryImportWorkspace
+            key={ctx.draftEpoch}
             sourceValues={ctx.sourceValues}
             parkedSourceValues={ctx.parkedSourceValues}
             sourceMeta={{
@@ -329,6 +396,20 @@ export function ImportedCategoryWorkspaceRenderer() {
           onConfirm={ctx.confirmDelete}
           onCancel={() => ctx.setPendingDelete(null)}
           width="min(440px, 100%)"
+        />
+      ) : null}
+      {/* No dismissal: each way out discards one of the two arrangements, so leaving has to be a choice. */}
+      {ctx.draftConflict ? (
+        <AppDialog
+          title="The category draft changed somewhere else"
+          description="Another window or another member saved a different arrangement of these imported categories while this one was being edited. Keep this arrangement to replace it, or load the other one and continue from there."
+          width="min(480px, 100%)"
+          actions={(
+            <>
+              <Button variant="ghost" onClick={ctx.loadOtherDraft}>Load the other arrangement</Button>
+              <Button onClick={ctx.keepMyDraft}>Keep this arrangement</Button>
+            </>
+          )}
         />
       ) : null}
       {ctx.notice ? (

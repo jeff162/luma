@@ -2189,6 +2189,15 @@ _save_import_workflow_state = set_tenant_workflow_state
 # opaque frontend draft snapshot; the backend only persists and returns it.
 class CategoryWorkspaceDraftBody(BaseModel):
     draft: Optional[dict] = None
+    # The revision this draft was edited from, as the last read or save returned it.
+    base_revision: int = 0
+
+
+def _workspace_draft_revision(state: dict) -> int:
+    try:
+        return max(int(state.get("revision") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 @router.get("/category-workspace-draft")
@@ -2196,15 +2205,39 @@ def get_category_workspace_draft():
     with get_db() as conn:
         state = _get_import_workflow_state(conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY)
     draft = state.get("draft")
-    return {"draft": draft if isinstance(draft, dict) else None}
+    return {"draft": draft if isinstance(draft, dict) else None, "revision": _workspace_draft_revision(state)}
 
 
 @router.put("/category-workspace-draft")
 def save_category_workspace_draft(body: CategoryWorkspaceDraftBody):
+    """Store the draft only if nobody has stored another since it was read.
+
+    The draft is one shared record, and it used to be overwritten by whichever save arrived last — so two tabs,
+    or two members, silently erased each other's arranging. Every save now names the revision it was edited
+    from; a save based on an older one is refused with the stored draft, for the browser to offer back. The
+    read and the write share one immediate transaction, so two saves racing on the same revision cannot both
+    pass the check.
+    """
     draft = body.draft if isinstance(body.draft, dict) else None
     with get_db() as conn:
-        _save_import_workflow_state(conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY, {"draft": draft})
-    return {"ok": True}
+        conn.execute("BEGIN IMMEDIATE")
+        state = _get_import_workflow_state(conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY)
+        current = _workspace_draft_revision(state)
+        stored = state.get("draft")
+        if body.base_revision != current:
+            if draft == stored:
+                # Nothing would be lost either way, so there is nothing to ask about.
+                return {"ok": True, "revision": current}
+            raise HTTPException(status_code=409, detail={
+                "code": "draft_conflict",
+                "message": "The imported-category draft was changed somewhere else.",
+                "draft": stored if isinstance(stored, dict) else None,
+                "revision": current,
+            })
+        _save_import_workflow_state(
+            conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY, {"draft": draft, "revision": current + 1}
+        )
+    return {"ok": True, "revision": current + 1}
 
 
 def _get_system_rule_suggestion_review_state(conn) -> dict:

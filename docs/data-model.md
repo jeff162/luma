@@ -1562,6 +1562,13 @@ When the schema changes from here:
   in `POST_RESTORE_DATA_INIT[N]` so restoring an older backup re-runs it. Write it to be correct run once on
   data that predates it — it runs exactly once, gated on the backup's `schema_version`
 
+- a migration that changes what an existing database *holds* — renames a column with data in it, sets a
+  value on rows that exist, backfills from another table, drops an index that forbade rows now allowed, stamps
+  an identity — gets an upgrade test from a hand-built database at the version before it. A fresh install is
+  created directly in the current shape, so it proves nothing about an upgrade. Everything from v26 to v53
+  that does this is covered in `test_migrations_after_v25.py`; purely additive migrations (an empty column or
+  table) need none
+
 - a data step must **check that the tables and columns it touches exist** and return quietly if they do
   not. The per-migration tests (`test_migration_v24.py`, `test_account_type_rules.py`, …) hand-build a
   minimal schema at an old version and then run the *whole* chain to `CURRENT_VERSION`, so every later

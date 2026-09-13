@@ -425,6 +425,23 @@ for what the *user* can act on.
   named in `CLAUDE.md` are a **list to work through**, not a menu to sample from — this one is where the
   operational footguns live, which makes skipping it the most expensive omission available.
 
+- **To prove a new test fails on the old code, run it against a copy of `HEAD`, not a stashed tree.** Git
+  writes are denied, `git stash` included, and a stash would pocket the user's uncommitted work anyway.
+  `git archive HEAD | tar -x -C <scratch dir>` is read-only and produces a clean checkout of what is
+  committed; copy the new or changed test files into it and run them with the repo's own
+  `backend/venv/bin/python -m pytest … -p no:cacheprovider` from that directory. A test that passes there
+  is not testing the change. It does not work for a test importing a name the change introduced — that
+  fails at import, which proves nothing — so write the proof around behavior the old code already exposes
+  (an HTTP route, a service call) wherever possible.
+
+- **A test that unlocks the vault over HTTP and then calls `crypto_service` directly gets `VaultLocked`.**
+  An unlock belongs to the browser session that presented the secret (`security-model.md` → *Identity and
+  the network perimeter*), and a direct service call from the test thread is a different session with
+  nothing unlocked. Wrap such calls in `in_browser_session(client)` from `backend/tests/_api_client.py`,
+  which joins the test client's session. The same rule is why a test that switches identity with
+  `select-identity` and switches back finds the first user locked: picking an identity starts a new
+  session, so unlock again.
+
 - **A flaky test is not fixed by lowering concurrency.** Capping Playwright's worker count made a
   failure stop reproducing, and that is evidence of nothing: a knob that changes timing changes a race's
   *probability* without touching its cause. Six clean runs at the original setting then showed the
