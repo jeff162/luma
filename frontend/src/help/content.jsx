@@ -86,7 +86,7 @@ export const HELP_SECTIONS = [
   {
     key: 'accounts',
     label: 'Accounts',
-    blurb: 'Where transactions come from, and pairing up accounts that turn out to be the same one.',
+    blurb: 'Where transactions come from, connecting data providers, and pairing up accounts that turn out to be the same one.',
   },
   {
     key: 'recurring',
@@ -169,7 +169,8 @@ export const HELP_TOPICS = [
         </p>
         <ol>
           <li>
-            Load transactions - Use the Import/Export page or connect a Data source. If there are
+            Load transactions - Use the Import/Export page or connect
+            a <HelpLink to="/help/data-providers">data provider</HelpLink>. If there are
             several files to be imported, import them all at once before moving on. If files come from
             different sources, accounts can be mapped so they match. If this
             is not done during the import process, it can be done later on the Accounts page. If files do
@@ -1651,41 +1652,165 @@ export const HELP_TOPICS = [
   {
     id: 'page-accounts',
     section: 'accounts',
-    title: 'Accounts and owners',
+    title: 'The Accounts page',
     surfaces: ['Accounts'],
-    summary: 'Accounts are where transactions come from, and owners attribute them to a person for filtering and reports. The page has three tabs: Accounts, Owners and Connections.',
+    summary: 'Accounts, Owners and Connections. Transactions identify the account they came from, owners are matches to accounts for reporting , and connections lists the configured data providers. ',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          <strong>Accounts</strong> are created by importing rather than set up in advance: a file or
-          a data source is mapped to an account, and the account appears. An account can matter on its
-          own, such as a card used for one purpose, or as the way a transaction is attributed to an
-          owner. A tag attached to an account reaches every transaction on it.
+          <strong>Accounts</strong> are created during the import process. The various sources of transaction data tend to
+          either supply account information with the transaction or all the transactions are from a single
+          account and the user identifies that account when the data is imported.
         </p>
         <p>
-          Bringing in the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
-          usually worth it, since they carry the richest per-merchant detail; a bank account on its own
-          represents a month of card purchases as the single payment that settled them. If both ends are
+          Bringing in data from the individual spending accounts &mdash; credit cards, P2P, loan accounts &mdash; is
+          usually worth it, since they carry the richest transaction detail; a bank account on its own
+          represents a month of card purchases a single payment. When both the payment account and the
+          actual purchase accounts are
           imported, the category that <em>credit-card payment</em>s are filed under belongs in a group
           marked <HelpLink to="/help/exclude-from-totals">Exclude from totals</HelpLink> (the
           supplied <em>Transfers</em> group ships that way) so the spending is not counted twice. Where
           that detail is not interesting, the bank account alone is enough.
         </p>
         <p>
-          Two accounts that turn out to be the same physical account can
-          be <HelpLink to="/help/merging-accounts">merged</HelpLink>, which also settles the
-          duplicates between them. Detaching reverses it.
+          Accounts may end up with different identifiers in the transaction data. This can occur when
+          transaction data comes from different sources and when a new credit card is issued. There are two
+          ways this can be handled. During the import the new account can be mapped to the existing account and
+          the transactions will be associated with that account. Alternatively, a new account can be created and
+          merged with the existing account on the Account
+          page <HelpLink to="/help/merging-accounts">merged</HelpLink>. Merged accounts can be detached if
+          needed which re-evaluates the transactions which were discarded as same-account duplicates.
         </p>
         <p>
-          <strong>Owners</strong> are created on the second tab and assigned to accounts. Once more
+          <strong>Owners</strong> are assigned to accounts. When more
           than one owner exists, <em>shared</em> becomes available as a choice. Owner can be filtered
-          and reported on, and a rule can be scoped to one.
+          and reported on and used in the selection criteria for rules.
         </p>
         <p>
-          <strong>Connections</strong> is where a data provider is linked and the accounts it offers
-          are mapped to accounts here. A connection that needs attention says so on its card and on
-          the Tasks page.
+          <strong>Connections</strong> is where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
+          and maintained. This is also where the mapping of accounts from the provider to accounts in
+          the application occurs.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'data-providers',
+    section: 'accounts',
+    title: 'Data providers and connections',
+    surfaces: ['Accounts (Connections)', 'Import / Export (Data connections)'],
+    summary: `A data provider is an online service that retrieves transactions directly from banks and card issuers. A connection is one link to a provider, and the accounts it offers are mapped to accounts in ${APP_NAME} the same way an imported file's are.`,
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A <strong>data provider</strong> is an online service that retrieves transactions from banks
+          and card issuers, so they arrive in {APP_NAME} without exporting and importing a file. The
+          supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>.
+          A <strong>connection</strong> is one link to a provider, usually to one bank, and it brings
+          that bank's accounts with it.
+        </p>
+        <p>
+          A data provider is not the same thing as a
+          saved <HelpLink to="/help/unknown-data-source">data source</HelpLink>, which is a template for
+          importing CSV files. Transactions from either one land in the same ledger and go through the
+          same rules and duplicate detection.
+        </p>
+
+        <h4>Before connecting</h4>
+        <p>
+          The credentials that give a provider access to a bank are stored encrypted in
+          a <strong>vault</strong>. A vault passphrase has to be set before the first connection, and
+          the vault is unlocked once per browser session to connect or sync. Other users request access
+          to the vault, and someone who can already open it approves the request. Nothing else is
+          encrypted by the vault; see <HelpLink to="/help/data-and-backups">data on disk, and
+            backups</HelpLink>.
+        </p>
+        <ul>
+          <li>
+            <strong>Plaid</strong> &mdash; needs app credentials from a Plaid account, entered once
+            with <strong>Configure</strong> by an administrator.
+          </li>
+          <li>
+            <strong>SimpleFIN Bridge</strong> &mdash; needs a setup token generated at SimpleFIN Bridge.
+            A token works only once, so a failed attempt needs a new one. One SimpleFIN connection can
+            cover several banks.
+          </li>
+        </ul>
+        <p>
+          When {APP_NAME} is reached over a network rather than on the same computer, HTTPS has to be set
+          up before connecting, since the credentials would otherwise cross the network unprotected. Demo
+          data has to be cleared first as well.
+        </p>
+
+        <h4>Connecting and mapping accounts</h4>
+        <p>
+          Connecting asks how much history to fetch on the first sync, then lists each account the
+          provider offers. Each one is mapped to an existing account, mapped to a new account, or
+          skipped. Nothing is pulled until every account has a destination.
+        </p>
+        <p>
+          Mapping onto an account that already holds transactions imported from a file is what lets
+          duplicate detection recognize the ones that arrive again from the provider.
+          See <HelpLink to="/help/duplicate-report">the duplicate-detection report</HelpLink>.
+        </p>
+        <p>
+          An account opened at the bank later shows up on the connection's card as <strong>to
+            map</strong>, and its transactions are skipped until it is mapped. The mapping, and which
+          extra details each sync captures, can be changed at any time
+          from <strong>Connection settings&hellip;</strong> in the card's menu.
+        </p>
+
+        <h4>Syncing</h4>
+        <p>
+          New transactions are pulled on request, from the sync control in the navigation pane or
+          from <strong>Sync now</strong> on the <strong>Data connections</strong> card of the Import /
+          Export page. Each sync records what arrived as cards in the import history, the same as an
+          imported file: one <strong>Initial import</strong> card for the first history, then one card
+          per month. Possible duplicates are flagged on those cards for review.
+        </p>
+        <p>
+          The connection's menu on that card holds the less routine actions:
+        </p>
+        <ul>
+          <li>
+            <strong>Fetch more history</strong> &mdash; pulls transactions older than the ones already
+            here, as far back as the bank and provider allow.
+          </li>
+          <li>
+            <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
+            stored credential, for example after restoring a backup.
+          </li>
+          <li>
+            <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
+            synced so the next sync imports it again. Sync cards have no Undo, so this is how a
+            connection is started over.
+          </li>
+        </ul>
+        <p>
+          Some providers limit how many requests can be made in a period. A sync that stops at that
+          limit reports <strong>more history to fetch</strong> and carries on with a later sync.
+        </p>
+
+        <h4>When a connection needs attention</h4>
+        <p>
+          A connection with something to act on says so on its card. <strong>Reconnect needed</strong> means
+          the provider no longer accepts the stored credential, usually because access was revoked or
+          expired at the provider. Syncing stays stopped until it is connected again, and the Tasks page
+          lists it too.
+          A <strong>provider notice</strong> is a problem the provider reported that did not stop the
+          sync, such as one bank on a multi-bank connection needing attention. An account the provider
+          reports in another currency is skipped; see <HelpLink to="/help/single-currency">single-currency
+            support</HelpLink>.
+        </p>
+
+        <h4>Disconnecting</h4>
+        <p>
+          Disconnecting keeps the accounts and every transaction already synced. Whether it also revokes
+          the provider's access depends on the provider, and the confirmation says which. SimpleFIN
+          Bridge has no way to revoke access from here, so access there is revoked at SimpleFIN Bridge
+          itself.
         </p>
       </>
     ),
@@ -1902,6 +2027,11 @@ export const HELP_TOPICS = [
             out</HelpLink>, and which account the rows belong to. Saving those settings as
           a <HelpLink to="/help/unknown-data-source">data source</HelpLink> means the next file from
           the same place needs none of it again.
+        </p>
+        <p>
+          Transactions from a <HelpLink to="/help/data-providers">data provider</HelpLink> arrive on
+          the same tab, through <strong>Sync now</strong> on the <strong>Data connections</strong> card,
+          and each sync's cards join the same import history.
         </p>
         <p>
           <strong>Amazon</strong> has its own tab because marketplace orders arrive in their own shape
@@ -2660,7 +2790,7 @@ export const HELP_TOPICS = [
     section: 'general-concepts',
     title: 'Single-currency support',
     surfaces: ['Settings \u2014 Currency'],
-    summary: 'A ledger holds one currency at a time, chosen on the Settings page. Amounts are stored as plain numbers, so changing the setting relabels every figure rather than converting it, and an account a data source reports in another currency is skipped rather than imported.',
+    summary: 'A ledger holds one currency at a time, chosen on the Settings page. Amounts are stored as plain numbers, so changing the setting relabels every figure rather than converting it, and an account a data provider reports in another currency is skipped rather than imported.',
     body: () => (
       <>
         <p>
@@ -2675,7 +2805,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           The consequence worth knowing about is at the edge, where data arrives. An account that a
-          connected data source reports as held in another currency is <strong>skipped</strong> &mdash; its
+          data provider reports as held in another currency is <strong>skipped</strong> &mdash; its
           transactions are not imported, and the account-mapping screen says so rather than letting the
           account sync cleanly and sit permanently empty. Where one source carries several currencies, the
           transactions in a foreign one are dropped the same way. A CSV file is taken at face value: its
@@ -2702,7 +2832,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           If the contents of the database are considered sensitive, {APP_NAME} can generate key pairs to build
-          strongly encrypted backup files. Secrets and credentials for accessing connected data sources
+          strongly encrypted backup files. Secrets and credentials for
+          accessing <HelpLink to="/help/data-providers">data providers</HelpLink>{' '}
           are already encrypted in the control database, secured by the vault passphrase. All backups
           of the credentials database contain encrypted data.
         </p>

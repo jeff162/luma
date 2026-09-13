@@ -104,7 +104,7 @@ describe('the ladder', () => {
     })
     renderDialog()
     expect(await screen.findByText('Robin can open this vault')).toBeTruthy()
-    expect(screen.getByText(/No credential changes and no data source is reconnected/)).toBeTruthy()
+    expect(screen.getByText(/No credential changes and no connection is reconnected/)).toBeTruthy()
   })
 
   it('points at a passkey the user has forgotten they registered', async () => {
@@ -189,7 +189,7 @@ describe('the reset', () => {
   it('says what survives before what is destroyed, and counts the cost', async () => {
     await openResetForm()
     expect(screen.getByText(/Your transactions, accounts, categories and rules are kept\./)).toBeTruthy()
-    expect(screen.getByText(/2 data sources will need reconnecting/)).toBeTruthy()
+    expect(screen.getByText(/2 connections will need reconnecting/)).toBeTruthy()
   })
 
   it('refuses to run without the typed confirmation', async () => {

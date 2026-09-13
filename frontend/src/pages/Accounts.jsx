@@ -530,7 +530,7 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
   )
 }
 
-// How far back a newly connected data source pulls on its first sync. Shared by the connect dialog and the
+// How far back a new connection pulls on its first sync. Shared by the connect dialog and the
 // Plaid card so the two cannot drift apart. "All available history" is bounded by whatever the provider
 // itself will return, which for a cursor provider is its published cap and for a walking provider is where
 // its history actually runs out.
@@ -542,7 +542,7 @@ const HISTORY_DEPTH_OPTIONS = [
   { value: '30', label: 'Last 30 days' },
 ]
 
-const HISTORY_DEPTH_TITLE = "How far back this data source pulls on its first sync. Saved as your default for future connections. To pull older history for a source that's already connected, use Fetch more history on its card."
+const HISTORY_DEPTH_TITLE = "How far back this connection pulls on its first sync. Saved as your default for future connections. To pull older history for an existing connection, use Fetch more history on the Import / Export page."
 
 // Connect a provider whose authorization is a value the user pastes rather than a widget that opens.
 // Everything shown is driven by the provider's `connect_spec` — label, help link, placeholder — so adding
@@ -701,7 +701,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
   if (!vault.configured) {
     return (
       <div style={box('var(--surface2)', 'var(--border)')}>
-        <span style={{ color: 'var(--muted)' }}>Data-source credentials are kept in an encrypted vault. Set a passphrase to begin.</span>
+        <span style={{ color: 'var(--muted)' }}>Data provider credentials are kept in an encrypted vault. Set a passphrase to begin.</span>
         <Button small onClick={onSet} style={{ marginLeft: 'auto' }}>Set vault passphrase</Button>
       </div>
     )
@@ -713,7 +713,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
       <div style={box('var(--surface2)', 'var(--border)')}>
         <span style={{ color: 'var(--muted)' }}>
           Vault access requested. Someone who can already open the vault needs to approve it before you
-          can connect or sync data sources.
+          can connect or sync data providers.
         </span>
       </div>
     )
@@ -1028,7 +1028,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     setChangingPassphrase(false)
     setNotice({
       title: 'Vault passphrase changed',
-      description: 'Your data sources are unaffected. Any credentials backup taken before now still '
+      description: 'Your connections are unaffected. Any credentials backup taken before now still '
         + 'needs the previous passphrase to restore.',
     })
   }
@@ -1051,7 +1051,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     if (httpsBlocked) {
       setNotice({
         title: 'HTTPS required to connect',
-        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data source, so bank credentials never cross the network in cleartext.',
+        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data provider, so bank credentials never cross the network in cleartext.',
       })
       return
     }
@@ -1067,7 +1067,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     if (httpsBlocked) {
       setNotice({
         title: 'HTTPS required to connect',
-        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data source, so bank credentials never cross the network in cleartext.',
+        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data provider, so bank credentials never cross the network in cleartext.',
       })
       return
     }
@@ -1410,7 +1410,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
 
       {configured.length === 0 && unconfigured.length === 0 ? (
         <Card style={{ padding: 16 }}>
-          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No data-source providers are available.</p>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No data providers are available.</p>
         </Card>
       ) : null}
 
@@ -1491,7 +1491,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 ) : null}
                 {s.unmapped ? (
                   <StatusPill tone="accent2"
-                    title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this data source ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
+                    title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this provider ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
                     {s.unmapped} to map
                   </StatusPill>
                 ) : null}
@@ -1599,7 +1599,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             <button
                               type="button"
                               onClick={() => openAccountMap(c)}
-                              title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
+                              title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this connection ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4,
                                 padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
@@ -1649,7 +1649,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
                             color: 'var(--danger)',
                           }}>
-                            {c.last_sync_error || 'This data source no longer accepts this connection.'}
+                            {c.last_sync_error || 'The provider no longer accepts this connection.'}
                             {' '}Syncing stays stopped until it is connected again.
                             {/* Both ways out, side by side and where the problem is stated — this is one
                                 of the few things on a card that is actually asking to be acted on, and
@@ -1786,7 +1786,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             {c.has_credential === false
                               // Refreshing needs a credential to fetch with, so for a connection whose
                               // credential is gone the old advice was a step that could only fail.
-                              ? 'No accounts, and no stored credential to fetch them with — connect this data source again, then disconnect this connection.'
+                              ? 'No accounts, and no stored credential to fetch them with — connect this provider again, then disconnect this connection.'
                               : 'No accounts imported yet — pull them in with ⋯ → “↻ Refresh accounts”.'}
                           </span>
                         ) : null}
@@ -1808,13 +1808,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         )
       })}
 
-      {/* Adding a data source means whatever its first step actually is: entering app credentials for a
+      {/* Adding a data provider means whatever its first step actually is: entering app credentials for a
           provider that has them, and connecting straight away for one that has none — for which a
           Configure dialog would open with nothing in it. Providers needing credentials stay admin-only;
           one that needs none is gated on the vault like any other connect. */}
       {unconfigured.length && unconfigured.some(p => isAdmin || p.requires_app_config === false) ? (
         <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data source:</span>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data provider:</span>
           {unconfigured
             .filter(p => isAdmin || p.requires_app_config === false)
             .map(p => (
@@ -1916,7 +1916,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           items={[
             {
               label: 'Connection settings…',
-              title: 'Choose what each account from this data source maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
+              title: 'Choose what each account from this connection maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
               onClick: () => openAccountMap(cardMenu.connection),
             },
             {

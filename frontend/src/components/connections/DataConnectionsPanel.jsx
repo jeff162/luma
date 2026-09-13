@@ -38,6 +38,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api.js'
 import { Button, Card, Tooltip } from '../ui.jsx'
+import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { ActionMenu, ActionMenuButton } from '../ActionMenu.jsx'
 import { LastSyncSummary, LastSyncedLine } from './ConnectionStatus.jsx'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
@@ -120,7 +121,10 @@ export function DataConnectionsPanel({ style, onOpenSyncLog }) {
     <>
       <Card style={{ display: 'grid', gap: 10, alignContent: 'start', ...style }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Data connections</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FeatureExplainer topic="data-providers" placement="bottom-left" />
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Data connections</div>
+          </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, lineHeight: 1.5 }}>
             Pull new and changed transactions from a connected bank. What arrives lands on the cards below,
             the same as an imported file.
@@ -213,7 +217,7 @@ export function DataConnectionsPanel({ style, onOpenSyncLog }) {
                     a stale timestamp that suggests nothing is wrong. */}
                 {c.reauth_required ? (
                   <button type="button" onClick={() => navigate('/accounts?tab=connections')}
-                    title={c.last_sync_error || 'This data source no longer accepts this connection — reconnect it on the Accounts page.'}
+                    title={c.last_sync_error || 'The provider no longer accepts this connection — reconnect it on the Accounts page.'}
                     style={{
                       padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
                       background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',

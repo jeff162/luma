@@ -89,7 +89,7 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
     return (
       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
         <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Syncing…</span>{' '}
-        importing transactions from this data source.
+        importing transactions from this connection.
       </div>
     )
   }

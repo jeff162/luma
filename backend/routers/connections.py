@@ -295,7 +295,7 @@ def set_captured_fields(connection_id: str, body: CapturedFieldsRequest):
         try:
             adapter = get_adapter(connection["provider"])
         except UnknownProviderError:
-            raise HTTPException(status_code=409, detail="This data source has no adapter")
+            raise HTTPException(status_code=409, detail="This connection's provider is not supported")
         optional = {f["key"] for f in adapter.capture_fields() if not f.get("locked")}
         chosen = sorted(k for k in (body.fields or []) if k in optional)
         conn.execute(

@@ -1028,7 +1028,7 @@ def export_credentials(request: Request):
         # rather than reporting the passphrase as wrong when it reaches material it cannot read.
         "version":          4,
         "exported_at":      utcnow_iso(),
-        "warning":          "This file holds encrypted data-source credentials. Anyone with it and your "
+        "warning":          "This file holds encrypted data provider credentials. Anyone with it and your "
                             "vault passphrase can use them. Store securely.",
         "connections":      connections,
         "provider_configs": provider_configs,

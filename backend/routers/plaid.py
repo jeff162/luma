@@ -57,7 +57,7 @@ def _credential(request: Request, connection: dict) -> str:
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to reconnect this data source.",
+            "message": "Unlock the vault to reconnect this connection.",
         })
     except (crypto_service.MissingCredential, crypto_service.VaultDecryptError):
         # The stored credential cannot be produced, so there is no Item to re-authorize — update mode is
@@ -68,7 +68,7 @@ def _credential(request: Request, connection: dict) -> str:
         raise HTTPException(status_code=409, detail={
             "code": "credential_unreadable",
             "message": "This connection has no usable credential, so it cannot be reconnected in place. "
-                       "Connect the data source again, then disconnect this one.",
+                       "Connect the provider again, then disconnect this one.",
         })
 
 

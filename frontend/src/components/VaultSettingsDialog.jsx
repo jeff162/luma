@@ -226,7 +226,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   return (
     <AppDialog
       title="Vault settings"
-      description="How this vault is opened, who else can open it, and the key protecting your data-source credentials."
+      description="How this vault is opened, who else can open it, and the key protecting your data provider credentials."
       onClose={onClose}
       width="min(560px, 100%)"
       actions={<DialogActions><Button small onClick={onClose}>Done</Button></DialogActions>}
@@ -294,7 +294,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
             same ground, which is why the description says which case it is really for. */}
         <Section
           title="Recovery code"
-          description="A one-time code that opens the vault and sets a new passphrase, without changing the key your credentials are encrypted with — so nothing is re-encrypted and no data source is reconnected. Worth having if you are the only person who can open this vault: without one, a forgotten passphrase means rebuilding the vault and reconnecting every data source."
+          description="A one-time code that opens the vault and sets a new passphrase, without changing the key your credentials are encrypted with — so nothing is re-encrypted and no connection is reconnected. Worth having if you are the only person who can open this vault: without one, a forgotten passphrase means rebuilding the vault and reconnecting every connection."
         >
           <Row>
             <span>
@@ -345,7 +345,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
         <Section
           style={requests?.length ? { order: -1 } : undefined}
           title="Vault access"
-          description="These people can open the vault. Anyone who sets a vault passphrase joins the list below it until someone who can already open the vault approves them. Approving shares the key that decrypts data-source credentials — it does not change what they can see in the ledger, which is shared already."
+          description="These people can open the vault. Anyone who sets a vault passphrase joins the list below it until someone who can already open the vault approves them. Approving shares the key that decrypts data provider credentials — it does not change what they can see in the ledger, which is shared already."
         >
           {members === null ? <Spinner /> : members.map(m => (
             <Row key={m.user_id}>
@@ -400,7 +400,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
 
         <Section
           title="Replace the vault key"
-          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. Everyone who still has access keeps it, and no data source needs reconnecting."
+          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. Everyone who still has access keeps it, and no connection needs reconnecting."
         >
           <div>
             <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
@@ -419,7 +419,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           // Says the part that is *not* obvious: revoking stops them opening the vault from now on, but
           // the key they could already read has not changed. Someone acting on a real compromise has to
           // know the second step exists, or they will stop here believing it is finished.
-          description={`${confirmingRevoke.display_name} will no longer be able to connect or sync data sources, and their unlock methods stop working. Their account, and everything in the ledger, is unaffected. If you are removing them because the key may have been exposed, follow this with Replace the vault key — revoking alone does not change the key they could already read.`}
+          description={`${confirmingRevoke.display_name} will no longer be able to connect or sync data providers, and their unlock methods stop working. Their account, and everything in the ledger, is unaffected. If you are removing them because the key may have been exposed, follow this with Replace the vault key — revoking alone does not change the key they could already read.`}
           confirmLabel={busy === `revoke-${confirmingRevoke.user_id}` ? 'Removing…' : 'Remove access'}
           confirmDisabled={busy === `revoke-${confirmingRevoke.user_id}`}
           cancelDisabled={busy === `revoke-${confirmingRevoke.user_id}`}
@@ -438,7 +438,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           title="Replace the vault key?"
           // Not styled danger: nothing is lost and every current member keeps working. What it *is* is
           // slow to undo — the old key is gone — so it takes a confirmation rather than a single click.
-          description="Every stored data-source credential is re-encrypted under a new key. Anyone whose access you removed can no longer decrypt them, even with a copy of the database. Everyone who still has access is unaffected and no data source needs reconnecting."
+          description="Every stored data provider credential is re-encrypted under a new key. Anyone whose access you removed can no longer decrypt them, even with a copy of the database. Everyone who still has access is unaffected and no connection needs reconnecting."
           confirmLabel={busy === 'rotate' ? 'Replacing…' : 'Replace key'}
           confirmDisabled={busy === 'rotate'}
           cancelDisabled={busy === 'rotate'}
@@ -458,7 +458,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
       {confirmingDiscard ? (
         <AppConfirmDialog
           title="Remove the recovery code?"
-          description="The code on file stops working and no replacement is issued. If the vault passphrase is then forgotten, the ways back in are a passkey, another member re-enrolling you, or rebuilding the vault and reconnecting every data source. A new code can be created here at any time."
+          description="The code on file stops working and no replacement is issued. If the vault passphrase is then forgotten, the ways back in are a passkey, another member re-enrolling you, or rebuilding the vault and reconnecting every connection. A new code can be created here at any time."
           confirmLabel={busy === 'discard-recovery-code' ? 'Removing…' : 'Remove code'}
           confirmDisabled={busy === 'discard-recovery-code'}
           cancelDisabled={busy === 'discard-recovery-code'}

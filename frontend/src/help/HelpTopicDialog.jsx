@@ -19,6 +19,10 @@ import { scrollToHelpAnchor } from './helpAnchors.js'
  * The viewer already shows the full body, so its footer links to the /help *index* (a distinct, useful
  * destination) rather than this topic's own /help page, which would just repeat the same text.
  *
+ * Each cross-link also pushes the topic being left onto a trail, so the footer can offer "Back to
+ * <topic>" the way the /help page does. The trail is component state, never browser history: the viewer
+ * does not route, and a history entry would make the browser's Back act on the page behind the overlay.
+ *
  * `data-modal-overlay` marks this as the active modal layer so DetailPanelShell yields Escape to it
  * (the dialog owns Escape while open) — matching the app's shared modal-over-panel convention.
  *
@@ -27,21 +31,28 @@ import { scrollToHelpAnchor } from './helpAnchors.js'
  */
 export default function HelpTopicDialog({ topicId, onClose }) {
   // Topic and anchor move together: a cross-link picks both at once, and the anchor must not outlive
-  // the topic it was chosen for (a later plain link would otherwise inherit the previous jump).
-  const [current, setCurrent] = useState({ id: topicId, anchor: null })
+  // the topic it was chosen for (a later plain link would otherwise inherit the previous jump). The trail
+  // moves with them, so a switch and the push that records it cannot land in different renders.
+  // `scrollTop` is set only when stepping back, to return the reader to where they followed the link.
+  const [view, setView] = useState({ current: { id: topicId, anchor: null, scrollTop: null }, trail: [] })
+  const { current, trail } = view
   const location = useLocation()
   // Where the viewer was opened from (the route behind the overlay), so the Help index can offer a
   // "Return to <page>" link back. /help origins are ignored by the Help page's own guard.
   const fromPath = `${location.pathname}${location.search}${location.hash}`
-  useEffect(() => { setCurrent({ id: topicId, anchor: null }) }, [topicId])
+  // A `?` opening a different topic starts a new trail: the previous one belonged to another reading.
+  useEffect(() => {
+    setView({ current: { id: topicId, anchor: null, scrollTop: null }, trail: [] })
+  }, [topicId])
 
   // The overlay is the scroll container and survives an in-place topic switch, so each new body
-  // starts at its own top unless the link asked for a heading inside it.
+  // starts at its own top unless the link asked for a heading inside it, or the reader is stepping
+  // back to a topic they had scrolled through.
   const overlayRef = useRef(null)
   const bodyRef = useRef(null)
   useLayoutEffect(() => {
     const cleanup = current.anchor ? scrollToHelpAnchor(bodyRef.current, current.anchor) : null
-    if (!cleanup && overlayRef.current) overlayRef.current.scrollTop = 0
+    if (!cleanup && overlayRef.current) overlayRef.current.scrollTop = current.scrollTop ?? 0
     return cleanup ?? undefined
   }, [current])
 
@@ -55,9 +66,29 @@ export default function HelpTopicDialog({ topicId, onClose }) {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [onClose])
 
+  function followLink(id, anchor = null) {
+    const leftAt = overlayRef.current?.scrollTop ?? 0
+    setView(prev => ({
+      current: { id, anchor, scrollTop: null },
+      trail: [...prev.trail, { id: prev.current.id, scrollTop: leftAt }],
+    }))
+  }
+
+  function goBack() {
+    setView(prev => {
+      if (!prev.trail.length) return prev
+      const previous = prev.trail[prev.trail.length - 1]
+      return {
+        current: { id: previous.id, anchor: null, scrollTop: previous.scrollTop },
+        trail: prev.trail.slice(0, -1),
+      }
+    })
+  }
+
   const entry = HELP_TOPICS_BY_ID[current.id]
   if (!entry) return null
   const Body = entry.body
+  const backTitle = trail.length ? HELP_TOPICS_BY_ID[trail[trail.length - 1].id]?.title : null
 
   return createPortal(
     <div
@@ -101,15 +132,29 @@ export default function HelpTopicDialog({ topicId, onClose }) {
             }}
           >&times;</button>
         </div>
-        <HelpNavContext.Provider value={{ navigate: (id, anchor = null) => setCurrent({ id, anchor }) }}>
+        <HelpNavContext.Provider value={{ navigate: followLink }}>
           <div className="help-body" ref={bodyRef}><Body /></div>
         </HelpNavContext.Provider>
-        <div style={{ marginTop: 16, textAlign: 'right' }}>
+        {/* At the foot rather than the top: a linked topic is read through before stepping back, so this is
+            where the reader is when they want it, and the two ways out share one line. */}
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          {backTitle ? (
+            <button
+              type="button"
+              onClick={goBack}
+              style={{
+                background: 'none', border: 'none', padding: 0,
+                color: 'var(--accent2)', cursor: 'pointer', fontSize: 12,
+              }}
+            >
+              &larr; Back to {backTitle}
+            </button>
+          ) : null}
           <Link
             to="/help"
             state={{ from: fromPath }}
             onClick={onClose}
-            style={{ fontSize: 12, color: 'var(--accent2)' }}
+            style={{ fontSize: 12, color: 'var(--accent2)', marginLeft: 'auto' }}
           >
             All help topics &rarr;
           </Link>

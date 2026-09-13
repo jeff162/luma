@@ -22,6 +22,7 @@ export const IMPORT_CATEGORY_USAGE_MODE_VALUES = new Set([
 export const IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY = 'import.defaultImportedCategoryMode'
 export const SUPPORTED_DATA_PROVIDERS = [
   { id: 'plaid', name: 'Plaid', availability: 'Available now' },
+  { id: 'simplefin', name: 'SimpleFIN Bridge', availability: 'Available now' },
 ]
 
 export function normalizeImportCategoryUsageMode(value) {

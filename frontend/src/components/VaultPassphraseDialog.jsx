@@ -201,14 +201,14 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           : confirming ? 'Confirm it’s you'
             : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
       description={changing
-        ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no data source needs re-linking. The current passphrase proves this is you — a passkey does the same, for anyone who has one.'
+        ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no connection needs re-linking. The current passphrase proves this is you — a passkey does the same, for anyone who has one.'
         : confirming
           ? 'Changing how this vault is opened needs the passphrase or a passkey, even though the vault is already open. Otherwise anyone who reached an unlocked screen could add their own way in.'
           : requesting
           ? 'This workspace already has a credential vault. Choose the passphrase that will open it for you — it starts working once a member who can already open the vault approves the request.'
           : setting
-            ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
-            : 'Enter your vault passphrase to connect and sync data sources this session.'}
+            ? 'The vault encrypts your data provider credentials at rest. You will enter this passphrase once per session to connect or sync.'
+            : 'Enter your vault passphrase to connect and sync data providers this session.'}
       onClose={onClose}
       // Above the standard dialog layer: this is the one dialog that opens *on top of* another one —
       // a connect or a disconnect confirmation raises it and waits behind it — and at the shared
@@ -300,7 +300,7 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
           <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
             {requesting
               ? 'Nobody else ever learns this passphrase — approval does not require it.'
-              : 'Nothing here can recover it for you — create a recovery code in Vault settings, or losing it means reconnecting every data source.'}
+              : 'Nothing here can recover it for you — create a recovery code in Vault settings, or losing it means reconnecting every connection.'}
             {' '}Store it in a password manager; it must be at least {limits.minLength} characters using
             at least {limits.minDistinct} different ones.
           </p>

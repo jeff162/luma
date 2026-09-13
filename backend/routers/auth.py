@@ -1193,7 +1193,7 @@ def vault_rotate(request: Request):
         raise HTTPException(status_code=409, detail={
             "code":    "vault_rotation_blocked",
             "message": "A stored credential could not be read with the current key, so it cannot be "
-                       "re-encrypted. Reconnect the affected data source, then try again.",
+                       "re-encrypted. Reconnect the affected connection, then try again.",
         })
     return {"result": result, "user": _session_payload(user)}
 

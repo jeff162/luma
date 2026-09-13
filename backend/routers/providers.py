@@ -85,12 +85,12 @@ def require_app_config(request: Request, provider: str) -> dict:
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to use this data source.",
+            "message": "Unlock the vault to use this data provider.",
         })
     if not app_config:
         raise HTTPException(status_code=409, detail={
             "code": "provider_not_configured",
-            "message": "Configure this data source's credentials before connecting.",
+            "message": "Configure this data provider's credentials before connecting.",
         })
     return app_config
 
@@ -128,7 +128,7 @@ def establish_connection(request: Request, provider: str, payload: dict,
         if is_demo_data_loaded(conn):
             raise HTTPException(status_code=409, detail={
                 "code": "demo_data_loaded",
-                "message": "Clear the demo data before connecting a data source.",
+                "message": "Clear the demo data before connecting a data provider.",
             })
     # A connected bank stores a live access credential, which must never sit unencrypted — so connecting
     # always requires a vault, unlocked, regardless of the app-login perimeter (they are orthogonal).
@@ -136,12 +136,12 @@ def establish_connection(request: Request, provider: str, payload: dict,
     if not crypto_service.vault_configured():
         raise HTTPException(status_code=409, detail={
             "code": "vault_not_configured",
-            "message": "Set a vault passphrase before connecting a data source.",
+            "message": "Set a vault passphrase before connecting a data provider.",
         })
     if not crypto_service.is_unlocked(user["id"]):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to connect a data source.",
+            "message": "Unlock the vault to connect a data provider.",
         })
 
     adapter = get_adapter(provider)
@@ -155,7 +155,7 @@ def establish_connection(request: Request, provider: str, payload: dict,
         raise HTTPException(status_code=400, detail={
             "code": "weak_vault",
             "message": (
-                "Set a strong vault passphrase before connecting a data source. Each vault passphrase must "
+                "Set a strong vault passphrase before connecting a data provider. Each vault passphrase must "
                 f"be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters with at least "
                 f"{crypto_service.VAULT_PRODUCTION_MIN_DISTINCT} distinct characters."
             ),
@@ -325,7 +325,7 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
     if not get_adapter(provider).requires_app_config:
         raise HTTPException(status_code=409, detail={
             "code": "no_app_credential",
-            "message": "This data source has no app-level credentials to configure.",
+            "message": "This data provider has no app-level credentials to configure.",
         })
     # No environment gate here any more. Switching to Production used to demand a strong passphrase,
     # because Sandbox accepted a weak one; with the weak tier gone the check could only ever pass, and
@@ -341,7 +341,7 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
         # The secret is vault-encrypted, so storing one needs the vault configured and unlocked.
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Set and unlock a vault passphrase before saving this data source's secret.",
+            "message": "Set and unlock a vault passphrase before saving this data provider's secret.",
         })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -379,12 +379,12 @@ def get_secret(provider: str, request: Request):
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to view this data source's secret.",
+            "message": "Unlock the vault to view this data provider's secret.",
         })
     if not app_config or not app_config.get("secret"):
         raise HTTPException(status_code=409, detail={
             "code": "no_secret",
-            "message": "This data source has no secret on file.",
+            "message": "This data provider has no secret on file.",
         })
     return {"secret": app_config["secret"], "source": get_provider_config_status(provider)["source"]}
 
@@ -413,7 +413,7 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to disconnect this data source.",
+            "message": "Unlock the vault to disconnect this connection.",
         })
     except (crypto_service.MissingCredential, crypto_service.VaultDecryptError):
         # There is no credential to revoke *with* — a vault reset clears them and deliberately keeps the
@@ -463,13 +463,13 @@ def refresh_accounts(provider: str, body: RefreshAccountsRequest, request: Reque
     except crypto_service.VaultLocked:
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
-            "message": "Unlock the vault to refresh this data source.",
+            "message": "Unlock the vault to refresh this connection.",
         })
     except (crypto_service.MissingCredential, crypto_service.VaultDecryptError):
         raise HTTPException(status_code=409, detail={
             "code": "no_credential",
             "message": "This connection has no usable credential, so its accounts cannot be refreshed. "
-                       "Connect the data source again, then disconnect this one.",
+                       "Connect the provider again, then disconnect this one.",
         })
     try:
         accounts = get_adapter(provider).fetch_accounts(app_config, credential)

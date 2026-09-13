@@ -182,12 +182,12 @@ export default function ConnectionAccountMapDialog({
           the second section undiscoverable. */}
       <AppDialog
         title={requireAll
-          ? `Map accounts from ${connection?.institution || 'this data source'}`
+          ? `Map accounts from ${connection?.institution || 'this connection'}`
           : `${connection?.institution || 'Connection'} settings`}
         description={
           requireAll
-            ? 'Choose what each account from this data source is. Transactions are pulled once every account has a destination — mapping an account onto one already in Luma is also what lets duplicate detection recognize transactions imported from a file.'
-            : 'Adjust what each account from this data source maps to, and which details future syncs capture. Changing a mapping re-checks the transactions already pulled for duplicates.'
+            ? 'Choose what each account from this connection is. Transactions are pulled once every account has a destination — mapping an account onto one already in Luma is also what lets duplicate detection recognize transactions imported from a file.'
+            : 'Adjust what each account from this connection maps to, and which details future syncs capture. Changing a mapping re-checks the transactions already pulled for duplicates.'
         }
         width="min(760px, 100%)"
         onClose={saving ? undefined : onClose}
@@ -220,7 +220,7 @@ export default function ConnectionAccountMapDialog({
           <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><Spinner /></div>
         ) : rows.length === 0 ? (
           <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
-            This data source reported no accounts.
+            This connection reported no accounts.
           </p>
         ) : (
           <div style={{ display: 'grid', gap: 0 }}>
@@ -234,7 +234,7 @@ export default function ConnectionAccountMapDialog({
               borderBottom: '1px solid var(--border)',
               position: 'sticky', top: 0, zIndex: 1, background: 'var(--surface)',
             }}>
-              <span>Account from data source</span>
+              <span>Account from provider</span>
               <span />
               <span>Maps To</span>
               <span style={{ textAlign: 'center' }}>Skip</span>
@@ -492,7 +492,7 @@ export default function ConnectionAccountMapDialog({
         )}
         {captureFields.length > 0 ? (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Details captured from this data source</div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Details captured from this connection</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.5 }}>
               Extra detail kept with each transaction, alongside the amount, date, and merchant. Some is
               always captured because duplicate detection relies on it. Changes apply to future syncs.

@@ -292,12 +292,12 @@ deployment is HTTPS" and "the app is HTTP" are both true at once.
 **Topology is detected per request, not chosen.** Standalone versus client-server is just *"did this
 request arrive over loopback or over the network?"* — which is strictly more correct than a stored preset,
 because the same install is loopback from its own box and networked from another. The one genuine user
-choice is forward-looking — *will you connect a data source?* — and it has to be asked ahead of time
+choice is forward-looking — *will you connect a data provider?* — and it has to be asked ahead of time
 because standing up HTTPS is not instantaneous and the requirement cannot first be discovered at
 connect-time.
 
 **The permissible-HTTP rule.** Plain HTTP on a non-loopback bind is an acceptable operator choice **only
-when both** hold: no data source is configured (no live credential on the wire), **and** the instance is
+when both** hold: no data provider is configured (no live credential on the wire), **and** the instance is
 passwordless (no login credential or session cookie to steal). The coupling is the point — the reason to
 run a perimeter is distrust of who can reach the box, and that same distrust makes a sniffable, replayable
 **session cookie** unacceptable. Protecting only the login exchange protects nothing, because the cookie

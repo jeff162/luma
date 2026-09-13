@@ -3015,8 +3015,8 @@ function CurrencySection() {
         </Button>
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
-        Amounts are stored plain numbers, this sets what those numbers <em>mean</em> and how
-        they are shown — it does not convert anything. The more interesting feature is that transactions from a connected data source with
+        Amounts are stored as plain numbers. This sets what those numbers <em>mean</em> and how
+        they are shown — it does not convert anything. The more interesting feature is that transactions from a data provider in
         a different currency are not imported.
       </div>
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}

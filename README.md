@@ -67,7 +67,7 @@ Anyone whose main requirement is either of these will be better served by some o
 
 ## How it works
 
-The first run creates a local user and offers a choice: load the demo data, import a CSV, connect a data source or do none of the above. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
+The first run creates a local user and offers a choice: load the demo data, import a CSV, connect a data provider or do none of the above. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
 
 Two things then drive everything: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags and rules all exist to make those two better, and each can be used or ignored depending on whether it is useful:
 

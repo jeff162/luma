@@ -594,7 +594,7 @@ class ReenrolmentTests(_VaultCase):
         cs.grant_access(self.bob, slot["id"])
 
         self.assertEqual(cs.unlock(self.alice, NEW_PASSPHRASE), self.dek,
-                         "same DEK, so no data source is reconnected")
+                         "same DEK, so no connection is reconnected")
 
     def test_it_is_refused_when_nobody_could_grant_it(self):
         # The self-brick: alice is the only member, so overwriting her slot with a pending one would

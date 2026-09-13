@@ -129,7 +129,7 @@ def resolve_initial_sync_batch(conn, connection) -> str:
     if row:
         return row["id"]
     batch_id = str(uuid.uuid4())
-    institution = connection["institution"] or connection["provider"] or "Data source"
+    institution = connection["institution"] or connection["provider"] or "Connection"
     filename = f"{institution} · Initial import"
     conn.execute(
         """
@@ -168,7 +168,7 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
     if row:
         return row["id"]
     batch_id = str(uuid.uuid4())
-    institution = connection["institution"] or connection["provider"] or "Data source"
+    institution = connection["institution"] or connection["provider"] or "Connection"
     filename = f"{institution} · {on_date.strftime('%B %Y')}"
     # A card's transaction-month span is NOT a coverage claim: a delta card can span all of July while
     # holding only the three July rows that happened to arrive. Coverage for a connection lives on
@@ -840,9 +840,9 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         if is_demo_data_loaded(conn):
             raise HTTPException(status_code=409, detail={
                 "code": "demo_data_loaded",
-                "message": "Clear the demo data before syncing a data source.",
+                "message": "Clear the demo data before syncing a data provider.",
             })
-        require_no_pending_restore(conn, "syncing a data source")
+        require_no_pending_restore(conn, "syncing a data provider")
 
     marked = _connections_in_scope(connection_id, provider)
     set_sync_running(marked, True)
@@ -1462,7 +1462,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     request.state.user, connection["provider"]
                 )
                 if app_config is None:
-                    message = "This data source has no configured app credentials."
+                    message = "This data provider has no configured app credentials."
                     log_warning(
                         f"[sync] skipping connection {connection['id']}: provider "
                         f"{connection['provider']!r} has no configured app credentials"
@@ -1629,7 +1629,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # clears the credentials and keeps the connection rows so a re-link lands back on them.
                 # `reauth_required` is already set by whatever cleared it, and is set again here so a row
                 # that arrived in this state by any other route says the same thing.
-                message = ("This connection has no stored credential. Connect the data source again to "
+                message = ("This connection has no stored credential. Connect the provider again to "
                            "store a fresh one.")
                 log_warning(f"[sync] connection {connection['id']} has no stored credential")
                 _record_sync_failure(conn, connection["id"], message, reauth_required=True)
@@ -1645,14 +1645,14 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # The message is written here because the exception carries none: it is raised bare, having
                 # no context at the point it is detected (see `crypto_service.decrypt_secret`).
                 message = ("This connection's stored credential can no longer be read with the current "
-                           "vault key. Reconnect the data source to store a fresh credential.")
+                           "vault key. Reconnect to store a fresh credential.")
                 log_warning(f"[sync] connection {connection['id']} credential is unreadable under the current DEK")
                 _record_sync_failure(conn, connection["id"], message, reauth_required=True)
                 _record(error=message)
                 continue
             except UnknownProviderError as e:
                 log_warning(f"[sync] skipping connection {connection['id']}: {e}")
-                _record_sync_failure(conn, connection["id"], f"Unknown data source: {e}")
+                _record_sync_failure(conn, connection["id"], f"Unknown data provider: {e}")
                 _record(error=f"unknown provider: {e}")
                 continue
             except NotImplementedError as e:

@@ -514,7 +514,7 @@ function LocalPreferenceProfileScreen({
     },
     {
       key: 'connect',
-      title: 'Connect a data source',
+      title: 'Connect a data provider',
       summary: 'Link an account/accounts through a data provider.',
       destination: DATA_PROVIDER_STARTUP_ROUTE,
     },
@@ -797,7 +797,7 @@ function LocalPreferenceProfileScreen({
                   better, and you can pick them up as you need them.
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  It all starts with data. Import a CSV or connect a data source below and the rest of the app fills
+                  It all starts with data. Import a CSV or connect a data provider below and the rest of the app fills
                   in around it. None of the choices here are permanent — almost anything can be changed later.
                 </div>
               </div>
@@ -871,7 +871,7 @@ function LocalPreferenceProfileScreen({
             </div>
 
             <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
-              Connecting a data source links accounts through <DataProviderInfoButton />.
+              Connecting links bank accounts through one of the supported <DataProviderInfoButton />.
             </div>
 
             <Toggle

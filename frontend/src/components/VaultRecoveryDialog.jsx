@@ -16,7 +16,7 @@
 //      moves, nothing is re-linked. **Named**: "somebody else can open this vault" is not something
 //      anyone can act on, and "frances can" is — the name is the whole content of the rung.
 //   2. A recovery code                    → opens the vault and re-keys the passphrase against the SAME
-//      workspace key, so again nothing is re-encrypted and no data source is reconnected.
+//      workspace key, so again nothing is re-encrypted and no connection is reconnected.
 //   3. A credentials backup               → complete recovery, but only after a reset, since re-keying
 //      needs a local vault open and there is no opening the old one. Named here so the reset does not
 //      read as pure loss when a rescue file exists.
@@ -213,7 +213,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
     return (
       <AppDialog
         title="Your vault is open again"
-        description="The new passphrase protects the same key, so every data source keeps working — nothing was re-encrypted and nothing needs reconnecting."
+        description="The new passphrase protects the same key, so every connection keeps working — nothing was re-encrypted and nothing needs reconnecting."
         onClose={onClose}
         width="min(520px, 100%)"
         actions={<Button small onClick={onClose}>Done</Button>}
@@ -234,7 +234,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
     return (
       <AppDialog
         title="The vault was rebuilt"
-        description="Set a new vault passphrase, then reconnect each data source."
+        description="Set a new vault passphrase, then reconnect each connection."
         onClose={onClose}
         width="min(560px, 100%)"
         actions={<Button small onClick={onClose}>Done</Button>}
@@ -243,8 +243,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
           <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
             Your transactions, accounts and their settings are unchanged.{' '}
             {outcome.connections_needing_relink === 1
-              ? 'One data source needs reconnecting.'
-              : `${outcome.connections_needing_relink} data sources need reconnecting.`}
+              ? 'One connection needs reconnecting.'
+              : `${outcome.connections_needing_relink} connections need reconnecting.`}
           </p>
           {outcome.also_locked_out?.length ? (
             <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
@@ -284,7 +284,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
   return (
     <AppDialog
       title="Can’t open your vault?"
-      description="The vault protects your data-source credentials. Your transactions and accounts are not encrypted and are never affected by anything on this screen."
+      description="The vault protects your data provider credentials. Your transactions and accounts are not encrypted and are never affected by anything on this screen."
       onClose={onClose}
       width="min(560px, 100%)"
       actions={<Button variant="ghost" small onClick={onClose}>Close</Button>}
@@ -318,7 +318,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                   : 'Another member holds a working unlock method, so nothing has to be destroyed.'}{' '}
                 Choose a new passphrase here and ask
                 {otherNames.length === 1 ? ` ${otherNames[0]}` : ' one of them'} to approve it in Vault
-                settings. No credential changes and no data source is reconnected.
+                settings. No credential changes and no connection is reconnected.
               </p>
               {/* The fields sit in the rung, exactly as the recovery code's do below it. They used to be
                   a sentence pointing at the Connections tab — which had no such control while the vault
@@ -363,7 +363,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
             <Rung title="Use your recovery code">
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
                 This opens the vault and sets a new passphrase in one step. The key behind your
-                credentials does not change, so every data source keeps working.
+                credentials does not change, so every connection keeps working.
               </p>
               {/* Enter walks the three fields and opens the vault from the last — recovery is one
                   operation, so it is one keyboard run rather than three fields and a reach for the
@@ -421,10 +421,10 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
             <Rung title="Last resort">
               <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>
                 <strong>Your transactions, accounts, categories and rules are kept.</strong> What is
-                destroyed is the stored credential for each data source, so{' '}
+                destroyed is the stored credential for each connection, so{' '}
                 {preview?.connections === 1
-                  ? 'one data source will need reconnecting'
-                  : `${preview?.connections ?? 0} data sources will need reconnecting`}
+                  ? 'one connection will need reconnecting'
+                  : `${preview?.connections ?? 0} connections will need reconnecting`}
                 . Their accounts, mappings and history stay where they are. This cannot be undone.
               </p>
               {/* The consequence that replaces the old refusal. There is one key per workspace, so this
@@ -434,7 +434,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5, color: 'var(--warning)' }}>
                   This also ends {nameList(otherNames)}’s access — the vault has one key, shared by
                   everyone who can open it. {otherNames.length === 1 ? 'They' : 'They'} will need to set a
-                  new vault passphrase afterwards, and the data sources will need reconnecting once.
+                  new vault passphrase afterwards, and the connections will need reconnecting once.
                   If {otherNames.length === 1 ? `${otherNames[0]} is` : 'any of them are'} reachable,
                   the option above costs nothing.
                 </p>

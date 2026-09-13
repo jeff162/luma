@@ -71,7 +71,7 @@ def _https_setup_task(request: Request | None) -> dict | None:
         "title":       "Set up HTTPS",
         "description": (
             "This server is reached over the network without HTTPS. "
-            + ("A data source is configured, so bank credentials would cross the network in cleartext — "
+            + ("A data provider is configured, so bank credentials would cross the network in cleartext — "
                "HTTPS is required before connecting."
                if required else
                "Sign-in credentials cross the network in cleartext — configuring HTTPS is recommended.")
@@ -110,7 +110,7 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "id":          "vault_access_requests",
         "title":       "Vault access requested",
         "description": f"{names} {'is' if len(waiting) == 1 else 'are'} waiting for access to the "
-                       "data-source credential vault. Approving lets them connect and sync data sources."
+                       "data provider credential vault. Approving lets them connect and sync data providers."
                        + ("" if crypto_service.is_unlocked(user["id"])
                           else " Unlock the vault first — approving shares the key, so it has to be in hand."),
         "count":       len(waiting),

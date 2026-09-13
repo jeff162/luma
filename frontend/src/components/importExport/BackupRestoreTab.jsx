@@ -262,7 +262,7 @@ export function BackupRestoreTab() {
       setPendingConfirm({
         type: 'credentials',
         title: 'Restore credentials backup?',
-        message: `This will replace the data-source credentials currently stored in ${APP_NAME}${name}. Your accounts and transactions are not touched.`,
+        message: `This will replace the data provider credentials currently stored in ${APP_NAME}${name}. Your accounts and transactions are not touched.`,
         confirmLabel: 'Restore credentials',
         variant: 'warn',
       })
@@ -290,7 +290,7 @@ export function BackupRestoreTab() {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Contains categories, rules, owners, accounts, transactions. No data-source credentials.</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Contains categories, rules, owners, accounts, transactions. No data provider credentials.</div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <Button variant="ghost" disabled={downloading} onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
             <Button variant="ghost" disabled={enabledRecipients.length === 0 || downloading} onClick={startEncryptedBackup}>Generate encrypted backup</Button>
@@ -308,7 +308,7 @@ export function BackupRestoreTab() {
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-            Encrypted data-source credentials back up.
+            Encrypted data provider credentials back up.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
             <Button
@@ -324,7 +324,7 @@ export function BackupRestoreTab() {
               // applies to restoring here — this install's key opens its own backups whatever the
               // passphrase has since become — so the caveat is scoped to somewhere else.
               ? 'Restoring this requires this user\'s current vault passphrase\u2019s. Retain passphrases after a change to allow restoring older backups.'
-              : 'No stored data-source credentials exist to back up.'}
+              : 'No stored data provider credentials exist to back up.'}
           </div>
         </div>
         {backupMsg ? (
@@ -400,7 +400,7 @@ export function BackupRestoreTab() {
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
-            Restore a {APP_NAME} data backup or a data-source credentials backup.
+            Restore a {APP_NAME} data backup or a data provider credentials backup.
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
@@ -448,7 +448,7 @@ export function BackupRestoreTab() {
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {restoreIsCredentials
-                  ? 'Data-source credentials, still encrypted. Restoring replaces the credentials stored here; accounts and transactions are not touched.'
+                  ? 'Data provider credentials, still encrypted. Restoring replaces the credentials stored here; accounts and transactions are not touched.'
                   : restoreInspection.encrypted
                     ? `${restoreInspection.cipher || 'Encrypted'} backup, readable by ${restoreInspection.recipient_count || 0} backup key${restoreInspection.recipient_count === 1 ? '' : 's'}. Restoring replaces all existing data.`
                     : `Readable ${restoreInspection.container === 'zip' ? 'zipped' : 'plain JSON'} backup file. Restoring replaces all existing data.`}

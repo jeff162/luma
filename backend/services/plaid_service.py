@@ -46,8 +46,8 @@ def _get_client(app_config: dict):
     env       = (app_config or {}).get("env", "sandbox")
     if not client_id or not secret:
         raise RuntimeError(
-            "Plaid is not configured. Add your Plaid client ID and secret on the data-source "
-            "Configure card (Accounts → Connections), or in your .env file."
+            "Plaid is not configured. Add your Plaid client ID and secret on the data provider's "
+            "Configure card (Accounts → Connections)."
         )
     configuration = plaid.Configuration(
         host=_ENV_MAP.get(env, plaid.Environment.Sandbox),

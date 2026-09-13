@@ -78,7 +78,7 @@ export function SyncNavItem({ style, activeStyle }) {
     const { failures } = await runSyncAll(freshness.byProvider.map(p => p.provider), { days: 0 })
     if (failures.length) {
       setNotice({
-        title: failures.length === 1 ? 'A data source could not be synced' : 'Some data sources could not be synced',
+        title: failures.length === 1 ? 'A data provider could not be synced' : 'Some data providers could not be synced',
         // Named per provider: with several connected, "sync failed" leaves the user to work out which one
         // — and the others may well have imported fine, which the panel behind this notice still shows.
         description: failures
