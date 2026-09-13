@@ -179,7 +179,10 @@ instruction and fix the drift rather than silently choosing the looser version.
   trouble has been — long interactive sessions and a conclusion drawn from one screenshot. Ask for a
   headed session when it would genuinely help rather than grinding on: something that cannot be
   isolated another way, or an attempt or two that have already failed. Say what it would settle.
-  `scripts/check_backend_and_frontend.sh` runs the whole gate and is the habitual command.
+  `scripts/check_backend_and_frontend.sh` runs the whole gate and is the habitual command. To run one spec,
+  put its path before the project flag — `npx playwright test tests/ui/<spec>.js --config=playwright.config.js
+  --project=app` — since `--project app tests/ui/<spec>.js` reads the path as a second project name and
+  exits with "Project(s) not found" before running anything.
 
 - If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
   the specific processes or ports launched for that session. Never use broad process-name kills.

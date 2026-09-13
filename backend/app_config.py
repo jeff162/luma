@@ -223,7 +223,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="use_log_files",
         env_var="LUMA_USE_LOG_FILES",
         label="Launcher log files",
-        help="Writes backend and frontend launcher logs on each start. Read by the start scripts before the app runs.",
+        help="Saves the start scripts' backend and frontend terminal output beside the scripts, overwritten on each start. Read by the start scripts before the app runs. The server's own luma.log, beside the data, is written either way.",
         default="false",
         advanced=True,
     ),

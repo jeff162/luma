@@ -61,13 +61,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend import app_config, runtime_config, spa
+from backend import app_config, app_log_file, runtime_config, spa
 from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service
-from backend.routers import accounts, app_control, connections, auth, categories, currency, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
+from backend.routers import accounts, app_control, connections, auth, categories, currency, diagnostics, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
 # Starlette's own default, passed explicitly below so the session's lifetime is stated here rather than
@@ -271,7 +271,13 @@ async def lifespan(app: FastAPI):
     # The control DB is already initialized (configuration was resolved from it below); this readies the
     # financial database so no request handling starts against partial state.
     init_db()
-    yield
+    # A copy of the server's log beside the data, whatever is or is not capturing its output. After uvicorn
+    # has configured its loggers, which the handler has to sit beside rather than replace (`app_log_file.py`).
+    app_log_file.install()
+    try:
+        yield
+    finally:
+        app_log_file.uninstall()
 
 
 # The control database has to exist before configuration can be resolved out of it, and configuration
@@ -331,6 +337,7 @@ app.include_router(tasks.router,         prefix="/api/tasks",         tags=["tas
 app.include_router(recurring.router,     prefix="/api/recurring",     tags=["recurring"])
 app.include_router(currency.router,      prefix="/api/currency",      tags=["currency"])
 app.include_router(app_control.router,   prefix="/api/app",           tags=["app"])
+app.include_router(diagnostics.router,   prefix="/api/diagnostics",   tags=["diagnostics"])
 
 
 @app.get("/api/health")

@@ -2,10 +2,10 @@
 *Widen to include*: the Rule checkup's one-click fix for a charge that drifted past a rule's amount range.
 
 It moves the bound and re-applies the rule as **one** request. As a rule update followed by a separate
-apply it could stop between the two, and did once in real use: the bound moved, the charge stayed
-unclaimed, and the panel then showed it as a near-edge warning at 0% with nothing to say the fix was half
-done. The test that matters most here is therefore the one that breaks the apply and checks that the bound
-did not move.
+apply it could stop between the two. That is one explanation, never confirmed, for a state a user once
+found: the bound moved, the charge still unclaimed, and the panel showing it as a near-edge warning at 0%.
+The test that matters most here is therefore the one that breaks the apply and checks that the bound did
+not move, since that half-done state is what the single request exists to rule out.
 
 Driven through the API rather than the router function, because the transaction boundary is the property
 under test and only a real request exercises it.
@@ -81,7 +81,7 @@ class RuleWidenTests(unittest.TestCase):
 
     def test_widening_moves_the_bound_and_claims_the_charge_in_one_request(self):
         rule_id = self._rule(amount_max=60.0)
-        # The float a file's 63.40 can arrive as, which is what the finding that exposed this carried.
+        # The float a file's 63.40 can arrive as, which is what the demo's Metro Water charge carried.
         txn_id = self._txn(amount=63.39999999999999)
         self.assertEqual(self.client.get("/api/rules/range-drift").json()["counts"], {"rule_range": 1})
 
@@ -95,8 +95,8 @@ class RuleWidenTests(unittest.TestCase):
                          "nothing is left for the checkup to report, not even a near-edge warning")
 
     def test_a_failure_part_way_leaves_the_rule_as_it_was(self):
-        # All or nothing. Were the bound written in its own transaction, it would survive a failed apply —
-        # exactly the half-done state that reached a user.
+        # All or nothing. Were the bound written in its own transaction, it would survive a failed apply,
+        # leaving the half-done state a user once found by some route.
         rule_id = self._rule(amount_max=60.0)
         txn_id = self._txn(amount=63.40)
         with mock.patch("backend.routers.rules._apply_rule_to_existing", side_effect=RuntimeError("apply failed")):

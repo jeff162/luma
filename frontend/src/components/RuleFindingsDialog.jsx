@@ -435,7 +435,7 @@ export default function RuleFindingsDialog({ onClose, onEditRule, onRulesChanged
 
   // Move the bound out to this charge and re-apply the rule, which is the whole maintenance action the
   // finding exists to offer. One request, so it cannot stop halfway: as a rule update followed by a
-  // separate apply, a failure between them left the bound moved and the charge unclaimed. The server
+  // separate apply, a failure between them could leave the bound moved and the charge unclaimed. The server
   // rounds the bound outwards and preserves hand categorizations (`widen_rule_range`). What happens to
   // the rule's series follows on its own — the row takes the category back, and the detector claims it on
   // its next pass.

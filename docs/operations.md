@@ -91,6 +91,20 @@ sets rather than by asking whether stdout is a terminal — that question also a
 and diverting output whenever something captures it would take the diagnostics away from the smoke
 harness, which captures them precisely to explain a failed launch.
 
+**The server also keeps its own log, in every topology.** `luma.log` beside the data database is a *copy*
+of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather than a
+redirect, so the terminal, the systemd journal and `docker logs` keep everything they received before. It
+holds warnings and errors, a crashed request's traceback included, a line each time the server starts, and
+access lines only for requests that failed; successful requests stay out, or routine polling would soon
+rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
+uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
+genuine failures out the same way. It rotates at 1 MB and keeps one previous file (`luma.log.1`). What it
+cannot hold is anything before the application starts, such as a missing dependency or a crash during
+import: that stays in the output alone, which on macOS means `luma-desktop.log`. Settings → **Error log**
+reads the errors back out of it, for administrators only, since a traceback can carry transaction details
+and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest. `LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals'
+output beside the scripts.
+
 ## LAN server
 
 **This shape is documented, not shipped.** No Caddyfile and no systemd unit are in the repository; the
@@ -231,6 +245,7 @@ What exists today, and what each actually tells you:
 | The data-location line in the navigation pane | which databases *this* copy is open on |
 | The connection sync log (Import / Export → Import → Data connections → **Sync log**) | what a data source did, and why a sync failed |
 | `luma-desktop.log` | startup output where there is no terminal |
+| `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing
 else on screen distinguishes a checkout pointed at a restored backup from one pointed at real data. The

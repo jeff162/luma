@@ -10,6 +10,7 @@ import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../li
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Toggle, Tooltip } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import ErrorLogSection from '../components/ErrorLogSection.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -3122,6 +3123,19 @@ export default function Settings() {
               {...bindSection('environment')}
             >
               <ConfigurationSection authEnabled={authEnabled} currentUser={currentUser} />
+            </StickySection>
+          )}
+
+          {/* Behind the same gate as Configuration: a traceback can carry transaction details and this
+              installation's file paths. */}
+          {canManageEnvironment && (
+            <StickySection
+              title="Error log"
+              description="Errors the server recorded, newest first, for when something did not work and the screen did not say why."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('errorLog')}
+            >
+              <ErrorLogSection />
             </StickySection>
           )}
 

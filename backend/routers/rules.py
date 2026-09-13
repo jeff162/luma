@@ -1028,11 +1028,11 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
     """Move one amount bound out to a charge and re-apply the rule, in one transaction — the Rule checkup's
     *Widen to include*.
 
-    It used to be two requests from the browser, a rule update and then an apply, and a failure between
-    them left the bound moved and the charge still unclaimed. Nothing in the panel could say so: the
-    charge then sat at 0% inside the new bound and read as a near-edge warning rather than as a fix half
-    done, and a retry could not reproduce how it got there. Both halves under one `get_db()` make it all
-    or nothing, whatever interrupts it.
+    It used to be two requests from the browser, a rule update and then an apply. A user once found the
+    bound moved and the charge still unclaimed, which the panel showed as a near-edge warning at 0% rather
+    than as a fix half done, and retrying could not reproduce it. The cause was never established: a
+    failure between the two requests produces exactly that state, and so would a later write putting the
+    category back. Both halves under one `get_db()` rule out the first, whatever interrupts it.
 
     The bound is rounded outwards to the cent here, from the decimal the caller sent rather than from its
     float, so the charge the finding names is inside the result. Hand categorizations are preserved, as the

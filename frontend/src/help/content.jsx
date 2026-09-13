@@ -2761,6 +2761,11 @@ export const HELP_TOPICS = [
             override would change.
             See <HelpLink to="/help/configuration">configuration settings</HelpLink>.
           </li>
+          <li>
+            <strong>Error log</strong> lists the errors the server recorded, newest first, with the detail
+            behind each. It is the place to look when something did not work and the screen did not say
+            why. Like Configuration, it is hidden from users who are not administrators.
+          </li>
         </ul>
       </>
     ),
@@ -2863,7 +2868,7 @@ export const HELP_TOPICS = [
       <>
         <p>
           Almost everything is stored in a local SQLite database (attachments are stored in a documents directory next
-          to the database file). Accounts, transactions, categories, tags are all stored in{' '}
+          to the database file, and a log of errors sits beside it). Accounts, transactions, categories, tags are all stored in{' '}
           <strong>plain text</strong>. Protection comes from the computer's security (disk encryption,
           OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
           A sign-in password is available to restrict <em>network</em> access to the app.

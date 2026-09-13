@@ -310,8 +310,8 @@ describe('RuleFindingsDialog', () => {
   })
 
   it('widens the bound and re-applies the rule in one request', async () => {
-    // Both halves or neither. As a rule update followed by a separate apply, a failure between the two left
-    // the bound moved and the charge unclaimed, and the panel then showed it as a near-edge warning.
+    // Both halves or neither. As a rule update followed by a separate apply, a failure between the two could
+    // leave the bound moved and the charge unclaimed, which the panel would then show as a near-edge warning.
     const { onRulesChanged } = renderDialog([], { drift: [DRIFT] })
     await userEvent.click(await screen.findByText('Widen to include'))
     await waitFor(() => expect(txnMutations.widenRuleRange).toHaveBeenCalledWith('broad', 'max', 224))

@@ -504,9 +504,10 @@ Important behavior:
   than a table of its own. A charge missing a bound by up to 25% is a **warning** with a one-click
   *Widen to include* (the bound has one right answer; the row then takes the category back, and the
   detector returns it to the series on its next pass). **Widening is one transaction** (`POST
-  /rules/{id}/widen`): as a rule update followed by a separate apply, a failure between the two left the
-  bound moved and the charge unclaimed, which the panel then showed as a near-edge warning at 0% with
-  nothing to say the fix was half done. One sitting within 10% *inside* a bound is the
+  /rules/{id}/widen`), so it cannot stop between moving the bound and applying the rule. As two requests
+  it could, and a user once found exactly that state (the bound moved, the charge unclaimed, shown as a
+  near-edge warning at 0%) without the cause ever being established. One sitting within 10% *inside* a
+  bound is the
   same warning one occurrence earlier, **information**, with no widen offered since the rule still claims
   it. A row already carrying the rule's own category is never reported, and each rule reports at most its
   three most recent near-misses, since a drifted range says one thing however many rows hit it — a

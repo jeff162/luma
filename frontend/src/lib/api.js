@@ -272,6 +272,8 @@ export const api = {
   // Stops the server process itself, not the session. Only present when the desktop launcher owns the
   // process; elsewhere the backend answers 404 and the UI never offers it.
   shutdownApp: () => request('/app/shutdown', { method: 'POST' }),
+  // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
+  getErrorLog: () => request('/diagnostics/log/errors'),
   listUsers: () => request('/auth/users'),
   createUser: (data) => request('/auth/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
