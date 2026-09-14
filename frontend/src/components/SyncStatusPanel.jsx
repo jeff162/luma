@@ -72,6 +72,13 @@ function ConnectionRow({ institution, added = 0, requests = 0, running, error })
 
 function FinishedRow({ provider, state }) {
   const r = state.result || {}
+  // No skipped count. On a routine sync it is almost entirely rows already in the ledger — each sync re-asks
+  // for recent days on purpose — and the rest (an account mapped to skip, one awaiting a mapping, zero-amount
+  // rows) are either the user's own choice or already flagged on the connection card. A bare total next to
+  // "0 added" read as something having gone wrong; the sync log keeps the breakdown.
+  const outcome = r.added || r.updated
+    ? `${r.added || 0} added${r.updated ? `, ${r.updated} updated` : ''}`
+    : 'nothing new'
   const note = state.paused?.length
       ? 'Paused on the provider’s request limit — more history arrives on a later sync'
       : state.incomplete
@@ -82,7 +89,7 @@ function FinishedRow({ provider, state }) {
       <div style={{ display: 'flex', gap: 10 }}>
         <span style={{ flex: 1 }}>{provider}</span>
         <span style={{ color: 'var(--muted)' }}>
-          {r.added || 0} added{r.updated ? `, ${r.updated} updated` : ''}{r.skipped ? `, ${r.skipped} skipped` : ''}
+          {outcome}
         </span>
       </div>
       <div style={{ marginTop: 4, fontSize: 11, color: 'var(--muted)' }}>{note}</div>

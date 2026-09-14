@@ -1574,7 +1574,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                       // Named for what the user sees and what to do about it. Retrying now would not help
                       // and would push the provider toward cutting the connection off entirely.
                       ? `Synced ${ss.result.added} transactions — exhausted ${providerLabel(p.provider)} limit on requests/day. History retrieval will restart on the next sync after the limit resets.`
-                      : `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}, ${ss.result.skipped} skipped`}
+                      // No skipped count, for the reason given on the sync panel's finished row: it is almost
+                      // all rows already held, and a bare total beside "0 added" reads as a failure.
+                      : ss.result.added || ss.result.updated || ss.result.removed
+                        ? `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}`
+                        : 'Sync complete — nothing new'}
                 </div>
               ) : null}
 
