@@ -2857,7 +2857,7 @@ export const HELP_TOPICS = [
     section: 'settings',
     title: 'Configuration settings',
     surfaces: ['Configuration (Settings)'],
-    summary: `Every setting has a working default; configuration is not required to get started. A .env file overrides the handful of values that need to be known before the app starts (ports, where the database files live).`,
+    summary: `Every setting has a working default, so nothing needs configuring to get started. A .env file overrides the handful of values that have to be known before the app starts, such as the port and where the database files live.`,
     body: () => (
       <>
         <p>
@@ -2865,7 +2865,7 @@ export const HELP_TOPICS = [
           default, so a plain installation needs <strong>no configuration file at all</strong>.
         </p>
         <p>
-          Three settings worth knowing about:
+          Two settings worth knowing about:
         </p>
         <ul>
           <li>
@@ -2875,15 +2875,17 @@ export const HELP_TOPICS = [
             confirmation and follow it automatically.
           </li>
           <li>
-            <strong>Backend port</strong> needs to be an unused port and is used by the frontend
-            to connect to the backend. Users do not need to be aware of this port.
-          </li>
-          <li>
-            <strong>Frontend port</strong> is the port the browser connects to.
+            <strong>Port</strong> is the port the browser connects to, 8010 unless changed. A
+            downloaded copy of {APP_NAME} uses this one port for everything, and if another program already
+            holds it, starts on a free port instead and reports the address it chose. Under Docker the
+            browser port is <strong>Port (Docker)</strong> instead.
           </li>
         </ul>
         <p>
-          Most users do not need to touch the settings under <strong>Advanced</strong>.
+          Most users do not need to touch the settings under <strong>Advanced</strong>. One of them,
+          {' '}<strong>Backend port</strong>, only matters when {APP_NAME} runs from source code or under
+          Docker, where the interface is served separately and passes requests on to the backend on that
+          port. A downloaded copy does not use it.
         </p>
         <p>
           Each setting indicates how the current value is derived:
@@ -2903,9 +2905,24 @@ export const HELP_TOPICS = [
             force &mdash; an override always wins, and always takes effect at the next restart.
           </li>
         </ul>
+
+        <HelpHeading anchor="env-file">The .env file</HelpHeading>
         <p>
-          The <code>.env</code> file lives beside the
-          application. If it is present the screen indicates where it lives.
+          An override is a line in a plain text file named <code>.env</code>, one setting per line in the
+          form <code>NAME=value</code> &mdash; for example <code>FRONTEND_PORT=8020</code>. Each setting on the
+          Configuration screen shows the name to use. Changes take effect the next time {APP_NAME} starts.
+        </p>
+        <p>
+          The screen shows the exact path the file is read from, whether or not the file exists yet. Where
+          that is depends on how {APP_NAME} was installed: beside the program for a portable download, in
+          <code> ~/Library/Application Support/Luma</code> for the macOS app, and at the top of the
+          folder for a copy run from source code.
+        </p>
+        <p>
+          <code>env_example.txt</code> lists every setting with an explanation, marked with the ways of running
+          {' '}{APP_NAME} it applies to. It comes with every download (beside the program, or in the macOS disk
+          image) and sits at the top of the source code folder. Copying it to <code>.env</code> and removing
+          the <code>#</code> in front of a setting turns that setting on.
         </p>
       </>
     ),

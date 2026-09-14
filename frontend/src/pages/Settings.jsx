@@ -1547,8 +1547,8 @@ function orderedConfigRows(settings) {
 }
 
 /*
- * Most of these settings are read once at startup by an operator who will never look at them; the three
- * an ordinary install might change (the data directory and the two ports) would otherwise be buried
+ * Most of these settings are read once at startup by an operator who will never look at them; the two
+ * an ordinary install might change (the data directory and the port) would otherwise be buried
  * among them. A setting is filed as advanced by declaration rather than by whether it currently holds
  * its default — placement that moved with the value would make a row people saw last week vanish this
  * week — but one actually set in the environment is surfaced anyway, since overriding it is direct
@@ -1754,9 +1754,11 @@ function ConfigurationSection({ authEnabled, currentUser }) {
           <InsetPanel style={{ gap: 8 }}>
             <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Configuration variables</SectionEyebrow>
             <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
-              The defaults are suitable for many installations. Settings can be overridden via a
-              <code>.env</code> file in the installation directory. This is useful mainly for running
-              multiple copies on one machine from the same installation. Changes require a restart.
+              The defaults are suitable for many installations. Settings can be overridden with a
+              {' '}<code>.env</code> file at the path below, one <code>NAME=value</code> line per setting;
+              {' '}<code>env_example.txt</code>, included with every download, lists them all. This is useful
+              mainly for changing the port or running several copies on one machine. Changes require a
+              restart.
             </p>
             <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
               {config.env_file_present

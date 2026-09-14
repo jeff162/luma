@@ -54,14 +54,15 @@ export default defineConfig(({ mode }) => {
     throw new Error('No application version: set VITE_APP_VERSION, or a "version" in frontend/package.json.')
   }
 
-  const frontendPort = Number(env.FRONTEND_PORT || 5173)
+  // Defaults match DEFAULT_FRONTEND_PORT / DEFAULT_BACKEND_PORT in backend/runtime_config.py.
+  const frontendPort = Number(env.FRONTEND_PORT || 8010)
   // Loopback unless FRONTEND_HOST says otherwise. The dev server used to bind every interface, which put
   // it on the LAN by default — and an esbuild advisory (GHSA-67mh-4wv8-2f99) lets any page the developer
   // visits read from it, so the wide bind is worth opting into rather than out of. `localhost` and not
   // `127.0.0.1`: the browser's origin becomes the WebAuthn Relying Party id, and an address is not a
   // domain, so the numeric form disables passkey vault slots in development.
   const frontendHost = env.FRONTEND_HOST || 'localhost'
-  const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8000}`
+  const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8011}`
 
   return {
     plugins: [react()],

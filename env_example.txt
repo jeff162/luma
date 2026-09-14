@@ -1,0 +1,129 @@
+# Optional Luma configuration overrides
+#
+# No .env file is needed: every setting has a working default. To override one, make a copy of this file
+# named .env in the place listed below, and remove the # from the lines to change. Each setting is one
+# NAME=value line. Changes take effect the next time Luma starts.
+#
+# Where .env is read from:
+#   Portable download (Windows, Linux)   the folder holding the luma program
+#   macOS app                            ~/Library/Application Support/Luma
+#   Source checkout, Docker              the top folder of the checkout
+#
+# Settings -> Configuration shows the exact path (whether or not the file exists yet), every effective
+# value, and where each value came from.
+#
+# Not every setting applies to every way of running Luma. Each one is marked:
+#   [all]       every setup
+#   [download]  a downloaded build: the portable download or the macOS app
+#   [source]    running from a source checkout with the start scripts
+#   [docker]    running with docker-compose
+#
+# Keep this file plain ASCII: it ships in the downloads and is often read in a terminal.
+
+# ------------------------------------------------------------------------------
+# 1. Where the data lives
+# ------------------------------------------------------------------------------
+
+# DATA_DIR [all]
+# The folder holding both databases (luma-data.db, luma-control.db) and the documents folder. Pointing a
+# second copy of Luma at a different folder is how two installations share one machine.
+# Default:
+#   Portable download   the folder holding the luma program (a relative path is taken from there too)
+#   macOS app           ~/Library/Application Support/Luma
+#   Source checkout     the folder the backend is started from
+#   Docker              /data inside the container, set by docker-compose.yml (not changeable here)
+# DATA_DIR=
+
+# DB_PATH, CONTROL_DB_PATH [all]
+# One database file each, overriding DATA_DIR for that file. Needed only where a database does not use
+# the default file name, which includes installations older than DATA_DIR.
+# DB_PATH=
+# CONTROL_DB_PATH=
+
+# ------------------------------------------------------------------------------
+# 2. Ports
+# ------------------------------------------------------------------------------
+#
+# The browser always connects to the frontend port. A downloaded build is one program on that one port.
+# Running from source or under Docker adds a separate frontend server, which passes API requests on to
+# the backend port behind it.
+
+# FRONTEND_PORT [download] [source]
+# The port the browser connects to (under Docker, FRONTEND_DOCKER_PORT plays this part). If it is busy, a
+# downloaded build starts on a free port and reports which: in the terminal, or in luma-desktop.log beside
+# the data for the macOS app. The start scripts refuse to start instead, naming the busy port.
+# Default: 8010
+# FRONTEND_PORT=8010
+
+# BACKEND_PORT [source] [docker]
+# The port the backend listens on behind the frontend server. Under Docker, the port the backend is also
+# published on. A downloaded build does not use it.
+# Default: 8011
+# BACKEND_PORT=8011
+
+# FRONTEND_HOST [source]
+# Address the development frontend listens on. Loopback by default, so other devices cannot reach it.
+# 0.0.0.0 makes it reachable from a phone or another machine on the network. A downloaded build always
+# accepts connections from this computer only. Default: localhost
+# FRONTEND_HOST=0.0.0.0
+
+# FRONTEND_DOCKER_PORT [docker]
+# The port the browser connects to under Docker. Default: 3000
+# FRONTEND_DOCKER_PORT=3000
+
+# ------------------------------------------------------------------------------
+# 3. Sessions and deployment
+# ------------------------------------------------------------------------------
+
+# SESSION_COOKIE_NAME [all]
+# Keeps browser sessions apart when two installations are used from the same browser.
+# Default: derived from the control database path on first run, then stored
+# SESSION_COOKIE_NAME=
+
+# SESSION_SECRET [all]
+# Signs session cookies. Generated on first run and stored in the control database; set here only to pin
+# a specific value, for example to keep sessions valid across a rebuilt control database. Changing it
+# signs everyone out.
+# SESSION_SECRET=
+
+# SESSION_COOKIE_SECURE [source] [docker]
+# Sends the session cookie only over HTTPS. For a server installation behind a TLS-terminating reverse
+# proxy. A downloaded build serves plain HTTP to this computer only and must leave it off. Default: false
+# SESSION_COOKIE_SECURE=false
+
+# CORS_ORIGINS [source] [docker]
+# Other web origins whose pages may call this API from a browser, with cookies attached. Needed only for
+# a deployment that serves the interface and the API from different origins. Default: empty
+# CORS_ORIGINS=https://app.example.invalid
+
+# APP_NAME [source] [docker]
+# Display name, for white-labelling. The interface takes its name from VITE_APP_NAME when it is built,
+# so this is only meaningful alongside a build of the interface. Default: Luma
+# APP_NAME=Luma
+
+# ------------------------------------------------------------------------------
+# 4. Launcher and developer options
+# ------------------------------------------------------------------------------
+
+# LUMA_DEVELOPER_OPTIONS [all]
+# Shows developer-only options in Settings, including destructive reset tools. Not needed for normal use.
+# LUMA_DEVELOPER_OPTIONS=true
+
+# LUMA_USE_LOG_FILES [source]
+# Saves the start scripts' backend and frontend terminal output beside the scripts, overwritten on each
+# start. The server's own luma.log, beside the data, is written either way. Default: false
+# LUMA_USE_LOG_FILES=false
+
+# LUMA_BACKEND_READY_TIMEOUT [source]
+# Seconds the start scripts wait for the backend before starting the frontend anyway. Worth raising if
+# the first run's dependency installation is slow. Default: 180
+# LUMA_BACKEND_READY_TIMEOUT=180
+
+# VITE_API_PROXY_TARGET [source]
+# Where the development frontend sends API requests. Derived from BACKEND_PORT when unset.
+# VITE_API_PROXY_TARGET=http://localhost:8011
+
+# LUMA_ENV_FILE [source] cannot be set in this file, because it chooses which file is read. Set in the
+# environment before starting the backend, it points the backend (only) at a different override file;
+# the start scripts and the development frontend still read this one for their ports. The browser test
+# harness uses it to run against throwaway databases.

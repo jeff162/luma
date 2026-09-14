@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 import { AUTH_STATE_PATH } from './tests/authState.js'
 
-// Dedicated, hard-coded E2E ports kept clear of the usual dev ports (5174 / 8001) so the isolated
+// Dedicated, hard-coded E2E ports kept clear of the default dev ports (8010 / 8011) so the isolated
 // stack never collides with a running dev session. The harness boots its OWN backend (throwaway temp
 // DB, see scripts/run-e2e-backend.sh) + frontend, so `npm run ui:test` is self-contained and never
 // touches the developer's real data. Set PLAYWRIGHT_BASE_URL to instead run against an already-running

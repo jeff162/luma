@@ -46,7 +46,7 @@ if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
 
 $frontendPort = Get-EnvValue $envPath 'FRONTEND_PORT'
 if ([string]::IsNullOrWhiteSpace($frontendPort)) {
-  $frontendPort = '5173'
+  $frontendPort = '8010'
 }
 
 if (Test-PortInUse ([int]$frontendPort)) {

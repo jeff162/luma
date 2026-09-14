@@ -2,7 +2,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-8011}:8000"
     volumes:
       - ./data:/data
     # Optional: an override file is honored when present, but the app runs on defaults without one.

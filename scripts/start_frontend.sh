@@ -54,7 +54,7 @@ PY
 }
 
 FRONTEND_PORT="$(get_env_value "$ENV_PATH" FRONTEND_PORT)"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+FRONTEND_PORT="${FRONTEND_PORT:-8010}"
 
 if port_in_use "$FRONTEND_PORT"; then
   echo "Frontend port $FRONTEND_PORT is already in use. Stop the running frontend before starting another one."

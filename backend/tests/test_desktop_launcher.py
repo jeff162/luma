@@ -149,6 +149,22 @@ def test_a_busy_configured_port_falls_back_instead_of_refusing_to_start():
     assert 1024 < chosen < 65536
 
 
+def test_the_browser_port_is_the_frontend_port_not_the_backend_port():
+    """One process serves the interface and the API, so the port the browser opens is `FRONTEND_PORT` —
+    the name that means "the browser's port" when running from source as well. `BACKEND_PORT` names the
+    internal hop behind a separate frontend, which this build does not have, so it must not be read."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as first, \
+         socket.socket(socket.AF_INET, socket.SOCK_STREAM) as second:
+        # Held open together so the two are guaranteed distinct, then released so both are free.
+        first.bind((desktop.BIND_HOST, 0))
+        second.bind((desktop.BIND_HOST, 0))
+        frontend, backend = first.getsockname()[1], second.getsockname()[1]
+    values = {"frontend_port": str(frontend), "backend_port": str(backend)}
+
+    with mock.patch.object(desktop.app_config, "value_of", side_effect=values.__getitem__):
+        assert desktop._choose_port() == frontend
+
+
 def test_ctrl_c_exits_cleanly_and_releases_the_lock():
     """uvicorn re-raises SIGINT into the caller after its own graceful shutdown, so the advertised way
     to stop the app arrives as an exception. Letting it escape reports a normal exit as a crash."""

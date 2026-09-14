@@ -385,13 +385,14 @@ class ConfigGroupingTests(unittest.TestCase):
     def test_the_settings_an_ordinary_install_might_change_are_not_advanced(self):
         with _isolated_control_db():
             rows = {row["key"]: row for row in app_config.effective_config()}
-        for key in ("data_dir", "backend_port", "frontend_port"):
+        for key in ("data_dir", "frontend_port"):
             self.assertFalse(rows[key]["advanced"], f"{key} is one of the few worth leading with")
 
     def test_startup_and_deployment_knobs_are_advanced(self):
         with _isolated_control_db():
             rows = {row["key"]: row for row in app_config.effective_config()}
-        for key in ("session_secret", "cors_origins", "developer_options", "backend_ready_timeout"):
+        # backend_port included: a downloaded build ignores it, so it is not one to lead with.
+        for key in ("session_secret", "cors_origins", "developer_options", "backend_ready_timeout", "backend_port"):
             self.assertTrue(rows[key]["advanced"])
 
     def test_placement_does_not_move_when_a_value_does(self):

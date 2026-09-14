@@ -84,7 +84,7 @@ if (-not (Test-Path $venvPython)) {
 
 $backendPort = Get-EnvValue $envPath 'BACKEND_PORT'
 if ([string]::IsNullOrWhiteSpace($backendPort)) {
-  $backendPort = '8000'
+  $backendPort = '8011'
 }
 
 if (Test-PortInUse ([int]$backendPort)) {

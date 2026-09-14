@@ -71,6 +71,10 @@ Press Ctrl+C in the terminal window to stop it.
 Data lives in this folder, in luma-data.db and luma-control.db and the documents folder, and stays here when the application is
 closed. Moving or copying this whole folder moves the data with it.
 
+No configuration is needed. To change a setting such as the port (8010 unless changed), copy
+env_example.txt to a file named .env in this folder and edit it. Settings -> Configuration shows every
+effective value and where it came from.
+
 Options:
   --no-browser    start without opening a browser, just print the address
 
@@ -87,6 +91,10 @@ Press Ctrl+C in the terminal window to stop it.
 Data lives in the per-user application data directory for this operating system, not in this folder, so
 it survives replacing or moving the application. Settings -> Configuration reports the exact location in
 use. Setting DATA_DIR overrides it.
+
+No configuration is needed. To change a setting such as the port (8010 unless changed), copy
+env_example.txt to a file named .env in that same per-user directory and edit it. Settings -> Configuration
+shows the exact path, every effective value, and where each came from.
 
 Options:
   --no-browser    start without opening a browser, and just print the address
@@ -120,6 +128,10 @@ the network: the server accepts connections from this machine only.
 Data lives in ~/Library/Application Support/{DEFAULT_APP_NAME}, and stays there when the application is
 replaced or deleted. Startup messages, including the address in use, are written to luma-desktop.log in
 that same folder; an application started from Finder has no terminal to print them to.
+
+No configuration is needed. To change a setting such as the port (8010 unless changed), copy
+env_example.txt from this disk image to a file named .env in that same folder and edit it. Settings ->
+Configuration shows every effective value and where it came from.
 
 To stop it, quit {DEFAULT_APP_NAME} from the Dock, or press Command-Q. Either shuts the server down
 cleanly. "Shut down {DEFAULT_APP_NAME}", at the bottom of the navigation panel inside the app, does the
@@ -316,6 +328,12 @@ def _package(built: Path, form: str) -> Path:
 # a conveyed copy and is still owed its license. It is also the form every packager and license scanner
 # looks for, none of which open the app and click About.
 LICENSE_FILE = ROOT / "LICENSE"
+# The commented list of every override, shipped as-is beside the README: a downloaded copy has no other
+# place to learn what a `.env` can say. One file for every way of running the app, each setting marked
+# with where it applies, so the kit and the repository cannot disagree. Named without a leading dot, and
+# the same in both places: Finder and most Linux file managers hide dot-files, so `.env_example` was
+# invisible in exactly the disk image meant to hand it over.
+ENV_EXAMPLE_FILE = ROOT / "env_example.txt"
 
 
 def _package_zip(executable: Path, form: str) -> Path:
@@ -352,6 +370,7 @@ def _package_zip(executable: Path, form: str) -> Path:
         add(executable.name, executable.read_bytes(), 0o755)
         add("README.txt", READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED, 0o644)
         add("LICENSE", LICENSE_FILE.read_text(encoding="utf-8"), 0o644)
+        add(ENV_EXAMPLE_FILE.name, ENV_EXAMPLE_FILE.read_text(encoding="utf-8"), 0o644)
 
     return archive
 
@@ -374,6 +393,7 @@ def _package_disk_image(app: Path, form: str) -> Path:
         (staging / "Applications").symlink_to("/Applications")
         (staging / "README.txt").write_text(READ_ME_MACOS)
         shutil.copyfile(LICENSE_FILE, staging / "LICENSE")
+        shutil.copyfile(ENV_EXAMPLE_FILE, staging / ENV_EXAMPLE_FILE.name)
 
         _run(
             [

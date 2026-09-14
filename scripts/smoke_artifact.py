@@ -44,7 +44,7 @@ DIST_DIR = ROOT / "dist"
 # runners — while the launcher binds `127.0.0.1`, which would present as the app never starting.
 HEALTH_HOST = "127.0.0.1"
 # Not the default port: a smoke run should fail because the artifact is broken, not because something
-# else on the machine already holds 8000. The launcher falls back to an ephemeral port when its
+# else on the machine already holds 8010. The launcher falls back to an ephemeral port when its
 # configured one is busy, so a collision here would look like a timeout rather than a conflict.
 SMOKE_PORT = 8765
 STARTUP_TIMEOUT_SECONDS = 120.0
@@ -172,7 +172,8 @@ def _environment(home: Path, local_appdata: Path) -> dict[str, str]:
     """A self-contained environment. Every layer that outranks the built-in default is cleared, since
     the built-in default is the thing under test, and the home directory is redirected so the run
     asserts against a known path and leaves nothing behind."""
-    env = {**os.environ, "BACKEND_PORT": str(SMOKE_PORT)}
+    # FRONTEND_PORT because the launcher serves the browser on it; BACKEND_PORT is ignored by this build.
+    env = {**os.environ, "FRONTEND_PORT": str(SMOKE_PORT)}
     for key in ("DATA_DIR", "DB_PATH", "CONTROL_DB_PATH", "LUMA_ENV_FILE", "XDG_DATA_HOME", "APPDATA"):
         env.pop(key, None)
     env["HOME"] = str(home)

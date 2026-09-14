@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const DEFAULT_FRONTEND_PORT = 5173
+const DEFAULT_FRONTEND_PORT = 8010
 
 function readFrontendPortFromEnvFile() {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url))

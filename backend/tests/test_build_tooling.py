@@ -111,6 +111,14 @@ def test_the_bundled_executable_keeps_its_date_and_its_compression(tmp_path):
     assert (entry.external_attr >> 16) & 0o777 == 0o755
 
 
+def test_the_shipped_env_example_is_plain_ascii():
+    """It ships as a file opened outside a browser — in a terminal, on Windows under an OEM code page — so
+    the rule `check_shipped_ascii.py` applies to the README holds for it too. That check reads Python
+    string literals and cannot see this file, which is why it is asserted here."""
+    text = build_desktop.ENV_EXAMPLE_FILE.read_bytes()
+    assert text.isascii(), [line for line in text.decode("utf-8").splitlines() if not line.isascii()]
+
+
 def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
     """`writestr` given a plain name supplies a mode of 0o600, so `README.txt` and `LICENSE` unpacked
     to something readable only by whoever ran the unzip — a kit extracted into a shared location, or
@@ -127,8 +135,8 @@ def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
     with zipfile.ZipFile(archive) as bundle:
         members = {info.filename: info for info in bundle.infolist()}
 
-    assert set(members) == {"luma/luma", "luma/README.txt", "luma/LICENSE"}
-    for name in ("luma/README.txt", "luma/LICENSE"):
+    assert set(members) == {"luma/luma", "luma/README.txt", "luma/LICENSE", "luma/env_example.txt"}
+    for name in ("luma/README.txt", "luma/LICENSE", "luma/env_example.txt"):
         assert (members[name].external_attr >> 16) & 0o777 == 0o644, name
     # One build, one date across every member — so a reader cannot tell them apart by age.
     assert {info.date_time for info in members.values()} == {(2026, 3, 4, 5, 6, 8)}

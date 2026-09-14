@@ -201,7 +201,7 @@ conventions.
 
 An optional `.env` file overrides the handful of values resolved before the app is running — the ports,
 the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy
-`.env_example` to `.env` to use it.
+`env_example.txt` to `.env` to use it.
 
 ## Platform support
 

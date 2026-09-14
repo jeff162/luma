@@ -55,7 +55,7 @@ Or start them individually:
 
 ```bash
 # backend — from the REPO ROOT, not from backend/, since the app is imported as backend.main
-uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8011
 
 # frontend
 cd frontend
@@ -69,13 +69,13 @@ reaches no user: the product ships as a static bundle served by the backend, so 
 test-runner advisory exists only on a developer machine. The six packages in `dependencies` are the
 ones that reach the browser, and an advisory there has to be acted on rather than explained.
 
-No `.env` file is required — a checkout runs on defaults (backend 8000, frontend 5173, databases in the working directory). A
+No `.env` file is required — a checkout runs on defaults (browser at frontend 8010, backend 8011, databases in the working directory). A
 repo-root `.env` is the override mechanism, and is useful for running against different databases (test v. prod) or different instances running on the same box:
 `BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
 and `DATA_DIR` specifies the database location. A hand-run `uvicorn`
 does not read `.env` for its port, so pass the same value `.env` sets or the frontend will call a
 backend that is not there. **Settings → Configuration** lists every effective value and its current source. Most settings can be set via
-a `.env` file, see `.env_example`.
+a `.env` file, see `env_example.txt`.
 
 For building test scrpits, the `LUMA_ENV_FILE` environment variable (not a `.env` file setting as it points at the `.env` file to use). It redirects **the backend
 only** — `start_luma.sh`, `start_backend.sh`, and `vite.config.js` each read the repo-root `.env` directly

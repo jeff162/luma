@@ -45,7 +45,9 @@ together and opens a browser at it — no second process, no proxy.
 WebAuthn Relying Party id must be a domain, so opening the address form silently disables every passkey
 vault slot with nothing on screen to explain why. Use the printed URL.
 
-**The port is preferred, not guaranteed.** A busy configured port falls back to an ephemeral one, and
+**The port is `FRONTEND_PORT`, and it is preferred, not guaranteed.** The browser's port has that one
+name in every topology; here the single process *is* the frontend, so `BACKEND_PORT` — the internal hop
+behind Vite or nginx elsewhere — is not read. A busy configured port falls back to an ephemeral one, and
 says so rather than doing it silently — a separately started `uvicorn` on the same databases is usually
 what that means. Nothing durable is keyed to the port: cookies are not port-scoped and an RP id is the
 host alone, so a passkey registered on one port still works on the next.

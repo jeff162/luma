@@ -108,11 +108,11 @@ if (-not $powerShellExe) {
 $useLogFiles = Test-Truthy (Get-EnvValue $envPath 'LUMA_USE_LOG_FILES') $false
 $backendPort = Get-EnvValue $envPath 'BACKEND_PORT'
 if ([string]::IsNullOrWhiteSpace($backendPort)) {
-  $backendPort = '8000'
+  $backendPort = '8011'
 }
 $frontendPort = Get-EnvValue $envPath 'FRONTEND_PORT'
 if ([string]::IsNullOrWhiteSpace($frontendPort)) {
-  $frontendPort = '5173'
+  $frontendPort = '8010'
 }
 $backendReadyTimeout = Get-IntValue (Get-EnvValue $envPath 'LUMA_BACKEND_READY_TIMEOUT') 180
 $backendHealthUrl = "http://127.0.0.1:$backendPort/api/health"

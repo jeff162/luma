@@ -128,7 +128,7 @@ if ! venv_is_healthy; then
 fi
 
 BACKEND_PORT="$(get_env_value "$ENV_PATH" BACKEND_PORT)"
-BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_PORT="${BACKEND_PORT:-8011}"
 
 if port_in_use "$BACKEND_PORT"; then
   echo "Backend port $BACKEND_PORT is already in use. Stop the running backend before starting another one."

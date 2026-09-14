@@ -15,8 +15,8 @@ Three decisions carry the design:
   it, but the URL opened is `http://localhost:<port>`. `_passkey_context` in `routers/auth.py` refuses a
   bare IP as a WebAuthn Relying Party id, so opening `http://127.0.0.1:<port>` would silently disable
   every passkey slot with nothing on screen to explain why. The two are not interchangeable here.
-- **A port is a convenience, not an identity.** The configured port is preferred so the URL stays
-  familiar, but a busy port falls back to an ephemeral one rather than refusing to start. Nothing
+- **A port is a convenience, not an identity.** The configured `FRONTEND_PORT` is preferred so the URL
+  stays familiar, but a busy port falls back to an ephemeral one rather than refusing to start. Nothing
   durable is keyed to it: cookies are not port-scoped, and a WebAuthn RP id is the host alone, so a
   different port each launch costs neither the session nor a registered passkey.
 - **A second launch joins the first.** Two processes on one SQLite pair is the failure this avoids, and
@@ -238,8 +238,12 @@ def _port_is_free(port: int) -> bool:
 
 
 def _choose_port() -> int:
+    # `frontend_port`, not `backend_port`. This one process serves the interface as well as the API, so
+    # the port the browser opens is the frontend's — the setting that names the browser's port when
+    # running from source too, where `backend_port` is the internal hop behind Vite. One meaning per name
+    # across every way of running the app is the point; this build simply has no internal hop.
     try:
-        configured = int(app_config.value_of("backend_port"))
+        configured = int(app_config.value_of("frontend_port"))
     except (TypeError, ValueError):
         configured = 0
 

@@ -194,14 +194,20 @@ SETTINGS: tuple[Setting, ...] = (
         key="backend_port",
         env_var="BACKEND_PORT",
         label="Backend port",
-        help="Port the backend listens on, and the port the frontend uses to reach it.",
+        help="Port the backend listens on when the interface is served separately (running from source, or under Docker), which passes API requests on to it. A downloaded build does not use it.",
         default=DEFAULT_BACKEND_PORT,
+        # Advanced since downloads stopped reading it: only a source or Docker install has the internal
+        # hop it names, and the port a person actually looks for is the frontend's.
+        advanced=True,
     ),
     Setting(
         key="frontend_port",
         env_var="FRONTEND_PORT",
-        label="Frontend port",
-        help="Port to connect to from a browser.",
+        # "Port", not "Frontend port": it is the one port a person looks for, and in a downloaded build it is
+        # the only one. The variable keeps its FRONTEND_ name, which pairs it with FRONTEND_HOST and would
+        # break every existing .env to rename.
+        label="Port",
+        help="Port the browser connects to. A downloaded build serves everything on this one port, and starts on a free port instead if it is busy. Under Docker the browser port is Port (Docker).",
         default=DEFAULT_FRONTEND_PORT,
     ),
     Setting(
@@ -214,7 +220,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(
         key="frontend_docker_port",
         env_var="FRONTEND_DOCKER_PORT",
-        label="Frontend port (Docker)",
+        label="Port (Docker)",
         help="Published frontend port when running under Docker.",
         default=DEFAULT_FRONTEND_DOCKER_PORT,
         advanced=True,

@@ -44,8 +44,11 @@ APP_VERSION = "0.3.0"
 DEFAULT_DATA_DIR = "."
 CONTROL_DB_FILENAME = "luma-control.db"
 DB_FILENAME = "luma-data.db"
-DEFAULT_BACKEND_PORT = "8000"
-DEFAULT_FRONTEND_PORT = "5173"
+# Not 8000 or 5173: those are the stock defaults of Django, `python -m http.server` and Vite, so a
+# developer's other projects would be sitting on them. 5000 was rejected too — macOS's AirPlay Receiver
+# holds it by default.
+DEFAULT_BACKEND_PORT = "8011"
+DEFAULT_FRONTEND_PORT = "8010"
 # Loopback, so the dev server is not on the LAN unless someone asks for it. `localhost` rather than
 # `127.0.0.1` because the browser's origin becomes the WebAuthn Relying Party id, and an address is not
 # a domain — binding the numeric form would silently disable passkey vault slots in development.
