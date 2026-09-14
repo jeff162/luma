@@ -447,14 +447,13 @@ def _build_quick_filter_clause(value: str):
     if want("amount"):
         amount = _parse_quick_filter_amount(search_text)
         if amount is not None:
-            magnitude, direction = amount
-            if direction is None:
-                or_clauses.append("ROUND(ABS(t.amount), 2) = ?")
-                params.append(float(magnitude))
-            else:
-                # Stored money out is positive (docs/data-model.md), the reverse of how it is typed.
-                or_clauses.append("ROUND(t.amount, 2) = ?")
-                params.append(float(magnitude if direction == "out" else -magnitude))
+            low_cents, high_cents, direction = amount
+            # Stored money out is positive (docs/data-model.md), the reverse of how it is typed, so a typed sign
+            # picks the stored one and no sign compares the magnitude. Compared in whole cents, where a range's
+            # edges are exact; a float edge like 77.5 is not.
+            stored = {"out": "t.amount", "in": "-t.amount"}.get(direction, "ABS(t.amount)")
+            or_clauses.append(f"CAST(ROUND({stored} * 100) AS INTEGER) BETWEEN ? AND ?")
+            params.extend([low_cents, high_cents])
 
     if not or_clauses:
         # The user explicitly asked for `field:value` but the value did not produce any constraint
@@ -630,7 +629,7 @@ def _parse_quick_filter_year_month(value: str) -> Optional[str]:
 
 def _parse_quick_filter_year(value: str) -> Optional[str]:
     # A bare 4-digit year (1900–2099) jumps to that year — handy for scrolling far back. It still
-    # ORs with the amount match, so "2023" also finds $2023.00; the date-year clause is additive.
+    # ORs with the amount match, so "2023" also finds $2,023.00–$2,023.99; the date-year clause is additive.
     text = (value or "").strip()
     return text if re.fullmatch(r"(?:19|20)\d{2}", text) else None
 
@@ -649,7 +648,7 @@ def _parse_quick_filter_month_day(value: str) -> Optional[str]:
 
 def _parse_quick_filter_month(value: str) -> Optional[str]:
     # A bare 1-12 returns the zero-padded month for an any-year match. It still ORs with the amount
-    # match, so "9" also finds $9.00; the date-month clause is additive.
+    # match, so "9" also finds $9.00–$9.99; the date-month clause is additive.
     text = (value or "").strip()
     if re.fullmatch(r"\d{1,2}", text) and 1 <= int(text) <= 12:
         return f"{int(text):02d}"
@@ -659,8 +658,15 @@ def _parse_quick_filter_month(value: str) -> Optional[str]:
 _QUICK_FILTER_AMOUNT_RE = re.compile(r"([+-]?)(\d+(?:\.\d*)?|\.\d+)")
 
 
-def _parse_quick_filter_amount(value: str) -> Optional[tuple[Decimal, Optional[str]]]:
-    """`(magnitude, direction)` for text that reads as an amount, else None; direction is "out", "in" or None.
+def _parse_quick_filter_amount(value: str) -> Optional[tuple[int, int, Optional[str]]]:
+    """`(low_cents, high_cents, direction)` for text that reads as an amount, else None: the inclusive range of
+    magnitudes, in cents, the typed text could still become. Direction is "out", "in" or None.
+
+    **The dollars are exact and only the cents narrow as they are typed.** `77` is $77.00–$77.99, `77.4` is
+    $77.40–$77.49 and `77.45` is exactly $77.45. An exact match found nothing until the last cent was in, so a
+    $77.35 charge stayed hidden at "77" while a $77.00 one showed. The dollars are *not* a prefix: `7` is
+    $7.00–$7.99 and never $70 or $700, which would flood the list at every keystroke. Past two decimals the
+    value rounds to the cent, as it always did.
 
     **The sign is read the way a person writes it**, not the way it is stored: `-42.10` is money paid out,
     `+42.10` money received, and a bare `42.10` either. Accounting parentheses mean a minus. Storage runs the
@@ -678,8 +684,14 @@ def _parse_quick_filter_amount(value: str) -> Optional[tuple[Decimal, Optional[s
     if not match or (parenthesized and match.group(1)):
         return None
     sign = "-" if parenthesized else match.group(1)
-    magnitude = Decimal(match.group(2)).quantize(Decimal("0.01"))
-    return magnitude, {"-": "out", "+": "in"}.get(sign)
+    direction = {"-": "out", "+": "in"}.get(sign)
+    digits = match.group(2)
+    dollars, _, cents = digits.partition(".")
+    if len(cents) >= 2:
+        exact = int((Decimal(digits) * 100).quantize(Decimal("1")))
+        return exact, exact, direction
+    low = int(dollars or 0) * 100 + (int(cents) * 10 if cents else 0)
+    return low, low + (9 if cents else 99), direction
 
 
 def _build_transaction_filter(

@@ -662,8 +662,8 @@ export const HELP_TOPICS = [
           <li>a <strong>month</strong> or <strong>month/day</strong> with no year &mdash; <code>03</code> or <code>03/15</code> &mdash; matches that date in every year</li>
         </ul>
         <p>
-          A number is also tried as an amount, so <code>2023</code> finds a $2,023.00 transaction as well,
-          and <code>03</code> a $3.00 one. <code>date:2023</code> searches dates alone.
+          A number is also tried as an amount, so <code>2023</code> finds transactions of $2,023.00 to
+          $2,023.99 as well, and <code>03</code> ones of $3.00 to $3.99. <code>date:2023</code> searches dates alone.
         </p>
 
         <HelpHeading anchor="amounts">Amounts</HelpHeading>
@@ -673,7 +673,9 @@ export const HELP_TOPICS = [
           <li><code>+42.10</code> &mdash; money received</li>
         </ul>
         <p>
-          An amount matches to the cent. A dollar sign and thousands separators are fine
+          The dollars in an amount are exact, and the cents narrow as they are typed: <code>77</code> finds
+          every amount from $77.00 to $77.99 (never $770), <code>77.4</code> those from $77.40 to $77.49,
+          and <code>77.45</code> that amount alone. A dollar sign and thousands separators are fine
           (<code>$1,250.00</code>), and parentheses read as a minus, the way a statement writes a payment:
           <code> (42.10)</code>. For a range of amounts, use the <strong>💲 Amount</strong> filter beside the
           Transactions search box.

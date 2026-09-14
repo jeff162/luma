@@ -60,24 +60,31 @@ class QuickFilterParsingTests(unittest.TestCase):
         self.assertIn("%-09-29", params)
 
     def test_bare_month_builds_any_year_clause(self):
-        # "9" matches every September (LIKE '%-09-%') and also ORs the $9.00 amount match.
+        # "9" matches every September (LIKE '%-09-%') and also ORs the $9.00–$9.99 amount match.
         clause, params = _build_quick_filter_clause("9")
         self.assertIn("%-09-%", params)
-        self.assertIn(9.0, params)
+        self.assertIn(900, params)
+        self.assertIn(999, params)
 
     def test_amount(self):
         def parsed(value):
             result = _parse_quick_filter_amount(value)
-            return None if result is None else (str(result[0]), result[1])
+            return result
 
-        self.assertEqual(parsed("68"), ("68.00", None))
-        self.assertEqual(parsed("$1,234.5"), ("1234.50", None))
-        self.assertEqual(parsed(".5"), ("0.50", None))
+        # The dollars are exact; the cents narrow only as far as they have been typed.
+        self.assertEqual(parsed("68"), (6800, 6899, None))
+        self.assertEqual(parsed("68."), (6800, 6899, None))
+        self.assertEqual(parsed("7"), (700, 799, None))            # never $70 or $700
+        self.assertEqual(parsed("77.4"), (7740, 7749, None))
+        self.assertEqual(parsed("77.45"), (7745, 7745, None))
+        self.assertEqual(parsed("77.456"), (7746, 7746, None))     # past the cent, rounded to it
+        self.assertEqual(parsed("$1,234.5"), (123450, 123459, None))
+        self.assertEqual(parsed(".5"), (50, 59, None))
         # The sign as a person writes it: minus is money paid out, plus is money received.
-        self.assertEqual(parsed("-20.22"), ("20.22", "out"))
-        self.assertEqual(parsed("-$20.22"), ("20.22", "out"))
-        self.assertEqual(parsed("(20.22)"), ("20.22", "out"))
-        self.assertEqual(parsed("+20.22"), ("20.22", "in"))
+        self.assertEqual(parsed("-20.22"), (2022, 2022, "out"))
+        self.assertEqual(parsed("-$20.22"), (2022, 2022, "out"))
+        self.assertEqual(parsed("(20.22)"), (2022, 2022, "out"))
+        self.assertEqual(parsed("+20"), (2000, 2099, "in"))
         self.assertIsNone(parsed("(-20.22)"))
         self.assertIsNone(parsed("not-a-number"))
         # `Decimal` reads all three of these; none of them is an amount anyone typed.
@@ -86,20 +93,22 @@ class QuickFilterParsingTests(unittest.TestCase):
         self.assertIsNone(parsed("1e3"))
 
     def test_signed_amount_flips_to_the_stored_sign(self):
-        # Stored money out is positive, so a typed "-" compares against a positive amount.
+        # Stored money out is positive, so a typed "-" compares the stored amount as it is and a typed "+"
+        # compares it negated; no sign compares the magnitude.
         clause, params = _build_quick_filter_clause("amount:-20.22")
-        self.assertEqual(clause, "(ROUND(t.amount, 2) = ?)")
-        self.assertEqual(params, [20.22])
+        self.assertEqual(clause, "(CAST(ROUND(t.amount * 100) AS INTEGER) BETWEEN ? AND ?)")
+        self.assertEqual(params, [2022, 2022])
         clause, params = _build_quick_filter_clause("amount:+20.22")
-        self.assertEqual(params, [-20.22])
+        self.assertEqual(clause, "(CAST(ROUND(-t.amount * 100) AS INTEGER) BETWEEN ? AND ?)")
         clause, params = _build_quick_filter_clause("amount:20.22")
-        self.assertEqual(clause, "(ROUND(ABS(t.amount), 2) = ?)")
+        self.assertEqual(clause, "(CAST(ROUND(ABS(t.amount) * 100) AS INTEGER) BETWEEN ? AND ?)")
 
     def test_bare_year_builds_date_year_clause(self):
         clause, params = _build_quick_filter_clause("2023")
         self.assertIn("t.date LIKE ?", clause)
         self.assertIn("2023-%", params)   # year jump
-        self.assertIn(2023.0, params)      # also ORs the amount match ($2023.00)
+        self.assertIn(202300, params)      # also ORs the amount match ($2,023.00–$2,023.99)
+        self.assertIn(202399, params)
 
     def test_field_prefix_restricts(self):
         # date:2023 restricts to the date-year clause only — no merchant/amount OR.

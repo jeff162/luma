@@ -158,5 +158,52 @@ class AmountSignTests(QuickFilterSearchTests):
         self.assertEqual(self.found("inf"), [])
 
 
+class AmountAsTypedTests(QuickFilterSearchTests):
+    """The dollars are exact and the cents narrow only as far as they have been typed.
+
+    Matching to the cent found nothing until the last digit was in, so a $77.35 charge stayed hidden at "77"
+    while a $77.00 one showed. Searched with `amount:` so a digit in some row's free text cannot join in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        with get_db() as conn:
+            for txn_id, amount in (
+                ("txn-77-00", 77.00), ("txn-77-35", 77.35), ("txn-77-40", 77.40), ("txn-77-45", 77.45),
+                ("txn-77-49", 77.49), ("txn-770", 770.00),
+                # Money received, stored negative.
+                ("txn-in-77-20", -77.20),
+            ):
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, amount, date, merchant_name, display_name, raw_name) "
+                    "VALUES (?, 'acct', ?, '2026-03-14', 'Payee', 'Payee', 'PAYEE')",
+                    (txn_id, amount),
+                )
+
+    def test_whole_dollars_match_every_cent_of_them(self):
+        self.assertEqual(
+            self.found("amount:77"),
+            ["txn-77-00", "txn-77-35", "txn-77-40", "txn-77-45", "txn-77-49", "txn-in-77-20"],
+        )
+        self.assertEqual(self.found("amount:77."), self.found("amount:77"))
+
+    def test_the_dollars_are_not_a_prefix(self):
+        self.assertEqual(self.found("amount:7"), ["txn-bakery"])
+        self.assertEqual(self.found("amount:770"), ["txn-770"])
+
+    def test_a_typed_tenth_narrows_to_its_cents(self):
+        self.assertEqual(self.found("amount:77.4"), ["txn-77-40", "txn-77-45", "txn-77-49"])
+
+    def test_two_decimals_are_exact(self):
+        self.assertEqual(self.found("amount:77.45"), ["txn-77-45"])
+
+    def test_the_sign_still_picks_a_direction(self):
+        self.assertEqual(
+            self.found("amount:-77"),
+            ["txn-77-00", "txn-77-35", "txn-77-40", "txn-77-45", "txn-77-49"],
+        )
+        self.assertEqual(self.found("amount:+77"), ["txn-in-77-20"])
+
+
 if __name__ == "__main__":
     unittest.main()
