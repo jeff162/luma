@@ -17,13 +17,13 @@
 
 import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
-import { AppDialog, Button, Card, Input } from '../ui.jsx'
+import { AppDialog, Button, Card, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
 import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
-import { SENSITIVE_FIELD_PROPS } from '../../lib/sensitiveFields.js'
+import { EXISTING_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../../lib/sensitiveFields.js'
 
 // Human-readable explanation for the restore compatibility guard's 409 detail.
 function describeRestoreIncompatibility(detail) {
@@ -472,18 +472,18 @@ export function BackupRestoreTab() {
                     onChange={e => setPrivateKeyFile(e.target.files[0])}
                     style={{ fontSize: 13 }}
                   />
-                  <input
-                    type="password"
-                    name="restore-private-key-passphrase"
+                  <PasswordInput
                     aria-label="Private key passphrase"
                     value={privateKeyPassphrase}
-                    onChange={e => setPrivateKeyPassphrase(e.target.value)}
+                    onChange={setPrivateKeyPassphrase}
                     placeholder="Private key passphrase (optional)"
+                    wrapperStyle={{ minWidth: 220 }}
                     style={{
                       background: 'var(--surface2)', color: 'var(--text)',
                       border: `1px solid ${privateKeyFile ? 'var(--border)' : 'color-mix(in srgb, var(--accent2) 60%, var(--border))'}`, borderRadius: 6,
-                      padding: '6px 10px', fontSize: 13, minWidth: 220,
+                      padding: '6px 10px', fontSize: 13,
                     }}
+                    {...EXISTING_SECRET_PROPS}
                   />
                 </div>
               )}
@@ -501,13 +501,13 @@ export function BackupRestoreTab() {
                     This backup was made on another system. Enter the vault passphrase it was created
                     with — not this system&apos;s.
                   </div>
-                  <Input
-                    type="password"
+                  <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
+                  <PasswordInput
                     value={backupPassphrase}
                     onChange={setBackupPassphrase}
                     placeholder="Vault passphrase this backup was made with"
                     autoFocus
-                    {...SENSITIVE_FIELD_PROPS}
+                    {...EXISTING_SECRET_PROPS}
                   />
                 </div>
               )}

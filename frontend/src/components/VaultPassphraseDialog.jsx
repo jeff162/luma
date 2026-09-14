@@ -10,16 +10,16 @@
 // it — but it asks for the same fields against the same floor, and a separate dialog would be the same
 // component with one extra input and its own opportunity to disagree about the rules.
 //
-// The strength meter travels with it (no other caller). The autofill-suppression props do not: the
-// Connections tab's provider-secret fields and the backup tab want the same opt-out list, and one copy of
-// it is the point, so it lives in `lib/sensitiveFields.js` — a shared constant, and not a vault-specific
-// one, so a component module was the wrong home for it in both directions.
+// The strength meter travels with it (no other caller). The field sets do not: the Connections tab's
+// provider-secret fields and the backup tab annotate their secrets the same way, and one copy of that is
+// the point, so it lives in `lib/sensitiveFields.js` — a shared constant, and not a vault-specific one, so
+// a component module was the wrong home for it in both directions.
 
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, AppDialog, Tooltip } from './ui.jsx'
+import { Button, PasswordInput, PasswordManagerUsername, AppDialog, Tooltip } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
-import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
+import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
 import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
 import { useVaultPasskeyUnlock } from '../lib/useVaultPasskeyUnlock.js'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
@@ -241,31 +241,32 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>
+        <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
         {changing ? (
-          <Input type="password" value={current} onChange={setCurrent}
+          <PasswordInput value={current} onChange={setCurrent}
             placeholder={canUsePasskey ? 'Current passphrase (or use a passkey)' : 'Current passphrase'}
             autoFocus
-            onKeyDown={advanceOnEnter(passphraseRef)} {...SENSITIVE_FIELD_PROPS} />
+            onKeyDown={advanceOnEnter(passphraseRef)} {...EXISTING_SECRET_PROPS} />
         ) : null}
         {/* Submits directly when unlocking, which is the single-field case and the whole interaction:
             type the passphrase, press Enter. Every other mode is choosing a *new* passphrase and has a
             confirm field, so Enter moves there instead — submitting from here would skip the check the
             second field exists to make. */}
-        <Input ref={passphraseRef} type="password" value={passphrase} onChange={setPassphrase}
+        <PasswordInput ref={passphraseRef} value={passphrase} onChange={setPassphrase}
           placeholder={changing ? 'New passphrase' : 'Vault passphrase'} autoFocus={!changing}
           onKeyDown={setting ? advanceOnEnter(confirmRef) : onEnter(() => { if (!blocked) submit() })}
-          {...SENSITIVE_FIELD_PROPS} />
+          {...(setting ? NEW_SECRET_PROPS : EXISTING_SECRET_PROPS)} />
         {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
         {shortfall ? (
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{shortfall}</div>
         ) : null}
         {setting ? (
-          <Input ref={confirmRef} type="password" value={confirm} onChange={setConfirm}
+          <PasswordInput ref={confirmRef} value={confirm} onChange={setConfirm}
             placeholder={changing ? 'Confirm new passphrase' : 'Confirm passphrase'}
             // Guarded on the same `blocked` the button is, so Enter can never submit something the
             // button would refuse — a passphrase under the floor stays un-submittable either way.
             onKeyDown={onEnter(() => { if (!blocked) submit() })}
-            {...SENSITIVE_FIELD_PROPS} />
+            {...NEW_SECRET_PROPS} />
         ) : null}
         {mismatch ? (
           <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{MISMATCH}</div>

@@ -822,29 +822,26 @@ export const Input = forwardRef(function Input(
   )
 })
 
-// Password field with an inline show/hide reveal. Controlled like `Input` (value/onChange as a string).
-// `wrapperStyle` sizes the field (e.g. a maxWidth so it doesn't stretch to the full card); the reveal
-// button is non-tabbable so it never sits between the field and the submit button in tab order.
+// Password field with an inline show/hide reveal — the field for every secret someone types or pastes,
+// since a masked field with no reveal leaves no way to check what actually landed in it. It renders the
+// shared `Input` by default, so it takes the same props (a `lib/sensitiveFields.js` set, a forwarded ref
+// for Enter-to-advance) and matches the fields beside it. `as` swaps in another field component with the
+// same string-valued `onChange` — the sign-in screen's `TransientTextInput`, which knows nothing of
+// `suppressAutofillId`, so a set carrying that prop needs the default. `style` styles the field and
+// `wrapperStyle` sizes it (e.g. a maxWidth so it doesn't stretch to the full card); the reveal button is
+// non-tabbable so it never sits between the field and the submit button in tab order.
+//
+// There is deliberately no `autoComplete` default. Whether the field holds a new secret or an existing one
+// is the caller's to say, and a default that guessed is how a field asking for an existing passphrase came
+// to be offered a generated one.
 //
 // `onReveal` (optional, may be async) runs before the field is revealed, for a value the browser does
 // not hold yet — the provider secret is stored write-only, so showing it means fetching it first. If it
 // throws, the field stays hidden: a failed fetch (locked vault, no secret on file) must not flip the
 // control to "revealed" over an empty box, which would read as "the stored secret is blank".
-export function PasswordInput({
-  value,
-  onChange,
-  placeholder,
-  disabled = false,
-  autoComplete = 'new-password',
-  id,
-  suppressAutofillId = false,
-  wrapperStyle,
-  onReveal,
-  ...rest
-}) {
-  // `suppressAutofillId`: render with no id/name so the browser has no handle to key form-field
-  // history on — see the Input component for the full rationale (reused `useId` leaks suggestions).
-  const autoId = useId()
+export const PasswordInput = forwardRef(function PasswordInput(
+  { as: Field = Input, style, wrapperStyle, disabled = false, onReveal, ...rest }, ref,
+) {
   const [revealed, setRevealed] = useState(false)
   const [revealing, setRevealing] = useState(false)
 
@@ -865,23 +862,19 @@ export function PasswordInput({
 
   return (
     <div style={{ position: 'relative', ...wrapperStyle }}>
-      <input
+      <Field
         {...rest}
-        id={suppressAutofillId ? undefined : (id || autoId)}
+        ref={ref}
         type={revealed ? 'text' : 'password'}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
         disabled={disabled}
-        autoComplete={autoComplete}
-        style={{ ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%', paddingRight: 58 }}
+        style={{ width: '100%', ...style, paddingRight: 58 }}
       />
       <button
         type="button"
         tabIndex={-1}
         disabled={disabled || revealing}
         onClick={toggleReveal}
-        aria-label={revealed ? 'Hide password' : 'Show password'}
+        aria-label={revealed ? 'Hide characters' : 'Show characters'}
         style={{
           position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
           background: 'transparent', border: 'none', color: 'var(--muted)',
@@ -891,6 +884,18 @@ export function PasswordInput({
         {revealing ? '…' : revealed ? 'Hide' : 'Show'}
       </button>
     </div>
+  )
+})
+
+// The username a password manager files the secret fields after it under, for a surface with no username
+// field of its own (`VAULT_PASSWORD_MANAGER_USERNAME` in `lib/sensitiveFields.js` says why the vault needs
+// one). A hidden field annotated `username` is the documented way to supply it; whether a particular
+// manager honours it can only be seen in that browser. Place it directly before the secret fields, so a
+// visible text field further up — a recovery code — is not the one taken as the username instead.
+export function PasswordManagerUsername({ value }) {
+  return (
+    <input type="text" autoComplete="username" value={value} readOnly tabIndex={-1} aria-hidden="true"
+      style={{ display: 'none' }} />
   )
 }
 

@@ -365,3 +365,51 @@ describe('telling the user why the new passphrase is not accepted yet', () => {
     expect((await screen.findByRole('tooltip')).textContent).toMatch(/characters/i)
   })
 })
+
+const { VAULT_PASSWORD_MANAGER_USERNAME } = await import('../../lib/sensitiveFields.js')
+
+describe('what each field tells a password manager', () => {
+  // The reported case: the field asking for a passphrase that already existed was annotated
+  // `new-password`, and a browser's built-in manager filled a freshly generated password into it. A
+  // manager may fill a saved value into any of these, but may offer to generate one only where a
+  // passphrase is being chosen.
+  const secretFields = () => Array.from(document.querySelectorAll('input[type="password"]'))
+    .map(el => [el.placeholder, el.getAttribute('autocomplete')])
+
+  it('asks for an existing passphrase when unlocking', () => {
+    renderDialog({ mode: 'unlock', onSubmit: vi.fn() })
+    expect(secretFields()).toEqual([['Vault passphrase', 'current-password']])
+  })
+
+  it('asks for an existing passphrase when confirming it is you', () => {
+    renderDialog({ mode: 'confirm', onSubmit: vi.fn() })
+    expect(secretFields()).toEqual([['Vault passphrase', 'current-password']])
+  })
+
+  it('marks both fields as new when setting a passphrase', () => {
+    renderDialog({ mode: 'set', onSubmit: vi.fn() })
+    expect(secretFields()).toEqual([
+      ['Vault passphrase', 'new-password'],
+      ['Confirm passphrase', 'new-password'],
+    ])
+  })
+
+  it('marks only the replacement as new when changing the passphrase', async () => {
+    renderDialog({ mode: 'change', onSubmit: vi.fn() })
+    await screen.findByPlaceholderText('New passphrase')
+    await waitFor(() => expect(vaultCredentialsBackups).toHaveBeenCalled())
+    expect(secretFields()).toEqual([
+      ['Current passphrase', 'current-password'],
+      ['New passphrase', 'new-password'],
+      ['Confirm new passphrase', 'new-password'],
+    ])
+  })
+
+  it('names the credential ahead of the secret fields, so it is not filed as the sign-in password', () => {
+    renderDialog({ mode: 'set', onSubmit: vi.fn() })
+    const username = document.querySelector('input[autocomplete="username"]')
+    expect(username.value).toBe(VAULT_PASSWORD_MANAGER_USERNAME)
+    const firstSecret = document.querySelector('input[type="password"]')
+    expect(username.compareDocumentPosition(firstSecret) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})

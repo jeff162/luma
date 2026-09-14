@@ -7,6 +7,7 @@ import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
+import { PasswordInput } from './ui.jsx'
 
 const s = {
   page: {
@@ -199,8 +200,8 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
           )}
           {awaitingPasswordChange ? (
             <>
-              <TransientTextInput
-                type="password"
+              <PasswordInput
+                as={TransientTextInput}
                 value={newPassword}
                 onChange={setNewPassword}
                 onKeyDown={advanceOnEnter(newPasswordConfirmRef)}
@@ -210,9 +211,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 autoComplete="new-password"
                 style={s.input}
               />
-              <TransientTextInput
+              <PasswordInput
+                as={TransientTextInput}
                 ref={newPasswordConfirmRef}
-                type="password"
                 value={newPasswordConfirm}
                 onChange={setNewPasswordConfirm}
                 onKeyDown={submitOnEnter}
@@ -228,9 +229,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
             </>
           ) : !awaiting2fa ? (
             <>
-              <TransientTextInput
+              <PasswordInput
+                as={TransientTextInput}
                 ref={passwordRef}
-                type="password"
                 value={password}
                 onChange={setPassword}
                 onKeyDown={submitOnEnter}

@@ -16,7 +16,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { VaultPassphraseDialog } from '../components/VaultPassphraseDialog.jsx'
-import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
+import { EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS } from '../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../components/VaultSettingsDialog.jsx'
 import { VaultRecoveryDialog } from '../components/VaultRecoveryDialog.jsx'
 import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../lib/useVaultPasskeyUnlock.js'
@@ -509,7 +509,7 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
           <PasswordInput value={secret} onChange={setSecret}
             placeholder={hasSecret ? '•••••••• (leave blank to keep)' : 'Provider secret'}
             onReveal={hasSecret ? revealStoredSecret : undefined}
-            {...SENSITIVE_FIELD_PROPS} />
+            {...EXISTING_SECRET_PROPS} />
           {hasSecret ? (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>
               Show reveals the stored secret — for checking it against the provider’s dashboard. Leave the
@@ -604,7 +604,7 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose,
             onChange={setToken}
             placeholder={spec?.placeholder || ''}
             autoFocus
-            {...SENSITIVE_FIELD_PROPS}
+            {...NO_AUTOFILL_PROPS}
           />
           {spec?.hint ? (
             <span style={{ fontSize: 11, color: 'var(--muted)' }}>{spec.hint}</span>

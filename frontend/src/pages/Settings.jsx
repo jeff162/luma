@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useId, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
+import { NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
@@ -30,6 +30,8 @@ const SETTINGS_CONTENT_WIDTH = 'min(1040px, 100%)'
 // Password fields don't need the full card width — cap them so a ~40-50 character entry is visible
 // without the field spanning the whole (wide) settings card.
 const PASSWORD_FIELD_WIDTH = { maxWidth: 360 }
+// Sized like the page's other form controls rather than the shared `Input`'s larger default.
+const PASSWORD_FIELD_STYLE = getFormControlStyle({ size: 'md', surface: 'base' })
 function clearBrowserStoredState() {
   if (typeof window === 'undefined') return
   try {
@@ -222,8 +224,8 @@ function UserAdminSection({ passwordPolicy }) {
             <input id={`${fieldIdBase}-create-display-name`} name="settings-create-user-display-name" value={form.display_name} onChange={e => setForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <FormLabel htmlFor={`${fieldIdBase}-create-password`} style={{ marginBottom: 4 }}>Password</FormLabel>
-            <input id={`${fieldIdBase}-create-password`} name="settings-create-user-password" type="password" value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} style={inputStyle} />
+            <FormLabel style={{ marginBottom: 4 }}>Password</FormLabel>
+            <PasswordInput aria-label="Password" value={form.password} onChange={value => setForm(prev => ({ ...prev, password: value }))} style={inputStyle} {...NEW_SECRET_PROPS} />
           </div>
           <div>
             <FormLabel htmlFor={`${fieldIdBase}-create-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -273,8 +275,8 @@ function UserAdminSection({ passwordPolicy }) {
                   <input id={`${fieldIdBase}-edit-${user.id}-display-name`} name={`settings-edit-user-${user.id}-display-name`} value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-password`} style={{ marginBottom: 4 }}>New password</FormLabel>
-                  <input id={`${fieldIdBase}-edit-${user.id}-password`} name={`settings-edit-user-${user.id}-password`} type="password" value={editForm.password} onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))} placeholder="Leave blank to keep current" style={inputStyle} />
+                  <FormLabel style={{ marginBottom: 4 }}>New password</FormLabel>
+                  <PasswordInput aria-label="New password" value={editForm.password} onChange={value => setEditForm(prev => ({ ...prev, password: value }))} placeholder="Leave blank to keep current" style={inputStyle} {...NEW_SECRET_PROPS} />
                 </div>
                 <div>
                   <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -676,8 +678,8 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
 
         <div style={{ display: 'grid', gap: 8 }}>
           <FormLabel>Your password (admin)</FormLabel>
-          <PasswordInput value={adminPassword} onChange={setAdminPassword} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} />
-          <PasswordInput value={adminConfirm} onChange={setAdminConfirm} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} />
+          <PasswordInput aria-label="Your password" value={adminPassword} onChange={setAdminPassword} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <PasswordInput value={adminConfirm} onChange={setAdminConfirm} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
         </div>
 
@@ -696,6 +698,8 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
                   value={otherPasswords[p.id] || ''}
                   onChange={value => setOtherPasswords(prev => ({ ...prev, [p.id]: value }))}
                   disabled={saving}
+                  style={PASSWORD_FIELD_STYLE}
+                  {...NEW_SECRET_PROPS}
                 />
               </div>
             ))}

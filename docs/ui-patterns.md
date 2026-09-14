@@ -902,9 +902,28 @@ Two rules travel with it:
   exactly what the confirmation was added to take away. The button is the only way through, and that
   asymmetry is deliberate rather than an oversight to be tidied up later.
 
-Note the mechanical prerequisite: fields carrying `SENSITIVE_FIELD_PROPS`/`NO_AUTOFILL_PROPS` render with
-**no id or name** (see `shared-components.md`), so focus cannot be moved by querying for the next field —
-`Input` forwards a ref for exactly this.
+Note the mechanical prerequisite: fields carrying a `sensitiveFields.js` set (any but `ONE_TIME_CODE_PROPS`)
+render with **no id or name** (see `shared-components.md`), so focus cannot be moved by querying for the
+next field — `Input` and `PasswordInput` forward a ref for exactly this.
+
+## Secret fields
+
+**Every secret someone types or pastes gets a Show/Hide reveal** (`PasswordInput`): sign-in and user
+passwords, vault passphrases, backup and key-file passphrases, provider secrets. A masked field with no
+reveal leaves no way to check what actually landed in it.
+
+**Password managers are welcome; the browser's form history is not.** A manager fills from a store the user
+chose to save into, usually behind an unlock, and offering a strong generated value for a secret being
+chosen is help. Form history replays whatever was once typed into a field the browser considers the same
+one, and that is what the sets in `lib/sensitiveFields.js` suppress. So a field says which kind of secret it
+holds rather than trying to keep managers away:
+
+- **A new secret** is `new-password`, and a manager may generate it.
+- **An existing secret** is `current-password`. Marking one as new is not harmless: a manager then offers,
+  and can fill in, a freshly generated value for a field whose only correct content already exists.
+- **A surface with no username field names the credential** with a hidden `username` field
+  (`PasswordManagerUsername`), because managers file saved secrets by site and username. Without it a vault
+  passphrase has nothing to tell it apart from the sign-in password for the same site.
 
 ### Import history outlives the connection that produced it
 

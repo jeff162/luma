@@ -22,12 +22,12 @@
 import { useState, useEffect, useRef, useId } from 'react'
 import { api, saveBlob } from '../../lib/api.js'
 import {
-  Card, Button, COMPACT_ACTION_BTN_STYLE, Spinner, Input, AppDialog, AppConfirmDialog,
+  Card, Button, COMPACT_ACTION_BTN_STYLE, Spinner, Input, PasswordInput, AppDialog, AppConfirmDialog,
   Tooltip, getFormControlStyle,
 } from '../ui.jsx'
 import { useTransientTextEdit } from '../../lib/uiInteractions.js'
 import TransientTextInput from '../TransientTextInput.jsx'
-import { SENSITIVE_FIELD_PROPS } from '../../lib/sensitiveFields.js'
+import { NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
 import { APP_NAME } from '../../lib/appConfig.js'
 
 /** Whether a typed name collides with one already saved. Mirrors the server's comparison exactly —
@@ -485,22 +485,20 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
         ) : null}
         {!generated ? (
           <>
-            <Input
-              type="password"
+            <PasswordInput
               value={passphrase}
               onChange={setPassphrase}
               placeholder="Passphrase for the key file (optional)"
               aria-label="Passphrase for the generated key file"
-              {...SENSITIVE_FIELD_PROPS}
+              {...NEW_SECRET_PROPS}
             />
             {passphrase ? (
-              <Input
-                type="password"
+              <PasswordInput
                 value={confirmPassphrase}
                 onChange={setConfirmPassphrase}
                 placeholder="Confirm passphrase"
                 aria-label="Confirm the passphrase for the generated key file"
-                {...SENSITIVE_FIELD_PROPS}
+                {...NEW_SECRET_PROPS}
               />
             ) : null}
             {passphrase && confirmPassphrase && passphrase !== confirmPassphrase ? (

@@ -35,8 +35,8 @@
 // this moment — so the "your transactions are kept" line sits above every warning here, not below them.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AppDialog, Button, Input, InsetPanel, SectionEyebrow, Spinner } from './ui.jsx'
-import { NO_AUTOFILL_PROPS, SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
+import { AppDialog, Button, Input, InsetPanel, PasswordInput, PasswordManagerUsername, SectionEyebrow, Spinner } from './ui.jsx'
+import { NEW_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
@@ -333,20 +333,21 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 </p>
               ) : (
                 <>
-                  <Input
-                    value={reenrolPassphrase} onChange={setReenrolPassphrase} type="password"
+                  <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
+                  <PasswordInput
+                    value={reenrolPassphrase} onChange={setReenrolPassphrase}
                     placeholder="New passphrase"
-                    onKeyDown={advanceOnEnter(reenrolConfirmRef)} {...SENSITIVE_FIELD_PROPS}
+                    onKeyDown={advanceOnEnter(reenrolConfirmRef)} {...NEW_SECRET_PROPS}
                   />
                   {reenrolShortfall ? (
                     <div style={{ fontSize: 12, color: '#dc2626' }}>{reenrolShortfall}</div>
                   ) : null}
-                  <Input
+                  <PasswordInput
                     ref={reenrolConfirmRef}
-                    value={reenrolConfirm} onChange={setReenrolConfirm} type="password"
+                    value={reenrolConfirm} onChange={setReenrolConfirm}
                     placeholder="Confirm new passphrase"
                     onKeyDown={onEnter(() => { if (!reenrolBlocked) reenrol() })}
-                    {...SENSITIVE_FIELD_PROPS}
+                    {...NEW_SECRET_PROPS}
                   />
                   <div>
                     <Button small disabled={reenrolBlocked} onClick={reenrol}>
@@ -371,20 +372,21 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
               <Input
                 value={code} onChange={setCode} placeholder="Recovery code"
                 style={{ fontFamily: 'monospace' }}
-                onKeyDown={advanceOnEnter(recoveryPassphraseRef)} {...SENSITIVE_FIELD_PROPS}
+                onKeyDown={advanceOnEnter(recoveryPassphraseRef)} {...NO_AUTOFILL_PROPS}
               />
-              <Input
+              <PasswordManagerUsername value={VAULT_PASSWORD_MANAGER_USERNAME} />
+              <PasswordInput
                 ref={recoveryPassphraseRef}
-                value={passphrase} onChange={setPassphrase} type="password"
+                value={passphrase} onChange={setPassphrase}
                 placeholder="New vault passphrase"
-                onKeyDown={advanceOnEnter(recoveryConfirmRef)} {...SENSITIVE_FIELD_PROPS}
+                onKeyDown={advanceOnEnter(recoveryConfirmRef)} {...NEW_SECRET_PROPS}
               />
-              <Input
+              <PasswordInput
                 ref={recoveryConfirmRef}
-                value={confirmPassphrase} onChange={setConfirmPassphrase} type="password"
+                value={confirmPassphrase} onChange={setConfirmPassphrase}
                 placeholder="Confirm new passphrase"
                 onKeyDown={onEnter(() => { if (!recoverBlocked) recover() })}
-                {...SENSITIVE_FIELD_PROPS}
+                {...NEW_SECRET_PROPS}
               />
               {shortfall ? (
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{shortfall}</div>
