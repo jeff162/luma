@@ -9,6 +9,7 @@ import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { LastSyncSummary, LastSyncedLine, StatusPill } from '../components/connections/ConnectionStatus.jsx'
+import { ConnectionSyncLogDialog } from '../components/connections/ConnectionSyncLogDialog.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -834,6 +835,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // be acted on. What *is* asking (an account with no destination) is counted in the collapsed summary,
   // per the rule in `docs/ui-patterns.md` that a nudge must survive collapsing.
   const [openAccountLists, setOpenAccountLists] = useState({})
+  // The connection ids the open sync log starts filtered to; null while it is closed. Opened in place, the
+  // same dialog Import / Export opens, because this is a page people come to when a connection looks wrong
+  // and the log is what explains it — sending them to another page to read it was a detour.
+  const [syncLogScope, setSyncLogScope] = useState(null)
   // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
   // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
@@ -1527,6 +1532,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
                   {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
                 </Button>
+                {/* Scoped to this provider's connections, since that is what the card it sits in is about;
+                    the log's own pills widen it to the rest. */}
+                {connections.length ? (
+                  <Button variant="ghost" small onClick={() => setSyncLogScope(connections.map(c => c.id))}
+                    title="What each sync actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
+                    Sync log
+                  </Button>
+                ) : null}
                 {/* "Sync now" lives in the card header, not here — it is the routine action, so it has to
                     stay reachable while the card is collapsed. */}
               </div>
@@ -1695,9 +1708,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           lastSync={c.last_sync}
                           syncing={!!c.syncing}
                           onOpenReport={() => openLastSyncReport(c)}
-                          onOpenLog={() => navigate(
-                            `/import-export?connection=${encodeURIComponent(c.id)}`,
-                          )}
+                          onOpenLog={() => setSyncLogScope([c.id])}
                         />
                         {accts.length || unfedProviderAccounts(c).length ? (() => {
                           const unfed = unfedProviderAccounts(c)
@@ -1974,6 +1985,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         page, and these panels float over the app rather than belonging to the tab that opened them. */}
     {connectionDialogsNode}
     {panelsNode}
+    {syncLogScope ? (
+      <ConnectionSyncLogDialog initialConnectionIds={syncLogScope} onClose={() => setSyncLogScope(null)} />
+    ) : null}
     </>
   )
 }

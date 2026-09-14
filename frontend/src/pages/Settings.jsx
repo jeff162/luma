@@ -3065,9 +3065,8 @@ export default function Settings() {
   const settingsScrollRef = useRef(null)
 
   // Deep link from elsewhere in the app: `?section=<key>` opens that section on arrival (a link landing on
-  // a collapsed card has not actually taken the user anywhere) and `?connection=<id>` scopes the sync log
-  // to one connection. Captured once, so clearing the filter or re-collapsing the section afterwards
-  // sticks instead of the URL springing it back. Opening writes through the normal section preference
+  // a collapsed card has not actually taken the user anywhere). Captured once, so re-collapsing the section
+  // afterwards sticks instead of the URL springing it back. Opening writes through the normal section preference
   // rather than overriding the render: the section then behaves like any other, and "open" survives as
   // the user's state — which is right, since they just asked to look at it.
   const [searchParams] = useSearchParams()

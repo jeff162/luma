@@ -867,7 +867,8 @@ came of leaving it unstated, in `docs/data-model.md`.
   **Configure** (the app credential — moved off the Settings form entirely; that section now only points
   here), **Connect bank**, a small per-connection **Sync** for checking what was just configured, and the
   linked accounts. The tab is **configuration only**; the operational half (routine sync, fetch more
-  history, refresh accounts, remove synced transactions, and the sync log) lives on Import / Export in
+  history, refresh accounts, remove synced transactions, and the sync log — which this tab also opens in
+  place) lives on Import / Export in
   `components/connections/DataConnectionsPanel.jsx`, with the actions shared through
   `lib/useConnectionOperations.js` and the status rendering through `components/connections/ConnectionStatus.jsx`
   so the two surfaces cannot describe one connection differently. See `ui-patterns.md` for why the split

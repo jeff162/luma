@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 55
+CURRENT_VERSION = 56
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1454,6 +1454,74 @@ def _add_import_batch_provider(conn):
     _backfill_import_batch_provider(conn)
 
 
+# The v56 shape of `connection_sync_log`, which the baseline CREATE carries with a comment per column. Written
+# out rather than read back from `sqlite_master`, because an upgraded database's stored CREATE is the v23
+# one with every later ALTER appended, and rewriting SQL text is the fragile way to change a constraint.
+_CONNECTION_SYNC_LOG_V56 = """
+    CREATE TABLE connection_sync_log_v56 (
+        id                   TEXT PRIMARY KEY,
+        connection_id        TEXT NOT NULL REFERENCES connection(id) ON DELETE CASCADE,
+        provider             TEXT,
+        institution          TEXT,
+        started_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        finished_at          TEXT,
+        mode                 TEXT,
+        days_requested       INTEGER,
+        cursor_before        TEXT,
+        cursor_after         TEXT,
+        pages                INTEGER NOT NULL DEFAULT 0,
+        added                INTEGER NOT NULL DEFAULT 0,
+        updated              INTEGER NOT NULL DEFAULT 0,
+        removed              INTEGER NOT NULL DEFAULT 0,
+        skipped              INTEGER NOT NULL DEFAULT 0,
+        status_sequence      TEXT,
+        final_status         TEXT,
+        became_complete      INTEGER NOT NULL DEFAULT 0,
+        error                TEXT,
+        warnings             TEXT,
+        advisories           TEXT,
+        skipped_no_account   INTEGER NOT NULL DEFAULT 0,
+        skipped_already_held INTEGER NOT NULL DEFAULT 0,
+        account_counts       TEXT,
+        card_counts          TEXT,
+        requested_windows    TEXT,
+        request_allowance    TEXT
+    )
+"""
+
+
+@migration(56)
+def _sync_log_rows_go_with_their_connection(conn):
+    # A disconnect deletes the connection, and until now its log rows stayed behind with `connection_id`
+    # nulled. Every disconnected connection's rows therefore shared one id-less group: the log offered it
+    # as a single filter pill labelled with whichever institution SQLite picked, and the pill could not
+    # filter, because an empty id reads as "no filter". Nothing reads the log of a connection that is gone,
+    # so the rows now go with it. SQLite cannot change a foreign key in place, hence the rebuild; rows that
+    # already lost their connection are left behind by it, which is the cleanup the old rule never did.
+    # Guarded like v53: the isolated per-migration tests hand-build minimal schemas and run the whole chain.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"connection_sync_log", "connection"} <= tables:
+        return
+    foreign_keys = conn.execute("PRAGMA foreign_key_list(connection_sync_log)").fetchall()
+    if any(fk["from"] == "connection_id" and fk["on_delete"] == "CASCADE" for fk in foreign_keys):
+        return  # already rebuilt, or a fresh database created in this shape
+    conn.execute("DROP TABLE IF EXISTS connection_sync_log_v56")
+    conn.execute(_CONNECTION_SYNC_LOG_V56)
+    # Only the columns both shapes have: a hand-built fixture carries a subset, and every column it lacks
+    # has a default in the new shape.
+    current = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log_v56)")}
+    shared = ", ".join(r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")
+                       if r["name"] in current)
+    conn.execute(
+        f"INSERT INTO connection_sync_log_v56 ({shared}) SELECT {shared} FROM connection_sync_log "
+        "WHERE connection_id IN (SELECT id FROM connection)"
+    )
+    conn.execute("DROP TABLE connection_sync_log")
+    conn.execute("ALTER TABLE connection_sync_log_v56 RENAME TO connection_sync_log")
+    # Dropped with the old table; the baseline script that creates it has already run by now.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started ON connection_sync_log(started_at)")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1792,11 +1860,13 @@ def init_db(db_path: str | None = None):
             -- update_status signal (Plaid's transactions_update_status today) seen across the drained pages,
             -- and `became_complete` records the call that flipped the connection out of its initial pull.
             -- Cursors are stored only as a short fingerprint (length + prefix), never the full opaque token.
-            -- connection_id is ON DELETE SET NULL so a disconnect (which deletes the connection) leaves its
-            -- diagnostics readable via the denormalized provider/institution snapshot. See routers/sync.py.
+            -- connection_id is ON DELETE CASCADE: a disconnect (which deletes the connection) deletes its rows
+            -- too, since nothing reads the log of a connection that is gone (see migration v56 for what
+            -- keeping them with a nulled id did). provider/institution are a snapshot that labels a row
+            -- without a join. See routers/sync.py.
             CREATE TABLE IF NOT EXISTS connection_sync_log (
                 id              TEXT PRIMARY KEY,
-                connection_id   TEXT REFERENCES connection(id) ON DELETE SET NULL,
+                connection_id   TEXT NOT NULL REFERENCES connection(id) ON DELETE CASCADE,
                 provider        TEXT,
                 institution     TEXT,
                 started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

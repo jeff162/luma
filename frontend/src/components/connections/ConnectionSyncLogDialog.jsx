@@ -24,6 +24,9 @@ import {
   requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
 } from '../../lib/syncLogSummary.js'
 
+// A stable default, so an omitted prop does not read as a new selection on every render.
+const EMPTY_IDS = []
+
 function SyncLogRow({ entry }) {
   // Degrade gracefully if a timestamp can't be parsed (e.g. a pre-fix malformed value) — show the raw
   // string rather than "Invalid Date".
@@ -256,7 +259,7 @@ function syncLogAsText(entries, scopeLabel) {
   return lines.join('\n')
 }
 
-function ConnectionSyncLogBody({ initialConnectionId = '' }) {
+function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
   // Read-only viewer over connection_sync_log. It answers the two questions a connection can't answer
   // about itself: "did this sync fetch everything?" (the status sequence — a full historical backfill vs.
   // a stop at the ~30-day Initial Update) and "why did nothing arrive?" (the warnings and advisories,
@@ -266,18 +269,20 @@ function ConnectionSyncLogBody({ initialConnectionId = '' }) {
   const [error, setError] = useState('')
   const [clearing, setClearing] = useState(false)
   const [copied, setCopied] = useState(false)
-  // Which connections the list is scoped to — seeded by the deep link from a connection card, then
-  // adjustable here with the pills below. Filtered server-side: the retention window is bounded but its
-  // rows are not small (a deep walk records one entry per request), so a filtered view has no reason to
-  // ship the whole buffer. Empty means no filter, which is what makes "no pill pressed" show everything.
-  const [connectionIds, setConnectionIds] = useState(initialConnectionId ? [initialConnectionId] : [])
+  // Which connections the list is scoped to — seeded by whatever opened it (one connection's card, or
+  // every connection of one provider), then adjustable here with the pills below. Filtered server-side:
+  // the retention window is bounded but its rows are not small (a deep walk records one entry per
+  // request), so a filtered view has no reason to ship the whole buffer. Empty means no filter, which is
+  // what makes "no pill pressed" show everything.
+  const [connectionIds, setConnectionIds] = useState(() => initialConnectionIds.filter(Boolean))
   // Rows per connection *in the buffer*, from the same response and deliberately unfiltered — these label
   // and size the pills, so they have to keep describing every connection while some are filtered out.
-  // Also the source of the labels: they come from the log's own denormalized columns, so a connection the
-  // user has since disconnected keeps a named, clickable pill instead of losing it with its connection row.
   const [counts, setCounts] = useState([])
 
-  useEffect(() => { setConnectionIds(initialConnectionId ? [initialConnectionId] : []) }, [initialConnectionId])
+  // Re-seeded only when the *set* of ids changes. A caller builds the array inline, so depending on the
+  // array itself would reset the user's own pill choices on every render of the page behind the dialog.
+  const initialKey = initialConnectionIds.filter(Boolean).join('\n')
+  useEffect(() => { setConnectionIds(initialKey ? initialKey.split('\n') : []) }, [initialKey])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -352,7 +357,8 @@ function ConnectionSyncLogBody({ initialConnectionId = '' }) {
       {/* One pill per connection that has rows here, replacing the old "Showing only X" banner rather than
           sitting beside it — two controls for one filter can disagree, and the banner could only ever say
           what the deep link had chosen. Only connections present in the log are offered: a pill that
-          filters to nothing is a dead end, and the log's own columns name them even after a disconnect. */}
+          filters to nothing is a dead end. A disconnected connection has none — its rows are deleted with
+          it — so every pill names a connection that still exists. */}
       {/* A single connection needs no pill — it would filter to what is already on screen. But an active
           filter always renders the row, so a deep link to a connection with no rows yet still offers a
           way back to everything instead of stranding the user on an empty list. */}
@@ -417,7 +423,10 @@ function ConnectionSyncLogBody({ initialConnectionId = '' }) {
 }
 
 
-// Opened from the Data connections card rather than standing on the page.
+// Opened from a button rather than standing on a page: the Data connections card on Import / Export, and
+// on Accounts → Connections each provider's card and each connection's last-sync pill, opened in place
+// there rather than by sending the user to Import / Export — someone who went looking for the log on the
+// connections page should find it without a detour.
 //
 // It was a permanent section under the import history at first, which was wrong in the same way its old
 // home in Settings was wrong, just in the other direction: a diagnostic nobody needs most of the time
@@ -429,7 +438,7 @@ function ConnectionSyncLogBody({ initialConnectionId = '' }) {
 // working elsewhere — a duplicate review, a reconciliation. This one is opened, read, and dismissed;
 // giving it a nav pill would put a permanent affordance in the chrome for something with no state worth
 // preserving across a navigation.
-export function ConnectionSyncLogDialog({ initialConnectionId = '', onClose }) {
+export function ConnectionSyncLogDialog({ initialConnectionIds = EMPTY_IDS, onClose }) {
   return (
     <AppDialog
       title="Connection sync log"
@@ -438,7 +447,7 @@ export function ConnectionSyncLogDialog({ initialConnectionId = '', onClose }) {
       width="min(860px, 100%)"
       actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
     >
-      <ConnectionSyncLogBody initialConnectionId={initialConnectionId} />
+      <ConnectionSyncLogBody initialConnectionIds={initialConnectionIds} />
     </AppDialog>
   )
 }

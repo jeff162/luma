@@ -4563,7 +4563,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
           `?connection=` a connection card links with, so arriving from one lands filtered to it. */}
       {syncLogOpen ? (
         <ConnectionSyncLogDialog
-          initialConnectionId={syncLogConnectionId}
+          initialConnectionIds={syncLogConnectionId ? [syncLogConnectionId] : []}
           onClose={() => setSyncLogOpen(false)}
         />
       ) : null}

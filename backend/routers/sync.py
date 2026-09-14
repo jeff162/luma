@@ -1951,8 +1951,9 @@ def sync_diagnostics(limit: int = 100,
             f"SELECT * FROM connection_sync_log {where} ORDER BY started_at DESC, id DESC LIMIT ?",
             params,
         ).fetchall()
-        # Labels come from the log's own denormalized columns, not from the connection table: a connection
-        # the user has since disconnected still has rows here, and they must stay filterable and named.
+        # Labels come from the log's own denormalized columns, which name the row as it was written without
+        # a join. Every row's connection still exists: a disconnect deletes its rows with it (`ON DELETE
+        # CASCADE`), so no row can arrive here without the id its pill filters on.
         count_rows = conn.execute(
             """
             SELECT   connection_id, provider, institution, COUNT(*) AS count

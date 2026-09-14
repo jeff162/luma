@@ -657,9 +657,23 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
             self.assertEqual(unfiltered, scoped)
             self.assertEqual({c["connection_id"] for c in unfiltered}, {"conn-1", "conn-2"})
             self.assertEqual(sum(c["count"] for c in unfiltered), 2)
-            # Labelled from the log's own denormalized columns, so a disconnected connection keeps a named,
-            # clickable pill rather than losing it along with its row in the connection table.
             self.assertTrue(all(c["institution"] for c in unfiltered))
+
+    def test_disconnecting_a_connection_deletes_its_rows(self):
+        """A disconnect deletes the connection, and its log rows go with it.
+
+        They used to be kept with `connection_id` nulled. Every disconnected connection's rows then shared
+        one id-less group, whose pill carried whichever institution SQLite happened to pick and could not
+        filter — an empty id reads as "no filter" — so it looked pressed while the list showed everything.
+        Nothing reads the log of a connection that is gone, so the rows are deleted rather than repaired.
+        """
+        self._two_connection_log()
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("DELETE FROM connection WHERE id = 'conn-2'")
+        with self._use_db_path():
+            result = sync_module.sync_diagnostics()
+        self.assertEqual([e["connection_id"] for e in result["entries"]], [self.CONNECTION_ID])
+        self.assertEqual([c["connection_id"] for c in result["counts"]], [self.CONNECTION_ID])
 
 
 class SyncLogMigrationTests(unittest.TestCase):
