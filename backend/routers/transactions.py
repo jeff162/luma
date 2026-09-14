@@ -1033,8 +1033,10 @@ def list_transactions(
                 b.imported_at AS import_batch_imported_at,
                 -- Data-source (sync) provenance for the origin hover: the provider names which
                 -- connection a synced row came from, so two same-institution connections (both
-                -- labeled e.g. "Northgate") are still tellable apart. NULL for CSV/manual batches.
-                bconn.provider AS import_batch_provider,
+                -- labeled e.g. "Northgate") are still tellable apart. Read from the card, not the
+                -- connection, so it outlives a removed connection. NULL for CSV/manual batches.
+                b.provider    AS import_batch_provider,
+                (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed,
                 o.name        AS owner_name,
                 o.color       AS owner_color,
                 t.suspect_duplicate_of,
@@ -1060,7 +1062,6 @@ def list_transactions(
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category pc ON pc.id = c.parent_id
             LEFT JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN connection bconn ON bconn.id = b.connection_id
             LEFT JOIN recurring_series rs ON rs.id = t.recurring_series_id
             LEFT JOIN (
                 SELECT txn_id, MIN(series_id) AS series_id

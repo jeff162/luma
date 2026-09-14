@@ -230,7 +230,6 @@ def _normalize_txn(t: dict) -> dict:
         # prior pending transaction's id, so the sync can convert the pending row in place instead of
         # trashing it and re-adding. NULL for transactions that were never pending.
         "pending_transaction_id": t.get("pending_transaction_id"),
-        "merchant_entity_id":   t.get("merchant_entity_id"),
         "counterparties":       _counterparty_names(t),
         "check_number":         _check_number(t),
         "location":             _location_text(t),

@@ -4199,7 +4199,8 @@ def list_batches():
                    -- Connection provenance for data-source (sync) cards: the provider disambiguates two
                    -- connections at the same institution (e.g. one "Northgate" via Plaid, another via a
                    -- different provider), and institution is the stable label the group header shows.
-                   conn.provider    AS connection_provider,
+                   -- The card's own provider stands in once the connection is removed.
+                   COALESCE(conn.provider, b.provider) AS connection_provider,
                    conn.institution AS connection_institution,
                    EXISTS(
                        SELECT 1

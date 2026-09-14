@@ -198,6 +198,11 @@ auto-confirms on merge. CSV import infers the role from a column's cardinality a
 anything that cannot measure a file must stamp the role deliberately. See
 [`data-model.md`](data-model.md) → *Import batches and profiles*.
 
+**Capture what is helpful.** A captured field is stored on every synced row, and every evidence field
+feeds the ledger's search text whatever its role, so a provider field nothing is likely to use is better
+left out. Plaid's `merchant_entity_id` was dropped on that basis: an opaque id that appeared on a handful of
+rows and was only ever matched by search.
+
 **Where a file importer's declarations go.** With no class to hold a class attribute, a non-adapter
 source registers by name in `services/source_capabilities.py` and every consumer reads through one
 accessor. [Zero-amount rows](#zero-amount-rows) is the worked example, and it has **no default** for the

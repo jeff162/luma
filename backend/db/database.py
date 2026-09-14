@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 54
+CURRENT_VERSION = 55
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1423,6 +1423,37 @@ def _trusted_imports_yield_to_rules(conn):
     _unlock_trusted_import_categories(conn)
 
 
+def _backfill_import_batch_provider(conn):
+    """Copy each sync card's provider from its connection onto the card.
+
+    A card used to name its provider only through `connection_id`, and removing a connection nulls that
+    link, so every row the connection had synced lost its "Connection" line. Cards whose connection is
+    still present are filled here; a card whose connection is already gone has nothing left to copy from
+    and stays NULL. Also a data-init step, since a restored older backup carries cards without the column."""
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"import_batch", "connection"} <= tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if not {"connection_id", "provider"} <= columns:
+        return
+    conn.execute(
+        """UPDATE import_batch
+              SET provider = (SELECT c.provider FROM connection c WHERE c.id = import_batch.connection_id)
+            WHERE provider IS NULL AND connection_id IS NOT NULL"""
+    )
+
+
+@migration(55)
+def _add_import_batch_provider(conn):
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "import_batch" not in tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "provider" not in columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN provider TEXT")
+    _backfill_import_batch_provider(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1459,6 +1490,7 @@ POST_RESTORE_DATA_INIT = {
     24: _backfill_connection_account_mapping,
     25: _widen_unset_csv_terminal_window,
     54: _unlock_trusted_import_categories,
+    55: _backfill_import_batch_provider,
 }
 
 
@@ -2268,6 +2300,10 @@ def init_db(db_path: str | None = None):
                 -- The connection whose sync produced this card (source_kind='connection_sync'); the indexed
                 -- key sync uses to resolve the current period's card. NULL for CSV/marketplace batches.
                 connection_id    TEXT REFERENCES connection(id) ON DELETE SET NULL,
+                -- The provider key of that connection ('plaid', 'simplefin'), written with the card rather
+                -- than read through connection_id, which removing the connection nulls. It is what lets a
+                -- synced row still name its connection afterwards. NULL for CSV/marketplace batches.
+                provider         TEXT,
                 -- Cached Amazon reconciliation "attention" count (a duplicate/split to resolve), with the
                 -- global recon epoch (db_meta 'recon_epoch') it was computed at. Recomputed lazily only when
                 -- the batch's epoch trails the current one; see amazon.reconciliation_attention_count and the

@@ -3161,10 +3161,10 @@ _ORIGIN_COLUMNS_SQL = """
            t.import_evidence_json,
            b.filename    AS import_batch_filename,
            b.imported_at AS import_batch_imported_at,
-           bc.provider   AS import_batch_provider
+           b.provider    AS import_batch_provider,
+           (b.provider IS NOT NULL AND b.connection_id IS NULL) AS import_batch_connection_removed
     FROM   txn t
     LEFT JOIN import_batch b  ON b.id  = t.import_batch_id
-    LEFT JOIN connection  bc  ON bc.id = b.connection_id
     WHERE  t.id IN ({placeholders})
 """
 
@@ -3236,13 +3236,15 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     # reference (specific rows AND coverage entries) with human-readable source context.
     batch_meta: dict[str, dict] = {}
     for row in conn.execute(
-        "SELECT b.id, b.filename, b.imported_at, c.provider "
-        "FROM import_batch b LEFT JOIN connection c ON c.id = b.connection_id"
+        "SELECT b.id, b.filename, b.imported_at, b.provider, "
+        "(b.provider IS NOT NULL AND b.connection_id IS NULL) AS connection_removed "
+        "FROM import_batch b"
     ).fetchall():
         batch_meta[str(row["id"])] = {
-            "source_filename":     row["filename"],
-            "source_imported_at":  row["imported_at"],
-            "source_provider":     row["provider"],
+            "source_filename":           row["filename"],
+            "source_imported_at":        row["imported_at"],
+            "source_provider":           row["provider"],
+            "source_connection_removed": row["connection_removed"],
         }
 
     # This report's own batch, for the hard-reject incoming side: those rows never became `txn` rows,
@@ -3252,6 +3254,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
         "import_batch_filename":    this_batch.get("source_filename"),
         "import_batch_imported_at": this_batch.get("source_imported_at"),
         "import_batch_provider":    this_batch.get("source_provider"),
+        "import_batch_connection_removed": this_batch.get("source_connection_removed"),
     }
 
     def enrich_with_source(target: dict, source_batch_id: Optional[str]) -> dict:

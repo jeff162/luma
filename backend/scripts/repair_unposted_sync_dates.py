@@ -64,7 +64,7 @@ def _period_cards(conn, connection_id):
     return {r["period"]: r["id"] for r in rows}
 
 
-def _ensure_period_card(conn, connection_id, institution, period, cards, apply):
+def _ensure_period_card(conn, connection_id, institution, provider, period, cards, apply):
     """The card for `period`, created if the connection has none. Mirrors `resolve_sync_period_batch` —
     same identity (connection + `sync_period`), same naming — so a card this makes is indistinguishable
     from one the next sync would have made, and the next sync reuses it rather than adding a second."""
@@ -75,10 +75,10 @@ def _ensure_period_card(conn, connection_id, institution, period, cards, apply):
     if apply:
         conn.execute(
             """
-            INSERT INTO import_batch (id, filename, status, source_kind, connection_id, config_snapshot)
-            VALUES (?, ?, 'completed', ?, ?, ?)
+            INSERT INTO import_batch (id, filename, status, source_kind, connection_id, provider, config_snapshot)
+            VALUES (?, ?, 'completed', ?, ?, ?, ?)
             """,
-            (batch_id, f"{institution} · {label}", SYNC_SOURCE_KIND, connection_id,
+            (batch_id, f"{institution} · {label}", SYNC_SOURCE_KIND, connection_id, provider,
              json.dumps({"sync_period": period})),
         )
     cards[period] = batch_id
@@ -195,7 +195,7 @@ def repair(conn, apply=False):
         if connection_id not in cards_by_connection:
             cards_by_connection[connection_id] = _period_cards(conn, connection_id)
         institution = row["institution"] or row["provider"] or "Data source"
-        target = _ensure_period_card(conn, connection_id, institution, period,
+        target = _ensure_period_card(conn, connection_id, institution, row["provider"], period,
                                      cards_by_connection[connection_id], apply)
         moves[(row["import_batch_id"], target)].append(row)
         leaving[row["import_batch_id"]] += 1

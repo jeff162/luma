@@ -313,7 +313,7 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertEqual(adapter.fetch_transactions(cfg, "tok-1"), [
                 {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
                  "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False,
-                 "authorized_date": None, "merchant_entity_id": None, "counterparties": [],
+                 "authorized_date": None, "counterparties": [],
                  "check_number": None, "location": None, "currency": None}
             ])
 
@@ -344,7 +344,7 @@ class PlaidCurrencyTests(unittest.TestCase):
         return {"plaid_transaction_id": txn_id, "plaid_account_id": account, "amount": 12.5,
                 "merchant_name": "Store", "raw_name": "STORE", "date": "2026-01-01",
                 "authorized_date": None, "is_pending": False, "pending_transaction_id": None,
-                "merchant_entity_id": None, "counterparties": [], "check_number": None,
+                "counterparties": [], "check_number": None,
                 "location": None, "currency": currency}
 
     def _sync(self, page, ledger_currency="USD"):

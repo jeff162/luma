@@ -81,7 +81,6 @@ class PlaidAdapter(ProviderAdapter):
         {"key": "authorized_date",      "label": "Transaction date (as well as posted date)", "locked": True,  "default_on": True},
         {"key": "provider_description", "label": "Original description",                      "locked": True,  "default_on": True},
         {"key": "counterparties",       "label": "Merchant and counterparties",               "locked": True,  "default_on": True},
-        {"key": "merchant_entity_id",   "label": "Merchant identifier",                       "locked": True,  "default_on": True},
         {"key": "check_number",         "label": "Check number",                              "locked": True,  "default_on": True},
         {"key": "location",             "label": "Location",                                  "locked": False, "default_on": False},
     ]
@@ -100,7 +99,6 @@ class PlaidAdapter(ProviderAdapter):
             "date":                    t["date"],
             "authorized_date":         t.get("authorized_date"),
             "is_pending":              t["is_pending"],
-            "merchant_entity_id":      t.get("merchant_entity_id"),
             "counterparties":          t.get("counterparties") or [],
             "check_number":            t.get("check_number"),
             "location":                t.get("location"),

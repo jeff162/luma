@@ -92,7 +92,8 @@ class PlaidNormalizationTests(unittest.TestCase):
         normalized = PlaidAdapter._normalize_txn(plaid_service._normalize_txn(PLAID_TXN))
         self.assertEqual(normalized["authorized_date"], "2026-07-02")
         self.assertEqual(normalized["check_number"], "1042")
-        self.assertEqual(normalized["merchant_entity_id"], "ent-cvs")
+        # Plaid sends a merchant entity id; nothing reads it, so it is not carried across.
+        self.assertNotIn("merchant_entity_id", normalized)
         self.assertEqual(normalized["counterparties"], ["CVS Caremark"])
         # No Plaid field names survive the seam.
         self.assertNotIn("plaid_transaction_id", normalized)
@@ -111,7 +112,6 @@ class SyncEvidenceTests(unittest.TestCase):
         txn = {
             "raw_name": "CAREMARK MAIL",
             "authorized_date": "2026-07-02",
-            "merchant_entity_id": "ent-cvs",
             "counterparties": ["CVS Caremark"],
             "check_number": "1042",
             "location": "1 Main St, Boston, MA",
@@ -132,7 +132,7 @@ class SyncEvidenceTests(unittest.TestCase):
         # provider's descriptor and counterparties up with no per-source handling.
         raw = build_sync_evidence(
             {"raw_name": "CAREMARK MAIL", "counterparties": ["CVS Caremark"], "authorized_date": None,
-             "merchant_entity_id": None, "check_number": None, "location": None},
+             "check_number": None, "location": None},
             source_label="CREDIT CARD ···4103", captured_fields=set(),
         )
         texts = collect_duplicate_match_texts(
@@ -150,10 +150,10 @@ class SyncEvidenceTests(unittest.TestCase):
         without = self._evidence(_captured=set())
         self.assertNotIn("Location", headers(without))
         # Locked captures stay regardless of the user's optional selection.
-        self.assertEqual(headers(without), {"Counterparty", "Merchant ID", "Check number", "Authorized date"})
+        self.assertEqual(headers(without), {"Counterparty", "Check number", "Authorized date"})
 
     def test_empty_values_are_omitted_rather_than_stored_blank(self):
-        ev = self._evidence(merchant_entity_id=None, check_number="", counterparties=[], _captured=set())
+        ev = self._evidence(check_number="", counterparties=[], _captured=set())
         self.assertEqual({f["header"] for f in ev.get("extra_text_fields", [])}, {"Authorized date"})
 
     def test_only_the_counterparty_is_offered_to_the_duplicate_text_matcher(self):
@@ -165,7 +165,7 @@ class SyncEvidenceTests(unittest.TestCase):
         ev = self._evidence()
         roles = {f["header"]: f.get("role") for f in ev["extra_text_fields"]}
         self.assertIsNone(roles["Counterparty"])
-        for header in ("Merchant ID", "Check number", "Authorized date", "Location"):
+        for header in ("Check number", "Authorized date", "Location"):
             self.assertEqual(roles[header], EVIDENCE_ROLE_CATEGORICAL, header)
 
         # The behavior the roles buy: only the counterparty reaches the cross-account matcher.

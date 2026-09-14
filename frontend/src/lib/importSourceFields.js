@@ -76,7 +76,8 @@ export function getTxnOriginRows(txn) {
       : null
     // Labeled "Source" (not "Source file") because a data-connection batch isn't a file. For a synced
     // batch the provider is surfaced as its own row below so two same-institution connections stay
-    // distinguishable from the hover alone (the group header carries the same provider cue).
+    // distinguishable from the hover alone (the group header carries the same provider cue). The card
+    // keeps its provider after the connection is removed, and the row says so.
     rows.push({
       key: 'source_file',
       label: 'Source',
@@ -88,7 +89,9 @@ export function getTxnOriginRows(txn) {
       rows.push({
         key: 'connection',
         label: 'Connection',
-        value: providerLabel(txn.import_batch_provider),
+        value: txn.import_batch_connection_removed
+          ? `${providerLabel(txn.import_batch_provider)} (removed)`
+          : providerLabel(txn.import_batch_provider),
         scope: 'meta',
       })
     }

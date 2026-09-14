@@ -409,10 +409,8 @@ def build_sync_evidence(txn: dict, *, source_label: str, captured_fields: set[st
 
     for name in (txn.get("counterparties") or []):
         add("Counterparty", name)
-    # An opaque provider id and a checkbook number that restarts at 1 on every account: worth reading,
-    # worthless as evidence two rows are the same charge (two accounts both writing check #1042 is
-    # ordinary, and a shared merchant id says the same *merchant*, not the same transaction).
-    add("Merchant ID", txn.get("merchant_entity_id"), role=EVIDENCE_ROLE_CATEGORICAL)
+    # A checkbook number restarts at 1 on every account: worth reading, worthless as evidence two rows are
+    # the same charge (two accounts both writing check #1042 is ordinary).
     add("Check number", txn.get("check_number"), role=EVIDENCE_ROLE_CATEGORICAL)
     # Recorded as text so the authorized/posted disagreement is visible on the row itself, not only
     # inferable from the column. The dedupe sweep reads the real `authorized_date` column for its date

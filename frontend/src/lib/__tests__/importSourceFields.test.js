@@ -32,6 +32,19 @@ describe('getTxnOriginRows source/connection rows', () => {
     expect(row({ merchant_name: 'X', import_batch_filename: 'export.csv' }, 'connection')).toBeUndefined()
   })
 
+  it('still names the connection after it was removed, and says so', () => {
+    const removed = row(
+      {
+        merchant_name: 'X',
+        import_batch_filename: 'Northgate · Initial import',
+        import_batch_provider: 'plaid',
+        import_batch_connection_removed: 1,
+      },
+      'connection',
+    )
+    expect(removed).toMatchObject({ label: 'Connection', value: 'Plaid (removed)' })
+  })
+
   it('keeps the "not from an import" placeholder labeled Source', () => {
     const source = row({ merchant_name: 'X' }, 'source_file')
     expect(source.label).toBe('Source')

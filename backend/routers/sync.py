@@ -133,10 +133,11 @@ def resolve_initial_sync_batch(conn, connection) -> str:
     filename = f"{institution} · Initial import"
     conn.execute(
         """
-        INSERT INTO import_batch (id, filename, status, source_kind, connection_id, config_snapshot)
-        VALUES (?, ?, 'completed', ?, ?, ?)
+        INSERT INTO import_batch (id, filename, status, source_kind, connection_id, provider, config_snapshot)
+        VALUES (?, ?, 'completed', ?, ?, ?, ?)
         """,
-        (batch_id, filename, SYNC_SOURCE_KIND, connection["id"], json.dumps({"initial_backfill": True})),
+        (batch_id, filename, SYNC_SOURCE_KIND, connection["id"], connection["provider"],
+         json.dumps({"initial_backfill": True})),
     )
     return batch_id
 
@@ -175,10 +176,11 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
     # connection_account, and these cards deliberately record none (see _record_sync_coverage).
     conn.execute(
         """
-        INSERT INTO import_batch (id, filename, status, source_kind, connection_id, config_snapshot)
-        VALUES (?, ?, 'completed', ?, ?, ?)
+        INSERT INTO import_batch (id, filename, status, source_kind, connection_id, provider, config_snapshot)
+        VALUES (?, ?, 'completed', ?, ?, ?, ?)
         """,
-        (batch_id, filename, SYNC_SOURCE_KIND, connection["id"], json.dumps({"sync_period": period_key})),
+        (batch_id, filename, SYNC_SOURCE_KIND, connection["id"], connection["provider"],
+         json.dumps({"sync_period": period_key})),
     )
     return batch_id
 

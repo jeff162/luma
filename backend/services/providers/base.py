@@ -49,8 +49,8 @@ Optional capture fields, all provider-neutral and all absent-tolerant, declared 
 - `authorized_date` — when the charge was authorized, as against `date` (when it posted). The single
   most valuable one for duplicate detection: two sources for the same charge commonly report
   *different* ones of these, which is what made real duplicates look like near-misses on date.
-- `provider_description`, `counterparties`, `merchant_entity_id` — identity beyond the descriptor
-  string, which each source truncates differently.
+- `provider_description`, `counterparties` — identity beyond the descriptor string, which each source
+  truncates differently.
 - `check_number` — folded into the merchant as `Check #<n>` on insert, matching the CSV convention, so
   the check discriminator can tell two same-amount checks apart.
 - `location` — enrichment only; the one field that defaults off.
