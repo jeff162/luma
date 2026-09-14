@@ -889,6 +889,7 @@ export default function Transactions() {
             onUpdateTags={updateTags}
             onUpdatePurchase={updatePurchase}
             onUpdateDocuments={updateDocuments}
+            onMarkReviewed={bulkMode ? undefined : rowActions.markReviewed}
           />
         )
       case 'amount':

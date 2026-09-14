@@ -649,7 +649,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, onUpdateDocuments, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, onUpdateDocuments, onMarkReviewed, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -716,15 +716,36 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
       <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         {txn.needs_review ? (
           <RowTooltip
-            content={<span>Needs review — recently imported and not yet looked over. Clears when you edit its category or mark it reviewed.</span>}
+            content={<span>Needs review — recently imported and not yet looked over. {onMarkReviewed
+              ? 'Click to mark it reviewed.'
+              : 'Clears when you edit its category or mark it reviewed.'}</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
-            <span
-              aria-label="Needs review"
-              style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--review-marker-color)', fontSize: 13, fontWeight: 700, cursor: 'default' }}
-            >
-              R
-            </span>
+            {onMarkReviewed ? (
+              // Clicking marks the row reviewed, through the same action as the row menu (which also
+              // raises the undo toast). Only offered where the host wires the row actions; elsewhere the
+              // marker stays informational. The row stays where it is — see ui-patterns → lingers.
+              <button
+                type="button"
+                aria-label="Needs review — mark reviewed"
+                onClick={event => { event.stopPropagation(); onMarkReviewed(txn) }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  minWidth: 18, minHeight: 18, padding: '0 2px', margin: '-2px 0',
+                  background: 'none', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  color: 'var(--review-marker-color)', fontSize: 13, fontWeight: 700, lineHeight: 1,
+                }}
+              >
+                R
+              </button>
+            ) : (
+              <span
+                aria-label="Needs review"
+                style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--review-marker-color)', fontSize: 13, fontWeight: 700, cursor: 'default' }}
+              >
+                R
+              </span>
+            )}
           </RowTooltip>
         ) : null}
         {txn.recurring_series_id ? (

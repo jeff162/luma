@@ -309,6 +309,7 @@ export default function TransactionListTable({
             onUpdateTags={(id, tags, blockedTags) => patchRows(id, { tags, blocked_tags: blockedTags })}
             onUpdatePurchase={(id, purchase) => patchRows(id, { purchase })}
             onUpdateDocuments={(id, documents) => patchRows(id, { documents })}
+            onMarkReviewed={rowMenuEnabled ? rowActions.markReviewed : undefined}
           />
         )
       case 'amount':

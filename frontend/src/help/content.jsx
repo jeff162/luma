@@ -534,7 +534,7 @@ export const HELP_TOPICS = [
           what it refers to.
         </p>
         <ul>
-          <li><strong>R</strong> &mdash; the transaction is new and <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.</li>
+          <li><strong>R</strong> &mdash; the transaction is new and <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>. Clicking it marks the transaction reviewed.</li>
           <li><strong>Split (N)</strong> &mdash; the amount is <HelpLink to="/help/transaction-splits">divided across categories</HelpLink>.</li>
           <li><strong>&#128279;</strong> &mdash; one of <HelpLink to="/help/multi-payment-purchases">several payments for one purchase</HelpLink>.</li>
           <li><strong>&#8617;</strong> &mdash; a <HelpLink to="/help/reimbursable-expenses">reimbursable expense</HelpLink> or its repayment.</li>
@@ -564,8 +564,11 @@ export const HELP_TOPICS = [
           <li>Editing the transaction's category clears it. Correcting or setting the category counts as reviewing it.
           </li>
           <li>
-            <strong>Mark reviewed</strong>, on the row's right-click menu and in the bulk-edit bar, clears it
-            without changing anything else. This covers the common case where everything is correct.
+            Clicking the <strong>R</strong> marker, or <strong>Mark reviewed</strong> on the row's right-click
+            menu or in the bulk-edit bar, clears it without changing anything else. This covers the common
+            case where everything is correct. A single click shows an <strong>Undo</strong> for a few seconds,
+            for a transaction that turns out to need checking elsewhere first, and the row stays where it is
+            in the list until <strong>Refresh</strong>, even with the Needs review filter on.
             The quick filter beside the search box, just above the transaction table, has a <em>Needs review</em> choice so all the transactions
             to be reviewed can be cleared at once in a bulk-edit option after the ones which needed
             editing have been dealt with. The main filter at the top of the page can be used to limit

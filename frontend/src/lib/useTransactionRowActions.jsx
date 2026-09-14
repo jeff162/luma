@@ -25,7 +25,7 @@
  *                              `onOpenSplit` so a split row's marker opens this same editor.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
 import { useTags } from './useTags.js'
@@ -51,6 +51,9 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const [ruleModalState, setRuleModalState] = useState(null)
   // Pre-removal membership snapshot backing the "Removed from recurring series · Undo" toast.
   const [recurringUndo, setRecurringUndo] = useState(null)
+  // The row last marked reviewed, backing the "Marked reviewed · Undo" toast. Only the latest: reviewing
+  // down a list replaces it on each click, and an older one can be re-flagged from bulk edit.
+  const [reviewUndo, setReviewUndo] = useState(null)
   // The transaction whose split is being edited. Owned here rather than per host so the ledger, every
   // detail list, and the row menu all reach one editor — and so a host wires it by passing
   // `openSplitFromMenu` to its CategoryCell rather than repeating the dialog.
@@ -141,10 +144,26 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       await txnMutations.markReviewed(target.id)
       // The row lingers in place (per the linger pattern); patching the flag clears its marker.
       reconcileRow?.(target.id, { needs_review: 0 })
+      setReviewUndo({ txnId: target.id, label: getTxnMerchantLabel(target) })
     } catch (err) {
       reportActionFailure('Could not mark as reviewed', err)
     }
   }
+
+  async function undoMarkReviewed() {
+    const snap = reviewUndo
+    if (!snap) return
+    setReviewUndo(null)
+    try {
+      await txnMutations.markNeedsReview(snap.txnId)
+      reconcileRow?.(snap.txnId, { needs_review: 1 })
+    } catch (err) {
+      reportActionFailure('Could not flag for review again', err)
+    }
+  }
+
+  // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
+  const closeReviewUndo = useCallback(() => setReviewUndo(null), [])
 
   // "Mark as recurring" routes through the rule editor (recurring series are rule-backed): an existing
   // rule-backed member edits that rule; a non-rule detected member jumps to its card on the Recurring
@@ -316,6 +335,9 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     recurringUndo,
     setRecurringUndo,
     undoRemoveFromRecurring,
+    reviewUndo,
+    undoMarkReviewed,
+    closeReviewUndo,
     actionError,
     setActionError,
     handleNoteSave,
@@ -336,6 +358,7 @@ export function TransactionRowActionsChrome({ controller }) {
     ruleModalState, setRuleModalState,
     ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring, restoreToRecurring,
     recurringUndo, setRecurringUndo, undoRemoveFromRecurring,
+    reviewUndo, undoMarkReviewed, closeReviewUndo,
     actionError, setActionError,
     handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
@@ -441,6 +464,16 @@ export function TransactionRowActionsChrome({ controller }) {
             : "This transaction won't count toward the series across future scans."}
           onUndo={undoRemoveFromRecurring}
           onDismiss={() => setRecurringUndo(null)}
+        />
+      ) : null}
+      {reviewUndo ? (
+        // Keyed on the row so each new review restarts the countdown rather than inheriting the last.
+        <UndoToast
+          key={reviewUndo.txnId}
+          title="Marked reviewed"
+          description={`“${reviewUndo.label}” no longer needs review.`}
+          onUndo={undoMarkReviewed}
+          onDismiss={closeReviewUndo}
         />
       ) : null}
       {actionError ? (

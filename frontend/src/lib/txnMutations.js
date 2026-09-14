@@ -106,6 +106,17 @@ export const txnMutations = {
     return result
   },
 
+  // Flag a single row as needing review again — the undo behind "Marked reviewed". Same bulk endpoint,
+  // through its `set_review_status` action.
+  async markNeedsReview(txnId) {
+    const result = await api.bulkUpdateTransactions(
+      { mode: 'ids', ids: [txnId] },
+      [{ type: 'set_review_status', needs_review: true }],
+    )
+    notifyTransactionsChanged()
+    return result
+  },
+
   async trashTransaction(txnId) {
     const result = await api.trashTransaction(txnId)
     notifyTransactionsChanged()

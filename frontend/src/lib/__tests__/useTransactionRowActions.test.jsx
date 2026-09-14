@@ -21,6 +21,7 @@ vi.mock('../api.js', () => ({
   api: {
     getMatchingRuleForTransaction: vi.fn(),
     getTags: vi.fn(() => Promise.resolve([])),
+    bulkUpdateTransactions: vi.fn(() => Promise.resolve({ ok: true })),
   },
 }))
 
@@ -156,5 +157,58 @@ describe('saving a split', () => {
     const get = controllerFor({ reconcileRow: vi.fn(), onSplitSaved })
     get().handleSplitSaved('t1', { is_split: true, parts: [] })
     expect(onSplitSaved).toHaveBeenCalledWith('t1', { is_split: true, parts: [] })
+  })
+})
+
+
+/*
+ * Marking a row reviewed offers an undo.
+ *
+ * Reviewing is usually settled on the spot, but not always — a charge may need checking on another site
+ * first — so the press is reversible for a few seconds. The row itself never moves: the flag is patched
+ * onto it in place both ways, so a list filtered to "Needs review" does not reshuffle under repeated
+ * clicks (see ui-patterns → "An edited transaction lingers where it was found").
+ */
+describe('marking reviewed', () => {
+  function ReviewHarness({ reconcileRow }) {
+    const controller = useTransactionRowActions({ onOpenDetail: () => {}, reconcileRow })
+    return (
+      <>
+        <button onClick={() => controller.markReviewed(TXN)}>review</button>
+        <TransactionRowActionsChrome controller={controller} />
+      </>
+    )
+  }
+
+  it('clears the flag in place and offers an undo that sets it again', async () => {
+    const user = userEvent.setup()
+    const reconcileRow = vi.fn()
+    render(<MemoryRouter><ReviewHarness reconcileRow={reconcileRow} /></MemoryRouter>)
+
+    await user.click(screen.getByText('review'))
+    await waitFor(() => expect(reconcileRow).toHaveBeenCalledWith('t1', { needs_review: 0 }))
+    expect(api.bulkUpdateTransactions).toHaveBeenCalledWith(
+      { mode: 'ids', ids: ['t1'] }, [{ type: 'mark_reviewed' }],
+    )
+    expect(screen.getByText('Marked reviewed')).toBeTruthy()
+
+    await user.click(screen.getByText('Undo'))
+    await waitFor(() => expect(reconcileRow).toHaveBeenCalledWith('t1', { needs_review: 1 }))
+    expect(api.bulkUpdateTransactions).toHaveBeenLastCalledWith(
+      { mode: 'ids', ids: ['t1'] }, [{ type: 'set_review_status', needs_review: true }],
+    )
+    expect(screen.queryByText('Marked reviewed')).toBeNull()
+  })
+
+  it('offers no undo when the write failed, since nothing changed', async () => {
+    const user = userEvent.setup()
+    const reconcileRow = vi.fn()
+    api.bulkUpdateTransactions.mockRejectedValueOnce(new Error('nope'))
+    render(<MemoryRouter><ReviewHarness reconcileRow={reconcileRow} /></MemoryRouter>)
+
+    await user.click(screen.getByText('review'))
+    expect(await screen.findByText('Could not mark as reviewed')).toBeTruthy()
+    expect(reconcileRow).not.toHaveBeenCalled()
+    expect(screen.queryByText('Marked reviewed')).toBeNull()
   })
 })
