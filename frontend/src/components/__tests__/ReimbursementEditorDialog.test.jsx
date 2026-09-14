@@ -29,6 +29,7 @@ vi.mock('../../lib/api.js', () => ({
     deleteReimbursement: vi.fn(),
     getReimbursementSettings: vi.fn(),
     moveReimbursementClaim: vi.fn(),
+    getCategories: vi.fn(),
   },
 }))
 
@@ -410,5 +411,48 @@ describe('the footer of a completed reimbursement', () => {
     expect(await screen.findByRole('button', { name: 'Cancel' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Complete' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+  })
+})
+
+
+/*
+ * Opened from a ledger row's ↩ marker, the dialog is handed no category list.
+ *
+ * The marker cell holds no categories, and it once passed an empty array: the completion picker then
+ * offered nothing but "New group", which read as though a group were wanted, and a leftover could not be
+ * moved anywhere. Every other host passes a real list, which is why the tests above (which also do) never
+ * saw it. This is the reported case in miniature: no `categories`, no `onAddCategory`.
+ */
+describe('completing from a host with no category list', () => {
+  function openWithoutCategories(reimbursement) {
+    api.getReimbursement.mockResolvedValue(reimbursement)
+    return render(
+      <StrictMode>
+        <ReimbursementEditorDialog linkId="link-1" txnId="t1" onClose={() => {}} onSaved={() => {}} />
+      </StrictMode>,
+    )
+  }
+
+  it('loads the categories itself, so the leftover can be moved into a real one', async () => {
+    api.getCategories.mockResolvedValue(CATEGORIES)
+    api.completeReimbursement.mockResolvedValue({ ...record(), completed: true })
+    openWithoutCategories(record())
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(screen.getByRole('button', { name: /Choose category/ }))
+    await userEvent.click(await screen.findByText('Movies & Events'))
+    await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
+
+    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
+      'link-1', { category_id: 'movies', target_txn_id: 't1' },
+    ))
+    expect(api.getCategories).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fetch when the host already passed the list', async () => {
+    open(record())
+    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    expect(await screen.findByRole('button', { name: /Choose category/ })).toBeTruthy()
+    expect(api.getCategories).not.toHaveBeenCalled()
   })
 })

@@ -97,6 +97,14 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   const [completeOpen, setCompleteOpen] = useState(false)
   const [completeCategory, setCompleteCategory] = useState(null)
   const [completeTarget, setCompleteTarget] = useState('')
+  // The category list the completion picker offers. A host that already holds the list passes it; a host
+  // that does not (the ledger row's ↩ marker has no categories of its own) leaves it empty, and the dialog
+  // loads it the first time the question is asked. Offering the picker an empty list is not a smaller
+  // version of the right answer: it lists nothing but "New group", which reads as though a group is wanted.
+  const [loadedCategories, setLoadedCategories] = useState(null)
+  // Categories created from the picker here, kept locally so a new one is listed and shown as selected
+  // even where the host passed no `onAddCategory` to fold it into its own list.
+  const [addedCategories, setAddedCategories] = useState([])
 
   useEffect(() => {
     let cancelled = false
@@ -119,6 +127,26 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [linkId])
+
+  const hostHasCategories = Array.isArray(categories) && categories.length > 0
+  useEffect(() => {
+    if (!completeOpen || hostHasCategories || loadedCategories) return undefined
+    let cancelled = false
+    api.getCategories()
+      .then(list => { if (!cancelled) setLoadedCategories(Array.isArray(list) ? list : []) })
+      .catch(err => { if (!cancelled) setError(err?.message || 'The categories could not be loaded.') })
+    return () => { cancelled = true }
+  }, [completeOpen, hostHasCategories, loadedCategories])
+
+  const baseCategories = hostHasCategories ? categories : (loadedCategories || [])
+  const pickerCategories = addedCategories.length
+    ? [...baseCategories, ...addedCategories.filter(added => !baseCategories.some(c => c.id === added.id))]
+    : baseCategories
+
+  function handleAddCategory(category) {
+    setAddedCategories(prev => (prev.some(c => c.id === category.id) ? prev : [...prev, category]))
+    onAddCategory?.(category)
+  }
 
   // The household default, so the reminder control can say what "following the default" works out to
   // for *this* record rather than naming a rule the reader then has to apply themselves.
@@ -430,11 +458,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
                   <span style={{ color: 'var(--muted)' }}>Which category does it belong to?</span>
                   <CategoryPicker
                     value={completeCategory}
-                    categories={categories}
+                    categories={pickerCategories}
                     compact
                     showSelectedBadge
                     onChange={setCompleteCategory}
-                    onAddCategory={onAddCategory}
+                    onAddCategory={handleAddCategory}
                     // The picker portals its dropdown to <body> at 1100, which is behind an AppDialog
                     // (1200) — it has to be raised to be visible from inside one.
                     panelZIndex={1300}

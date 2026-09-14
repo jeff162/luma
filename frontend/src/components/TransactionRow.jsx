@@ -981,12 +981,12 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
           />
         ) : null}
         {editingReimbursement ? (
-          /* Owned here for the same reason the purchase editor beside it is: this dialog needs nothing
-             from the host but somewhere to report the result. */
+          /* Owned here for the same reason the purchase editor beside it is. This cell holds no category
+             list, so none is passed: the dialog loads its own when completing asks for a category. An
+             empty array was passed here once, and the completion picker offered nothing but "New group". */
           <ReimbursementEditorDialog
             linkId={editingReimbursement}
             txnId={txn.id}
-            categories={[]}
             onClose={() => setEditingReimbursement(null)}
             onSaved={() => onUpdateReimbursements?.(txn.id)}
           />
