@@ -3,7 +3,7 @@
 
 import { useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE, ROW_HOVER_OPEN_DELAY_MS } from '../ui.jsx'
+import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE, ROW_HOVER_OPEN_DELAY_MS, RefreshButton} from '../ui.jsx'
 import SplitEditorDialog from '../SplitEditorDialog.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
@@ -711,7 +711,6 @@ export function AmazonReconciliationDialog({
     } },
   ]
 
-  const busyOrLoading = busy || loading
   const chromeButtonStyle = {
     background: 'var(--surface2)', border: '1px solid var(--border)',
     borderRadius: 6, padding: '4px 10px', cursor: 'pointer', color: 'var(--muted)', fontSize: 13,
@@ -722,15 +721,17 @@ export function AmazonReconciliationDialog({
         <FeatureExplainer topic="amazon-reconciliation" placement="bottom-left" />
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 15 }}>Amazon reconciliation</div>
+        <div style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+          Amazon reconciliation
+          {onReload ? (
+            <RefreshButton onRefresh={onReload} loading={loading} disabled={busy}
+              onMouseDown={e => e.stopPropagation()} />
+          ) : null}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>
           How this import&apos;s orders line up with the card charges in your ledger.
         </div>
       </div>
-      {onReload ? (
-        <button type="button" title="Refresh" disabled={busyOrLoading} onClick={onReload}
-          onMouseDown={e => e.stopPropagation()} style={chromeButtonStyle}>↻ Refresh</button>
-      ) : null}
       {onMinimize ? (
         <button type="button" title="Minimize to nav bar (state is preserved — click the pill to restore)"
           onClick={onMinimize} onMouseDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>

@@ -568,7 +568,7 @@ export const HELP_TOPICS = [
             menu or in the bulk-edit bar, clears it without changing anything else. This covers the common
             case where everything is correct. A single click shows an <strong>Undo</strong> for a few seconds,
             for a transaction that turns out to need checking elsewhere first, and the row stays where it is
-            in the list until <strong>Refresh</strong>, even with the Needs review filter on.
+            in the list until the <strong>↻</strong> beside the page title refreshes it, even with the Needs review filter on.
             The quick filter beside the search box, just above the transaction table, has a <em>Needs review</em> choice so all the transactions
             to be reviewed can be cleared at once in a bulk-edit option after the ones which needed
             editing have been dealt with. The main filter at the top of the page can be used to limit

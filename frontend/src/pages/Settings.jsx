@@ -8,9 +8,10 @@ import { NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Toggle, Tooltip } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
+import { useErrorLog } from '../lib/useErrorLog.js'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -1024,7 +1025,7 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
   )
 }
 
-function StickySection({ title, description, actions, children, defaultCollapsed = true, scrollContainerRef = null, open: controlledOpen, onOpenChange }) {
+function StickySection({ title, description, actions, refresh = null, children, defaultCollapsed = true, scrollContainerRef = null, open: controlledOpen, onOpenChange }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(!defaultCollapsed)
   const sectionRef = useRef(null)
   const open = controlledOpen ?? uncontrolledOpen
@@ -1113,7 +1114,9 @@ function StickySection({ title, description, actions, children, defaultCollapsed
               color: 'inherit',
               cursor: 'pointer',
               textAlign: 'left',
-              flex: 1,
+              // Sized to its content rather than stretched, so a refresh can sit against the title; the
+              // spacer below keeps the rest of the row a place to click open.
+              flex: '0 1 auto',
               minWidth: 0,
             }}
           >
@@ -1137,6 +1140,9 @@ function StickySection({ title, description, actions, children, defaultCollapsed
               {description ? <span style={{ fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.45 }}>{description}</span> : null}
             </span>
           </button>
+          {/* Only while open: a closed section has nothing on screen to reload. */}
+          {open && refresh ? <div style={{ flexShrink: 0 }}>{refresh}</div> : null}
+          <div aria-hidden="true" onClick={() => setOpen(!open)} style={{ flex: 1, alignSelf: 'stretch', cursor: 'pointer' }} />
           {actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
         </div>
       </div>
@@ -3087,6 +3093,10 @@ export default function Settings() {
   }
 
   const canManageEnvironment = !authEnabled || currentUser?.role === 'admin'
+  // Read here rather than inside the section so its refresh can sit on the section's title, where every
+  // refresh control goes. It still reads only while the section is open.
+  const errorLogSection = bindSection('errorLog')
+  const errorLog = useErrorLog(canManageEnvironment && !!errorLogSection.open)
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -3138,9 +3148,10 @@ export default function Settings() {
               title="Error log"
               description="Errors the server recorded, newest first, for when something did not work and the screen did not say why."
               scrollContainerRef={settingsScrollRef}
-              {...bindSection('errorLog')}
+              refresh={<RefreshButton onRefresh={errorLog.load} loading={errorLog.loading} />}
+              {...errorLogSection}
             >
-              <ErrorLogSection />
+              <ErrorLogSection log={errorLog.log} error={errorLog.error} />
             </StickySection>
           )}
 

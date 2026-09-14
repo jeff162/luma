@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton } from '../components/ui.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
@@ -2458,15 +2458,23 @@ export default function Categories() {
 
                 <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>
-                      Matching transactions
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>
+                        Matching transactions
+                      </div>
+                      {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
+                        server on demand to drop rows that no longer match the selected category. */}
+                      <RefreshButton
+                        onRefresh={() => setMatchingReloadNonce(n => n + 1)}
+                        loading={matchingTxnsLoading}
+                        disabled={!matchingTxnsKey}
+                        title="Refresh — re-query the list and drop transactions that no longer match"
+                      />
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                         {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
                       </div>
-                      {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
-                        server on demand to drop rows that no longer match the selected category. */}
                       {showReimbursements ? (
                         <Button
                           variant="ghost"
@@ -2477,15 +2485,6 @@ export default function Categories() {
                           Reimbursements
                         </Button>
                       ) : null}
-                      <Button
-                        variant="ghost"
-                        small
-                        onClick={() => setMatchingReloadNonce(n => n + 1)}
-                        disabled={matchingTxnsLoading || !matchingTxnsKey}
-                        title="Re-query the list and drop transactions that no longer match"
-                      >
-                        ↻ Refresh
-                      </Button>
                       <Button
                         variant="ghost"
                         small

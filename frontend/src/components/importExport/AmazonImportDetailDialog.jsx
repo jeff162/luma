@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo, useState } from 'react'
-import { Tooltip, ROW_HOVER_OPEN_DELAY_MS } from '../ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton} from '../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
@@ -139,13 +139,14 @@ export function AmazonImportDetailDialog({
         <FeatureExplainer topic="amazon-import-detail" placement="bottom-left" />
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 15 }}>Amazon import detail</div>
+        <div style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+          Amazon import detail
+          {onReload ? (
+            <RefreshButton onRefresh={onReload} loading={loading} onMouseDown={e => e.stopPropagation()} />
+          ) : null}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>What this import did, and which file each row came from.</div>
       </div>
-      {onReload ? (
-        <button type="button" title="Refresh" disabled={loading} onClick={onReload}
-          onMouseDown={e => e.stopPropagation()} style={chromeButtonStyle}>↻ Refresh</button>
-      ) : null}
       {onMinimize ? (
         <button type="button" title="Minimize to nav bar (state is preserved — click the pill to restore)"
           onClick={onMinimize} onMouseDown={e => e.stopPropagation()} style={chromeButtonStyle}>– Minimize</button>

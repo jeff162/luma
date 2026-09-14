@@ -37,7 +37,7 @@ import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { DUPLICATE_REPORT_COLUMNS_PREF_KEY } from '../lib/importExport/constants.js'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
-import { Button, COMPACT_ACTION_BTN_STYLE, Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
+import { Button, COMPACT_ACTION_BTN_STYLE, Tooltip, ROW_HOVER_OPEN_DELAY_MS, RefreshButton} from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { MatchReport } from './importExport/MatchReport.jsx'
 import { TransactionMatchCell, SourceFileLink } from './importExport/TransactionMatchCell.jsx'
@@ -620,27 +620,19 @@ export default function UnifiedDuplicatesDialog({
         <FeatureExplainer topic="duplicate-report" placement="bottom-left" />
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 15 }}>Duplicate detection report — {title}</div>
+        <div style={{ fontWeight: 600, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+          Duplicate detection report — {title}
+          {onReload ? (
+            <RefreshButton onRefresh={onReload} loading={loading} disabled={pendingBulk}
+              onMouseDown={e => e.stopPropagation()} />
+          ) : null}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>
           {accountFilter?.id
             ? `${scopedEntries.length} duplicate${scopedEntries.length === 1 ? '' : 's'} for ${accountFilter.name}`
             : `${entries.length} total · ${hardRejectCount} rejected at import · ${softFlagCount} flagged for review`}
         </div>
       </div>
-      {onReload ? (
-        <button
-          type="button"
-          title="Refresh"
-          disabled={loading || pendingBulk}
-          onClick={onReload}
-          onMouseDown={e => e.stopPropagation()}
-          style={{
-            background: 'var(--surface2)', border: '1px solid var(--border)',
-            borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-            color: 'var(--muted)', fontSize: 13,
-          }}
-        >↻ Refresh</button>
-      ) : null}
       {onMinimize ? (
         <button
           type="button"

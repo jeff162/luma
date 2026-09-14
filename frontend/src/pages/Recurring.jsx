@@ -22,8 +22,7 @@ import { api } from '../lib/api.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
   PageHeader, Spinner, Button, Select, Input, EmptyState, AppDialog, SegmentedToggle,
-  getFloatingPanelSurfaceStyle,
-} from '../components/ui.jsx'
+  getFloatingPanelSurfaceStyle, RefreshButton} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import { RecurringSignalsView, RecurringUpcomingView, DismissedSignalsDialog } from '../components/RecurringSignals.jsx'
@@ -1114,9 +1113,9 @@ export default function Recurring() {
   // drill-down exactly as they were. That reads as "the edit I just made did not take": the findings are
   // derived on read, so they were already correct on the server and only this page had not asked again.
   const refreshAll = useCallback(() => {
-    load()
-    loadSignals()
     setReportNonce(n => n + 1)  // an open drill-down re-fetches its rows too
+    // Returned so the refresh control turns for as long as the page's own reads take.
+    return Promise.all([load(), loadSignals()])
   }, [load, loadSignals])
 
   // Accepting a price change is deliberately *not* a one-click apply, the way widening a rule's bound is
@@ -1186,6 +1185,7 @@ export default function Recurring() {
         <div style={{ maxWidth: PAGE_COLUMN, margin: '0 auto' }}>
           <PageHeader
             title="Recurring Transactions"
+            refresh={<RefreshButton onRefresh={refreshAll} title="Refresh — reload everything on this page" />}
             titleAdornment={allSeries && allSeries.length > 0 && (
               // The standard report ↗ next to the title opens a transaction report of every recurring row
               // (all series). Toggles closed when it's already the open view.
@@ -1203,7 +1203,6 @@ export default function Recurring() {
             )}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Button variant="ghost" onClick={refreshAll} title="Reload everything on this page">Refresh</Button>
               <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
               {reviewHasAny ? (
                 // The count is the whole signal for whether there is work, so the zero state has to say

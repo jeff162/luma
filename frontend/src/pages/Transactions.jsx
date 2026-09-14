@@ -11,7 +11,7 @@ import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import AttributeFilterControl from '../components/AttributeFilterControl.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, Input, SelectAllCheckbox, Tooltip } from '../components/ui.jsx'
+import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, Input, SelectAllCheckbox, Tooltip, RefreshButton } from '../components/ui.jsx'
 import { planHidingProbes, hidingNoteText, hidingActionLabel } from '../lib/searchHidingProbe.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -907,7 +907,19 @@ export default function Transactions() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
-        <PageHeader title="Transactions" help={<FeatureExplainer topic="page-transactions" placement="bottom-left" />}>
+        <PageHeader
+          title="Transactions"
+          help={<FeatureExplainer topic="page-transactions" placement="bottom-left" />}
+          // Edited rows are left in place so a mis-tap stays correctable (see reconcileCategorizedRow); this
+          // re-queries on demand to drop rows that no longer match the active filter. Not while the first
+          // page is still arriving, which would only start the same query again.
+          refresh={(
+            <RefreshButton
+              onRefresh={() => (initialLoading ? undefined : load({ append: false }))}
+              title="Refresh — re-query the list and drop transactions that no longer match"
+            />
+          )}
+        >
 
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
               live; it lists only what is still open, so it empties as things are completed. */}
@@ -952,17 +964,6 @@ export default function Transactions() {
             <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* Edited rows are left in place so a mis-tap stays correctable (see reconcileCategorizedRow);
-              this re-queries on demand to drop rows that no longer match the active filter. */}
-            <Button
-              variant="ghost"
-              small
-              onClick={() => load({ append: false })}
-              disabled={initialLoading}
-              title="Re-query the list and drop transactions that no longer match"
-            >
-              ↻ Refresh
-            </Button>
             <AttributeFilterControl
               attributes={filterAttributes}
               value={attributeFilter.attribute}

@@ -5,37 +5,18 @@
  * Settings -> Error log: the errors the server recorded in its log file (`backend/app_log_file.py`), newest
  * first.
  *
- * Read when the section opens and on Refresh rather than polled, because it is consulted after something
- * went wrong rather than watched. Each entry is one line, with its traceback folded behind a native
- * disclosure: the message says what failed, and the traceback is for whoever is asked to look into it.
+ * Read when the section opens and on refresh rather than polled, because it is consulted after something
+ * went wrong rather than watched. The reading lives in `lib/useErrorLog.js` rather than here, because
+ * Settings owns the section's title and a refresh sits beside the title of what it reloads. Each entry is
+ * one line, with its traceback folded behind a native disclosure: the message says what failed, and the
+ * traceback is for whoever is asked to look into it.
  * The file's location is stated because the file holds more than this list does — warnings, and the
  * failed requests around an error — and it is what someone would be asked to send.
  */
 
-import { useCallback, useEffect, useState } from 'react'
-import { api } from '../lib/api.js'
-import { Button } from './ui.jsx'
 import { formatTimestamp } from '../lib/utils.js'
 
-export default function ErrorLogSection() {
-  const [log, setLog] = useState(null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setLog(await api.getErrorLog())
-      setError('')
-    } catch (err) {
-      setError(err?.message || 'The error log could not be read.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
+export default function ErrorLogSection({ log, error }) {
   const entries = log?.entries || []
   return (
     <div style={{ display: 'grid', gap: 10 }}>
@@ -45,9 +26,6 @@ export default function ErrorLogSection() {
             Log file: <code>{log.path}</code>
           </span>
         ) : null}
-        <Button small variant="ghost" onClick={load} disabled={loading} style={{ marginLeft: 'auto' }}>
-          {loading ? 'Reading…' : 'Refresh'}
-        </Button>
       </div>
 
       {error ? <div role="alert" style={{ fontSize: 13, color: 'var(--danger)' }}>{error}</div> : null}

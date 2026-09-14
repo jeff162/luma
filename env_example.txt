@@ -1,10 +1,9 @@
 # Optional Luma configuration overrides
 #
-# No .env file is needed: every setting has a working default. To override one, make a copy of this file
-# named .env in the place listed below, and remove the # from the lines to change. Each setting is one
-# NAME=value line. Changes take effect the next time Luma starts.
+# The .env file is used to override the default settings. Save a copy of this file as
+# .env and edit it as needed. Changes require a restart to take effect.
 #
-# Where .env is read from:
+# Where .env should be stored:
 #   Portable download (Windows, Linux)   the folder holding the luma program
 #   macOS app                            ~/Library/Application Support/Luma
 #   Source checkout, Docker              the top folder of the checkout
@@ -12,13 +11,12 @@
 # Settings -> Configuration shows the exact path (whether or not the file exists yet), every effective
 # value, and where each value came from.
 #
-# Not every setting applies to every way of running Luma. Each one is marked:
-#   [all]       every setup
+# Not every setting applies to every installation:
+#   [all]       applies to every installation
 #   [download]  a downloaded build: the portable download or the macOS app
 #   [source]    running from a source checkout with the start scripts
 #   [docker]    running with docker-compose
 #
-# Keep this file plain ASCII: it ships in the downloads and is often read in a terminal.
 
 # ------------------------------------------------------------------------------
 # 1. Where the data lives
@@ -33,12 +31,6 @@
 #   Source checkout     the folder the backend is started from
 #   Docker              /data inside the container, set by docker-compose.yml (not changeable here)
 # DATA_DIR=
-
-# DB_PATH, CONTROL_DB_PATH [all]
-# One database file each, overriding DATA_DIR for that file. Needed only where a database does not use
-# the default file name, which includes installations older than DATA_DIR.
-# DB_PATH=
-# CONTROL_DB_PATH=
 
 # ------------------------------------------------------------------------------
 # 2. Ports

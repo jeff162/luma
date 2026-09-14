@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { Button } from './ui.jsx'
+import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 
 // Shared "re-run categorization" control, used by the Rules page and the imported rule-suggestions
 // page. Retroactive recategorization (services/categorizer.recategorize_all) is global and
@@ -50,6 +51,20 @@ export function useRecategorize() {
 // the same way: a topic that calls a button something the button does not say sends the reader looking
 // for a control that is not there, so the two move together.
 export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categorize', showCount = false }) {
+  // Busy for as long as the run takes, including whatever the caller does once it returns. A run walks every
+  // transaction, so on a real ledger it lasts long enough to be pressed twice with nothing on screen saying
+  // the first press started anything; the result banner only arrives at the end.
+  const [running, setRunning] = useState(false)
+  const busy = useBusyIndicator(running)
+  async function run() {
+    if (running) return
+    setRunning(true)
+    try {
+      await onRun?.()
+    } finally {
+      setRunning(false)
+    }
+  }
   const hasPending = pendingCount > 0
   const style = hasPending
     ? {
@@ -67,13 +82,14 @@ export function RecategorizeButton({ pendingCount, onRun, label = '↻ Categoriz
     <Button
       variant="ghost"
       small
-      onClick={onRun}
+      onClick={run}
+      disabled={running}
       style={style}
-      title={hasPending
+      title={running ? 'Re-categorizing transactions…' : hasPending
         ? `${pendingCount} transaction${pendingCount === 1 ? '' : 's'} could be re-categorized`
         : 'No transactions currently look eligible for re-categorization'}
     >
-      {showCount && hasPending ? `${label} (${pendingCount})` : label}
+      {busy ? 'Categorizing…' : showCount && hasPending ? `${label} (${pendingCount})` : label}
     </Button>
   )
 }

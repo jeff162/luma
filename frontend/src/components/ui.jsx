@@ -437,6 +437,8 @@ export function AppDialog({
   // dialog floats over live content the user can still see and interact with (e.g. drag the bulk-edit
   // form aside to read the transactions behind it). Position is session-only — re-centers on reopen.
   draggable = false,
+  // A `RefreshButton`, attached to the title like a page's (see `PageHeader`).
+  refresh = null,
 }) {
   const [drag, setDrag] = useState({ x: 0, y: 0 })
   const panelRef = useRef(null)
@@ -507,7 +509,13 @@ export function AppDialog({
             style={{ padding: headerPadding, flexShrink: 0, ...(draggable ? { cursor: 'move', userSelect: 'none' } : null) }}
           >
             <div>
-              {title ? <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div> : null}
+              {title ? (
+                <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {title}
+                  {/* Kept out of the drag: a press on it must not also pick the dialog up. */}
+                  {refresh ? <span onMouseDown={event => event.stopPropagation()} style={{ display: 'inline-flex' }}>{refresh}</span> : null}
+                </div>
+              ) : null}
               {description ? (
                 <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
                   {description}
@@ -705,7 +713,9 @@ export function DialogActions({ children, align = 'end', style, background = 'va
 // line still sits hard right — dropped flush left it would read as content belonging to the heading, and
 // the title would stop looking like a title. Every one of these properties is inert until the row
 // actually overflows, so no page's current layout moves.
-export function PageHeader({ title, children, leftAdornment, help, titleAdornment }) {
+// `refresh` takes a `RefreshButton`, placed after the title and anything else attached to it — the standard
+// home for a page's refresh (see `RefreshButton`).
+export function PageHeader({ title, children, leftAdornment, help, titleAdornment, refresh }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -717,6 +727,7 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
           {help}
           <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
           {titleAdornment}
+          {refresh}
         </div>
         {leftAdornment}
       </div>
@@ -727,11 +738,14 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
   )
 }
 
-export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title }) {
+export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title,
+  'aria-label': ariaLabel, 'aria-busy': ariaBusy }) {
   const base = {
     padding: small ? '6px 12px' : '9px 16px',
     borderRadius: 8, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: small ? 13 : 14, fontWeight: 500, transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s',
+    fontSize: small ? 13 : 14, fontWeight: 500,
+    // The press itself is quick, so it reads as the button going down under the pointer rather than easing.
+    transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.06s, filter 0.06s',
     opacity: disabled ? 0.5 : 1, ...style,
   }
   const variants = {
@@ -746,6 +760,11 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
   }
   return (
     <button
+      // Carries the pressed look (`index.html`), the one state an inline style cannot express. Without it
+      // a click gave no sign of having landed unless the action happened to change the screen.
+      className="ui-button"
+      aria-label={ariaLabel}
+      aria-busy={ariaBusy}
       // The DOM attribute, not just the dimmed look and the dropped handlers. Without it the control
       // stays focusable, still announces as enabled to a screen reader, and still submits a form it
       // sits in — so a button that looks unavailable is only unavailable to a mouse. The handlers stay
@@ -758,6 +777,88 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
     >
       {children}
     </button>
+  )
+}
+
+// How long a finished refresh may wait for its turn to end before the icon is stopped anyway. A turn is
+// 0.6s; this only matters where no animation events arrive at all (animations switched off outright).
+export const REFRESH_TURN_FALLBACK_MS = 1200
+
+// The one refresh control: an icon-only ↻ attached to the title of whatever it reloads. `PageHeader` and
+// `AppDialog` take it as `refresh`; a custom header places it straight after its title text. The title
+// rather than the action row, because a refresh is not an action on the data — it is about the view the
+// title names — and the action row's first place belongs to the page's most common action.
+//
+// **A press always turns the icon at least once.** Most reloads here finish in a few milliseconds and bring
+// back what was already on screen, so a refresh that changed nothing visible and showed no sign of having
+// run read as a click that had not registered. That is a deliberate exception to `useBusyIndicator`, and a
+// narrow one: its rule exists so a control the user did *not* touch does not twitch, while one they just
+// pressed owes them an answer. Work the button did not start (`loading`) still goes through the indicator,
+// so a background reload turns it only once it has run long enough to notice.
+//
+// The turn stops at the end of a rotation rather than wherever it happens to be, which is also what makes
+// "at least once" hold without a timer: `lingering` is set as the animation starts and cleared only at an
+// iteration boundary reached with nothing left to wait for.
+export function RefreshButton({ onRefresh, loading = false, disabled = false, title = 'Refresh', onMouseDown }) {
+  const [inFlight, setInFlight] = useState(false)
+  const [lingering, setLingering] = useState(false)
+  const slowLoad = useBusyIndicator(loading)
+  const wanted = inFlight || slowLoad
+  // Read from the animation's iteration event, which fires between renders.
+  const wantedRef = useRef(wanted)
+  useLayoutEffect(() => { wantedRef.current = wanted }, [wanted])
+  const spinning = wanted || lingering
+
+  // The iteration event never arrives where animations are switched off entirely, and waiting on it there
+  // would leave the button refusing presses for good.
+  useEffect(() => {
+    if (wanted || !lingering) return undefined
+    const id = setTimeout(() => setLingering(false), REFRESH_TURN_FALLBACK_MS)
+    return () => clearTimeout(id)
+  }, [wanted, lingering])
+
+  async function refresh() {
+    // A second press while the first is still turning would start the same reload over for nothing.
+    if (inFlight || lingering) return
+    setInFlight(true)
+    setLingering(true)
+    try {
+      await onRefresh?.()
+    } finally {
+      setInFlight(false)
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      small
+      onClick={refresh}
+      onMouseDown={onMouseDown}
+      disabled={disabled}
+      title={title}
+      aria-label="Refresh"
+      aria-busy={spinning || undefined}
+      style={{ padding: '5px 7px', lineHeight: 0 }}
+    >
+      <svg
+        className={spinning ? 'ui-refresh-icon is-spinning' : 'ui-refresh-icon'}
+        aria-hidden="true"
+        width="14"
+        height="14"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        onAnimationStart={() => setLingering(true)}
+        onAnimationIteration={() => { if (!wantedRef.current) setLingering(false) }}
+      >
+        <path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89" />
+        <path d="M8.89 4.11h3v-3" />
+      </svg>
+    </Button>
   )
 }
 

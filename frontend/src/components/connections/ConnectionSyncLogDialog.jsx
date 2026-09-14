@@ -16,8 +16,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, Button } from '../ui.jsx'
-import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
+import { AppDialog, Button, RefreshButton } from '../ui.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
   allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
@@ -259,7 +258,8 @@ function syncLogAsText(entries, scopeLabel) {
   return lines.join('\n')
 }
 
-function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
+// The dialog and its state in one component, so the refresh can sit on the dialog's title.
+function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
   // Read-only viewer over connection_sync_log. It answers the two questions a connection can't answer
   // about itself: "did this sync fetch everything?" (the status sequence — a full historical backfill vs.
   // a stop at the ~30-day Initial Update) and "why did nothing arrive?" (the warnings and advisories,
@@ -301,10 +301,6 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
 
   useEffect(() => { load() }, [load])
 
-  // Whether the load has run long enough to be worth saying so. See `useBusyIndicator`: the work is
-  // never delayed, only the announcement of it.
-  const busy = useBusyIndicator(loading)
-
   async function clearLog() {
     setClearing(true)
     setError('')
@@ -339,14 +335,19 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
   }
 
   return (
+    <AppDialog
+      title="Connection sync log"
+      description="One row per connection per sync call — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider or the import reported along the way."
+      onClose={onClose}
+      width="min(860px, 100%)"
+      actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
+      // A filter pill reloads the list too, and that load reaches the icon only through `useBusyIndicator`
+      // — a quick one leaves it still, where the old relabelling button twitched on every pill click.
+      refresh={<RefreshButton onRefresh={load} loading={loading} />}
+    >
     <div style={{ display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {/* `disabled` follows the raw flag — a button must stop accepting presses the instant the work
-              starts — while the *label* waits for `useBusyIndicator`, so a load too quick to read never
-              repaints it. Clicking a filter pill reloads the list, and this button relabelling itself for
-              10ms each time read as the panel twitching rather than as anything being reported. */}
-          <Button small variant="ghost" onClick={load} disabled={loading}>{busy ? 'Loading…' : 'Refresh'}</Button>
           <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
             title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
             {copied ? 'Copied' : 'Copy for support'}
@@ -419,6 +420,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
         </div>
       ) : null}
     </div>
+    </AppDialog>
   )
 }
 
@@ -439,15 +441,5 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS }) {
 // giving it a nav pill would put a permanent affordance in the chrome for something with no state worth
 // preserving across a navigation.
 export function ConnectionSyncLogDialog({ initialConnectionIds = EMPTY_IDS, onClose }) {
-  return (
-    <AppDialog
-      title="Connection sync log"
-      description="One row per connection per sync call — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider or the import reported along the way."
-      onClose={onClose}
-      width="min(860px, 100%)"
-      actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
-    >
-      <ConnectionSyncLogBody initialConnectionIds={initialConnectionIds} />
-    </AppDialog>
-  )
+  return <ConnectionSyncLogBody initialConnectionIds={initialConnectionIds} onClose={onClose} />
 }

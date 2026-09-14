@@ -35,6 +35,19 @@
     </script>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      /* The shared Button (components/ui.jsx) looks pressed while it is held. Its styles are inline, and an
+         inline style cannot express :active, so this is the one place that state can live. */
+      .ui-button:not(:disabled):active { transform: translateY(1px); filter: brightness(0.9); }
+      /* RefreshButton's icon. A turn ends at an iteration boundary, so under reduced motion the animation
+         still has to iterate — it pulses in place instead of turning. */
+      @keyframes ui-refresh-turn { to { transform: rotate(360deg); } }
+      @keyframes ui-refresh-pulse { 50% { opacity: 0.35; } }
+      .ui-refresh-icon { display: block; }
+      .ui-refresh-icon.is-spinning { animation: ui-refresh-turn 0.6s linear infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .ui-button:not(:disabled):active { transform: none; }
+        .ui-refresh-icon.is-spinning { animation-name: ui-refresh-pulse; }
+      }
       :root {
         --bg:       #0f1117;
         --surface:  #1a1d27;
