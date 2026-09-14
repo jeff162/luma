@@ -17,7 +17,7 @@ from datetime import date
 from backend.services import plaid_service
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services.providers.base import ProviderAdapter
-from backend.services.source_capabilities import KEEP_ZERO_AMOUNT
+from backend.services.source_capabilities import CURRENCY_PER_TRANSACTION, KEEP_ZERO_AMOUNT
 
 # Plaid's `transactions_update_status` values that mean the historical backfill will not advance further.
 # UNKNOWN and a missing status count as terminal so a status Plaid cannot determine never traps the client
@@ -43,6 +43,8 @@ class PlaidAdapter(ProviderAdapter):
     # Kept: Plaid revises a transaction in place, so a $0 pending row is what the settled amount lands
     # on — through `modified`, or through `pending_transaction_id` when the posted row gets a new id.
     zero_amount_rows = KEEP_ZERO_AMOUNT
+    # Every transaction carries `iso_currency_code`, and the adapter judges rows one by one.
+    currency_scope = CURRENCY_PER_TRANSACTION
 
     def create_link_token(self, app_config: dict, user_id: str = "local-user",
                           access_token: str | None = None) -> str:

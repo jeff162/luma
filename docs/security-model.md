@@ -344,6 +344,13 @@ control DB. That split *is* the leaked-DB-≠-leaked-credential property, and it
 carries credentials that are **dead on arrival** anywhere else. A snapshot that can actually sync after
 restore needs the ciphertext, the vault slots, **and** someone who knows the passphrase that was in force.
 
+**The data backup carries each connection's non-secret half, and nothing in it opens anything.** It holds
+the provider handle, what the last sync did, and the resume point, so a restore can return a connection to
+its backed-up state (`data-model.md` → *Backups*). A handle and a resume point are positions, not access:
+every request to a provider needs the credential, which only the credentials backup carries — and only as
+ciphertext. So an unencrypted data backup reveals which institutions are linked, which its transactions
+already reveal, and grants no way to fetch more.
+
 **A leaked secrets backup is a pair of offline brute-force exposures, and they reach different things.**
 Login password hashes gate the *perimeter*; they are not a path to the credentials. The credentials fall
 only if the **vault passphrase** is cracked through the wrapped key material. This is why the passphrase

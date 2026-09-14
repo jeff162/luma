@@ -170,6 +170,45 @@ class RunImportCoreTests(unittest.TestCase):
         with get_db(str(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0], 1)
 
+    def test_a_row_in_another_currency_is_refused_and_reported(self):
+        # A wallet export can hold one foreign charge among dollar ones. The ledger stores bare amounts, so
+        # a £10 row imported as it stands would be $10 in every total. A blank cell states nothing and the
+        # matching code imports normally; only a stated mismatch is refused, and it is listed on the card.
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(*_account_sql("acc-wallet", "Wallet", "depository"))
+        csv = (
+            "Date,Description,Amount,Currency,Account\n"
+            "2026-05-09,Subscription,-10.00,GBP,Wallet\n"
+            "2026-05-09,Card top-up,14.21,USD,Wallet\n"
+            "2026-05-10,Coffee,-4.50,,Wallet\n"
+        )
+        cfg = self._cfg({"Wallet": "acc-wallet"}, use_imported_categories=False)
+        cfg["column_map"]["currency"] = "Currency"
+        with self._use_db_path():
+            result = run_import_core(csv, cfg, filename="wallet.csv")
+        self.assertEqual(result.get("imported"), 2)
+        summary = result["import_summary"]
+        self.assertEqual(summary["currency_rejected_count"], 1)
+        self.assertEqual(summary["rejected_count"], 1)
+        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["currency"])
+        self.assertIn("GBP", summary["rejected_rows"][0]["reason"])
+        with get_db(str(self.db_path)) as conn:
+            amounts = sorted(r[0] for r in conn.execute("SELECT raw_name FROM txn"))
+        self.assertEqual(amounts, ["Card top-up", "Coffee"])
+
+    def test_an_unmapped_currency_column_changes_nothing(self):
+        # Nearly every export states no currency, and one that does but was not mapped is the user saying
+        # the whole file is in the ledger's currency. Nothing is refused on a column nobody chose.
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(*_account_sql("acc-wallet", "Wallet", "depository"))
+        csv = "Date,Description,Amount,Currency,Account\n2026-05-09,Subscription,-10.00,GBP,Wallet\n"
+        with self._use_db_path():
+            result = run_import_core(
+                csv, self._cfg({"Wallet": "acc-wallet"}, use_imported_categories=False), filename="wallet.csv",
+            )
+        self.assertEqual(result.get("imported"), 1)
+        self.assertEqual(result["import_summary"]["currency_rejected_count"], 0)
+
     def test_caller_conn_owns_the_commit(self):
         # A caller-supplied connection makes the import part of THAT transaction — run_import_core must
         # not commit on its own. This is what lets the demo loader build everything atomically; if the

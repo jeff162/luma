@@ -248,7 +248,7 @@ const SKIP_BUCKETS = [
   {
     key: 'skipped_already_held', label: 'Already imported', tone: 'byMode',
     title: 'Already held from a previous sync — the incremental overlap re-asks for recent days on purpose.',
-    initialTitle: 'Reported as already imported on this connection\u2019s first pull, which should not happen.',
+    conflictTitle: 'Already in the ledger from a different connection \u2014 the same transaction reported by two connections, which should not happen.',
   },
   {
     key: 'skipped_zero_amount', label: 'Zero amount', tone: 'muted',
@@ -259,14 +259,13 @@ const SKIP_BUCKETS = [
 export function skippedBreakdown(entry) {
   const counts = entry?.skipped_breakdown
   if (!counts || typeof counts !== 'object') return null
-  // Already-held rows are only a contradiction where the call cannot account for them, and the server is
-  // what decides that (`unexplained_already_held`): it strips the two innocent sources — a connection that
-  // has fetched before, and a walking adapter's overlapping pages re-offering rows the same call just
-  // imported — leaving the case a transaction-id collision would produce. Read rather than re-derived so
-  // this row, the connection card's chip, and the outcome pill cannot reach different verdicts about one
-  // call. Rows written before the server sent the figure fall back to the older, looser reading.
+  // Already-held rows are only a contradiction when another connection brought them in, and the server is
+  // what decides that (`unexplained_already_held`): overlap, a resumed backfill, a walk re-seeing its own
+  // pages and a restore replaying the connection's own rows are all this connection re-seeing its own
+  // work. Read rather than re-derived so this row, the connection card's chip, and the outcome pill cannot
+  // reach different verdicts about one call. An entry without the figure falls back to the older reading.
   const unexplained = entry?.already_held_unexplained
-  const firstPull = unexplained === undefined || unexplained === null
+  const conflict = unexplained === undefined || unexplained === null
     ? entry?.mode === 'initial' && !entry?.cursor_before
     : unexplained > 0
   return SKIP_BUCKETS
@@ -274,8 +273,8 @@ export function skippedBreakdown(entry) {
       key: b.key,
       label: b.label,
       count: Number(counts[b.key] || 0),
-      tone: b.tone === 'byMode' ? (firstPull ? 'warning' : 'muted') : b.tone,
-      title: b.tone === 'byMode' && firstPull ? b.initialTitle : b.title,
+      tone: b.tone === 'byMode' ? (conflict ? 'warning' : 'muted') : b.tone,
+      title: b.tone === 'byMode' && conflict ? b.conflictTitle : b.title,
     }))
     .filter(b => b.count > 0)
 }

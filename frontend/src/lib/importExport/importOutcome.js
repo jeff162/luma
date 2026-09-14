@@ -17,6 +17,7 @@ export function summarizeImportOutcome(source) {
       dedupedCount: 0,
       accountSkippedCount: 0,
       zeroAmountCount: 0,
+      currencyRejectedCount: 0,
       validationErrorCount: 0,
       rejectedCount: 0,
       trailingNonTransactionCount: 0,
@@ -41,12 +42,13 @@ export function summarizeImportOutcome(source) {
   const enrichedCount = Number(rawSummary?.enriched_count ?? source.enriched_count) || 0
   const accountSkippedCount = Number(rawSummary?.account_skipped_count ?? source.account_skipped) || 0
   const zeroAmountCount = Number(rawSummary?.zero_amount_count ?? source.zero_amount_count) || 0
+  const currencyRejectedCount = Number(rawSummary?.currency_rejected_count ?? source.currency_rejected_count) || 0
   const validationErrorCount = Number(rawSummary?.validation_error_count ?? source.validation_error_count) || 0
   const trailingNonTransactionCount = Number(
     rawSummary?.trailing_non_transaction_count
     ?? (source.trailing_non_transaction_suspected ? source.trailing_error_count : 0),
   ) || 0
-  const rejectedCount = Number(rawSummary?.rejected_count ?? (zeroAmountCount + validationErrorCount)) || 0
+  const rejectedCount = Number(rawSummary?.rejected_count ?? (zeroAmountCount + currencyRejectedCount + validationErrorCount)) || 0
   const totalRows = Number(
     rawSummary?.total_rows
     ?? source.row_count
@@ -81,6 +83,7 @@ export function summarizeImportOutcome(source) {
     enrichedCount,
     accountSkippedCount,
     zeroAmountCount,
+    currencyRejectedCount,
     validationErrorCount,
     rejectedCount,
     trailingNonTransactionCount,

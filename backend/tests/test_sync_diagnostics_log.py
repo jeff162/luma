@@ -329,6 +329,25 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         messages = [a["message"] for a in self._advisories(self._log_rows()[0])]
         self.assertTrue(any("nothing imported" in m and "acct-ext-eur" in m for m in messages), messages)
 
+    def test_a_provider_that_states_currency_per_row_names_the_rows_not_the_account(self):
+        # One foreign-currency charge in an otherwise dollar wallet. A per-transaction provider drops only
+        # that row and the account keeps filling, so "held in GBP, so its transactions were not imported"
+        # — the account-level wording — told the user something false about everything else in it.
+        adapter = _FakeAdapter(pages=[{
+            "added": [self._txn("usd-1")], "has_more": False, "update_status": _DONE,
+            "unsupported_currency": {self.EXTERNAL_ACCOUNT_ID: "GBP"},
+        }])
+        with self._driven_sync(adapter=adapter):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            row = conn.execute("SELECT last_sync_warnings FROM connection WHERE id = ?",
+                               (self.CONNECTION_ID,)).fetchone()
+            held = conn.execute("SELECT COUNT(*) AS n FROM txn WHERE account_id = 'a1'").fetchone()["n"]
+        warnings = json.loads(row["last_sync_warnings"] or "[]")
+        self.assertEqual(held, 1, "the dollar row still lands")
+        self.assertEqual(warnings, ["Some Checking transactions are in GBP, so they were not imported — "
+                                    "every amount in Luma is USD."])
+
     def test_a_newly_discovered_unmapped_account_is_recorded(self):
         # A row arrives for a provider account this connection has never seen. It cannot be imported (there
         # is nowhere to put it) and the user's only clue used to be a line in the server console.
@@ -547,14 +566,24 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self.assertEqual(summary["added"], 1)
         self.assertEqual(summary["accounts"][self.EXTERNAL_ACCOUNT_ID]["added"], 1)
 
-    def test_already_held_rows_on_a_first_import_are_a_contradiction(self):
-        # Nothing can already be held before the first import, so this cannot be the routine overlap. It is
-        # what a transaction-id collision looks like from the outside — the shape that hid an entire account
-        # importing nothing — so it reads as needing attention rather than as a clean sync.
+    def test_already_held_rows_another_connection_brought_in_are_a_contradiction(self):
+        # Rows this connection brought in itself come round again routinely — overlap, a resumed backfill, a
+        # restore. A row another connection filed is what a transaction-id collision looks like from the
+        # outside — the shape that hid an entire account importing nothing — so it reads as needing
+        # attention rather than as a clean sync.
         with self._use_db_path(), get_db() as conn:
             conn.execute(
+                "INSERT INTO connection (id, provider, external_id, credential, institution) "
+                "VALUES ('conn-2', 'plaid', 'item-2', '', 'Other Bank')"
+            )
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, source_kind, connection_id) "
+                "VALUES ('other-card', 'Other Bank', 'connection_sync', 'conn-2')"
+            )
+            conn.execute(
                 "INSERT INTO txn (id, external_transaction_id, account_id, owner_id, amount, merchant_name,"
-                " raw_name, date, is_pending) VALUES ('t-pre', ?, 'a1', ?, 1.0, 'x', 'x', '2026-08-09', 0)",
+                " raw_name, date, is_pending, import_batch_id)"
+                " VALUES ('t-pre', ?, 'a1', ?, 1.0, 'x', 'x', '2026-08-09', 0, 'other-card')",
                 (f"{self.EXTERNAL_ACCOUNT_ID}-dup", SHARED_OWNER_ID),
             )
         collide = dict(self._txn("t1"))

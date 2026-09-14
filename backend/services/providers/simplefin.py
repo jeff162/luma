@@ -65,7 +65,7 @@ from datetime import date, datetime, timedelta, timezone
 from backend.app_logging import log_warning
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services.providers.base import ProviderAdapter, ProviderCredentialRejected
-from backend.services.source_capabilities import REJECT_ZERO_AMOUNT
+from backend.services.source_capabilities import CURRENCY_PER_ACCOUNT, REJECT_ZERO_AMOUNT
 
 # The stride of a history walk, and the widest single date-range query made.
 #
@@ -645,6 +645,8 @@ class SimpleFinAdapter(ProviderAdapter):
     # row already held — a settling charge arrives under a *new* id as its own row, leaving the $0 one
     # stranded (duplicate detection cannot pair them; the amounts differ). Same dead weight as a CSV's.
     zero_amount_rows = REJECT_ZERO_AMOUNT
+    # The protocol states a currency on the account, never on a transaction, so a mismatch drops the account.
+    currency_scope = CURRENCY_PER_ACCOUNT
     connect_spec = {
         "style": "token",
         "label": "Setup token",

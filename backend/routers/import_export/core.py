@@ -88,7 +88,10 @@ from backend.services.duplicate_detection import (
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
+from backend.services.ledger_currency import currency_matches, get_ledger_currency
+from backend.runtime_config import app_name
 from backend.services.source_capabilities import (
+    CURRENCY_REJECTION_KIND,
     SOURCE_CSV,
     ZERO_AMOUNT_REJECTION_KIND,
     ZERO_AMOUNT_REJECTION_REASON,
@@ -185,6 +188,9 @@ class AmountColumnMap(BaseModel):
 class ColumnMap(AmountColumnMap):
     date:         str
     pending:      Optional[str] = None
+    # The column stating each row's currency, for a file that can mix them (a wallet export). Unmapped,
+    # every row is taken to be in the ledger's currency, which is what nearly every export is.
+    currency:     Optional[str] = None
     description:  str
     category:     Optional[str] = None
     notes:        Optional[str] = None
@@ -457,6 +463,7 @@ def _import_evidence_reserved_headers(col: ColumnMap) -> set[str]:
             col.credit,
             col.direction,
             col.pending,
+            col.currency,
             col.description,
             col.category,
             col.notes,
@@ -2882,6 +2889,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         credit      = cm_dict.get("credit"),
         direction   = cm_dict.get("direction"),
         pending     = cm_dict.get("pending"),
+        currency    = cm_dict.get("currency"),
         description = cm_dict.get("description", ""),
         category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
@@ -2919,6 +2927,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     invalid_rows_suspected = False
     invalid_rows_message = None
     zero_amount_rows = []
+    currency_rows = []
     # Resolved once per import rather than per row: the policy is a property of the source, and reading it
     # inside the loop would invite a future edit that varies it by row.
     reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(SOURCE_CSV))
@@ -2932,6 +2941,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     caller_conn = conn
     with (nullcontext(conn) if conn is not None else get_db()) as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
+        # Read once, like the zero-amount policy: one import is judged against one ledger currency.
+        ledger_currency = get_ledger_currency(conn)
         # A recognized PayPal import groups under the single system PayPal data source, so all PayPal
         # imports share one header + one money-movement review. With no source picked, get-or-create it;
         # with a source picked (a hand-created PayPal source), *adopt* it — tag it `source:paypal` so it
@@ -3343,6 +3354,22 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     skipped += remaining
                     break
                 continue
+            # The ledger holds one currency and stores a bare number, so a row the file says is in another
+            # is refused rather than added into every total at face value — the rule a sync applies too
+            # (see `services/ledger_currency.py`). A blank cell states nothing and reads as the ledger's.
+            if col.currency:
+                row_currency = str(row.get(col.currency, "")).strip()
+                if row_currency and not currency_matches(ledger_currency, row_currency):
+                    skipped += 1
+                    currency_rows.append({
+                        "row": row_num,
+                        "kind": CURRENCY_REJECTION_KIND,
+                        "reason": f"In {row_currency} — every amount in {app_name()} is {ledger_currency}",
+                        "values": _normalize_import_row_values(row, headers),
+                    })
+                    row_results.append({"row": row_num, "status": "currency"})
+                    reset_footer_detection()
+                    continue
             # Declared rather than decided here: a $0 row means different things from different sources,
             # and the rule (plus what goes wrong either way) lives in `services/source_capabilities.py`.
             # For a CSV it is a pending charge published before it settled, and nothing can ever revise it
@@ -3558,9 +3585,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             else 0
         )
         zero_amount_count = len(zero_amount_rows)
+        currency_rejected_count = len(currency_rows)
         validation_error_count = len(errors)
         rejected_rows = sorted(
-            zero_amount_rows + validation_error_rows,
+            zero_amount_rows + currency_rows + validation_error_rows,
             key=lambda row: row.get("row") or 0,
         )[:20]
         import_summary = {
@@ -3570,9 +3598,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             "deduped_count": deduped,
             "account_skipped_count": sum(skip_counts.values()),
             "zero_amount_count": zero_amount_count,
+            "currency_rejected_count": currency_rejected_count,
             "validation_error_count": validation_error_count,
             "trailing_non_transaction_count": trailing_non_transaction_count,
-            "rejected_count": zero_amount_count + validation_error_count,
+            "rejected_count": zero_amount_count + currency_rejected_count + validation_error_count,
             "rejected_headers": headers,
             "rejected_rows": rejected_rows,
             "duplicate_headers": headers,
@@ -3669,8 +3698,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         "duplicate_sets":       [],
         "account_skipped":      account_skipped,
         "zero_amount_count":    zero_amount_count,
+        "currency_rejected_count": currency_rejected_count,
         "validation_error_count": validation_error_count,
-        "rejected_count":       zero_amount_count + validation_error_count,
+        "rejected_count":       zero_amount_count + currency_rejected_count + validation_error_count,
         "rejected_rows":        rejected_rows,
         "duplicate_count":      deduped,
         "enriched_count":       enriched_count,
@@ -3929,11 +3959,21 @@ def mark_batch_duplicates_reviewed(batch_id: str, body: BatchDuplicateReviewRequ
 def _duplicate_match_txn_id(matched: dict) -> tuple[Optional[str], Optional[str]]:
     """The single existing transaction a duplicate matched, if unambiguous. Handles both shapes: a
     coverage reject carries `candidates` (enrichable only when exactly one), a terminal/exact reject
-    carries the matched transaction directly. Returns (txn_id, None) or (None, skip_reason)."""
+    carries the matched transaction directly. Returns (txn_id, None) or (None, skip_reason).
+
+    A **transfer counterpart** is never the answer, however unambiguous. The coverage lookup names the
+    other leg of a movement (`cross_account` without `payment_match` — a wallet's funding deposit against
+    the bank or card withdrawal that paid it) so the report can explain the rejection, but that row is a
+    different transaction: enriching it stamps one side's source detail onto the other, which is how a
+    wallet's "General Card Deposit" and "General Currency Conversion" types came to sit on a credit-card
+    charge. A payment match is the same outflow seen from a second account, so it stays enrichable."""
     candidates = matched.get("candidates")
     if isinstance(candidates, list):
         if len(candidates) == 1 and (candidates[0] or {}).get("id"):
-            return candidates[0]["id"], None
+            only = candidates[0]
+            if only.get("cross_account") and not only.get("payment_match"):
+                return None, "transfer counterpart"
+            return only["id"], None
         return None, ("ambiguous match" if candidates else "no matched transaction")
     if matched.get("id"):
         return matched["id"], None

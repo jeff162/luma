@@ -53,6 +53,7 @@ export function getBlankMappingSuggestions() {
     category: '',
     notes: '',
     pending: '',
+    currency: '',
     account: '',
   }
 }

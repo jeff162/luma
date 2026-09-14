@@ -71,6 +71,7 @@ function getBlankSuggestedColumns() {
     category: '',
     notes: '',
     pending: '',
+    currency: '',
     account: '',
   }
 }
@@ -149,6 +150,7 @@ function ProfileForm({
   const [colCategory, setColCategory] = useState(cm.category || '')
   const [colNotes, setColNotes] = useState(cm.notes || '')
   const [colPending, setColPending] = useState(cm.pending || '')
+  const [colCurrency, setColCurrency] = useState(cm.currency || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
   // Capture picks (headers), or null = derive the default set. Seeded from the saved profile.
   const [evidenceColumns, setEvidenceColumns] = useState(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
@@ -168,8 +170,8 @@ function ProfileForm({
     [samplePreview, skipRowsValue],
   )
   const mappedHeaders = useMemo(
-    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount].filter(Boolean),
-    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount],
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount],
   )
   // "Imports from this data source have been categorized" only makes sense with a Category column mapped;
   // clear it if that mapping is removed.
@@ -225,6 +227,7 @@ function ProfileForm({
     setColCategory(preserveOrSuggest(colCategory, 'category'))
     setColNotes(preserveOrSuggest(colNotes, 'notes'))
     setColPending(preserveOrSuggest(colPending, 'pending'))
+    setColCurrency(preserveOrSuggest(colCurrency, 'currency'))
     setColAccount(preserveOrSuggest(colAccount, 'account'))
 
     if (nextAmountConvention === 'two_column') {
@@ -295,6 +298,7 @@ function ProfileForm({
         : { amount: colAmount }),
       ...(amtConv === 'single_unsigned' && colDir ? { direction: colDir } : {}),
       ...(colPending ? { pending: colPending } : {}),
+      ...(colCurrency ? { currency: colCurrency } : {}),
       ...(colCategory ? { category: colCategory } : {}),
       ...(colNotes ? { notes: colNotes } : {}),
       ...(colAccount ? { account: colAccount } : {}),
@@ -604,6 +608,25 @@ function ProfileForm({
             hint: columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : '',
             placeholder: 'e.g. Pending',
             inputId: `${fid}-mapping-pending`,
+          },
+          {
+            key: 'currency',
+            label: 'Currency column',
+            headers: columnAnalysis.currencyCandidates,
+            allHeaders: sampleHeaders,
+            value: colCurrency,
+            onChange: nextValue => {
+              if (nextValue) clearMappingSuggestion('currency')
+              setColCurrency(nextValue)
+            },
+            suggestedValue: mappingSuggestions.currency,
+            onAcceptSuggestion: nextValue => {
+              clearMappingSuggestion('currency')
+              setColCurrency(nextValue)
+            },
+            hint: columnAnalysis.currencyCandidates.length > 0 && !colCurrency ? formatLikelyMatchLabel(columnAnalysis.currencyCandidates.length) : '',
+            placeholder: 'e.g. Currency',
+            inputId: `${fid}-mapping-currency`,
           },
           amtConv === 'two_column'
             ? {

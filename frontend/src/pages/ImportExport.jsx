@@ -264,6 +264,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const [colCategory, setColCategory] = useState(null)
   const [colNotes, setColNotes] = useState(null)
   const [colPending, setColPending] = useState(null)
+  const [colCurrency, setColCurrency] = useState(null)
   const [colAccount, setColAccount] = useState(null)
   // The user's resolved capture picks (headers), or null = "not yet resolved" → derive the default set
   // (keyword/shape-matched unmapped columns). getColumnMap sends the resolved list as evidence_columns.
@@ -875,8 +876,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   // what actually gets captured — the user's explicit picks, or the derived default when untouched —
   // filtered to columns still present and unmapped so a stale pick can't leak through.
   const mappedHeaders = useMemo(
-    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount].filter(Boolean),
-    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount],
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount],
   )
   const evidenceColumnOptions = useMemo(
     () => computeEvidenceColumnOptions(preview, mappedHeaders, skipRows),
@@ -1162,7 +1163,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   }
 
   const hasImportWorkToSave = !!(
-    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending ||
+    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending || colCurrency ||
     colAccount || accountId || singleAccountNew.enabled || Object.keys(accountMap).length > 0 ||
     Object.keys(categoryAssignments).length > 0 || skipRows > 0 || dateFormat !== '%m/%d/%Y' ||
     amtConv !== 'single_signed' || !applyCat || useImportedCategories ||
@@ -1181,7 +1182,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   }, [
     dbInstanceId, preferenceSubjectId,
     preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, skipRows, applyCat, useImportedCategories, importedCategorySettings,
-    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount,
     singleAccountNew, accountMap, categoryAssignments,
   ])
 
@@ -1339,7 +1340,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   }, [
     accountMap, accountId, dateFormat, amtConv, skipRows,
     applyCat, enrichFromSource, useImportedCategories, importedCategorySettings, singleAccountNew,
-    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount,
     resolvedEvidenceColumns,
   ])
 
@@ -1465,6 +1466,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
       category: columnMap.category || '',
       notes: columnMap.notes || '',
       pending: columnMap.pending || '',
+      currency: columnMap.currency || '',
       account: columnMap.account || '',
     })
   }
@@ -1490,6 +1492,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     assignSuggestion('category', currentValues.category)
     assignSuggestion('notes', currentValues.notes)
     assignSuggestion('pending', currentValues.pending)
+    assignSuggestion('currency', currentValues.currency)
     assignSuggestion('account', currentValues.account)
 
     if (amountConvention === 'two_column') {
@@ -1552,6 +1555,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setColCategory(null)
     setColNotes(null)
     setColPending(null)
+    setColCurrency(null)
     setColAccount(null)
     setEvidenceColumns(null)
     applyInferredMappingSuggestions(inferredMapping)
@@ -1587,6 +1591,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setColCategory(null)
     setColNotes(null)
     setColPending(null)
+    setColCurrency(null)
     setColAccount(null)
     setEvidenceColumns(null)
     setMappingSuggestions(getBlankMappingSuggestions())
@@ -1622,7 +1627,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setImportedCategorySettings(extractImportedCategorySettings(p))
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColCurrency(cm.currency || null)
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
       skipRowsValue: p.skip_rows || 0,
       amountConvention: p.amount_convention || 'single_signed',
@@ -1636,6 +1641,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         category: cm.category || '',
         notes: cm.notes || '',
         pending: cm.pending || '',
+        currency: cm.currency || '',
         account: cm.account || '',
       },
     }))
@@ -1719,7 +1725,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setImportedCategorySettings(extractImportedCategorySettings(snap))
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColAccount(cm.account || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColCurrency(cm.currency || null); setColAccount(cm.account || null)
     setEvidenceColumns(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
       skipRowsValue: snap.skip_rows || 0,
@@ -1734,6 +1740,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         category: cm.category || '',
         notes: cm.notes || '',
         pending: cm.pending || '',
+        currency: cm.currency || '',
         account: cm.account || '',
       },
     }))
@@ -1865,6 +1872,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         setColCategory(null)
         setColNotes(null)
         setColPending(null)
+        setColCurrency(null)
         setColAccount(null)
         setEvidenceColumns(null)
         applyInferredMappingSuggestions(inferredMapping)
@@ -2145,7 +2153,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   function getColumnMap() {
     return {
       date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
-      direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, account: colAccount,
+      direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, currency: colCurrency, account: colAccount,
       // Authoritative capture set (see backend _build_evidence_column_plan): exactly these columns are
       // kept as import evidence. Resolved from the user's picks or the derived default.
       evidence_columns: resolvedEvidenceColumns,
@@ -2768,6 +2776,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setDuplicateRowsViewer(null)
     setDuplicateImporting(false)
     setColPending(null)
+    setColCurrency(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({})
     setImportedCategorySettings(getBlankImportedCategorySettings())
@@ -3671,6 +3680,14 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                   value: colPending,
                   setValue: setColPending,
                 }),
+                buildMappingFieldConfig({
+                  key: 'currency',
+                  label: 'Currency',
+                  candidateHeaders: columnAnalysis.currencyCandidates,
+                  value: colCurrency,
+                  setValue: setColCurrency,
+                  hint: 'Only needed when a file mixes currencies. Rows in any currency other than the ledger’s are not imported and appear with the rejected rows.',
+                }),
                 amtConv === 'two_column'
                   ? buildMappingFieldConfig({
                     key: 'credit',
@@ -4313,6 +4330,11 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
             if (summary.zeroAmountCount > 0) {
               parts.push(
                 <span key="zero-amount-rows">{summary.zeroAmountCount} zero amount</span>
+              )
+            }
+            if (summary.currencyRejectedCount > 0) {
+              parts.push(
+                <span key="currency-rows">{summary.currencyRejectedCount} in another currency</span>
               )
             }
             if (summary.validationErrorCount > 0) {

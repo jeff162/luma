@@ -143,31 +143,28 @@ SYNC_OUTCOME_ATTENTION = "attention"      # succeeded, and something did not mak
 SYNC_OUTCOME_OK = "ok"
 
 
-def unexplained_already_held(*, accounts: dict | None, cursor_before) -> int:
-    """How many rows the provider reported as already held that this call cannot account for.
+def unexplained_already_held(*, accounts: dict | None) -> int:
+    """How many rows the provider reported as already held that some *other* connection put there.
 
-    "Already held" is routine almost everywhere, and the two ways it arises innocently are what this
-    strips out:
+    "Already held" is routine almost everywhere: every incremental top-up re-asks for recent days on
+    purpose, a metered provider's backfill resumes across many calls, a walking adapter's overlapping pages
+    re-offer rows the same call just imported, and a restore replays a connection's own rows into the
+    ledger before its next pull. Every one of those is this connection re-seeing its own work, so the
+    question that separates them from a problem is not *when* the row arrived but *who brought it* —
+    `skipped_held_by_other_connection` counts only rows whose import card belongs to a different, still
+    existing connection, which is what a transaction-id collision looks like from the outside.
 
-    - **The connection has fetched before.** `cursor_before` is the resume point this call started from,
-      and its presence means earlier calls put rows in the ledger. Every incremental top-up re-asks for
-      recent days on purpose, and a metered provider's backfill resumes across many calls with the mode
-      still `initial` — so overlap there is the design working, not a contradiction.
-    - **The call re-saw its own work.** A walking adapter drains several pages whose windows overlap, so
-      rows page 1 imported come back on page 3 as already held. `skipped_already_held_prior` counts only
-      the rows that were in the ledger *before this call started*, which is why the bucket exists rather
-      than being recovered by subtracting one figure from another.
+    It used to be asked by timing instead: no resume point meant a first pull, and a first pull could hold
+    nothing. A restore clears the resume point while putting every previously synced row back, so the first
+    sync after one reported the connection's entire history as a contradiction. A row whose card lost its
+    connection (the connection was later removed) is not counted either: it is that account's earlier data,
+    and a reconnect re-offering it is the same innocent overlap.
 
-    What survives is the case worth a user's attention: a connection's very first pull being told it
-    already holds something, which is what a transaction-id collision with another source looks like from
-    the outside. Everything reading that judgement — the connection card's chip, the outcome pill, the
-    sync log's tone — reads this one number, so the three cannot come to different conclusions about one
-    call, which is exactly what they did while each re-derived it from `mode`.
+    Everything reading the judgement — the connection card's chip, the outcome pill, the sync log's tone —
+    reads this one number, so the three cannot come to different conclusions about one call.
     """
-    if cursor_before:
-        return 0
     return sum(
-        int((c or {}).get("skipped_already_held_prior") or 0)
+        int((c or {}).get("skipped_held_by_other_connection") or 0)
         for c in (accounts or {}).values()
         if isinstance(c, dict)
     )
@@ -181,17 +178,16 @@ def sync_outcome(*, error, mode: str | None, already_held: int, became_complete:
     and the label table the card renders, so the rule has one home.
 
     **`attention` is reserved for a problem with no other surface.** That leaves exactly one: rows the
-    provider reported as already held on a connection's **first** pull, which is a contradiction rather
-    than the routine overlap it is on a top-up (nothing can already be held before the first import) — the
-    outward appearance of a transaction-id collision.
+    provider reported as already held that another connection brought in — the outward appearance of a
+    transaction-id collision, on whichever pull it shows up.
 
     `already_held` must be the **narrowed** count from `unexplained_already_held`, never the raw skip
-    bucket. `mode == "initial"` is not a substitute for it: an initial backfill is not one call — a metered
+    bucket, and the mode is not a substitute for it. An initial backfill is not one call — a metered
     provider delivers it across as many syncs as its allowance allows, and the connection stays `initial`
-    for every one of them, because what flips the mode is the backfill *completing*. Reading the mode
-    alone reported a connection resuming normally as needing attention, on every sync, for as long as the
-    backfill took, and masked the outcome that was actually true of it (`incomplete`, "more history to
-    fetch") — the one the user could act on.
+    for every one of them — and a restore resets the mode while putting the connection's own rows back.
+    Reading the mode alone reported a connection resuming normally as needing attention, and masked the
+    outcome that was actually true of it (`incomplete`, "more history to fetch") — the one the user could
+    act on.
 
     Rows with no local account used to raise it too, and that was wrong twice over. A `skip`-mapped account
     is the user's own decision being honoured, so the alarm could never be cleared and fired on every sync
@@ -201,7 +197,7 @@ def sync_outcome(*, error, mode: str | None, already_held: int, became_complete:
     """
     if error:
         return SYNC_OUTCOME_FAILED
-    if mode == "initial" and already_held > 0:
+    if already_held > 0:
         return SYNC_OUTCOME_ATTENTION
     if mode == "initial" and not became_complete:
         return SYNC_OUTCOME_INCOMPLETE

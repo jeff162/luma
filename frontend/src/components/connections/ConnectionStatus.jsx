@@ -115,11 +115,12 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
       added: (c?.added || 0) + (c?.skipped_by_choice || 0) + (c?.skipped_unknown_account || 0),
     }
   })
-  // Already-held rows this call cannot account for — decided server-side by `unexplained_already_held`
+  // Already-held rows another connection brought in — decided server-side by `unexplained_already_held`
   // and stored on the summary, not re-derived here. Re-deriving it from `mode` is what made this chip
   // disagree with the outcome pill beside it and with the sync log behind it: `mode` stays `initial` for
-  // every call of a backfill a metered provider spreads over days, and a walking adapter's overlapping
-  // pages re-offer rows the same call just imported. Both are routine, and both used to light this up.
+  // every call of a backfill a metered provider spreads over days, a walking adapter's overlapping pages
+  // re-offer rows the same call just imported, and a restore puts a connection's own rows back before its
+  // next pull. All of it is routine, and all of it used to light this up.
   // A summary written before the server sent the figure has no key, which reads as nothing to report —
   // the next sync fills it in, and staying quiet is the right way to be wrong about a warning.
   //
@@ -179,7 +180,7 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
           {heldUnexplained ? (
             <OutcomeChip
               label="Already imported" count={heldUnexplained} tone="warning" onClick={onOpenLog}
-              title="Reported as already imported on this connection’s first pull, before it had fetched anything — open the sync log."
+              title="Already in the ledger from a different connection — the same transactions reported by two connections. Open the sync log."
             />
           ) : null}
         </div>

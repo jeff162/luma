@@ -51,7 +51,7 @@ import time
 import uuid
 import zipfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -549,6 +549,19 @@ def _verify_payload_content_hash(payload: dict) -> None:
 # from here and fails on any data table with no section, so adding one forces the wiring.
 BACKUP_SECTIONS = (
     ("owners", "owner", "SELECT * FROM owner ORDER BY rowid"),
+    # The non-secret half of each data connection. One row is split across the two backups by what each
+    # column is: the credential rides the credentials backup, and what describes the ledger in *this* file
+    # rides here — that the connection exists (so its accounts, mappings and import cards have something to
+    # belong to, whichever backup is restored first), what its last sync did, and how far it had read. The
+    # resume point belongs here for the same reason: written in the same export as the rows, it describes
+    # exactly them. It is an opaque position in the provider's feed, not a way in — nothing can be fetched
+    # with it without the credential. Left behind on the target, and listed in the coverage test:
+    # `credential`/`credential_enc` (secrets), `sync_started_at`/`sync_progress` (a sync running in the
+    # process that wrote them), and `provider_request_budget` (see `_restore_connections`).
+    ("connections", "connection",
+     "SELECT id, provider, external_id, institution, created_at, captured_fields, transactions_cursor, "
+     "initial_sync_complete, last_synced_at, last_sync_error, last_sync_error_at, consecutive_sync_failures, "
+     "last_sync_warnings, reauth_required, last_sync_outcome, last_sync_summary FROM connection ORDER BY rowid"),
     # Curated column list rather than SELECT *: these two tables carry columns that must not travel
     # (and have survived renames), so the payload names exactly what it means to include.
     ("accounts", "account",
@@ -572,12 +585,18 @@ BACKUP_SECTIONS = (
     # recurring_membership_override carries the user's per-transaction pin/exclude corrections that
     # survive scans.
     ("recurring_series", "recurring_series", "SELECT * FROM recurring_series ORDER BY rowid"),
+    # Every column, named. A curated list that falls behind the schema restores the omitted columns at
+    # their defaults, and for this table the defaults are not neutral: `trashed_at` and the dedupe
+    # resolution columns defaulting to NULL bring every trashed row and every confirmed duplicate back into
+    # the ledger as a live transaction. The coverage test compares this list with the table, column by
+    # column, so a column added later fails the suite until it is named here.
     ("transactions", "txn",
      "SELECT id, external_transaction_id, account_id, owner_id, "
-     "category_id, amount, merchant_name, display_name, raw_name, date, "
-     "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
-     "import_evidence_json, needs_review, recurring_series_id, is_split, "
-     "import_batch_id FROM txn ORDER BY date DESC"),
+     "category_id, amount, merchant_name, display_name, display_name_source, raw_name, date, "
+     "authorized_date, is_pending, category_overridden, category_source, imported_category, notes, "
+     "content_hash, import_evidence_json, needs_review, recurring_series_id, is_split, import_batch_id, "
+     "trashed_at, rejection_reason, dedupe_resolved_by, "
+     "suspect_duplicate_of, suspect_duplicate_reason, suspect_resolved_at FROM txn ORDER BY date DESC"),
     ("recurring_membership_overrides", "recurring_membership_override",
      "SELECT * FROM recurring_membership_override ORDER BY rowid"),
     # The user's "seen it, it's fine" dismissals of recurring anomaly signals. The signals themselves are
@@ -645,11 +664,16 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # a section is unchanged from 9, which is why the restore's per-section handling is shared with the
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
-# `recurring_signal_dismissals` section, and 14 the `rule_overlap_dismissals` section — all purely
-# additive, which is why an older archive still restores through exactly the same path with the new
-# section simply absent.
-BACKUP_PAYLOAD_VERSION = 14
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14)
+# `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, and 15 the
+# `connections` section — all purely additive, which is why an older archive still restores through exactly
+# the same path with the new section simply absent.
+BACKUP_PAYLOAD_VERSION = 15
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15)
+
+# How old a backup's resume points may be and still be handed back to a provider. Plaid documents a
+# `/transactions/sync` cursor as valid for at least a year after it was issued; past that nothing vouches
+# for it, and a resume point the provider refuses is worth less than the full backfill a reset buys.
+RESTORED_CURSOR_MAX_AGE_DAYS = 365
 
 # Which of the two backups a file is. Stamped into every container the app writes and read back by the
 # identification pass below, so the restore surface can route a file rather than asking the person
@@ -1127,6 +1151,107 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM owner")
 
 
+# What a data restore writes onto a connection row: everything the backup knows about it except its
+# identity, its resume point (decided separately) and the columns the target keeps (see BACKUP_SECTIONS).
+_RESTORED_CONNECTION_STATE = (
+    "captured_fields", "last_synced_at", "last_sync_error", "last_sync_error_at",
+    "consecutive_sync_failures", "last_sync_warnings", "reauth_required", "last_sync_outcome",
+    "last_sync_summary",
+)
+
+
+def _backup_age_days(header: dict) -> Optional[float]:
+    """Days since the backup was written, or None when it does not say."""
+    raw = str(header.get("exported_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        exported = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if exported.tzinfo is None:
+        exported = exported.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - exported) / timedelta(days=1)
+
+
+def _restore_connections(conn, rows, header: dict) -> dict[str, str]:
+    """Return every connection the backup names to the state the backup recorded, and say which local row
+    each backup id became.
+
+    `connection` is never wiped — its credentials belong to the other backup — so this reconciles rather
+    than reloads:
+
+    - **Known here** (same id, or the same provider handle under a different id): its recorded state is
+      written over the live row. The credential stays, and so does `provider_request_budget`, because
+      spending is a record of requests the provider really received, which no restore can un-make.
+    - **Unknown here** (a fresh install, or credentials not restored yet): the row is created with no
+      credential — the state a vault reset leaves, "waiting to be re-linked" — so the accounts, mappings and
+      import cards that belong to it survive instead of being dropped for want of a parent. A credentials
+      restore later fills the credential in on this same row.
+    - **Here but not in the backup**: its synced rows were just wiped with the rest of the ledger, so its
+      resume point goes too, exactly as `Remove synced transactions` resets it. Nothing else about it
+      changes. A backup older than this section names no connections, so every local one takes this path,
+      which is the whole of what a restore used to do.
+
+    **The resume point is the backup's own**, which is what makes this a return to the backed-up state
+    rather than a fresh start: it was written in the same export as the rows, so it claims exactly the data
+    just restored — and a delta sync from it re-delivers everything the provider reported since, including
+    rows added after the backup. Two cases cannot vouch for it and reset instead: a backup older than
+    `RESTORED_CURSOR_MAX_AGE_DAYS` (or with no date), and a live row whose handle has changed since, which
+    names a different feed.
+    """
+    age = _backup_age_days(header)
+    cursor_trusted = age is not None and age <= RESTORED_CURSOR_MAX_AGE_DAYS
+    live_cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)").fetchall()}
+    state_columns = [c for c in _RESTORED_CONNECTION_STATE if c in live_cols]
+    id_map: dict[str, str] = {}
+    for row in rows:
+        backup_id, provider, external_id = row.get("id"), row.get("provider"), row.get("external_id")
+        if not backup_id or not provider:
+            continue
+        local = conn.execute("SELECT id, external_id FROM connection WHERE id = ?", (backup_id,)).fetchone()
+        if local is None and external_id is not None:
+            local = conn.execute(
+                "SELECT id, external_id FROM connection WHERE provider = ? AND external_id = ?",
+                (provider, external_id),
+            ).fetchone()
+        keep_cursor = cursor_trusted and (local is None or local["external_id"] == external_id)
+        values = {column: row.get(column) for column in state_columns}
+        for column in ("consecutive_sync_failures", "reauth_required"):
+            if column in values:
+                values[column] = int(values[column] or 0)
+        values["transactions_cursor"] = row.get("transactions_cursor") if keep_cursor else None
+        values["initial_sync_complete"] = int(row.get("initial_sync_complete") or 0) if keep_cursor else 0
+        if row.get("institution") is not None:
+            values["institution"] = row["institution"]
+        if local is None:
+            values.update(id=backup_id, provider=provider, external_id=external_id, credential="",
+                          credential_enc=None)
+            if row.get("created_at"):
+                values["created_at"] = row["created_at"]
+            columns = list(values)
+            conn.execute(
+                f"INSERT INTO connection ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                [values[c] for c in columns],
+            )
+            id_map[backup_id] = backup_id
+        else:
+            columns = list(values)
+            conn.execute(
+                f"UPDATE connection SET {', '.join(f'{c} = ?' for c in columns)} WHERE id = ?",
+                [values[c] for c in columns] + [local["id"]],
+            )
+            id_map[backup_id] = local["id"]
+
+    restored = sorted(set(id_map.values()))
+    conn.execute(
+        "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0"
+        + (f" WHERE id NOT IN ({', '.join('?' * len(restored))})" if restored else ""),
+        restored,
+    )
+    return id_map
+
+
 def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts):
     """Reconcile restored `connection_account` rows against the live `connection` table.
 
@@ -1324,12 +1449,18 @@ _RESTORE_NULLIFY = (
     ("category", "parent_id", "category"),
     ("csv_import_profile", "account_id", "account"),
     ("import_batch", "profile_id", "csv_import_profile"),
+    # A sync card from a backup that predates the `connections` section names a connection this install may
+    # not have. The card stays; it simply stops belonging to a live connection, as after a disconnect.
+    ("import_batch", "connection_id", "connection"),
     ("recurring_series", "category_id", "category"),
     ("recurring_series", "account_id", "account"),
     ("txn", "owner_id", "owner"),
     ("txn", "category_id", "category"),
     ("txn", "import_batch_id", "import_batch"),
     ("txn", "recurring_series_id", "recurring_series"),
+    # The row a duplicate was matched against. A pointer at a row the backup no longer holds names nothing,
+    # which is how the dangling-pointer sweep after an undo treats it too.
+    ("txn", "suspect_duplicate_of", "txn"),
 )
 
 # Parents first: most of these children declare ON DELETE CASCADE, so dropping an orphaned rule or
@@ -1485,7 +1616,16 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
 
     _insert_section(conn, "owner", section_rows("owners"))
 
-    accounts = [dict(row) for row in section_rows("accounts")]
+    # Before anything that references a connection: accounts, their mappings and the sync cards all name
+    # one, and each is kept only if that connection exists here once this has run.
+    connection_ids = _restore_connections(conn, section_rows("connections"), header)
+
+    def _local_connection(row):
+        if row.get("connection_id") in connection_ids:
+            row["connection_id"] = connection_ids[row["connection_id"]]
+        return row
+
+    accounts = [_local_connection(dict(row)) for row in section_rows("accounts")]
     for row in accounts:
         row["display_name"] = (row.get("display_name") or row.get("name") or "").strip() or (row.get("name") or "")
     # Resolve account→connection links against the live connection table: translate a v7 payload's legacy
@@ -1496,18 +1636,20 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     # connection_account references both `account` (restored just above) and the live `connection` table
     # (never wiped): rows whose connection is absent locally are dropped rather than inserted dangling.
     connection_accounts = _reconcile_restored_connection_accounts(
-        conn, [dict(row) for row in section_rows("connection_accounts")], accounts
+        conn, [_local_connection(dict(row)) for row in section_rows("connection_accounts")], accounts
     )
     _insert_section(conn, "connection_account", connection_accounts)
     del accounts, connection_accounts
 
-    reconciled = {"owners", "accounts", "connection_accounts"}
-    translate_transactions = _legacy_transaction_transform(backup_version)
+    reconciled = {"owners", "connections", "accounts", "connection_accounts"}
+    transforms = {
+        "transactions": _legacy_transaction_transform(backup_version),
+        "import_batches": _local_connection,
+    }
     for section, table, _query in BACKUP_SECTIONS:
         if section in reconciled:
             continue
-        _insert_section(conn, table, section_rows(section),
-                        translate_transactions if section == "transactions" else None)
+        _insert_section(conn, table, section_rows(section), transforms.get(section))
 
     _apply_referential_rules(conn)
 
@@ -1524,25 +1666,6 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
             "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
             (str(backup_instance_id),),
         )
-
-    # A connection's resume point is a *claim about data held*, and the data it described has just been
-    # replaced — so it rolls back with the rows, exactly as `Remove synced transactions` resets it after
-    # deleting them. Skipping this loses transactions silently and permanently: a delta sync asks only for
-    # changes since the cursor, so every row the restore removed sits behind it, the provider considers
-    # them delivered, and nothing local knows to ask again. It also leaves half of one assertion standing
-    # — `connection_account.coverage_*` rides the payload precisely so coverage moves backward with the
-    # ledger, and a cursor that did not move would contradict it.
-    #
-    # Every connection, not only those with rows in the backup: the whole ledger was replaced, so every
-    # claim about it is stale. `provider_request_budget` is deliberately NOT reset — spending is a record
-    # of requests actually made, which no restore can un-make (see the `connection` table's own note on
-    # why the two are separate columns), and the sync-health fields describe contact with the provider
-    # rather than data held.
-    #
-    # The cost is that the next sync is a full backfill, which on a metered provider spends budget and may
-    # pause partway. That is the correct trade: the alternative is deciding from the backup's age whether
-    # a reset is needed, and a file's age says nothing about what the provider has reported since.
-    conn.execute("UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0")
 
     # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
     # already current, so re-running migrations would be schema-only no-ops — what's missing is the
@@ -1972,10 +2095,12 @@ def _read_single_json_member(zf) -> dict:
 # carries are as good a fingerprint as a declaration, and every older format has distinctive ones.
 
 _KIND_MARKERS = (
-    # Credentials first: `plaid_items` is the v1 shape, `connections`/`provider_configs` v2+, and `vault`
-    # rides v3+. None of them appear in a data payload.
-    (BACKUP_KIND_CREDENTIALS, ("connections", "provider_configs", "plaid_items", "vault")),
+    # Data first, because its markers are the unambiguous ones: no credentials payload has ever carried a
+    # ledger section, while a data payload carries a `connections` section of its own (the non-secret half
+    # of each connection, from payload version 15). Credentials: `plaid_items` is the v1 shape,
+    # `connections`/`provider_configs` v2+, and `vault` rides v3+.
     (BACKUP_KIND_DATA, ("owners", "transactions", "accounts", "categories")),
+    (BACKUP_KIND_CREDENTIALS, ("connections", "provider_configs", "plaid_items", "vault")),
 )
 
 
@@ -2272,24 +2397,56 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
         # Only a non-empty app secret is vaulted; a config with just client_id/env stores no ciphertext.
         return crypto_service.encrypt_app_credential(user, pc["provider"], plain) if plain else ("", None)
 
+    # Credentials are filled in on the connection rows rather than the rows being replaced. A row is shared
+    # with the data backup — its account links, mappings, import cards and sync state all hang off it, and
+    # `connection_account` cascades from it — so deleting and re-inserting, as this once did, erased every
+    # account mapping whenever credentials were restored onto a ledger that already held them, which is
+    # precisely the state a data restore leaves behind.
     with get_db() as conn:
-        conn.execute("DELETE FROM connection")
+        restored_ids: list[str] = []
         for c in connections:
             credential, credential_enc = _connection_secret(c)
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO connection (id, provider, external_id, credential, credential_enc, institution)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    c.get("id") or str(uuid.uuid4()),
-                    c["provider"],
-                    c["external_id"],
-                    credential,
-                    credential_enc,
-                    c.get("institution"),
-                ),
-            )
+            local = None
+            if c.get("id"):
+                local = conn.execute("SELECT id FROM connection WHERE id = ?", (c["id"],)).fetchone()
+            if local is None:
+                local = conn.execute(
+                    "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
+                    (c["provider"], c["external_id"]),
+                ).fetchone()
+            if local is None:
+                connection_id = c.get("id") or str(uuid.uuid4())
+                conn.execute(
+                    """
+                    INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (connection_id, c["provider"], c["external_id"], credential, credential_enc,
+                     c.get("institution")),
+                )
+            else:
+                connection_id = local["id"]
+                # The handle travels with the credential: the ciphertext is bound to (provider, external_id),
+                # so a credential written back under a different handle would never open.
+                conn.execute(
+                    """
+                    UPDATE connection
+                    SET    provider = ?, external_id = ?, credential = ?, credential_enc = ?,
+                           institution = COALESCE(?, institution)
+                    WHERE  id = ?
+                    """,
+                    (c["provider"], c["external_id"], credential, credential_enc, c.get("institution"),
+                     connection_id),
+                )
+            restored_ids.append(connection_id)
+        # A connection the file does not hold keeps its row and loses its credential, exactly as a vault
+        # reset leaves one: the file is the set of credentials to have, and the row is what a re-link lands on.
+        placeholders = ", ".join("?" * len(restored_ids))
+        conn.execute(
+            "UPDATE connection SET credential = '', credential_enc = NULL, reauth_required = 1"
+            + (f" WHERE id NOT IN ({placeholders})" if restored_ids else ""),
+            restored_ids,
+        )
         conn.execute("DELETE FROM provider_config")
         for pc in provider_configs:
             secret, secret_enc = _provider_secret(pc)

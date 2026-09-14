@@ -172,7 +172,7 @@ def _normalize_import_source_signature(source: dict) -> dict:
         "account_id": str(source.get("account_id") or "").strip(),
         "column_map": {
             key: str(column_map.get(key) or "").strip()
-            for key in ("date", "amount", "debit", "credit", "direction", "description", "category", "notes", "pending", "account")
+            for key in ("date", "amount", "debit", "credit", "direction", "description", "category", "notes", "pending", "currency", "account")
         },
         "account_assignments": account_assignments,
         "account_skips": account_skips,

@@ -103,6 +103,13 @@ Pick the **"Single column + a debit/credit type column"** amount convention and 
 (the one that says debit/credit or deposit/withdrawal). The other conventions are a single signed
 column, or separate debit/credit columns.
 
+### A file mixes currencies (a wallet export with the odd foreign charge)
+
+Map the file's **Currency** column — the mapper suggests it when the header says so. Rows in any currency
+other than the ledger's are then not imported and are listed with the file's rejected rows, since an amount
+in pounds would otherwise count as dollars in every total. A row with the currency cell left blank imports
+as the ledger's currency, and a file with no currency column needs nothing.
+
 ### An imported file is under "unknown data source" or "temporary draft"
 
 On that file's card: **Assign to data source** (pick an existing one) or **+ New data source from

@@ -21,6 +21,8 @@ import uuid
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -32,6 +34,7 @@ from backend.db.control_database import auth_required
 from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import (
     BACKUP_PAYLOAD_VERSION,
+    CredentialsRestoreRequest,
     BackupKeypairRequest,
     BackupRecipientCreate,
     BackupRecipientUpdate,
@@ -48,6 +51,7 @@ from backend.routers.import_export.backup import (
     inspect_backup_file,
     restore_backup,
     restore_backup_file,
+    restore_credentials,
     restore_credentials_file,
     restore_from_archive,
     router,
@@ -59,13 +63,12 @@ from backend.services.documents import document_file_path, write_document_file
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
-# `connection` (per-bank credentials), its legacy predecessor `plaid_item`, and `provider_config`
-# (app-level provider credentials) hold vault-encrypted secrets, which ride the separate credentials
-# backup (export/restore_credentials), not the regular data backup. `connection_sync_log` is the
-# provider-sync diagnostic log (developer-options surface) tied to `connection` (also excluded): operational
-# diagnostics, not part of the financial dataset a backup preserves, and pointless to restore against
-# connections the data backup never carries.
-EXCLUDED_TABLES = {"plaid_item", "connection", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
+# `plaid_item` (the legacy predecessor of `connection`) and `provider_config` (app-level provider
+# credentials) hold vault-encrypted secrets, which ride the separate credentials backup
+# (export/restore_credentials). `connection` itself is split between the two — see `EXCLUDED_COLUMNS`.
+# `connection_sync_log` is the provider-sync diagnostic log: capped, prunable and user-clearable, so
+# nothing about the system's state may depend on it, which is also why a backup has nothing to preserve.
+EXCLUDED_TABLES = {"plaid_item", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
 # The document text index and the shadow tables FTS5 keeps beside it. Derived state, not data: every
 # term in it comes from `document.text`, which the backup *does* carry, and the triggers rebuild the
 # index as those rows stream back in. Backing it up would ship a second copy of the same text and a
@@ -78,10 +81,24 @@ EXCLUDED_TABLES |= {"document_fts", "document_fts_data", "document_fts_idx", "do
 # operation it tracks.
 EXCLUDED_TABLES |= {"restore_state"}
 
+# Columns of a backed-up table that deliberately do not travel, per table, each with its reason. Empty on
+# purpose: a restore is meant to return the system to the state it was in when the backup was taken, so a
+# column left out is a piece of that state lost, and the default it restores at is rarely neutral (a
+# missing `txn.trashed_at` brought every trashed row back into the ledger). An entry here is a decision,
+# and the column-coverage test below is what forces someone to make it.
+EXCLUDED_COLUMNS: dict[str, set[str]] = {
+    # The credential is the credentials backup's half of the row. `sync_started_at`/`sync_progress` describe
+    # a sync running in the process that wrote them, which no other process can be continuing. The request
+    # budget records what the provider really received, so the target's figure stays true after a restore
+    # and the backup's would understate it.
+    "connection": {"credential", "credential_enc", "sync_started_at", "sync_progress", "provider_request_budget"},
+}
+
 # Every other data-DB table maps to a backup payload section. A new table with no entry here fails
 # the coverage guard, which is the point: it can't be silently left out of backups.
 TABLE_TO_SECTION = {
     "owner": "owners",
+    "connection": "connections",
     "account": "accounts",
     "category": "categories",
     "category_rule": "category_rules",
@@ -167,8 +184,19 @@ class BackupFixtureTestCase(unittest.TestCase):
                 # here only as the FK parent; connection_account rides this data backup, carrying the
                 # mapping and the connection's coverage claim. Both target columns are populated so the
                 # restore-side reconciliation is exercised on a real value rather than a NULL.
+                # Every piece of its state is set away from its default, so a round trip that lost one fails.
                 conn.execute(
-                    "INSERT INTO connection (id, provider, external_id, institution) VALUES ('fixture-conn', 'plaid', 'item-fixture', 'Fixture Bank')"
+                    """
+                    INSERT INTO connection
+                        (id, provider, external_id, credential, credential_enc, institution, captured_fields,
+                         transactions_cursor, initial_sync_complete, last_synced_at, last_sync_error,
+                         last_sync_error_at, consecutive_sync_failures, last_sync_warnings, reauth_required,
+                         last_sync_outcome, last_sync_summary, provider_request_budget)
+                    VALUES ('fixture-conn', 'plaid', 'item-fixture', '', 'sealed-token', 'Fixture Bank',
+                            '["counterparty"]', 'cursor-at-backup', 1, '2026-04-15T08:00:00Z', 'timed out',
+                            '2026-04-14T08:00:00Z', 1, '["one bank needs attention"]', 0, 'ok',
+                            '{"added": 2}', '{"spent": 10}')
+                    """
                 )
                 conn.execute(
                     """
@@ -198,6 +226,20 @@ class BackupFixtureTestCase(unittest.TestCase):
                 conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule, tag))
                 low, high = sorted([a1, a2])
                 conn.execute("INSERT INTO account_pair_distinct (account_id_low, account_id_high, asserted_at) VALUES (?, ?, '2026-04-15')", (low, high))
+                # A confirmed duplicate: trashed, pointing at the row it duplicates, with the resolution that
+                # trashed it, a user-set name and a second date. Every column is set away from its default,
+                # because a round trip that dropped one would otherwise pass by coincidence — which is how a
+                # backup that restored confirmed duplicates as live transactions went unnoticed.
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, "
+                    "display_name_source, raw_name, date, authorized_date, is_pending, category_overridden, "
+                    "category_source, needs_review, trashed_at, rejection_reason, dedupe_resolved_by, "
+                    "suspect_duplicate_of, suspect_duplicate_reason, suspect_resolved_at) "
+                    "VALUES (?, ?, ?, ?, 10.0, 'M', 'Renamed M', 'user', 'M', '2026-04-15', '2026-04-14', 0, 1, "
+                    "'manual', 1, '2026-04-17T10:00:00Z', 'duplicate_confirmed', 'user', ?, 'cross_account', "
+                    "'2026-04-17T10:00:00Z')",
+                    (str(uuid.uuid4()), a1, SHARED_OWNER_ID, leaf, txn),
+                )
                 # A second txn so the charge-level "not duplicates" pair table can hold a row.
                 txn2 = str(uuid.uuid4())
                 conn.execute(
@@ -360,6 +402,17 @@ class BackupFixtureTestCase(unittest.TestCase):
     def _upload(self, content: bytes, filename: str) -> UploadFile:
         return UploadFile(file=io.BytesIO(content), filename=filename)
 
+    def _contents(self, tables) -> dict[str, list[str]]:
+        """Every row of every table, as an order-independent comparable value. Counts are not enough to
+        call a round trip faithful: a restore can return every row while resetting a column on each."""
+        with self._use_db_path():
+            with get_db() as conn:
+                return {
+                    t: sorted(json.dumps(dict(r), sort_keys=True, default=str)
+                              for r in conn.execute(f"SELECT * FROM {t}"))
+                    for t in tables
+                }
+
     def _counts(self, tables) -> dict[str, int]:
         with self._use_db_path():
             with get_db() as conn:
@@ -384,16 +437,34 @@ class BackupRestoreTests(BackupFixtureTestCase):
             self.assertIn(section, payload, f"{table}: backup payload has no '{section}' section")
             self.assertEqual(len(payload[section]), counts[table], f"{table}: rows missing from the backup payload")
 
+    def test_backup_carries_every_column_of_every_table(self):
+        # The table-level guard above cannot see a curated column list falling behind the schema: the
+        # table is covered, its rows are all there, and a column is quietly missing from each. Compared
+        # against the live table rather than a list kept here, so a column added by a later migration
+        # fails this until the backup names it or `EXCLUDED_COLUMNS` records why it does not travel.
+        self._seed_complete()
+        payload = self._export_payload()
+        with self._use_db_path():
+            with get_db() as conn:
+                for table in sorted(self._user_data_tables()):
+                    columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                    expected = columns - EXCLUDED_COLUMNS.get(table, set())
+                    rows = payload[TABLE_TO_SECTION[table]]
+                    self.assertTrue(rows, f"fixture left {table} empty")
+                    self.assertEqual(set(rows[0]), expected, f"{table}: backup columns differ from the table")
+
     def test_restore_round_trip_preserves_every_table(self):
         self._seed_complete()
         tables = self._user_data_tables()
-        before = self._counts(tables)
+        before = self._contents(tables)
 
         payload = self._export_payload()
         with self._use_db_path():
             restore_backup(RestoreRequest(data=payload))  # same instance → guard allows without force
 
-        self.assertEqual(self._counts(tables), before)
+        after = self._contents(tables)
+        for table in sorted(tables):
+            self.assertEqual(after[table], before[table], f"{table}: restore did not return the backed-up rows")
 
     def test_restore_tolerates_since_removed_column(self):
         # A backup taken before a column was dropped (the real case: category_rule.priority, removed
@@ -687,44 +758,165 @@ class BackupArchiveTests(BackupFixtureTestCase):
     def test_archive_round_trip_preserves_every_table(self):
         self._seed_complete()
         tables = self._user_data_tables()
-        before = self._counts(tables)
+        before = self._contents(tables)
 
         self._restore_archive(self._write_archive())
 
-        self.assertEqual(self._counts(tables), before)
+        after = self._contents(tables)
+        for table in sorted(tables):
+            self.assertEqual(after[table], before[table], f"{table}: restore did not return the backed-up rows")
 
-    def test_restore_rolls_every_connection_cursor_back_with_the_ledger(self):
-        # A cursor is a claim about data held. The restore just replaced that data, so a surviving cursor
-        # would put every removed row behind it — a delta sync asks only for changes *since* the cursor, the
-        # provider considers them delivered, and they are silently gone. `Remove synced transactions` resets
-        # the same two columns for the same reason after deleting rows.
+    # --- connections: the half of the row this backup carries --------------------------------------
+
+    def _connection(self, connection_id="fixture-conn", db_path=None):
+        token = set_current_db_path(str(db_path or self.db_path))
+        try:
+            with get_db() as conn:
+                row = conn.execute("SELECT * FROM connection WHERE id = ?", (connection_id,)).fetchone()
+                return dict(row) if row else None
+        finally:
+            reset_current_db_path(token)
+
+    def test_restore_returns_each_connection_to_the_state_the_backup_recorded(self):
+        # The backup's resume point claims exactly the rows written beside it, so handing it back is what
+        # makes the next sync a delta from the backed-up moment — re-delivering everything since, including
+        # rows added after the backup — instead of a full backfill that reports the whole history as held.
+        self._seed_complete()
+        archive = self._write_archive()
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """UPDATE connection
+                   SET transactions_cursor = 'cursor-after-backup', initial_sync_complete = 0,
+                       last_synced_at = '2026-08-20T10:00:00Z', last_sync_outcome = 'failed',
+                       provider_request_budget = '{"spent": 41}', sync_progress = '{"pages": 3}'"""
+            )
+
+        self._restore_archive(archive)
+
+        row = self._connection()
+        self.assertEqual(row["transactions_cursor"], "cursor-at-backup")
+        self.assertEqual(row["initial_sync_complete"], 1)
+        self.assertEqual(row["last_synced_at"], "2026-04-15T08:00:00Z")
+        self.assertEqual(row["last_sync_outcome"], "ok")
+        self.assertEqual(row["captured_fields"], '["counterparty"]')
+        # What stays with the target: the credential, the spending the provider really saw, and the marker
+        # of a sync belonging to this process.
+        self.assertEqual(row["credential_enc"], "sealed-token")
+        self.assertEqual(row["provider_request_budget"], '{"spent": 41}')
+        self.assertEqual(row["sync_progress"], '{"pages": 3}')
+
+    def test_a_connection_the_backup_never_knew_loses_only_its_resume_point(self):
+        # Its synced rows went with the rest of the ledger, so a resume point past them would leave every one
+        # behind it for good. Its credential and history are nothing the restore has a view on.
+        self._seed_complete()
+        archive = self._write_archive()
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, credential_enc, transactions_cursor, "
+                "initial_sync_complete, last_synced_at) VALUES ('later-conn', 'plaid', 'item-later', "
+                "'later-token', 'later-cursor', 1, '2026-08-20T10:00:00Z')"
+            )
+
+        self._restore_archive(archive)
+
+        row = self._connection("later-conn")
+        self.assertIsNone(row["transactions_cursor"])
+        self.assertEqual(row["initial_sync_complete"], 0)
+        self.assertEqual(row["credential_enc"], "later-token")
+        self.assertEqual(row["last_synced_at"], "2026-08-20T10:00:00Z")
+
+    def test_a_resume_point_older_than_the_provider_honours_is_not_handed_back(self):
+        self._seed_complete()
+        archive = self._write_archive()
+        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            meta = json.loads(zf.read("meta.json"))
+        meta["exported_at"] = "2020-01-01T00:00:00Z"
+        archive = self._rewrite_member(archive, "meta.json", json.dumps(meta).encode("utf-8"))
+
+        self._restore_archive(archive)
+
+        row = self._connection()
+        self.assertIsNone(row["transactions_cursor"])
+        self.assertEqual(row["initial_sync_complete"], 0)
+        self.assertEqual(row["last_synced_at"], "2026-04-15T08:00:00Z", "the recorded state still returns")
+
+    def test_a_fresh_install_restored_data_first_then_credentials_ends_up_whole(self):
+        # The order a new machine is most likely to be set up in. The data restore finds no connections and
+        # used to drop every mapping for want of one; the credentials restore then deleted and re-inserted
+        # rows, cascading away whatever mappings had survived. Both halves now land on one row.
+        self._seed_complete()
+        with self._use_db_path(), get_db() as conn:
+            account_id = conn.execute(
+                "SELECT account_id FROM connection_account WHERE connection_id = 'fixture-conn'"
+            ).fetchone()["account_id"]
+            conn.execute("UPDATE account SET connection_id = 'fixture-conn' WHERE id = ?", (account_id,))
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, source_kind, connection_id) "
+                "VALUES ('sync-card', 'Fixture Bank · April 2026', 'connection_sync', 'fixture-conn')"
+            )
+        archive = self._write_archive()
+
+        fresh = Path(self.tempdir.name) / "fresh.db"
+        init_db(str(fresh))
+        token = set_current_db_path(str(fresh))
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+                restore_from_archive(zf)
+            with get_db() as conn:
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM connection_account WHERE connection_id = 'fixture-conn'").fetchone()[0], 1)
+                self.assertEqual(conn.execute(
+                    "SELECT connection_id FROM account WHERE id = ?", (account_id,)).fetchone()[0], "fixture-conn")
+                self.assertEqual(conn.execute(
+                    "SELECT connection_id FROM import_batch WHERE id = 'sync-card'").fetchone()[0], "fixture-conn")
+            husk = self._connection(db_path=fresh)
+            self.assertEqual((husk["credential"], husk["credential_enc"]), ("", None),
+                             "no credential until the credentials backup is restored")
+            self.assertEqual(husk["last_sync_outcome"], "ok")
+
+            self._restore_credentials_file([{"id": "fixture-conn", "provider": "plaid",
+                                             "external_id": "item-fixture", "credential": "",
+                                             "credential_enc": "sealed-token", "institution": "Fixture Bank"}])
+            with get_db() as conn:
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM connection_account WHERE connection_id = 'fixture-conn'").fetchone()[0], 1)
+        finally:
+            reset_current_db_path(token)
+        row = self._connection(db_path=fresh)
+        self.assertEqual(row["credential_enc"], "sealed-token")
+        self.assertEqual(row["last_synced_at"], "2026-04-15T08:00:00Z")
+
+    def _restore_credentials_file(self, connections):
+        """A credentials restore of an already-local file, so the rows go back verbatim with no vault work."""
+        payload = {"version": 4, "connections": connections, "provider_configs": [], "vault": {"format": 2}}
+        request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
+        with mock.patch("backend.routers.import_export.backup.crypto_service.vault_slot_is_local", return_value=True):
+            return restore_credentials(CredentialsRestoreRequest(data=payload), request)
+
+    def test_restoring_credentials_keeps_every_mapping_hanging_off_the_connection(self):
         self._seed_complete()
         with self._use_db_path():
+            self._restore_credentials_file([{"id": "fixture-conn", "provider": "plaid",
+                                             "external_id": "item-fixture", "credential": "",
+                                             "credential_enc": "fresh-token", "institution": None}])
             with get_db() as conn:
-                conn.execute(
-                    """UPDATE connection
-                       SET transactions_cursor = 'cursor-past-the-restored-rows',
-                           initial_sync_complete = 1,
-                           provider_request_budget = '{"spent": 41}',
-                           last_synced_at = '2026-08-20T10:00:00'"""
-                )
+                mappings = conn.execute("SELECT COUNT(*) FROM connection_account").fetchone()[0]
+        self.assertEqual(mappings, 1)
+        row = self._connection()
+        self.assertEqual(row["credential_enc"], "fresh-token")
+        self.assertEqual(row["institution"], "Fixture Bank", "a file with no institution does not erase one")
+        self.assertEqual(row["last_sync_outcome"], "ok", "sync state is the data backup's, not this file's")
 
-        self._restore_archive(self._write_archive())
-
+    def test_restoring_credentials_clears_a_connection_the_file_does_not_hold(self):
+        # Kept as a row, like a vault reset leaves it, because its mappings and history are the expensive
+        # part and the row is what a re-link lands on.
+        self._seed_complete()
         with self._use_db_path():
-            with get_db() as conn:
-                rows = [dict(r) for r in conn.execute(
-                    "SELECT transactions_cursor, initial_sync_complete, provider_request_budget,"
-                    " last_synced_at FROM connection"
-                )]
-        self.assertTrue(rows, "fixture must carry a connection for this to mean anything")
-        for row in rows:
-            self.assertIsNone(row["transactions_cursor"], "a cursor outlived the rows it described")
-            self.assertEqual(row["initial_sync_complete"], 0)
-            # Spending is a record of requests actually made — no restore can un-make them, so it must
-            # survive. Sync health describes contact with the provider, not data held.
-            self.assertEqual(row["provider_request_budget"], '{"spent": 41}')
-            self.assertEqual(row["last_synced_at"], "2026-08-20T10:00:00")
+            self._restore_credentials_file([])
+        row = self._connection()
+        self.assertEqual((row["credential"], row["credential_enc"], row["reauth_required"]), ("", None, 1))
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM connection_account").fetchone()[0], 1)
 
     def test_archive_reports_what_actually_landed(self):
         self._seed_complete()

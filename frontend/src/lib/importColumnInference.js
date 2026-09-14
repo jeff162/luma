@@ -180,6 +180,7 @@ function scoreHeaderName(header, type) {
     credit: ['credit', 'deposit', 'inflow', 'refund'],
     direction: ['type', 'direction', 'dr/cr', 'transaction type'],
     pending: ['pending', 'is pending', 'pending status', 'posted', 'cleared'],
+    currency: ['currency', 'ccy'],
   }
 
   return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
@@ -393,6 +394,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       creditCandidates: [],
       directionCandidates: [],
       pendingCandidates: [],
+      currencyCandidates: [],
       dateAnalysisByHeader: {},
       amountAnalysisByHeader: {},
     }
@@ -410,6 +412,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     creditCandidates: [],
     directionCandidates: [],
     pendingCandidates: [],
+    currencyCandidates: [],
     dateAnalysisByHeader: {},
     amountAnalysisByHeader: {},
   }
@@ -481,9 +484,16 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     if (pendingBoost > 0) {
       analyses.pendingCandidates.push({ header, score: pendingScore })
     }
+
+    // By header alone: a column of ISO codes looks like any other short-code column, and a wallet export
+    // that mixes currencies always names the column.
+    const currencyBoost = scoreHeaderName(header, 'currency')
+    if (currencyBoost > 0) {
+      analyses.currencyCandidates.push({ header, score: currencyBoost })
+    }
   })
 
-  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
+  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates', 'currencyCandidates']) {
     analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
     analyses[key] = analyses[key].map(entry => entry.header)
   }
@@ -621,6 +631,7 @@ export function inferUnambiguousImportMappingFromPreview(preview, skipRows = 0) 
       category: pickUnambiguousHeader(analysis.categoryCandidates),
       notes: pickUnambiguousHeader(analysis.notesCandidates),
       pending: pickUnambiguousHeader(analysis.pendingCandidates),
+      currency: pickUnambiguousHeader(analysis.currencyCandidates),
       account: pickUnambiguousHeader(analysis.accountCandidates),
     },
     analysis,
@@ -657,6 +668,7 @@ export function inferImportMappingFromPreview(preview, skipRows = 0) {
       category: analysis.categoryCandidates[0] || '',
       notes: analysis.notesCandidates[0] || '',
       pending: analysis.pendingCandidates[0] || '',
+      currency: analysis.currencyCandidates[0] || '',
       account: analysis.accountCandidates[0] || '',
     },
     analysis,

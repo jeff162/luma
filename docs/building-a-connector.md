@@ -86,9 +86,10 @@ otherwise learn by branching on `provider`:
 | `stable_external_id` | Whether re-authorizing returns the **same** `external_id`. `False` means a re-link needs to be told which connection it replaces — see below. |
 | `routine_lookback_days` | How far a routine (non-backfill) sync reaches on a cursorless provider. |
 | `zero_amount_rows` | Whether $0 rows are kept or refused — see below. **No default.** |
+| `currency_scope` | Whether the provider states a currency per `"account"` or per `"transaction"` — see [Currency](#currency). **No default.** |
 
-Most have a default. `zero_amount_rows` deliberately does not, because its answer does not generalize
-between providers and a wrong inherited guess is silent.
+Most have a default. `zero_amount_rows` and `currency_scope` deliberately do not, because their answers do
+not generalize between providers and a wrong inherited guess is silent.
 
 ## Where the connection handle comes from
 
@@ -351,10 +352,22 @@ denominations saved together are indistinguishable and both join every total. Th
 from and no rate source to convert with.
 
 An adapter receives the ledger currency as the `ledger_currency` argument to `fetch_transactions_sync` and
-must **drop** accounts denominated in anything else, reporting them so the user is told rather than left
+must **drop** rows denominated in anything else, reporting them so the user is told rather than left
 with silently wrong arithmetic. An account whose rows were discarded must also be kept out of coverage —
 claiming a range for an account whose transactions were thrown away produces the over-claim that makes
 duplicate detection reject genuine rows later.
+
+**Declare what the provider states a currency on** (`currency_scope`), because it decides what dropping
+means. A provider that names a currency per account (SimpleFIN) drops a mismatched account whole: it can
+never fill, so the user is warned from its recorded currency on every sync. A provider that names one per
+transaction (Plaid) drops only the mismatched rows while the account goes on filling, so the account-level
+warning is false there — one foreign subscription in a dollar wallet read as "held in GBP, so its
+transactions were not imported". Its notice names the rows instead, and only on a pull that dropped some.
+
+**A file importer has no adapter to declare this on, and a file is per-row by nature.** The CSV mapper
+takes an optional currency column; a row it names in another currency is refused and listed with the
+import's rejected rows, and an unmapped column means the whole file is in the ledger's currency. A new
+file importer whose format can mix currencies should do the same rather than import at face value.
 
 ## The published guide is not the contract
 

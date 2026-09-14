@@ -2169,7 +2169,9 @@ export const HELP_TOPICS = [
                 <td>The file drop area</td>
                 <td>Bringing in a CSV file. A mapping screen follows: which columns hold the date, the
                   amount and the description, <HelpLink to="/help/amount-conventions">how the file
-                  represents money in and out</HelpLink>, and which account the rows belong to.</td>
+                  represents money in and out</HelpLink>, and which account the rows belong to. For a file
+                  that mixes currencies, mapping its currency column keeps rows in any other currency out
+                  of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
               </tr>
               <tr>
                 <td><strong>Data connections</strong> and <strong>Sync now</strong></td>

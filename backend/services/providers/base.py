@@ -66,7 +66,7 @@ from abc import ABC, abstractmethod
 from datetime import date, timedelta
 
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY
-from backend.services.source_capabilities import ZeroAmountPolicy
+from backend.services.source_capabilities import CurrencyScope, ZeroAmountPolicy
 
 # The ledger's currency is **not** defined here, and no adapter may assume one. It is a user setting
 # (`services/ledger_currency.py`) and reaches an adapter the same way `account_targets` does: passed down
@@ -166,6 +166,11 @@ class ProviderAdapter(ABC):
     # from one to the next, so a new adapter must state it rather than inherit a guess. The rule for
     # deciding, and what goes wrong either way, is in `services/source_capabilities.py`.
     zero_amount_rows: ZeroAmountPolicy
+
+    # Whether this provider states a currency per account or per transaction, which decides whether a
+    # currency mismatch drops an account or a handful of rows — and so what the user is told. **No default**,
+    # like `zero_amount_rows`: it follows from the provider's protocol. See `services/source_capabilities.py`.
+    currency_scope: CurrencyScope
 
     # How far back a *routine* (non-backfill) sync reaches on a provider with no cursor. Deliberately not
     # applied to a cursor provider: for Plaid `days_requested` sets the window the item *maintains*, so

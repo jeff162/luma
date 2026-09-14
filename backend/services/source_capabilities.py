@@ -81,6 +81,33 @@ def zero_amount_policy_for_source(source: str) -> ZeroAmountPolicy:
         ) from None
 
 
+# Currency scope
+# --------------
+#
+# The ledger holds one currency (`services/ledger_currency.py`), so a row in any other is dropped rather
+# than stored as a bare number. What a source *states* a currency on decides what dropping means, and so
+# what the user can truthfully be told:
+#
+#   "account"     — the source names one currency per account (SimpleFIN). A mismatched account is
+#                   dropped whole, can never fill, and is worth warning about from its recorded currency
+#                   even on a pull that happened not to include it.
+#   "transaction" — the source names a currency on every row (Plaid; a CSV with a currency column). Only
+#                   the mismatched rows are dropped and the account keeps filling, so "this account is
+#                   held in GBP" is false: one foreign charge in an otherwise dollar wallet said exactly
+#                   that. The notice names the rows instead, and only on a pull that dropped some.
+#
+# No default, for the zero-amount reason: which one a source is follows from its protocol, not a guess.
+CurrencyScope = Literal["account", "transaction"]
+
+CURRENCY_PER_ACCOUNT: CurrencyScope = "account"
+CURRENCY_PER_TRANSACTION: CurrencyScope = "transaction"
+
+# The rejected-row `kind` for a file row stated in another currency. A file states it per row, through an
+# optional mapped column, so it is refused row by row and listed on the card like a $0 row; the reason
+# names the currency, which is the one thing the kind alone cannot say.
+CURRENCY_REJECTION_KIND = "currency"
+
+
 def rejects_zero_amount(policy: ZeroAmountPolicy) -> bool:
     """Read as a question rather than compared to a string literal at each call site, so a typo in a
     policy value cannot quietly mean "keep" at one of them."""

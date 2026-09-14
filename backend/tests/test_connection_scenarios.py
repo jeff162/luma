@@ -452,33 +452,68 @@ class ConnectionScenarioTests(unittest.TestCase):
                          "rows this very call imported are not evidence of anything")
         self.assertNotEqual(row["last_sync_outcome"], "attention")
 
-    def test_a_first_pull_told_it_already_holds_a_row_does_raise_attention(self):
-        # The case the alarm exists for, kept working while the innocent ones are stripped out: rows the
-        # ledger held before this call began, on a connection with no resume point — from outside,
-        # indistinguishable from a transaction-id collision.
-        #
-        # The planted row carries the id the adapter will derive for the same transaction: SimpleFIN ids
-        # are only unique *within* an account, so the ledger's globally-unique `external_transaction_id`
-        # is `<namespaced account>:<provider id>` (see `_normalize_txn`). Built from the account constant
-        # rather than written out, so it stays honest if the namespacing changes.
+    def _plant_held_row(self, *, card_connection_id):
+        """Put the one transaction the bank will offer into the ledger ahead of the sync, filed on an import
+        card belonging to `card_connection_id` — which is what decides whether the sync's "already held" is
+        this connection re-seeing its own row or a different connection's."""
         shallow = [Txn(txn_id="only-1", account="Demo Checking", posted="2026-07-20", amount="-12.00",
                        description="Grocery store", memo="LOCAL GROCER STORE #1133", payee="Grocery store")]
         self.sim = SimpleFinSim(transactions=shallow, accounts=["Demo Checking"], today="2026-08-08")
         local = self._offer(CHECKING)
         with self._db() as conn:
+            if card_connection_id not in (None, CONNECTION_ID):
+                conn.execute(
+                    "INSERT INTO connection (id, provider, external_id, credential, institution) "
+                    "VALUES (?, 'simplefin', 'sfin_other', '', 'Other Bridge')", (card_connection_id,),
+                )
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, source_kind, connection_id) "
+                "VALUES ('planted-card', 'Planted card', 'connection_sync', ?)", (card_connection_id,),
+            )
+            # The id the adapter will derive for the same transaction: SimpleFIN ids are only unique
+            # *within* an account, so the ledger's `external_transaction_id` is `<namespaced account>:<id>`
+            # (see `_normalize_txn`). Built from the account constant so it stays honest if that changes.
             conn.execute(
                 """INSERT INTO txn (id, external_transaction_id, account_id, owner_id, amount,
-                                    merchant_name, display_name, raw_name, date, is_pending)
+                                    merchant_name, display_name, raw_name, date, is_pending, import_batch_id)
                    VALUES ('planted', ?, ?, ?, -12.00, 'Grocery store', 'Grocery store',
-                           'Grocery store', '2026-07-20', 0)""",
+                           'Grocery store', '2026-07-20', 0, 'planted-card')""",
                 (f"{CHECKING}:only-1", local, SHARED_OWNER_ID),
             )
 
+    def test_a_restored_ledger_is_not_a_contradiction_on_the_next_pull(self):
+        """A restore puts a connection's own synced rows back and clears its resume point, so the next pull
+        is a first pull that finds everything already held. Judged by timing, that read as the connection's
+        whole history colliding with itself; judged by who brought the rows in, it is routine overlap."""
+        self._plant_held_row(card_connection_id=CONNECTION_ID)
+        self._sync(days=0, full_history=True)
+        row = self._connection_row()
+        summary = json.loads(row["last_sync_summary"])
+        self.assertEqual(summary["mode"], "initial", "the resume point is gone, so this is a first pull")
+        self.assertEqual(summary["already_held_unexplained"], 0)
+        self.assertNotEqual(row["last_sync_outcome"], "attention")
+
+    def test_a_row_another_connection_brought_in_does_raise_attention(self):
+        # The case the alarm exists for, kept working while the innocent ones are stripped out: the
+        # provider reports a transaction id the ledger already holds from a *different* connection — from
+        # outside, indistinguishable from a transaction-id collision.
+        self._plant_held_row(card_connection_id="other-connection")
         self._sync(days=0, full_history=True)
         row = self._connection_row()
         summary = json.loads(row["last_sync_summary"])
         self.assertEqual(summary["already_held_unexplained"], 1)
         self.assertEqual(row["last_sync_outcome"], "attention")
+
+    def test_a_row_from_a_removed_connection_is_not_a_contradiction(self):
+        # Removing a connection keeps its import cards and nulls their link to it. Reconnecting the same
+        # bank re-offers those rows under the same ids, which is the account's earlier data coming round
+        # again rather than two connections colliding.
+        self._plant_held_row(card_connection_id=None)
+        self._sync(days=0, full_history=True)
+        row = self._connection_row()
+        summary = json.loads(row["last_sync_summary"])
+        self.assertEqual(summary["already_held_unexplained"], 0)
+        self.assertNotEqual(row["last_sync_outcome"], "attention")
 
     def test_a_history_pull_with_nothing_left_to_walk_claims_nothing_new(self):
         # Once every account's history is complete, "Fetch more history" has no account left to walk — and

@@ -229,6 +229,18 @@ class EndpointTests(unittest.TestCase):
             evidence = json.loads(conn.execute("SELECT import_evidence_json FROM txn WHERE id = ?", (self.txn_id,)).fetchone()[0])
         self.assertIn("Pats tix", {f["value"] for f in evidence["extra_text_fields"]})
 
+    def test_enrich_endpoint_never_folds_detail_into_a_transfer_counterpart(self):
+        # The coverage lookup names the other leg of a movement to explain a rejected funding deposit, and
+        # that leg is a different transaction on a different account. A payment match is the same outflow
+        # seen from a second account, which is the case enrichment exists for, so it still folds in.
+        from backend.routers.import_export.core import enrich_batch_duplicates, BatchDuplicateEnrichRequest
+        self._dup(10, [{"id": self.txn_id, "cross_account": True}])
+        self._dup(11, [{"id": self.txn_id, "cross_account": True, "payment_match": True}])
+        with self._use_db_path():
+            result = enrich_batch_duplicates(self.batch_id, BatchDuplicateEnrichRequest(row_numbers=[10, 11]))
+        self.assertEqual([e["row"] for e in result["enriched"]], [11])
+        self.assertEqual(result["skipped"], [{"row": 10, "reason": "transfer counterpart"}])
+
     def test_enrich_endpoint_empty_rows_means_the_whole_batch(self):
         # The file card's "Enrich existing transactions from this source" toggle sends no row_numbers:
         # every duplicate row of the batch is attempted (with the usual skips), and the empty-rows undo

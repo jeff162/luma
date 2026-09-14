@@ -232,6 +232,20 @@ describe('column mapping', () => {
     expect(inferImportMappingFromPreview(p).columnMap.date).not.toBe('')
   })
 
+  it('suggests a column headed Currency, and nothing for a file without one', () => {
+    // A wallet export that mixes currencies names the column; the import refuses rows in any currency but
+    // the ledger's only once it is mapped, so the suggestion is what makes that cost nothing to set up.
+    const wallet = preview(['Date', 'Name', 'Currency', 'Gross'], [
+      { Date: '05/09/2026', Name: 'Subscription', Currency: 'GBP', Gross: '-10.00' },
+      { Date: '05/09/2026', Name: 'Card top-up', Currency: 'USD', Gross: '14.21' },
+    ])
+    expect(inferUnambiguousImportMappingFromPreview(wallet).columnMap.currency).toBe('Currency')
+    const bank = preview(['Date', 'Description', 'Amount'], [
+      { Date: '2026-03-01', Description: 'WHOLE FOODS', Amount: '-5.00' },
+    ])
+    expect(inferUnambiguousImportMappingFromPreview(bank).columnMap.currency).toBe('')
+  })
+
   it('returns safe defaults for an empty preview', () => {
     expect(inferImportFileCharacteristicsFromPreview({}).amountConvention).toBe('single_signed')
     expect(inferImportMappingFromPreview({}).columnMap.date).toBe('')

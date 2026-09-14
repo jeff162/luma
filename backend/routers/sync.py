@@ -54,6 +54,7 @@ from backend.services.categorizer import (
 )
 from backend.services.connection_dedupe import build_connection_dedupe
 from backend.services.source_capabilities import (
+    CURRENCY_PER_TRANSACTION,
     ZERO_AMOUNT_REJECTION_KIND,
     ZERO_AMOUNT_REJECTION_REASON,
     rejects_zero_amount,
@@ -574,7 +575,7 @@ def _record_connection_last_sync(conn, entry: dict) -> None:
     # Computed once, here, and stored beside the outcome it decided. The card renders its chip from this
     # number and the outcome pill comes from the same call, so the two surfaces cannot disagree — they did,
     # for exactly as long as each re-derived the judgement from `mode`.
-    unexplained = unexplained_already_held(accounts=accounts, cursor_before=entry.get("cursor_before"))
+    unexplained = unexplained_already_held(accounts=accounts)
     outcome = sync_outcome(
         error=entry.get("error"), mode=entry.get("mode"),
         already_held=unexplained, became_complete=bool(entry.get("became_complete")),
@@ -644,16 +645,23 @@ def _record_sync_failure(conn, connection_id: str, message: str, *, reauth_requi
 
 
 def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_currency: str,
-                       advisories: dict | None = None) -> list[str]:
+                       advisories: dict | None = None, *, currency_scope: str) -> list[str]:
     """Tell the user about mapped accounts whose transactions cannot be imported for their currency.
 
-    Driven primarily by the **stored** `provider_currency`, recorded when the connection listed its
-    accounts, rather than by what this particular pull happened to discard. The adapter's report
-    (`unsupported`) is merged in but cannot be the source on its own: the walk narrows a request to a
-    single account whenever only one still wants history, so an account excluded from that filter is simply
-    absent from the response and nothing was discarded *this time*. A warning that appears or not depending
-    on the shape of an unrelated fetch is worse than one that always appears — the user cannot tell whether
-    its absence means the problem went away.
+    **What can be said depends on what the provider states a currency on** (`currency_scope`, see
+    `services/source_capabilities.py`):
+
+    - **Per account.** Driven primarily by the **stored** `provider_currency`, recorded when the connection
+      listed its accounts, rather than by what this particular pull happened to discard. The adapter's
+      report (`unsupported`) is merged in but cannot be the source on its own: the walk narrows a request to
+      a single account whenever only one still wants history, so an account excluded from that filter is
+      simply absent from the response and nothing was discarded *this time*. A warning that appears or not
+      depending on the shape of an unrelated fetch is worse than one that always appears — the user cannot
+      tell whether its absence means the problem went away.
+    - **Per transaction.** Only the mismatched rows were dropped and the account goes on filling, so the
+      account's stated currency decides nothing and "held in GBP, so its transactions were not imported"
+      is false — it is what one foreign subscription in a dollar wallet produced. The notice comes only from
+      what this pull dropped and names the rows, so it appears with the pull that dropped them.
 
     Only mapped accounts produce a message. An unmapped or skipped provider account's rows are dropped
     regardless of currency, so there is nothing here its owner has lost and nothing to decide; those go to
@@ -672,6 +680,7 @@ def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_curre
         """,
         (connection_id,),
     ).fetchall()
+    per_transaction = currency_scope == CURRENCY_PER_TRANSACTION
     messages, unmapped = [], []
     for r in rows:
         external_account_id = r["external_account_id"]
@@ -681,12 +690,23 @@ def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_curre
         if not currency or currency_matches(ledger_currency, currency):
             continue
         if r["mapping_mode"] in (None, "skip") or not r["account_id"]:
+            # Nothing of an unmapped account is imported whatever its rows are denominated in, so the
+            # stated currency is a fair note for the log under either scope.
             unmapped.append(f"{external_account_id} ({currency})")
             continue
-        messages.append(
-            f"{r['provider_name'] or external_account_id} is held in {currency}, so its transactions "
-            f"were not imported — every amount in Luma is {ledger_currency}."
-        )
+        name = r["provider_name"] or external_account_id
+        if not per_transaction:
+            messages.append(
+                f"{name} is held in {currency}, so its transactions were not imported — every amount in "
+                f"Luma is {ledger_currency}."
+            )
+            continue
+        dropped = unsupported.get(external_account_id)
+        if dropped and not currency_matches(ledger_currency, dropped):
+            messages.append(
+                f"Some {name} transactions are in {dropped}, so they were not imported — every amount "
+                f"in Luma is {ledger_currency}."
+            )
     if unmapped:
         detail = (
             f"Unmapped non-{ledger_currency} accounts, nothing imported: {', '.join(unmapped)}"
@@ -889,10 +909,6 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     # connection's first backfill files every call into ONE card: swept by card, each resumption re-examines
     # everything imported so far to check what this call added, and the cost climbs with the card.
     card_added_ids: dict[str, list[str]] = {}
-    # Every row id this call inserted. A walking adapter drains pages whose windows overlap, so page 3
-    # routinely re-offers what page 1 just imported; without this the call cannot tell its own work from
-    # rows that were in the ledger before it started, and only the latter mean anything is wrong.
-    inserted_ids: set[str] = set()
     card_dupes: dict[str, int] = {}          # card_id -> rows hard-rejected as duplicates this call
     # (card_id, csv_value) -> {account_id, count, skipped}. `count` is rows that landed, `skipped` is rows
     # dropped for having no local account to land in; a source value is one or the other within a sync,
@@ -1124,7 +1140,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     touched_ids.append(pend["id"])
                     return False
             existing = conn.execute(
-                "SELECT id, is_pending FROM txn WHERE external_transaction_id = ?",
+                """
+                SELECT t.id, t.is_pending, b.connection_id AS source_connection_id
+                FROM   txn t LEFT JOIN import_batch b ON b.id = t.import_batch_id
+                WHERE  t.external_transaction_id = ?
+                """,
                 (t["external_transaction_id"],),
             ).fetchone()
             if existing:
@@ -1135,9 +1155,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     touched_ids.append(existing["id"])
                 else:
                     skipped += 1
-                    # Routine on a top-up — the incremental overlap re-asks for days already held, so this
-                    # is non-zero by design. On an *initial* pull it is a contradiction, and that is the
-                    # signal `sync_outcome` reads: nothing can already be held before the first import.
+                    # Routine — the incremental overlap re-asks for days already held, a resumed backfill
+                    # re-covers its windows, and a restore puts this connection's own rows back before its
+                    # next pull. Only a row another connection brought in is a contradiction, and that is
+                    # the signal `sync_outcome` reads (see `unexplained_already_held`).
                     #
                     # Deliberately not attributed to a card, and deliberately not allowed to create one.
                     # The other two skips are reported on a card because a card is the only place they
@@ -1146,13 +1167,15 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # It is also the single most routine event a sync has (every top-up re-asks for recent
                     # days on purpose), so resolving a card here would mint an empty one every month.
                     _bump(tally, t["external_account_id"], "skipped_already_held")
-                    # Counted apart, not derived by subtraction: `_prior` is the half that was in the
-                    # ledger *before this call*, and it is the only half that can mean a transaction-id
-                    # collision. The rest is this call re-seeing its own pages. Storing it directly is the
-                    # same rule the skip breakdown already follows — a bucket recovered by subtracting the
-                    # others is silently corrupted by the next bucket anyone adds.
-                    if existing["id"] not in inserted_ids:
-                        _bump(tally, t["external_account_id"], "skipped_already_held_prior")
+                    # Counted apart, not derived by subtraction: a row whose card belongs to a different
+                    # connection is the only kind that can mean a transaction-id collision. A card with no
+                    # connection is this account's data from a connection since removed, which a reconnect
+                    # re-offers innocently. Storing it directly is the same rule the skip breakdown already
+                    # follows — a bucket recovered by subtracting the others is silently corrupted by the
+                    # next bucket anyone adds.
+                    source = existing["source_connection_id"]
+                    if source is not None and source != connection["id"]:
+                        _bump(tally, t["external_account_id"], "skipped_held_by_other_connection")
                 return False
 
             # A check number folded into the merchant as "Check #<n>", matching the CSV convention, so
@@ -1258,7 +1281,6 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
             card_added_ids.setdefault(card_id, []).append(txn_id)
-            inserted_ids.add(txn_id)
             entry = card_accounts.setdefault(
                 (card_id, source_label), {"account_id": acc["id"], "count": 0, "skipped": 0})
             entry["account_id"] = acc["id"]
@@ -1567,7 +1589,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     unsupported_accounts.update(page.get("unsupported_currency") or {})
                     for w in _currency_warnings(
                         conn, connection["id"], page.get("unsupported_currency") or {}, ledger_currency,
-                        connection_advisories,
+                        connection_advisories, currency_scope=adapter.currency_scope,
                     ):
                         if w not in connection_warnings:
                             connection_warnings.append(w)
@@ -1973,9 +1995,7 @@ def sync_diagnostics(limit: int = 100,
         d["skipped_breakdown"] = _skipped_breakdown(d["account_counts"], d)
         # The same number the connection card warns on, from the same function, so a reader following the
         # card's deep-link into this log cannot meet a different verdict about the call they just clicked.
-        d["already_held_unexplained"] = unexplained_already_held(
-            accounts=d["account_counts"], cursor_before=r["cursor_before"],
-        )
+        d["already_held_unexplained"] = unexplained_already_held(accounts=d["account_counts"])
         return d
 
     return {

@@ -66,12 +66,12 @@ export function RejectedRowsDialog({ rows = [], headers = [], count = 0, title =
                             fontSize: 11,
                             fontWeight: 600,
                             border: '1px solid var(--border)',
-                            background: row.kind === 'zero_amount'
+                            background: row.kind === 'zero_amount' || row.kind === 'currency'
                               ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))'
                               : 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
-                            color: row.kind === 'zero_amount' ? '#b45309' : '#dc2626',
+                            color: row.kind === 'zero_amount' || row.kind === 'currency' ? '#b45309' : '#dc2626',
                           }}>
-                            {row.kind === 'zero_amount' ? 'Zero amount' : 'Validation error'}
+                            {row.kind === 'zero_amount' ? 'Zero amount' : row.kind === 'currency' ? 'Other currency' : 'Validation error'}
                           </span>
                           <span>{row.reason}</span>
                         </div>

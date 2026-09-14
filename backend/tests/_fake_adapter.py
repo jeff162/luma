@@ -13,7 +13,7 @@ is standing in for. A range-pull provider needs no fake: the base class ships th
 
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY
 from backend.services.providers.base import ProviderAdapter
-from backend.services.source_capabilities import KEEP_ZERO_AMOUNT
+from backend.services.source_capabilities import CURRENCY_PER_TRANSACTION, KEEP_ZERO_AMOUNT
 
 # Plaid's terminal `transactions_update_status`, the value its adapter maps to backfill_complete.
 DONE = "HISTORICAL_UPDATE_COMPLETE"
@@ -31,6 +31,7 @@ class FakeCursorAdapter(ProviderAdapter):
     # Stated because the base class deliberately supplies no default, and matching Plaid keeps this fake
     # standing in for the provider it names. A test needing the other policy overrides it per instance.
     zero_amount_rows = KEEP_ZERO_AMOUNT
+    currency_scope = CURRENCY_PER_TRANSACTION
 
     def __init__(self, pages=None, accounts=None):
         self._pages = list(pages or [])
