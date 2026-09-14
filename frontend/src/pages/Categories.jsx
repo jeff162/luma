@@ -19,8 +19,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
-import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { reconcileRowsAfterRuleApply, makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
+import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -680,7 +679,6 @@ export default function Categories() {
   const [moveNotice, setMoveNotice] = useState('')
   const [starterNotice, setStarterNotice] = useState('')
   const [addingStarter, setAddingStarter] = useState(false)
-  const [rulePrompt, setRulePrompt] = useState(null)
   const [selected, setSelected] = useState(null)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
   const [detailPanels, setDetailPanels] = useState([])
@@ -2518,11 +2516,6 @@ export default function Categories() {
                       onCategorySave={saveMatchingTxnCategory}
                       onCategoryOpenDetail={category => openDetailPanel('category', category)}
                       onTransactionOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
-                      onRulePrompt={prompt => {
-                        // Only suggest a rule when an *unassigned* transaction gets its first category;
-                        // changing an existing assignment should not nag with the toast.
-                        if (!prompt.previousCategoryId) setRulePrompt(prompt)
-                      }}
                       onAddCategory={addMatchingCategory}
                       onRowsChange={setPagedMatchingTxns}
                       onTrashed={() => setMatchingTxnsTotal(prev => Math.max(0, prev - 1))}
@@ -2694,21 +2687,6 @@ export default function Categories() {
 
       {starterNotice ? (
         <AppNoticeDialog title="Starter categories" description={starterNotice} onClose={() => setStarterNotice('')} />
-      ) : null}
-
-      {rulePrompt ? (
-        <RuleSuggestionToast
-          prompt={rulePrompt}
-          onSaved={({ applyToExisting, transactionIds }) => {
-            // Patch the rule's recategorization onto the affected rows in place (re-fetched by id) so they
-            // stay on the matching list rather than dropping on a reload — a mis-tap stays correctable, and
-            // the Refresh button is still there to prune rows that no longer match when the user wants.
-            if (applyToExisting) {
-              reconcileRowsAfterRuleApply(pagedMatchingTxns, transactionIds, setPagedMatchingTxns)
-            }
-          }}
-          onDismiss={() => setRulePrompt(null)}
-        />
       ) : null}
 
       {deleteDialog ? (

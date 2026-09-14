@@ -684,10 +684,6 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                     {...bulk.tableProps}
                     onCategorySave={handleOverrideCategory}
                     onAddCategory={handleAddCategory}
-                    onRulePrompt={p => {
-                      setRulePrompt(p)
-                      externalRulePrompt?.(p)
-                    }}
                     onTransactionOpenDetail={setChildTxn}
                     onTrashed={txnId => setChildTxn(prev => (prev && prev.id === txnId ? null : prev))}
                     // Every row here is the same payee, so the merchant report ↗ would be self-referential;

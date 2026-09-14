@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { transactionRowKey } from '../lib/splitRows.js'
@@ -24,6 +25,8 @@ import WindowedRows from './WindowedRows.jsx'
 import { SelectAllCheckbox } from './ui.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
+import RuleSuggestionToast from './RuleSuggestionToast.jsx'
+import { reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 
 const COLUMN_DEFS = {
   date: { key: 'date', label: 'Date', defaultWidth: 96, minWidth: 82 },
@@ -126,7 +129,6 @@ export default function TransactionListTable({
   onCategoryOpenDetail,
   onTransactionOpenDetail,
   onAddCategory,
-  onRulePrompt,
   onRowsChange,
   // Reconcile callbacks for the shared right-click row menu (owned by this table). The menu's
   // "Edit transaction" routes through onTransactionOpenDetail; it appears only when that callback
@@ -209,6 +211,12 @@ export default function TransactionListTable({
     onAddCategory,
   })
 
+  // The "create a rule?" offer after a category is picked, owned here rather than by each host. It used to
+  // be wired per surface, and most lists outside the Transactions page never were — categorizing from a
+  // sync report or a detail panel saved the category and offered nothing. Owning it here gives every list
+  // built on this table the same offer, on any manual category change.
+  const [rulePrompt, setRulePrompt] = useState(null)
+
   // The menu's "Edit transaction" item needs somewhere to open the editor; without that callback
   // there is no row menu. Bulk-select mode owns its own interaction, so suppress the menu there.
   const rowMenuEnabled = !bulkActive && typeof onTransactionOpenDetail === 'function'
@@ -267,7 +275,7 @@ export default function TransactionListTable({
               : undefined}
             onAddCategory={onAddCategory}
             onOpenSplit={rowActions.openSplitFromMenu}
-            onRulePrompt={onRulePrompt}
+            onRulePrompt={setRulePrompt}
           />
         )
       case 'account':
@@ -449,6 +457,21 @@ export default function TransactionListTable({
         />
       </div>
       <TransactionRowActionsChrome controller={rowActions} />
+      {/* Portaled because this table often sits inside a floating panel or a draggable dialog, and a
+          `position: fixed` toast inside a transformed ancestor is placed relative to that ancestor. */}
+      {rulePrompt ? createPortal(
+        <RuleSuggestionToast
+          prompt={rulePrompt}
+          onSaved={({ applyToExisting, transactionIds }) => {
+            // The rows the rule recategorized stay on the list with their new category, re-fetched by id,
+            // rather than dropping out of a scoped list on a reload. A host with no row setter is showing
+            // a list it cannot patch, and keeps what it has.
+            if (applyToExisting && onRowsChange) reconcileRowsAfterRuleApply(rows, transactionIds, onRowsChange)
+          }}
+          onDismiss={() => setRulePrompt(null)}
+        />,
+        document.body,
+      ) : null}
     </>
   )
 }

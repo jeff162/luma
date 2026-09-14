@@ -9,11 +9,10 @@ import {
 } from 'recharts'
 import { api } from '../lib/api.js'
 import { selectionsOfType, selectionsToParams } from '../lib/filterParams.js'
-import { reconcileRowsAfterRuleApply, applyCategoryChange } from '../lib/txnMutations.js'
+import { applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
-import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { ActionMenu } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
@@ -1887,7 +1886,6 @@ export default function Dashboard() {
   const [detailTxns, setDetailTxns] = useState([])
   const [detailPeriods, setDetailPeriods] = useState([])
   const [categories, setCategories] = useState([])
-  const [rulePrompt, setRulePrompt] = useState(null)
   // The single-view trend is derived (memo below) from the raw monthly rows so the user can re-bucket
   // (month/quarter/year) without re-fetching. `trendWindowBuckets` is the period-sized ±window used
   // when a date chip is set; null means the no-chip "all time" case, where the grain selector applies.
@@ -3003,7 +3001,6 @@ export default function Dashboard() {
                                   applyCategoryChange(txnId, cat, patch => setTxnData(prev => prev.map(
                                     x => x.id === txnId ? { ...x, ...patch } : x)))
                                 }}
-                                onRulePrompt={setRulePrompt}
                                 onRowsChange={setTxnData}
                                 onTransactionOpenDetail={openTransactionDetail}
                                 onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
@@ -3264,7 +3261,6 @@ export default function Dashboard() {
                         applyCategoryChange(txnId, cat, patch => setGroupTxnData(prev => prev.map(
                           x => x.id === txnId ? { ...x, ...patch } : x)))
                       }}
-                      onRulePrompt={setRulePrompt}
                       onRowsChange={setGroupTxnData}
                       onTransactionOpenDetail={openTransactionDetail}
                       onTrashed={txnId => { reconcileDetailEdit(txnId, null); groupTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
@@ -3433,19 +3429,6 @@ export default function Dashboard() {
           onClose={() => closeTagDetail(entry.key)}
         />
       ))}
-      {rulePrompt && (
-        <RuleSuggestionToast
-          prompt={rulePrompt}
-          onSaved={({ applyToExisting, transactionIds }) => {
-            // Patch the rule's recategorization onto whichever drill list shows the affected rows, in
-            // place — they stay on the page (now with the new category) instead of vanishing on a refilter.
-            if (!applyToExisting || !transactionIds?.length) return
-            reconcileRowsAfterRuleApply(txnData, transactionIds, setTxnData)
-            reconcileRowsAfterRuleApply(groupTxnData, transactionIds, setGroupTxnData)
-          }}
-          onDismiss={() => setRulePrompt(null)}
-        />
-      )}
       {tagBuilderOpen && (
         <TagReportBuilder
           availableTags={availableTags}
