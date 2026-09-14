@@ -1773,6 +1773,9 @@ decisions go*.
   → [`backlog/button-consolidation.md`](backlog/button-consolidation.md)
 - **Search on the Help topic list.** Parked, not started.
   → [`backlog/help-topic-search.md`](backlog/help-topic-search.md)
+- **An "explain this" mode that outlines the controls on a page that have help topics**, and the
+  post-data guided tour that would share its control-to-topic declarations. Not started.
+  → [`backlog/in-page-help-explain-mode.md`](backlog/in-page-help-explain-mode.md)
 - **The tooltip migration remainder and press-scoped labels**, batched with other small cleanups.
   → [`backlog/cleanup-pass.md`](backlog/cleanup-pass.md)
 - **Whether the grain picker should be the sole control on the single-period trend chart.** Two

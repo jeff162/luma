@@ -146,6 +146,10 @@ scale — rather than by feature.
   `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
   use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
   that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
+- [in-page-help-explain-mode.md](in-page-help-explain-mode.md) — **not started (2026-09-13).** An
+  "explain this" mode that outlines the controls on a page that have help topics and opens the topic on a
+  click, declared per control so it points at the real screen rather than a mockup; recorded with the
+  post-data guided tour from the onboarding rework, which would sequence over the same declarations.
 - [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **reduced 2026-09-03 to the parked
   include case.** The exclude note shipped 2026-07-28 and its behavior — `FilterConflictNote`, the
   like-for-like and view/totals-aware boundaries, and both symmetric tag-report cases — is in

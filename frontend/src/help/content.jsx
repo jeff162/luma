@@ -511,6 +511,7 @@ export const HELP_TOPICS = [
     summary: 'The transaction ledger itself, as a list. Everything recorded about a transaction is reachable from its row, and the same list is where a set of them is worked through together.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           Every transaction in the ledger is listed here. The search box above the table finds
           transactions by name, amount, date and more &mdash; see{' '}
@@ -2140,38 +2141,139 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>*needs review*</p>
+        {/* A map of the page rather than a prose tour: the page carries more topics than any other, and
+            what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
+            are how the page itself is divided. */}
         <p>
-          <strong>Import</strong> is the CSV importer. A file is dropped on it or browsed to, and a
-          mapping screen follows: which column holds the date, the amount and the
-          description, <HelpLink to="/help/amount-conventions">how the file represents money in and
-            out</HelpLink>, and which account the rows belong to. Saving those settings as
-          a <HelpLink to="/help/unknown-data-source">data source</HelpLink> means the next file from
-          the same place needs none of it again.
+          Where transactions come in and where data goes out. The page has four tabs, and the sections
+          below follow them: each row names something on the page, says what it is for, and links the
+          topic that explains it.
         </p>
         <p>
-          Transactions from a <HelpLink to="/help/data-providers">data provider</HelpLink> arrive on
-          the same tab, through <strong>Sync now</strong> on the <strong>Data connections</strong> card,
-          and each sync's cards join the same import history.
+          Importing the same activity twice is safe. Every import is compared against what is already in
+          the ledger, the clear duplicates are settled without asking, and whatever needs a decision waits
+          in the file card&apos;s duplicate-detection report.
         </p>
+
+        <HelpHeading anchor="import-tab">Import</HelpHeading>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>On the page</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>The file drop area</td>
+                <td>Bringing in a CSV file. A mapping screen follows: which columns hold the date, the
+                  amount and the description, <HelpLink to="/help/amount-conventions">how the file
+                  represents money in and out</HelpLink>, and which account the rows belong to.</td>
+              </tr>
+              <tr>
+                <td><strong>Data connections</strong> and <strong>Sync now</strong></td>
+                <td>Pulling transactions from a <HelpLink to="/help/data-providers">data
+                  provider</HelpLink>. What each sync brings in joins the import history below.</td>
+              </tr>
+              <tr>
+                <td><strong>Data sources</strong> and <strong>Manage sources</strong></td>
+                <td>The import history, grouped by <HelpLink to="/help/unknown-data-source">saved data
+                  source</HelpLink>. Saving a file&apos;s mapping as a data source means the next file from
+                  the same place needs none of the mapping again.</td>
+              </tr>
+              <tr>
+                <td><strong>Group imported categories</strong></td>
+                <td>Sorting the categories a file brought with it into groups, and removing the unwanted
+                  ones &mdash; see <HelpLink to="/help/imported-category-cleanup">learning categories from
+                  imported transactions</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td><strong>Generate rules</strong></td>
+                <td>Proposing rules from a file that is already categorized, so future imports are filed
+                  the same way &mdash; see <HelpLink to="/help/generate-rules">generating rules</HelpLink>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <HelpHeading anchor="file-cards">A file&apos;s card</HelpHeading>
         <p>
-          <strong>Amazon</strong> has its own tab because marketplace orders arrive in their own shape
-          and are matched against charges already in the ledger:
-          see <HelpLink to="/help/amazon-import">importing Amazon order detail</HelpLink>.
-          <strong> Export</strong> writes transactions out as CSV,
-          and <strong>Backup / Restore</strong> handles
-          the <HelpLink to="/help/data-and-backups">whole-database archives</HelpLink>.
+          Each imported file gets a card in the import history; a connection&apos;s syncs are filed on
+          cards by month.
         </p>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>On the card</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>The duplicate pills</td>
+                <td>Opening <HelpLink to="/help/duplicate-report">the duplicate-detection report</HelpLink>,
+                  where <HelpLink to="/help/cross-account-duplicates">cross-account
+                  matches</HelpLink> and <HelpLink to="/help/covered-range-review">covered-range
+                  matches</HelpLink> are decided.</td>
+              </tr>
+              <tr>
+                <td>The &#8599; button</td>
+                <td>The transactions the file brought in, with a search box of its own
+                  (see <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>) and,
+                  at the top, the rows <HelpLink to="/help/removed-as-duplicates">removed as
+                  duplicates</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td>The needs-review count and <strong>Mark all reviewed</strong></td>
+                <td>Looking over what just arrived, or clearing the flag for the whole file &mdash;
+                  see <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td><strong>Undo</strong></td>
+                <td>Removing the import along with everything it changed.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <HelpHeading anchor="amazon-tab">Amazon</HelpHeading>
         <p>
-          Importing the same activity twice is safe. Every import is compared against what is already
-          in the ledger and the clear duplicates are settled without
-          asking; <HelpLink to="/help/duplicate-report">the duplicate-detection report</HelpLink> on
-          the file card holds whatever needs a decision.
+          Marketplace orders arrive in their own shape and are matched against card charges already in
+          the ledger, so they have a tab of their own.
         </p>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>On the page</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>The file drop area</td>
+                <td>Bringing in the order and item files exported from Amazon &mdash;
+                  see <HelpLink to="/help/amazon-import">importing Amazon order detail</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td><strong>Import into account</strong>, <strong>Payment cards in these files</strong> and
+                  {' '}<strong>Category for matched card charges</strong></td>
+                <td>Where the orders go and which of the ledger&apos;s accounts each payment card is &mdash;
+                  see <HelpLink to="/help/amazon-funding-sources">the Amazon import page</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td>An Amazon card with orders needing review</td>
+                <td>Opening <HelpLink to="/help/amazon-reconciliation">the reconciliation
+                  report</HelpLink>, which lines orders up with card charges and resolves the unclear
+                  ones.</td>
+              </tr>
+              <tr>
+                <td>The outcome pills on an Amazon card</td>
+                <td>What that import actually did &mdash; see <HelpLink to="/help/amazon-import-detail">the
+                  Amazon import detail report</HelpLink>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <HelpHeading anchor="export-and-backup">Export and Backup / Restore</HelpHeading>
         <p>
-          Each imported file gets a <strong>card</strong> in the import history, grouped by data
-          source. The card carries pills for what the import did and what still needs attention, a
-          link to the transactions it created, and <strong>Undo</strong>, which removes the import
-          along with everything it changed.
+          <strong>Export</strong> writes transactions out as a CSV file. <strong>Backup /
+          Restore</strong> makes and restores whole-database archives, optionally encrypted to a backup
+          key &mdash; see <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
         </p>
       </>
     ),
