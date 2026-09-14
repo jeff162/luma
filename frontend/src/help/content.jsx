@@ -2893,16 +2893,21 @@ export const HELP_TOPICS = [
           one, and a new installation is not met with warnings about things that were never set up.
         </p>
         <p>
-          A task that is not worth acting on can be <strong>dismissed</strong>, which hides it until
-          there is more of it rather than for good. What is remembered is the count it was dismissed
-          at, and that mark falls again as the list shrinks, so clearing part of a backlog does not
-          bury the next new item underneath the old number.
+          A task is a reminder, and the <strong>Dismiss</strong> tab in its lower corner puts the
+          reminder away until there is more of it. The work itself stays on the page the task links
+          to. What is remembered is the count the task was dismissed at, and that mark falls again as
+          the list shrinks, so clearing part of a backlog does not bury the next new item underneath
+          the old number. A count that changes often, such as uncategorized transactions, brings its
+          task back often too.
         </p>
         <p>
-          Recurring findings work differently.
-          A <HelpLink to="/help/recurring-transactions">missing or changed charge</HelpLink> is an
-          individual finding, dismissed one at a time on the Recurring page rather than as a group
-          here.
+          The one task that cannot be dismissed is a requirement: HTTPS for an installation with a
+          data connection stays until it is set up.
+        </p>
+        <p>
+          A <HelpLink to="/help/recurring-transactions">missing or changed charge</HelpLink> can also
+          be dismissed on its own on the Recurring page, which answers that finding rather than only
+          hiding the reminder.
         </p>
       </>
     ),

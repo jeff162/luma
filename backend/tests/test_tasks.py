@@ -317,12 +317,32 @@ class TaskDismissalTests(TasksFixtureTestCase):
         self.assertIn("uncategorized_txns", {t["id"] for t in result["tasks"]})
         self.assertEqual(result["dismissed"], [])
 
-    def test_a_task_that_is_not_dismissible_cannot_be_dismissed(self):
-        self._insert_txn(category_id=None)
+    def test_a_required_task_cannot_be_dismissed(self):
+        # HTTPS with a data provider configured is the one task that is not a reminder: it stays until
+        # fixed. A networked plain-HTTP request is what raises it.
+        control_database.set_data_provider_intended(True)
+        request = SimpleNamespace(
+            url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
+            state=SimpleNamespace(user={"id": "test-user"}),
+        )
         with self._use_db_path():
+            task = next(t for t in get_tasks(request)["tasks"] if t["id"] == "configure_https")
+            self.assertTrue(task["required"])
+            self.assertNotIn("dismiss_key", task)
             with self.assertRaises(HTTPException) as raised:
-                dismiss_task("configure_https", self._request())
+                dismiss_task("configure_https", request)
         self.assertEqual(raised.exception.status_code, 404)
+
+    def test_the_recommended_https_reminder_can_be_dismissed(self):
+        from backend.db.control_database import enable_auth_mode
+        enable_auth_mode()
+        request = SimpleNamespace(
+            url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
+            state=SimpleNamespace(user={"id": "test-user"}),
+        )
+        with self._use_db_path():
+            result = dismiss_task("configure_https", request)
+        self.assertNotIn("configure_https", {t["id"] for t in result["tasks"]})
 
 
 class ReimbursementTaskTests(TasksFixtureTestCase):
@@ -384,12 +404,11 @@ class ReimbursementTaskTests(TasksFixtureTestCase):
         self.assertEqual([t["id"] for t in tasks], ["reimbursements_due"])
         self.assertEqual(tasks[0]["count"], 1)
 
-    def test_it_carries_no_dismiss_key(self):
-        # Snoozing a record is the dismissal. An aggregate one would be a second mechanism doing the
-        # same job, and it would hide a newly-due reminder behind a count that had not risen.
+    def test_the_reminder_is_dismissible_per_owner_group(self):
+        # A snoozed record answers for that receivable; dismissing the task only puts the reminder away.
         leaf = self._receivable_leaf()
         self._receivable_txn(leaf, SHARED_OWNER_ID)
-        self.assertNotIn("dismiss_key", self._reimbursement_tasks()[0])
+        self.assertEqual(self._reimbursement_tasks()[0]["dismiss_key"], "reimbursements_due")
 
     def test_a_recent_receivable_raises_nothing(self):
         leaf = self._receivable_leaf()
@@ -421,7 +440,7 @@ class ConnectionTaskTests(TasksFixtureTestCase):
     They matter because the connections UI is split across two pages — what a connection *is* is
     configured on Accounts, what it has been *doing* lives with the imports — so a user who visits
     neither would otherwise never learn that a bank stopped importing. Each is a broken state with a
-    concrete remedy, which is why none of them is dismissible and why they link to different pages.
+    concrete remedy, which is why they link to different pages.
     """
 
     def _insert_connection(self, *, institution, reauth=0, failures=0) -> str:
@@ -498,14 +517,19 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         for task_id in ("connections_need_reauth", "connections_failing", "connection_accounts_unmapped"):
             self.assertIsNone(self._task(task_id), task_id)
 
-    def test_none_of_them_can_be_dismissed(self):
-        # Unlike a backlog count, these do not go down on their own: dismissing one hides a connection
-        # that has stopped importing.
-        self._insert_connection(institution="Harborline Savings", reauth=1, failures=1)
-        connection = self._insert_connection(institution="Northgate Bank")
-        self._insert_provider_account(connection, mapping_mode=None)
+    def test_a_dismissed_reminder_returns_when_another_connection_breaks(self):
+        # The Tasks page is a reminder: dismissing hides it, and the count rising brings it back. These
+        # counts do not fall on their own, so "another connection" is what brings one back.
+        request = SimpleNamespace(
+            url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
+            state=SimpleNamespace(user={"id": "test-user"}),
+        )
+        self._insert_connection(institution="Harborline Savings", reauth=1)
         with self._use_db_path():
-            result = get_tasks()
-        for task in result["tasks"]:
-            if task["id"].startswith("connection"):
-                self.assertIsNone(task.get("dismiss_key"), task["id"])
+            result = dismiss_task("connections_need_reauth", request)
+        self.assertNotIn("connections_need_reauth", {t["id"] for t in result["tasks"]})
+
+        self._insert_connection(institution="Riverstone Credit Union", reauth=1)
+        with self._use_db_path():
+            visible = {t["id"] for t in get_tasks(request)["tasks"]}
+        self.assertIn("connections_need_reauth", visible)

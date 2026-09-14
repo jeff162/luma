@@ -105,7 +105,8 @@ class HttpsTaskTests(unittest.TestCase):
         task = tasks._https_setup_task(_req("192.168.1.10", "http"))
         self.assertIsNotNone(task)
         self.assertFalse(task["required"])
-        self.assertTrue(task["dismissible"])
+        self.assertIn("dismiss_key", tasks._with_dismiss_keys([task])[0])
+        self.assertIn("Passkeys", task["description"])
 
     def test_recommended_task_suppressible(self):
         cdb.enable_auth_mode()
@@ -117,7 +118,7 @@ class HttpsTaskTests(unittest.TestCase):
         task = tasks._https_setup_task(_req("192.168.1.10", "http"))
         self.assertIsNotNone(task)
         self.assertTrue(task["required"])
-        self.assertFalse(task["dismissible"])
+        self.assertNotIn("dismiss_key", tasks._with_dismiss_keys([task])[0])
 
     def test_provider_task_ignores_suppression(self):
         cdb.set_data_provider_intended(True)

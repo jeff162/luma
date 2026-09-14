@@ -25,8 +25,8 @@ const DISMISSIBLE = {
   dismiss_key: 'uncategorized_txns',
 }
 const NOT_DISMISSIBLE = {
-  id: 'vault_access_requests', title: 'Vault access requested', description: 'Someone is waiting.',
-  count: 1, link: '/accounts?tab=connections', link_label: 'Review vault access', severity: 'info',
+  id: 'configure_https', title: 'Set up HTTPS', description: 'HTTPS is required before connecting.',
+  count: 1, link: '/settings', link_label: 'How to set up HTTPS', severity: 'warning', required: true,
 }
 
 function payload(tasks, dismissed = []) {
@@ -42,8 +42,8 @@ describe('Tasks dismissal', () => {
     api.getTasks.mockResolvedValue(payload([DISMISSIBLE, NOT_DISMISSIBLE]))
     renderPage()
     await screen.findByText('Uncategorized transactions')
-    // One control for the one dismissible card — the vault request is someone else waiting, not a
-    // backlog of your own work, so it deliberately cannot be put away.
+    // One control for the one dismissible card. The server decides: every task is a reminder that can be
+    // put away except one that is required, which carries no dismiss_key.
     expect(screen.getAllByText('Dismiss')).toHaveLength(1)
   })
 

@@ -19,9 +19,17 @@ items stay hidden forever. Ratcheting down means the comparison is always agains
 list has been since, so anything new re-surfaces. A dismissal for a task that has since gone away
 entirely is dropped, which lets the dismissal expire on its own.
 
-The recurring anomaly signals deliberately do NOT use this: each of those is an individually
-identifiable finding, so they are dismissed one at a time by fingerprint on the Recurring page
-(`services/recurring_signals.py`) and their task counts only ever describe findings still open.
+**Every task is dismissible unless it is required.** The Tasks page is a reminder, so dismissing a card
+hides the reminder and nothing else: the state it reports stays on the page it links to. That holds for
+tasks whose findings have their own per-item answer too — a recurring signal dismissed by fingerprint on
+the Recurring page, a reimbursement snoozed — because putting the reminder away ("two of these are waiting
+on someone else") is a different statement from answering a finding. The only exception is a task that
+declares itself `required` (HTTPS with a data provider configured), which stays until it is fixed.
+`_with_dismiss_keys` applies the rule in one place, so a new task is dismissible without opting in.
+
+This reverses an earlier design that withheld dismissal from the connection, vault-access, recurring,
+rule-drift and reimbursement tasks, each for a reason about the underlying state. Those reasons are about
+the finding, not the reminder; don't re-impose them here.
 """
 
 import json
@@ -55,8 +63,9 @@ def _https_setup_task(request: Request | None) -> dict | None:
     # Transport nag: on a networked (non-loopback) bind still served over plain HTTP, credentials and
     # bank secrets would cross the wire in cleartext. Emit when either trigger is live — sign-in
     # protection on (a login cookie to sniff) or a data provider intended (a live bank secret). The
-    # provider case is *required* (not dismissible); plain client-server is only *recommended* and is
-    # suppressible. Self-clears the moment a request arrives over HTTPS — no stored dismissal for it.
+    # provider case is *required* (never dismissible); plain client-server is only *recommended*, so it is
+    # dismissible from Tasks like any other reminder (and still honors the older persisted suppression).
+    # Self-clears the moment a request arrives over HTTPS.
     if request is None or transport.request_is_loopback(request) or transport.request_is_https(request):
         return None
     perimeter_on = auth_required()
@@ -74,7 +83,9 @@ def _https_setup_task(request: Request | None) -> dict | None:
             + ("A data provider is configured, so bank credentials would cross the network in cleartext — "
                "HTTPS is required before connecting."
                if required else
-               "Sign-in credentials cross the network in cleartext — configuring HTTPS is recommended.")
+               "Sign-in credentials and the session cookie cross the network in cleartext — configuring "
+               "HTTPS is recommended.")
+            + " Passkeys, for unlocking the credential vault, also need HTTPS."
             + " Put a TLS-terminating reverse proxy (Caddy) in front of the backend."
         ),
         "count":       1,
@@ -82,7 +93,6 @@ def _https_setup_task(request: Request | None) -> dict | None:
         "link_label":  "How to set up HTTPS",
         "severity":    SEVERITY_WARNING,
         "required":    required,
-        "dismissible": not required,
     }
 
 
@@ -132,9 +142,9 @@ def _connection_tasks(conn) -> list[dict]:
     Three separate tasks rather than one "connections need attention", because the remedies are different
     pages' worth of different work and a merged count could not link anywhere useful.
 
-    Deliberately *not* dismissible. Each is a broken state with a concrete fix rather than a backlog of
-    work to get through, so "not now" is the wrong affordance: unlike an uncategorized-transactions count,
-    these do not go down on their own and hiding one hides a connection that has stopped importing.
+    Dismissible like every task (see the module docstring): the connection card keeps showing the broken
+    state. Worth knowing when reading a report about one: these counts do not fall on their own, so a
+    dismissed one stays hidden until another connection breaks or the first is fixed.
     """
     tasks = []
     rows = conn.execute(
@@ -234,7 +244,6 @@ def _build_tasks(request: Request | None) -> list[dict]:
                     "link":        "/accounts?tab=accounts",
                     "link_label":  "Review accounts",
                     "severity":    SEVERITY_WARNING,
-                    "dismiss_key": "unowned_accounts",
                 })
 
         # Pending transactions are intentionally excluded because the rest of the product
@@ -259,7 +268,6 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "link":        "/transactions?only=uncategorized",
                 "link_label":  "Review transactions",
                 "severity":    SEVERITY_INFO,
-                "dismiss_key": "uncategorized_txns",
             })
 
         # Soft-detected duplicates flagged at import time (new account on either side) or after
@@ -307,7 +315,6 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "link":        "/import-export",
                 "link_label":  "Open Import / Export",
                 "severity":    SEVERITY_WARNING,
-                "dismiss_key": "suspect_duplicates",
             })
 
         # Amazon imports whose reconciliation has actionable items — a duplicate charge to merge/discard, or a
@@ -330,7 +337,6 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "link":        "/import-export",
                 "link_label":  "Open Import / Export",
                 "severity":    SEVERITY_WARNING,
-                "dismiss_key": "amazon_reconciliation",
             })
 
         tasks.extend(_recurring_signal_tasks(conn))
@@ -338,6 +344,16 @@ def _build_tasks(request: Request | None) -> list[dict]:
         tasks.extend(_reimbursement_tasks(conn))
         tasks.extend(_connection_tasks(conn))
 
+    return _with_dismiss_keys(tasks)
+
+
+def _with_dismiss_keys(tasks: list[dict]) -> list[dict]:
+    """Make every task dismissible except one that declares itself `required`. The key is the task id, so
+    a per-owner task (reimbursements) is dismissed per owner, and the ids the original four dismissible
+    tasks stored their marks under are unchanged."""
+    for task in tasks:
+        if not task.get("required"):
+            task.setdefault("dismiss_key", task["id"])
     return tasks
 
 
@@ -354,10 +370,8 @@ def _reimbursement_tasks(conn) -> list[dict]:
     `owner_grouping_applies` rather than "any owner exists", because a built-in *Shared* owner appears
     the first time the Owners page is opened.
 
-    **No `dismiss_key`.** These carry a per-record snooze instead — pushing a reminder out is a statement
-    about *that* receivable, following the recurring signals rather than the count-ratcheting tasks. An
-    aggregate dismissal on top would be a second mechanism doing the same job, and it would hide a
-    newly-due reminder behind a count that had not risen.
+    Each receivable also carries a per-record snooze, which is the answer about *that* receivable. The
+    task's own dismissal only puts the reminder away, and it returns when another receivable comes due.
     """
     report = due_reminders(conn)
     if not report["total"]:
@@ -428,9 +442,9 @@ _SIGNAL_TASKS = [
 
 
 def _recurring_signal_tasks(conn) -> list[dict]:
-    """The recurring anomaly signals, one task per kind. These carry no `dismiss_key`: the signals are
-    individually identifiable, so they are dismissed one at a time on the page the task links to, and
-    the count here only ever describes findings that are still open."""
+    """The recurring anomaly signals, one task per kind. Each signal is also dismissed one at a time on the
+    page the task links to, and the count here only ever describes findings still open there; dismissing
+    the task hides the reminder until another finding of that kind appears."""
     counts = compute_signals(conn)["counts"]
     tasks = []
     for spec in _SIGNAL_TASKS:
@@ -452,8 +466,8 @@ def _recurring_signal_tasks(conn) -> list[dict]:
 def _rule_range_drift_tasks(conn) -> list[dict]:
     """The charges an amount-gated rule nearly claimed. One task covering both kinds rather than two,
     because they are one situation reported at two moments — the range has drifted — and the fix is the
-    same rule either way. Like the recurring signals it carries no `dismiss_key`: each finding is
-    dismissed individually on the Rules page this links to."""
+    same rule either way. Like the recurring signals, each finding is also dismissed individually on the
+    Rules page this links to."""
     counts = find_range_drift(conn)["counts"]
     n = sum(counts.values())
     if not n:

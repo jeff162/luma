@@ -311,8 +311,8 @@ configured.
 
 **Recommended versus required is a real distinction and the UI must keep it.** For plain client-server
 HTTPS is only recommended — it protects the login credential, which is the operator's call on their own
-network — so that nag is suppressible without configuring anything. Where a data source is involved it is
-required and never dismissible.
+network — so that reminder can be dismissed from Tasks without configuring anything, and it mentions that
+passkeys need HTTPS too. Where a data source is involved it is required and never dismissible.
 
 **Passkeys make the host name load-bearing, and the failure is silent.** WebAuthn needs a secure context,
 and an RP id must be a **domain**. Two consequences that look like packaging trivia and are not:

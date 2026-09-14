@@ -70,6 +70,7 @@ function TaskCard({ task, onDismiss }) {
   return (
     <div
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'flex-start',
         gap: 16,
@@ -100,7 +101,8 @@ function TaskCard({ task, onDismiss }) {
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
           {task.description}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {/* Room on the right for the corner tab, so a wrapped action row can never run under it. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingRight: task.dismiss_key ? 72 : 0 }}>
           <Link
             to={task.link}
             onClick={handleClick}
@@ -118,20 +120,33 @@ function TaskCard({ task, onDismiss }) {
           >
             {task.link_label} {'->'}
           </Link>
-          {task.dismiss_key ? (
-            <button
-              onClick={() => onDismiss(task)}
-              title="Hide this until there is more of it"
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)',
-                fontSize: 12, fontWeight: 500, padding: '5px 4px',
-              }}
-            >
-              Dismiss
-            </button>
-          ) : null}
         </div>
       </div>
+      {task.dismiss_key ? (
+        // A tab set into the card's bottom-right corner: it sits over the card's own border, its outer
+        // corner takes the card's radius and its inner corner is rounded, so it reads as cut out of the
+        // card rather than a button placed on it. Muted on purpose — the task's link is the main action.
+        <button
+          onClick={() => onDismiss(task)}
+          title="Hide this until there is more of it"
+          style={{
+            position: 'absolute',
+            right: -1,
+            bottom: -1,
+            minHeight: 26,
+            padding: '4px 14px',
+            background: 'var(--surface2)',
+            border: `1px solid ${style.border}`,
+            borderRadius: '10px 0 10px 0',
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 500,
+          }}
+        >
+          Dismiss
+        </button>
+      ) : null}
     </div>
   )
 }

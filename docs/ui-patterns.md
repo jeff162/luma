@@ -1144,13 +1144,20 @@ identifiable finding or a running count of work.
   has been since. A mark whose task has stopped applying entirely is dropped, so the dismissal expires on
   its own rather than covering the task's next appearance.
 
-- **Not everything raised should be dismissible.** A request from another person (the vault access
-  queue) is not the user's backlog, and something that is *required* rather than advisory (the HTTPS
-  warning with a provider configured) must not be put away at all. Offer the control only where
-  dismissing is a legitimate answer, and let the task itself declare that — `dismiss_key` present means
-  dismissible; the surface never infers it.
+- **A Tasks card is a reminder, so every one is dismissible except a required one.** Dismissing a card
+  puts the reminder away and nothing else: the state stays on the page the task links to, and a finding
+  with its own per-item answer (a recurring signal, a snoozed reimbursement) keeps it. "Two of these are
+  waiting on someone else" is a legitimate reason to hide a reminder even where it would not be a reason
+  to answer the finding. The one exception is something *required* rather than advisory (the HTTPS warning
+  with a data provider configured), which stays until fixed. The backend applies the rule in one place
+  (`_with_dismiss_keys`, keyed on `required`) and the surface reads `dismiss_key`, never inferring it. The
+  control is a muted **Dismiss** tab set into the card's bottom-right corner, over the card's border, so it
+  is easy to find without competing with the task's link. This reverses an earlier rule that withheld
+  dismissal from the connection, vault-access, recurring, rule-drift and reimbursement tasks for reasons
+  about the underlying state; don't re-impose it. Note what dismissal buys where a count does not fall on
+  its own (a broken connection): the card stays hidden until the count rises.
 
-  **Nondeterminism is a third reason, distinct from those two.** Where the app is reporting that it
+  **Nondeterminism is a reason a *finding* cannot be acknowledged, distinct from the Tasks reminder.** Where the app is reporting that it
   cannot tell what it will do — two category rules whose amount ranges overlap with no principled winner
   — acknowledging is not a legitimate answer, because the ledger goes on being categorized by an
   arithmetic accident while the surface reports nothing outstanding. Those stay listed until the *model*
