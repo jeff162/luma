@@ -200,7 +200,8 @@ Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and
 conventions.
 
 An optional `.env` file overrides the handful of values resolved before the app is running — the ports,
-the data directory (`DATA_DIR`, holding both databases), and the developer-options gate. Copy
+the data directory (`DATA_DIR`, holding both databases, the `documents` folder of attachments and the
+`luma.log` error log), and the developer-options gate. Copy
 `env_example.txt` to `.env` to use it.
 
 ## Platform support

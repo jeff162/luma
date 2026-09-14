@@ -2982,7 +2982,8 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             <strong>Data directory</strong> is where both database
-            files live &mdash; change to move an installation's data, possibly to run a
+            files live, along with the <code>documents</code> folder holding attachments and
+            the <code>luma.log</code> error log &mdash; change to move an installation's data, possibly to run a
             second installation on the same machine. The two database rows beneath it are shown for
             confirmation and follow it automatically.
           </li>

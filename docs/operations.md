@@ -142,6 +142,25 @@ volume, so backing up the host directory is backing up the installation.
 **One directory, fixed filenames.** `DATA_DIR` holds both databases. The two always travel together, so
 a second installation wants a second directory rather than a path per file.
 
+The databases are not all that lives there:
+
+| In the data directory | What it is | Follows `DB_PATH` |
+| --- | --- | --- |
+| `luma-data.db` | the ledger | — |
+| `luma-control.db` | users, sessions, and the credential vault | — |
+| `documents/` | attached documents, one file per attachment (`services/documents.py`) | yes |
+| `luma.log`, `luma.log.1` | the server's own log, read by Settings → **Error log** | yes |
+| `luma-desktop.log` | startup output where there is no terminal — today, the macOS app started from Finder | no |
+| `luma-desktop.lock` | the port of an instance the launcher (`backend/desktop.py`) started, so a second launch opens a tab on it | no |
+
+Both databases run in WAL mode, so each also has `-wal` and `-shm` files beside it while the app is open;
+committed data can still be sitting in the `-wal`, which is why a copy of a live database is taken with
+SQLite's `.backup` rather than by copying the file. **The last column is the split `DB_PATH` makes.**
+Attached documents and `luma.log` are placed beside the *data database*, so a per-file override takes them
+with it; the launcher's two files are placed in `DATA_DIR` itself and stay there. On an install that
+uses the override, the data directory and the database's directory are two different places, and only
+the second holds the documents.
+
 **Settings → Configuration is the authority on what is actually in force.** It reports every effective
 value *and the layer it came from*, because an environment override is invisible from inside the app.
 Read it before believing anything about a running instance — including which database it is open on.
