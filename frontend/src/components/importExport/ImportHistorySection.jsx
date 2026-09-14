@@ -186,6 +186,13 @@ export function ImportHistorySection({
                     (sum, b) => sum + Math.max(0, Number(b?.suspect_duplicate_count || 0)),
                     0,
                   )
+                  // The same reasoning for rows still needing review: each card's "to review" pill and its
+                  // Mark all reviewed sit inside the expanded row, so a collapsed row has to say there is
+                  // something in there. For a connection this is what new synced rows look like.
+                  const needsReviewCount = row.batches.reduce(
+                    (sum, b) => sum + Math.max(0, Number(b?.needs_review_count || 0)),
+                    0,
+                  )
 
                   return (
                     <div key={row.key}>
@@ -351,6 +358,33 @@ export function ImportHistorySection({
                                       }}
                                     >
                                       ⚠ {unresolvedDuplicateCount} duplicate{unresolvedDuplicateCount === 1 ? '' : 's'}
+                                    </button>
+                                  ) : null}
+                                  {needsReviewCount > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedSourceRows(prev => {
+                                        const nextState = prev && typeof prev === 'object' ? prev : {}
+                                        return { ...nextState, [row.key]: true }
+                                      })}
+                                      title={`${needsReviewCount} transaction${needsReviewCount === 1 ? '' : 's'} across imports in this data source still need review — expand to review or mark them reviewed`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 4,
+                                        marginLeft: 4,
+                                        padding: '1px 7px',
+                                        borderRadius: 99,
+                                        background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))',
+                                        color: 'var(--review-marker-color)',
+                                        border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))',
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        lineHeight: 1.5,
+                                      }}
+                                    >
+                                      {needsReviewCount} to review
                                     </button>
                                   ) : null}
                                 </>

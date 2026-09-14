@@ -4022,9 +4022,10 @@ def undo_batch_duplicate_enrichment_endpoint(batch_id: str, body: BatchDuplicate
 @router.post("/batches/{batch_id}/mark-reviewed")
 def mark_batch_reviewed(batch_id: str):
     """Clear the needs-review flag on every still-flagged transaction in this batch — the one-click
-    "I've looked these over (or don't need to)" for a whole imported file. This is the CSV counterpart
-    to bulk Mark reviewed on the Transactions filter; it exists because batches already track which
-    rows belong to a file, which data-source syncs don't yet have."""
+    "I've looked these over (or don't need to)" for a whole import card — a file, or a data connection's
+    initial or monthly sync card, since synced rows carry the card's `import_batch_id` too. The per-card
+    counterpart to bulk Mark reviewed on the Transactions filter. It clears only the rows flagged now, so
+    a sync card's count returns when later rows land on it."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE txn SET needs_review = 0 WHERE import_batch_id = ? AND needs_review = 1",
