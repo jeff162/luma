@@ -780,10 +780,12 @@ Key invariants:
   a series user-owned. Membership (`txn.recurring_series_id`) is recomputed for every surviving series on
   each scan.
 
-- **Rule-backed series (`source='rule'`) are the user-driven answer to varying payee names.** The derived
-  `(payee, category, sign)` key is right for the *auto* detector but too rigid when a human declares a
-  series a bank spells several ways (`NYTIMES.COM` vs. `NYTimes NY TIMES …4637`) — those normalize to
-  different keys and would never group. So a **rule** gains an `is_recurring` flag; when set it owns a
+- **Rule-backed series (`source='rule'`) let a user declare a series instead of waiting for detection.**
+  The common path is writing a rule for a charge already known to recur — after categorizing it, or from
+  the row menu — often before there is enough history for the detector to find it. Varying payee names
+  (`NYTIMES.COM` vs. `NYTimes NY TIMES …4637`) do *not* need this: those normalize to different keys, but
+  a rule renaming them to one `display_name` unifies the key the detector reads, and the series is found.
+  So a **rule** gains an `is_recurring` flag; when set it owns a
   `recurring_series` row (`source='rule'`, `rule_id` FK, `confirmed=1`) whose **membership is the rule's
   matches** — the same shared predicate (`categorizer.rule_matches_row`) that rule *apply* uses, so
   "which rows the rule owns" has one definition. This is the deliberate exception to "unify the name to

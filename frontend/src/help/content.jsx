@@ -1950,15 +1950,15 @@ export const HELP_TOPICS = [
 
         <h4>When the scan cannot see it</h4>
         <p>
-          The scan groups by the payee name on the statement. Sometimes merchant names come in with different
-          variations and the scan cannot determine that it is a single payee. While it is useful for reporting
-          to create rules that generate a single name for a payee, rules can also declare that their
-          matching transactions form a series. Turn on this flag and every transaction the rule matches
-          becomes a member of one series. A rule matches by keyword -- with optional amount and scope -- so
-          it gathers all the spellings at once, and later transactions attach themselves as they arrive. To
-          change which transactions belong, edit the rule. It is unusual but if all of the transactions
-          for a series cannot be captured by a single rule, having multiple rules to generate a single
-          merchant name will surface the series.
+          The scan groups by payee name, so a merchant whose name arrives in several spellings looks like
+          several payees. When rules rename those transactions to one standardized name, that is the name
+          the scan sees, and the series is found.
+        </p>
+        <p>
+          A charge already known to recur does not have to wait for the scan. When creating a rule for it
+          -- after categorizing the transaction, or from <strong>Mark as recurring…</strong> --
+          turn on <strong>Recurring series</strong>. Every transaction the rule matches becomes a member of
+          the series, and later matches join as they arrive. To change which transactions belong, edit the rule.
         </p>
         <p>
           A one-off that does not warrant a rule can still be added by hand from the Recurring page.
