@@ -577,7 +577,9 @@ export const HELP_TOPICS = [
           </li>
           <li>
             The import cards on the Import/Export page have a pill with the number of transactions in
-            the import which need review. Next to it is a button to <strong>mark all reviewed</strong>.
+            the import which need review. Clicking the pill opens the import&apos;s transactions with the
+            <em>Needs review</em> quick filter already on; the same filter turns off to show the rest of the import.
+            Next to the pill is a button to <strong>mark all reviewed</strong>.
           </li>
         </ul>
       </>

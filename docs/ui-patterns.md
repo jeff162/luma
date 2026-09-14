@@ -812,6 +812,15 @@ instead. The choice is remembered in the page's session state alongside the sear
 filter, so it survives navigation and resets on relaunch like its siblings; a `?only=` link is an
 explicit instruction and outranks both the seed and the remembered value.
 
+**An import report carries the same quick filter, seeded by whoever opened it.** A card's *N to review*
+pill opens the report with *Needs review* switched on; the ↗ and every drill-through open it with *Needs
+review* chosen but off. Opening on only the rows to review with no way back would hide the rest of the file
+they are being checked against, and sorting reviewed rows down would move each row the moment it was
+marked. The seed rides the report's payload like its date filter, so re-opening an open report re-applies
+it. A report remembers nothing across openings, and its header states the filtered count against the
+file's (*Needs review: 12 of 240 imported transactions from this file*), since the filtered figure alone
+reads as the size of the file. As on the ledger, a row marked reviewed stays until the report's ↻.
+
 **Tabs in a facet popover size to their labels, not to equal `flex: 1` cells.** Equal cells give the
 widest labels no breathing room while short ones sit in slack, so two long neighbours read as one run of
 text — and it degrades with every tab added. Natural width plus real horizontal padding keeps the gap

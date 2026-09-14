@@ -3,7 +3,8 @@
 
 /*
  * The Transactions ledger's attribute quick filter — the single button that replaced the separate
- * "Uncategorized only" and "Needs review" toggles.
+ * "Uncategorized only" and "Needs review" toggles. An import report (`ImportBatchDetail`) carries the same
+ * control, so a file's rows narrow with the same words and the same server predicate as the ledger's.
  *
  * It is deliberately **single-select**, which is what separates it from the FilterBar's Attributes tab.
  * This is the control for finding something quickly ("show me what needs review", "which rows have a

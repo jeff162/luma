@@ -690,7 +690,8 @@ export function ImportHistorySection({
                                       <>
                                         <button
                                           type="button"
-                                          onClick={() => openBatchDetail(b)}
+                                          // Opens on the rows the pill counts; the report's own quick filter turns it off.
+                                          onClick={() => openBatchDetail({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
                                           title="Review the transactions imported from this file"
                                           style={{
                                             display: 'inline-flex', alignItems: 'center', gap: 4,

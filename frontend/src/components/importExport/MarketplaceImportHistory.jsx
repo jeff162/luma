@@ -246,7 +246,8 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
                         <>
                           <button
                             type="button"
-                            onClick={() => onOpenLedger(b)}
+                            // Opens on the rows the pill counts; the report's own quick filter turns it off.
+                            onClick={() => onOpenLedger({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
                             title="Review the transactions imported from this file"
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))', color: 'var(--review-marker-color)', border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))', cursor: 'pointer', fontWeight: 600 }}
                           >

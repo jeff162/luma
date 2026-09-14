@@ -7,7 +7,7 @@
  * Import / Export page (full file view) and from the duplicate-detection dialog's drill-
  * through arrow (file view, optionally scoped to a date range from a coverage-window match).
  *
- * Four filters all flow through the same `activeKey` into `usePagedTransactions`, which
+ * Five filters all flow through the same `activeKey` into `usePagedTransactions`, which
  * resets pagination to page 1 whenever any of them change:
  *   - the batch id itself (always present)
  *   - an optional date range from `batch._dateFilter` (set by drill-through callers; lives
@@ -20,6 +20,9 @@
  *   - the user's debounced search input — the same backend search (`quick_filter`) as the Transactions page, so
  *     its grammar (keywords, dates, signed amounts) is documented once, in the `searching-transactions`
  *     help topic and `_build_quick_filter_clause`
+ *   - the ledger's quick filter (`AttributeFilterControl`), seeded from `batch._attributeFilter`: the card's
+ *     "N to review" pill opens with Needs review switched on, every other way in opens with it chosen but
+ *     off, so the rows still to look over are one click away without hiding the rest of the file
  *
  * The panel itself is read-write for categories: changes the user makes from this drawer
  * (via the inline CategoryPicker) update the underlying txn rows directly, the same way the
@@ -30,7 +33,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
-import { Button, Spinner } from './ui.jsx'
+import { Button, RefreshButton, Spinner } from './ui.jsx'
+import AttributeFilterControl from './AttributeFilterControl.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import CategoryDetail from './CategoryDetail.jsx'
@@ -40,6 +44,10 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './detailShared.jsx'
 
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
+
+// The quick filter's choice when the opener names none. A file's report is opened to look over what it
+// brought in, so the attribute worth being one click away is the one the card's own pill counts.
+const DEFAULT_ATTRIBUTE = 'needs-review'
 
 // This drawer is a file-scoped ledger, so the Account column must read as the account the file
 // actually populated — its as-imported label (`source_account_raw_name` = account.name). The
@@ -89,6 +97,28 @@ export default function ImportBatchDetail({
     onClose?.()
   }, [reportReviewCount, onClose])
 
+  // Seeded from the payload rather than held by the opener, like `_dateFilter`. Re-applied when the payload
+  // changes, because re-opening an open report replaces its entry: the pill turning the filter on, or the ↗
+  // opening it plain, is an explicit instruction that outranks whatever was toggled since.
+  const seedAttribute = batch?._attributeFilter?.attribute || DEFAULT_ATTRIBUTE
+  const seedActive = !!batch?._attributeFilter?.active
+  const [attributeFilter, setAttributeFilter] = useState({ attribute: seedAttribute, active: seedActive })
+  useEffect(() => {
+    setAttributeFilter({ attribute: seedAttribute, active: seedActive })
+  }, [seedAttribute, seedActive])
+  // Fetched, as on the Transactions page, so the two cannot drift in keys or labels.
+  const [filterAttributes, setFilterAttributes] = useState([])
+  useEffect(() => {
+    api.getFilterAttributes().then(setFilterAttributes).catch(() => {})
+  }, [])
+  const activeAttribute = attributeFilter.active ? attributeFilter.attribute : null
+  const activeAttributeLabel = activeAttribute
+    ? filterAttributes.find(attribute => attribute.key === activeAttribute)?.label || null
+    : null
+  // A reviewed or recategorized row stays where it is until this is bumped, as on the Transactions page, so a
+  // row does not vanish from a filtered list the moment it stops matching.
+  const [refreshNonce, setRefreshNonce] = useState(0)
+
   const [filterInput, setFilterInput] = useState('')
   const [debouncedFilter, setDebouncedFilter] = useState('')
   useEffect(() => {
@@ -97,6 +127,8 @@ export default function ImportBatchDetail({
   }, [filterInput])
   const { pos, panelRef, onDragStart } = useDetailPanelChrome(handleClose, { forceFloating, stackIndex })
   const [totalCount, setTotalCount] = useState(0)
+  // The scope's size without the quick filter, so a filtered header can say "12 of 240".
+  const [unfilteredCount, setUnfilteredCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
@@ -105,13 +137,17 @@ export default function ImportBatchDetail({
   })
   // The panel's scope, in one place: the list, the count and "select all matching" must resolve the same
   // set or a bulk edit reaches rows the list never showed.
-  const scopeParams = useMemo(() => ({
+  const unfilteredScopeParams = useMemo(() => ({
     import_batch_id: batch.id,
     ...(syncConnectionId ? { sync_connection_id: syncConnectionId } : {}),
     ...(dateStart ? { date_start: dateStart } : {}),
     ...(dateEnd   ? { date_end:   dateEnd   } : {}),
     ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
   }), [batch.id, syncConnectionId, dateStart, dateEnd, debouncedFilter])
+  // The quick filter ANDs, through the same parameter the Transactions page sends it on.
+  const scopeParams = useMemo(() => (
+    activeAttribute ? { ...unfilteredScopeParams, require_all_attribute_ids: activeAttribute } : unfilteredScopeParams
+  ), [unfilteredScopeParams, activeAttribute])
   const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
       ...scopeParams,
@@ -132,7 +168,7 @@ export default function ImportBatchDetail({
     sortState,
     onSort,
   } = usePagedTransactions({
-    activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
+    activeKey: `${batch.id}|${syncConnectionId || ''}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}|${activeAttribute || ''}|${refreshNonce}`,
     loadPage,
   })
 
@@ -150,21 +186,24 @@ export default function ImportBatchDetail({
   useEffect(() => {
     let cancelled = false
     setCountLoading(true)
-    api.getTransactions({
-      ...scopeParams,
-      limit: 1,
-      offset: 0,
-    }).then(result => {
+    const count = params => api.getTransactions({ ...params, limit: 1, offset: 0 })
+      .then(result => Number(result?.total || 0))
+    Promise.all([
+      count(scopeParams),
+      activeAttribute ? count(unfilteredScopeParams) : null,
+    ]).then(([scoped, unfiltered]) => {
       if (cancelled) return
-      setTotalCount(Number(result?.total || 0))
+      setTotalCount(scoped)
+      setUnfilteredCount(unfiltered ?? scoped)
       setCountLoading(false)
     }).catch(() => {
       if (cancelled) return
       setTotalCount(0)
+      setUnfilteredCount(0)
       setCountLoading(false)
     })
     return () => { cancelled = true }
-  }, [scopeParams])
+  }, [scopeParams, unfilteredScopeParams, activeAttribute, refreshNonce])
 
   // Rows this file imported that were later removed as confirmed duplicates (via the duplicate
   // report's Discard new / Replace existing, or an account merge). They are trashed, so they
@@ -198,10 +237,20 @@ export default function ImportBatchDetail({
   const dateFilterLabel = (dateStart || dateEnd)
     ? ` (filtered: ${dateStart || ''}${dateEnd && dateEnd !== dateStart ? ` … ${dateEnd}` : ''})`
     : ''
+  const scopeNoun = syncConnectionId
+    ? `transaction${unfilteredCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}`
+    : `imported transaction${unfilteredCount === 1 ? '' : 's'} from this file`
   const header = (
     <>
-      <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>
+      <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35, display: 'flex', alignItems: 'center', gap: 8 }}>
         {batch.filename}
+        {/* Kept out of the panel drag, which the header starts. */}
+        <RefreshButton
+          onRefresh={() => setRefreshNonce(n => n + 1)}
+          loading={loading}
+          onMouseDown={event => event.stopPropagation()}
+          title="Refresh — re-query the list and drop transactions that no longer match"
+        />
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         Imported {(batch.imported_at || '').slice(0, 16).replace('T', ' ')}
@@ -213,9 +262,13 @@ export default function ImportBatchDetail({
           // directly above it: a sync files its rows onto the card for their month, which by then usually
           // holds earlier rows from earlier syncs. Saying "from this file" over a subset would misreport
           // both the card and the sync.
-          : syncConnectionId
-            ? `${totalCount} transaction${totalCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}${dateFilterLabel}`
-            : `${totalCount} imported transaction${totalCount === 1 ? '' : 's'} from this file${dateFilterLabel}`}
+          // With the quick filter on, the count is a subset of the scope, and stating only that subset's size
+          // would read as the size of the file.
+          : activeAttribute
+            ? `${activeAttributeLabel || 'Filtered'}: ${totalCount} of ${unfilteredCount} ${scopeNoun}${dateFilterLabel}`
+            : syncConnectionId
+              ? `${totalCount} transaction${totalCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}${dateFilterLabel}`
+              : `${totalCount} imported transaction${totalCount === 1 ? '' : 's'} from this file${dateFilterLabel}`}
       </div>
     </>
   )
@@ -250,6 +303,12 @@ export default function ImportBatchDetail({
               color: 'var(--text)',
               outline: 'none',
             }}
+          />
+          <AttributeFilterControl
+            attributes={filterAttributes}
+            value={attributeFilter.attribute}
+            active={attributeFilter.active}
+            onChange={setAttributeFilter}
           />
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 220px' }}>
             Imported transactions from this file. Category changes made here update the underlying transactions directly.
