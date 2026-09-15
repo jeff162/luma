@@ -1758,295 +1758,295 @@ export default function App() {
               <TransactionShareProvider>
                 <UnifiedDuplicatesViewerProvider>
                   <AmazonReconciliationViewerProvider>
-                  <AmazonImportDetailViewerProvider>
-                  <ImportedCategoryWorkspaceProvider>
-                  <VaultGateProvider>
-                  <SyncStatusProvider>
-                    <ThemeController />
-                    <UnifiedDuplicatesViewerRenderer />
-                    <AmazonReconciliationViewerRenderer />
-                    <AmazonImportDetailViewerRenderer />
-                    <ImportedCategoryWorkspaceRenderer />
-                    <SyncStatusRenderer />
-                    <VaultGateRenderer />
-                    <style>{GLOBAL_SCROLLBAR_STYLES}</style>
-                    {pendingShutdown ? (
-                      <AppConfirmDialog
-                        title="Shut down Luma?"
-                        description={shutdownError
-                          ? shutdownError
-                          : 'This stops Luma on this computer, not just this session — the page stops working until it is started again. Nothing is lost: data is already saved.'}
-                        confirmLabel={shuttingDown ? 'Shutting down…' : 'Shut down Luma'}
-                        confirmVariant="danger"
-                        confirmDisabled={shuttingDown}
-                        cancelDisabled={shuttingDown}
-                        onConfirm={confirmShutdownApp}
-                        onCancel={() => { setPendingShutdown(false); setShutdownError('') }}
-                        width="min(460px, 100%)"
-                      />
-                    ) : null}
-                    {appStopped ? <BackendStoppedDialog /> : null}
-                    {pendingDemoClear ? (
-                      <AppConfirmDialog
-                        title="Clear demo data?"
-                        description={demoClearError
-                          ? demoClearError
-                          : 'This removes the demo dataset and returns the app to a clean slate so you can bring in your own data. This cannot be undone.'}
-                        confirmLabel={clearingDemo ? 'Clearing…' : 'Clear demo data'}
-                        confirmVariant="danger"
-                        confirmDisabled={clearingDemo}
-                        cancelDisabled={clearingDemo}
-                        borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-                        onConfirm={confirmClearDemoData}
-                        onCancel={() => { setPendingDemoClear(false); setDemoClearError('') }}
-                        width="min(480px, 100%)"
-                      />
-                    ) : null}
-                    <div style={s.shell}>
-                      <nav style={{ ...s.nav, width: navPaneWidth }}>
-                        <div style={s.logo}>
-                          <div>{APP_NAME}</div>
-                          {developerOptionsEnabled ? (
-                            <div style={{
-                              marginTop: 3,
-                              fontSize: 11,
-                              fontWeight: 600,
-                              color: 'var(--muted)',
-                              letterSpacing: '0.04em',
-                            }}>
-                              v{APP_VERSION}
-                            </div>
-                          ) : null}
-                          <DataLocationLine dataLocation={dataLocation} />
-                        </div>
-                        {NAV_LINKS.map(([to, label]) => (
-                          <NavLink
-                            key={to}
-                            to={to}
-                            end={to === '/'}
-                            style={({ isActive }) => (isActive ? activeStyle : s.link)}
-                          >
-                            <span>{label}</span>
-                            {to === '/tasks' && taskCount > 0 && (
-                              <span style={{
-                                background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
-                                color: '#fff',
-                                fontSize: 11, fontWeight: 700,
-                                padding: '1px 7px', borderRadius: 99,
-                                lineHeight: '18px', minWidth: 20, textAlign: 'center',
-                              }}>
-                                {taskCount}
-                              </span>
-                            )}
-                          </NavLink>
-                        ))}
-                        {/* Permanent, so it belongs with the pages rather than among the stashed-report
+                    <AmazonImportDetailViewerProvider>
+                      <ImportedCategoryWorkspaceProvider>
+                        <VaultGateProvider>
+                          <SyncStatusProvider>
+                            <ThemeController />
+                            <UnifiedDuplicatesViewerRenderer />
+                            <AmazonReconciliationViewerRenderer />
+                            <AmazonImportDetailViewerRenderer />
+                            <ImportedCategoryWorkspaceRenderer />
+                            <SyncStatusRenderer />
+                            <VaultGateRenderer />
+                            <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+                            {pendingShutdown ? (
+                              <AppConfirmDialog
+                                title="Shut down Luma?"
+                                description={shutdownError
+                                  ? shutdownError
+                                  : 'This stops Luma on this computer, not just this session — the page stops working until it is started again. Nothing is lost: data is already saved.'}
+                                confirmLabel={shuttingDown ? 'Shutting down…' : 'Shut down Luma'}
+                                confirmVariant="danger"
+                                confirmDisabled={shuttingDown}
+                                cancelDisabled={shuttingDown}
+                                onConfirm={confirmShutdownApp}
+                                onCancel={() => { setPendingShutdown(false); setShutdownError('') }}
+                                width="min(460px, 100%)"
+                              />
+                            ) : null}
+                            {appStopped ? <BackendStoppedDialog /> : null}
+                            {pendingDemoClear ? (
+                              <AppConfirmDialog
+                                title="Clear demo data?"
+                                description={demoClearError
+                                  ? demoClearError
+                                  : 'This removes the demo dataset and returns the app to a clean slate so you can bring in your own data. As long as no new data is loaded, the demo data can be reloaded from the Import/Export page.'}
+                                confirmLabel={clearingDemo ? 'Clearing…' : 'Clear demo data'}
+                                confirmVariant="danger"
+                                confirmDisabled={clearingDemo}
+                                cancelDisabled={clearingDemo}
+                                borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+                                onConfirm={confirmClearDemoData}
+                                onCancel={() => { setPendingDemoClear(false); setDemoClearError('') }}
+                                width="min(480px, 100%)"
+                              />
+                            ) : null}
+                            <div style={s.shell}>
+                              <nav style={{ ...s.nav, width: navPaneWidth }}>
+                                <div style={s.logo}>
+                                  <div>{APP_NAME}</div>
+                                  {developerOptionsEnabled ? (
+                                    <div style={{
+                                      marginTop: 3,
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      color: 'var(--muted)',
+                                      letterSpacing: '0.04em',
+                                    }}>
+                                      v{APP_VERSION}
+                                    </div>
+                                  ) : null}
+                                  <DataLocationLine dataLocation={dataLocation} />
+                                </div>
+                                {NAV_LINKS.map(([to, label]) => (
+                                  <NavLink
+                                    key={to}
+                                    to={to}
+                                    end={to === '/'}
+                                    style={({ isActive }) => (isActive ? activeStyle : s.link)}
+                                  >
+                                    <span>{label}</span>
+                                    {to === '/tasks' && taskCount > 0 && (
+                                      <span style={{
+                                        background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
+                                        color: '#fff',
+                                        fontSize: 11, fontWeight: 700,
+                                        padding: '1px 7px', borderRadius: 99,
+                                        lineHeight: '18px', minWidth: 20, textAlign: 'center',
+                                      }}>
+                                        {taskCount}
+                                      </span>
+                                    )}
+                                  </NavLink>
+                                ))}
+                                {/* Permanent, so it belongs with the pages rather than among the stashed-report
                             pills below it — see components/SyncNavItem.jsx. */}
-                        <SyncNavItem style={s.link} activeStyle={activeStyle} />
-                        <MinimizedDuplicatesNavItem />
-                        <MinimizedAmazonReconciliationNavItem />
-                        <MinimizedAmazonImportDetailNavItem />
-                        <MinimizedImportedCategoryWorkspaceNavItem />
-                        <div style={s.navFooter}>
-                          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                            {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
-                            {authEnabled ? (
-                              <span style={{ fontWeight: 600, color: 'var(--text)' }}>
-                                {currentUser?.display_name || currentUser?.username}
-                              </span>
-                            ) : (
-                              navProfileEditing && activeLocalProfile ? (
-                                <TransientTextInput
-                                  value={navProfileDraft}
-                                  onChange={setNavProfileDraft}
-                                  onCommit={commitNavProfileRename}
-                                  onCancel={() => {
-                                    setNavProfileEditing(false)
-                                    setNavProfileDraft(activeLocalProfile.name)
-                                  }}
-                                  restoreOnEscape
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    background: 'var(--surface2)',
-                                    color: 'var(--text)',
-                                    border: '1px solid var(--accent)',
-                                    borderRadius: 999,
-                                    padding: '4px 10px',
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                    verticalAlign: 'middle',
-                                    minWidth: 110,
-                                    outline: 'none',
-                                  }}
-                                />
-                              ) : (
-                                <button
-                                  onClick={handleSwitchLocalProfile}
-                                  onContextMenu={e => {
-                                    e.preventDefault()
-                                    if (!activeLocalProfile) return
-                                    setNavProfileMenu({
-                                      x: e.clientX,
-                                      y: e.clientY,
-                                    })
-                                  }}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 6,
-                                    background: 'var(--surface2)',
-                                    color: 'var(--text)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 999,
-                                    padding: '4px 10px',
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                    cursor: 'pointer',
-                                    verticalAlign: 'middle',
-                                  }}
-                                  title="Switch user profile"
-                                >
-                                  {activeLocalProfile?.name || 'Choose profile'}
-                                </button>
-                              )
-                            )}
-                          </div>
-                          {authEnabled && (
-                            <button
-                              onClick={handleLogout}
-                              style={{
-                                width: '100%',
-                                background: 'none',
-                                border: '1px solid var(--border)',
-                                color: 'var(--text)',
-                                borderRadius: 8,
-                                padding: '8px 10px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Sign out
-                            </button>
-                          )}
-                          {/* Last, because it is the most final thing here — and named for the whole
+                                <SyncNavItem style={s.link} activeStyle={activeStyle} />
+                                <MinimizedDuplicatesNavItem />
+                                <MinimizedAmazonReconciliationNavItem />
+                                <MinimizedAmazonImportDetailNavItem />
+                                <MinimizedImportedCategoryWorkspaceNavItem />
+                                <div style={s.navFooter}>
+                                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                                    {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
+                                    {authEnabled ? (
+                                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                                        {currentUser?.display_name || currentUser?.username}
+                                      </span>
+                                    ) : (
+                                      navProfileEditing && activeLocalProfile ? (
+                                        <TransientTextInput
+                                          value={navProfileDraft}
+                                          onChange={setNavProfileDraft}
+                                          onCommit={commitNavProfileRename}
+                                          onCancel={() => {
+                                            setNavProfileEditing(false)
+                                            setNavProfileDraft(activeLocalProfile.name)
+                                          }}
+                                          restoreOnEscape
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            background: 'var(--surface2)',
+                                            color: 'var(--text)',
+                                            border: '1px solid var(--accent)',
+                                            borderRadius: 999,
+                                            padding: '4px 10px',
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            verticalAlign: 'middle',
+                                            minWidth: 110,
+                                            outline: 'none',
+                                          }}
+                                        />
+                                      ) : (
+                                        <button
+                                          onClick={handleSwitchLocalProfile}
+                                          onContextMenu={e => {
+                                            e.preventDefault()
+                                            if (!activeLocalProfile) return
+                                            setNavProfileMenu({
+                                              x: e.clientX,
+                                              y: e.clientY,
+                                            })
+                                          }}
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            background: 'var(--surface2)',
+                                            color: 'var(--text)',
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 999,
+                                            padding: '4px 10px',
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            cursor: 'pointer',
+                                            verticalAlign: 'middle',
+                                          }}
+                                          title="Switch user profile"
+                                        >
+                                          {activeLocalProfile?.name || 'Choose profile'}
+                                        </button>
+                                      )
+                                    )}
+                                  </div>
+                                  {authEnabled && (
+                                    <button
+                                      onClick={handleLogout}
+                                      style={{
+                                        width: '100%',
+                                        background: 'none',
+                                        border: '1px solid var(--border)',
+                                        color: 'var(--text)',
+                                        borderRadius: 8,
+                                        padding: '8px 10px',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      Sign out
+                                    </button>
+                                  )}
+                                  {/* Last, because it is the most final thing here — and named for the whole
                               application rather than "Quit", which beside "Sign out" would read as
                               ending the session. Absent unless the backend says stopping would work. */}
-                          {shutdownAvailable && (
-                            <button
-                              onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
-                              style={{
-                                width: '100%',
-                                marginTop: 8,
-                                background: 'none',
-                                border: '1px solid var(--border)',
-                                color: 'var(--muted)',
-                                borderRadius: 8,
-                                padding: '8px 10px',
-                                cursor: 'pointer',
-                              }}
-                              title="Stop Luma on this computer"
-                            >
-                              Shut down Luma
-                            </button>
-                          )}
-                        </div>
-                        <div
-                          className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
-                          onMouseDown={startNavPaneResize}
-                          onDoubleClick={resetNavPaneWidth}
-                          role="separator"
-                          aria-orientation="vertical"
-                          aria-label="Resize navigation pane"
-                          title="Drag to resize · double-click to reset"
-                        />
-                      </nav>
-                      <div style={s.main}>
-                        {demoLoaded ? (
-                          <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 12,
-                            flexWrap: 'wrap',
-                            padding: '7px 16px',
-                            fontSize: 12.5,
-                            background: 'color-mix(in srgb, var(--danger) 12%, var(--surface))',
-                            borderBottom: '1px solid color-mix(in srgb, var(--danger) 30%, var(--border))',
-                          }}>
-                            <span style={{ fontWeight: 700, color: 'color-mix(in srgb, var(--danger) 72%, var(--text))', letterSpacing: '0.02em' }}>
-                              Demo data
-                            </span>
-                            <span style={{ color: 'var(--muted)' }}>
-                              Exploring the sample dataset — imports and connections are disabled.
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
-                              style={{
-                                marginLeft: 'auto',
-                                background: 'color-mix(in srgb, var(--danger) 14%, var(--surface))',
-                                color: 'color-mix(in srgb, var(--danger) 82%, var(--text))',
-                                border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
-                                borderRadius: 8,
-                                padding: '5px 12px',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Clear demo data
-                            </button>
-                          </div>
-                        ) : null}
-                        {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
-                        <div style={s.content}>
-                          <AppRoutes />
-                        </div>
-                      </div>
-                    </div>
-                    {navProfileMenu && activeLocalProfile && (
-                      <div
-                        ref={navProfileMenuRef}
-                        onMouseDown={e => e.stopPropagation()}
-                        style={{
-                          position: 'fixed',
-                          left: Math.min(navProfileMenu.x, window.innerWidth - 160),
-                          top: Math.min(navProfileMenu.y, window.innerHeight - 100),
-                          zIndex: 30,
-                          background: 'var(--surface)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 10,
-                          boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-                          padding: 4,
-                          minWidth: 150,
-                        }}
-                      >
-                        <button
-                          onClick={() => {
-                            setNavProfileMenu(null)
-                            setNavProfileDraft(activeLocalProfile.name)
-                            setNavProfileEditing(true)
-                          }}
-                          style={{
-                            display: 'block',
-                            width: '100%',
-                            textAlign: 'left',
-                            background: 'none',
-                            border: 'none',
-                            borderRadius: 8,
-                            padding: '8px 10px',
-                            fontSize: 13,
-                            cursor: 'pointer',
-                            color: 'var(--text)',
-                          }}
-                        >
-                          Rename
-                        </button>
-                      </div>
-                    )}
-                  </SyncStatusProvider>
-                  </VaultGateProvider>
-                  </ImportedCategoryWorkspaceProvider>
-                  </AmazonImportDetailViewerProvider>
+                                  {shutdownAvailable && (
+                                    <button
+                                      onClick={() => { setShutdownError(''); setPendingShutdown(true) }}
+                                      style={{
+                                        width: '100%',
+                                        marginTop: 8,
+                                        background: 'none',
+                                        border: '1px solid var(--border)',
+                                        color: 'var(--muted)',
+                                        borderRadius: 8,
+                                        padding: '8px 10px',
+                                        cursor: 'pointer',
+                                      }}
+                                      title="Stop Luma on this computer"
+                                    >
+                                      Shut down Luma
+                                    </button>
+                                  )}
+                                </div>
+                                <div
+                                  className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
+                                  onMouseDown={startNavPaneResize}
+                                  onDoubleClick={resetNavPaneWidth}
+                                  role="separator"
+                                  aria-orientation="vertical"
+                                  aria-label="Resize navigation pane"
+                                  title="Drag to resize · double-click to reset"
+                                />
+                              </nav>
+                              <div style={s.main}>
+                                {demoLoaded ? (
+                                  <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 12,
+                                    flexWrap: 'wrap',
+                                    padding: '7px 16px',
+                                    fontSize: 12.5,
+                                    background: 'color-mix(in srgb, var(--danger) 12%, var(--surface))',
+                                    borderBottom: '1px solid color-mix(in srgb, var(--danger) 30%, var(--border))',
+                                  }}>
+                                    <span style={{ fontWeight: 700, color: 'color-mix(in srgb, var(--danger) 72%, var(--text))', letterSpacing: '0.02em' }}>
+                                      Demo data
+                                    </span>
+                                    <span style={{ color: 'var(--muted)' }}>
+                                      Exploring the sample dataset — imports and connections are disabled.
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
+                                      style={{
+                                        marginLeft: 'auto',
+                                        background: 'color-mix(in srgb, var(--danger) 14%, var(--surface))',
+                                        color: 'color-mix(in srgb, var(--danger) 82%, var(--text))',
+                                        border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
+                                        borderRadius: 8,
+                                        padding: '5px 12px',
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      Clear demo data
+                                    </button>
+                                  </div>
+                                ) : null}
+                                {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
+                                <div style={s.content}>
+                                  <AppRoutes />
+                                </div>
+                              </div>
+                            </div>
+                            {navProfileMenu && activeLocalProfile && (
+                              <div
+                                ref={navProfileMenuRef}
+                                onMouseDown={e => e.stopPropagation()}
+                                style={{
+                                  position: 'fixed',
+                                  left: Math.min(navProfileMenu.x, window.innerWidth - 160),
+                                  top: Math.min(navProfileMenu.y, window.innerHeight - 100),
+                                  zIndex: 30,
+                                  background: 'var(--surface)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 10,
+                                  boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
+                                  padding: 4,
+                                  minWidth: 150,
+                                }}
+                              >
+                                <button
+                                  onClick={() => {
+                                    setNavProfileMenu(null)
+                                    setNavProfileDraft(activeLocalProfile.name)
+                                    setNavProfileEditing(true)
+                                  }}
+                                  style={{
+                                    display: 'block',
+                                    width: '100%',
+                                    textAlign: 'left',
+                                    background: 'none',
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 10px',
+                                    fontSize: 13,
+                                    cursor: 'pointer',
+                                    color: 'var(--text)',
+                                  }}
+                                >
+                                  Rename
+                                </button>
+                              </div>
+                            )}
+                          </SyncStatusProvider>
+                        </VaultGateProvider>
+                      </ImportedCategoryWorkspaceProvider>
+                    </AmazonImportDetailViewerProvider>
                   </AmazonReconciliationViewerProvider>
                 </UnifiedDuplicatesViewerProvider>
               </TransactionShareProvider>
