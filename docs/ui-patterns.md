@@ -173,8 +173,7 @@ Shared controls should be treated as finished product surfaces, not reused snipp
   Rules page's button is **+ New**, not *Add rule*: the heading above it says Rules, so repeating the noun
   buys nothing and costs header width the controls beside it need. This holds only where the page *is* one
   thing — a page listing several kinds of record still has to say which one it creates. The convention is
-  settled and the other pages have not caught up yet (Accounts still says *Add account*, Recurring *Add
-  manually*); they follow when their headers are next touched, rather than as a sweep. A label a Help
+  settled and the other pages have not caught up yet (Accounts still says *Add account*); they follow when their headers are next touched, rather than as a sweep. A label a Help
   topic quotes moves with it, and so does the empty state that tells a first-time user which button to
   press.
 
@@ -265,6 +264,8 @@ though it changes nothing, and a control that takes a threshold parameter reads 
 though it ends in an action.
 
 **Tabs or a segmented toggle?** Both switch the body of a page; the difference is what the options *are*. A **tab row** names several separate management surfaces that happen to live on one page (Accounts / Owners / Connections). The shared **`SegmentedToggle`** (`components/ui.jsx`) names peer *views of one subject* — the Dashboard's reporting frame and analysis mode, the Recurring page's Series / Needs attention / Upcoming. Where a view's contents are the reason to switch to it, put the count on the control as a `badge` (`badgeTone: 'warning'` where the number is what wants attention): a count only visible after switching cannot tell anyone to switch. Both follow the same persistence rule — session-scoped in `sessionStorage`, with a URL parameter winning over the stored value so a deep link from elsewhere (the Tasks page's `?signal=<kind>`) lands where it means to.
+
+**A search above a view selector narrows every view; each view's own pills sit above its rows.** The Recurring page's search box is above Series / Needs attention / Upcoming rather than inside the Series view, so one search reaches all three, and the status pills (Series) and kind pills (Needs attention) sit directly over the rows they select. A finding or an upcoming charge matches when **its series** does — the same name, category and either account — since a finding does not carry a movement's second account itself. The search narrows rows, never counts: the selector's badges and every pill count still say what exists, so a search cannot make a view look empty of work. The one figure that does follow it is the Upcoming header's count and total, which describe the list beneath them. The status pills end in a small **Deselect all**, since no selection shows nothing and picking one status otherwise means unticking the rest; it stays in place and does nothing when nothing is selected, so the row does not shift. Within a status the series are in one order — name or next due — with money movements sorted in among the bills and marked by their badge, not clustered after them.
 
 **Split a page into views when two things are competing for one viewport, rather than rationing the space between them.** Findings about recurring series and the series list itself were stacked on one screen; the findings crowded the list and the drill-down panel out of the viewport entirely. Capping the findings' height made the page survivable, but the two were never usefully read together — the fix was to make them peer views.
 

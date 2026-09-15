@@ -33,6 +33,7 @@ import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
@@ -121,13 +122,12 @@ function seriesComparator(sortOrder) {
 // A frozen view snapshot: per-category counts plus the ordered, grouped card layout (section ids in
 // CATEGORY_ORDER). Recomputed only on deliberate re-sort triggers (load, scan, filter/sort change) — NOT
 // on an in-place status change from a card action, so acting on a card never makes it jump until the
-// next natural refresh. Within a section, money-movement series still cluster after the bills (keeping a
-// transfer's two legs adjacent); the chosen order sorts within each of those two groups.
+// next natural refresh. Within a section the chosen order is the only one: money-movement series sort in
+// among the bills, marked by their badge. They once clustered after the bills to keep a transfer's two
+// legs adjacent, which stopped meaning anything when a pair became one series owning both legs — and it
+// read as those series having been left out of the order.
 function orderBucket(items, sortOrder) {
-  const cmp = seriesComparator(sortOrder)
-  const bills = items.filter(s => !s.money_movement).sort(cmp)
-  const movement = items.filter(s => s.money_movement).sort(cmp)
-  return [...bills, ...movement].map(s => s.id)
+  return [...items].sort(seriesComparator(sortOrder)).map(s => s.id)
 }
 
 function buildLayout(list, selected, sortOrder) {
@@ -700,6 +700,27 @@ function FilterPill({ label, count, on, onClick }) {
   )
 }
 
+// Ends the status pills. Nothing selected shows nothing, so picking one status would otherwise mean unticking
+// each of the others. It stays in place and does nothing when nothing is selected, so the row does not shift
+// as it comes and goes.
+function DeselectAllPill({ disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={disabled ? undefined : onClick}
+      aria-disabled={disabled || undefined}
+      title={disabled ? 'No statuses are selected' : 'Deselect every status'}
+      style={{
+        padding: '3px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600,
+        border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)',
+        cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.45 : 0.85,
+      }}
+    >
+      Deselect all
+    </button>
+  )
+}
+
 // Secondary-sort toggle (status stays the primary key). Small segmented control near the pills.
 function SortToggle({ value, onChange }) {
   return (
@@ -942,6 +963,10 @@ export default function Recurring() {
     setFilterList([...next])  // persist; the effect above rebuilds the layout
   }
 
+  function deselectAll() {
+    setFilterList([])
+  }
+
   const openReport = useCallback((s) => {
     // Toggle: clicking the count of the already-open series closes the drill-down; a different card
     // switches to it. Selecting a series keys the paged member fetch (usePagedTransactions) and the
@@ -1170,6 +1195,15 @@ export default function Recurring() {
       // A movement runs between two accounts, and searching for either has to find the card for it.
       s.counterpart_account_name,
     ].some(v => String(v || '').toLowerCase().includes(term))
+  // A finding or an upcoming charge is about a series, so it matches when its series does — the same fields,
+  // including a movement's second account, which the finding does not carry itself.
+  const matchesSignal = (signal) => {
+    if (!term) return true
+    const series = byId.get(signal.series_id)
+    if (series) return matchesSearch(series)
+    return [signal.series_name, signal.category_name, signal.account_name]
+      .some(v => String(v || '').toLowerCase().includes(term))
+  }
   const visibleSections = (layout?.sections || [])
     .map(sec => ({ ...sec, visibleIds: sec.ids.filter(id => { const s = byId.get(id); return s && matchesSearch(s) }) }))
     .filter(sec => sec.visibleIds.length > 0)
@@ -1185,6 +1219,7 @@ export default function Recurring() {
         <div style={{ maxWidth: PAGE_COLUMN, margin: '0 auto' }}>
           <PageHeader
             title="Recurring Transactions"
+            help={<FeatureExplainer topic="recurring-transactions" placement="bottom-left" />}
             refresh={<RefreshButton onRefresh={refreshAll} title="Refresh — reload everything on this page" />}
             titleAdornment={allSeries && allSeries.length > 0 && (
               // The standard report ↗ next to the title opens a transaction report of every recurring row
@@ -1203,7 +1238,8 @@ export default function Recurring() {
             )}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
+              {/* "+ New" rather than "Add manually": the page names what is created (see ui-patterns). */}
+              <Button variant="ghost" onClick={() => setAdding(true)}>+ New</Button>
               {reviewHasAny ? (
                 // The count is the whole signal for whether there is work, so the zero state has to say
                 // so rather than leave the number off and read as "not loaded yet". It stays *clickable*
@@ -1230,8 +1266,25 @@ export default function Recurring() {
               ? `Scan complete — ${scanSummary.inserted} new, ${scanSummary.preserved} kept${scanSummary.resumed ? `, ${scanSummary.resumed} resumed` : ''}.`
               : 'Detects subscriptions, bills, and taxes that recur on a schedule. Confirm the ones that look right; mark the rest "not recurring."'}
           </div>
+          {/* The first-visit tip. Dismissed, it leaves nothing behind: the topic's `?` is beside the title. */}
+          <ContextualExplainer
+            topic="recurring-transactions"
+            active={allSeries !== null}
+            tipKey="recurring-intro"
+            placement="bottom-left"
+            persistentButton={false}
+            style={{ marginBottom: 10 }}
+          />
+          {/* Above the view selector because it narrows whichever view is showing — which is also what lets
+              each view's own pills sit directly above the rows they select. */}
           <div style={{ marginBottom: 10 }}>
-            <ContextualExplainer topic="recurring-transactions" active={allSeries !== null} tipKey="recurring-intro" placement="bottom-left" />
+            <Input
+              value={search}
+              onChange={setSearch}
+              placeholder="Search merchant, category, or account…"
+              aria-label="Search recurring transactions"
+              style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
+            />
           </div>
           {/* The view selector. The badge lives on the control rather than inside the view it names —
               a count only visible after switching cannot tell anyone to switch. */}
@@ -1252,33 +1305,23 @@ export default function Recurring() {
               ]}
             />
           </div>
-          {/* Filtering, sorting and search apply to the series list alone, so they travel with it. */}
+          {/* Status pills and sort apply to the series list alone, so they travel with it. */}
           {view === VIEW_SERIES ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  {CATEGORY_ORDER.map(cat => (
-                    <FilterPill
-                      key={cat}
-                      label={CATEGORY_LABELS[cat]}
-                      count={layout?.counts?.[cat] ?? 0}
-                      on={selected.has(cat)}
-                      onClick={() => togglePill(cat)}
-                    />
-                  ))}
-                </div>
-                <SortToggle value={sortOrder} onChange={setSortOrder} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {CATEGORY_ORDER.map(cat => (
+                  <FilterPill
+                    key={cat}
+                    label={CATEGORY_LABELS[cat]}
+                    count={layout?.counts?.[cat] ?? 0}
+                    on={selected.has(cat)}
+                    onClick={() => togglePill(cat)}
+                  />
+                ))}
+                <DeselectAllPill disabled={selected.size === 0} onClick={deselectAll} />
               </div>
-              <div style={{ marginBottom: 8 }}>
-                <Input
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="Search merchant, category, or account…"
-                  aria-label="Search recurring series"
-                  style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
-                />
-              </div>
-            </>
+              <SortToggle value={sortOrder} onChange={setSortOrder} />
+            </div>
           ) : null}
         </div>
       </div>
@@ -1307,6 +1350,7 @@ export default function Recurring() {
                   onAcceptPrice={acceptPriceChange}
                   onExcludeCharge={excludeSignalCharge}
                   onShowDismissed={showDismissedSignals}
+                  matches={matchesSignal}
                 />
               )
             ) : view === VIEW_UPCOMING ? (
@@ -1314,6 +1358,7 @@ export default function Recurring() {
                 <RecurringUpcomingView
                   signals={signalData.signals || []}
                   horizonDays={signalData.horizon_days || 30}
+                  matches={matchesSignal}
                 />
               )
             ) : allSeries === null ? (
@@ -1321,7 +1366,10 @@ export default function Recurring() {
             ) : allSeries.length === 0 ? (
               <EmptyState message='No recurring series yet. Click "Scan for recurring" to detect them from your transactions.' />
             ) : visibleSections.length === 0 ? (
-              <EmptyState message={term ? 'No series match your search.' : 'No series match the selected filters.'} />
+              <EmptyState message={selected.size === 0
+                ? 'No statuses are selected. Choose one above to see its series.'
+                : term ? 'No series match your search.' : 'No series match the selected filters.'}
+              />
             ) : (
               visibleSections.map(section => (
                 <div key={section.key}>

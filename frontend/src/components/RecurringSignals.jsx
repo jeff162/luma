@@ -228,17 +228,23 @@ function TabButton({ label, count, on, onClick, tone }) {
  *
  * The kind row narrows within the view; it is a filter, not navigation, which is why it stays a pill
  * row rather than becoming part of the page's view selector.
+ *
+ * `matches` is the page's search, which sits above the view selector and narrows whichever view is
+ * showing. It narrows the rows only: the kind counts say what is open, as the selector's badge does, so a
+ * search never makes a kind look resolved.
  */
 export function RecurringSignalsView({
   signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
   onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, onShowDismissed,
+  matches = () => true,
 }) {
   const anomalies = (signals || []).filter(s => s.kind !== 'upcoming')
   const activeKinds = ANOMALY_KIND_ORDER.filter(k => (counts?.[k] || 0) > 0)
   // The filter actually in force: a kind arriving from elsewhere (a Tasks link) that has nothing open
   // by the time the page loads falls back to everything, rather than an empty list with no explanation.
   const effectiveKind = kind && counts?.[kind] ? kind : 'all'
-  const shown = effectiveKind === 'all' ? anomalies : anomalies.filter(s => s.kind === effectiveKind)
+  const ofKind = effectiveKind === 'all' ? anomalies : anomalies.filter(s => s.kind === effectiveKind)
+  const shown = ofKind.filter(matches)
 
   return (
     <div>
@@ -277,9 +283,11 @@ export function RecurringSignalsView({
           ))}
         </div>
       ) : (
-        <EmptyState message={anomalies.length
-          ? 'Nothing of that kind is open. Choose All to see the rest.'
-          : 'Nothing needs attention. Missing charges, amount changes and newly detected series show up here.'}
+        <EmptyState message={!anomalies.length
+          ? 'Nothing needs attention. Missing charges, amount changes and newly detected series show up here.'
+          : ofKind.length
+            ? 'No findings match your search.'
+            : 'Nothing of that kind is open. Choose All to see the rest.'}
         />
       )}
 
@@ -301,13 +309,21 @@ export function RecurringSignalsView({
  * The forward view: what is due next and what it is expected to cost. A peer view rather than a tab
  * inside the findings, because nothing in it is wrong — filing it under "needs attention" was the
  * mislabelling that separating the views is meant to fix. It carries no actions and no dismissal.
+ *
+ * `matches` is the page's search. The header's count and total are of the rows the search leaves, since
+ * the header describes the list beneath it — a total of charges that are not on screen could not be
+ * checked against anything.
  */
-export function RecurringUpcomingView({ signals, horizonDays }) {
+export function RecurringUpcomingView({ signals, horizonDays, matches = () => true }) {
   const upcoming = (signals || []).filter(s => s.kind === 'upcoming')
   if (!upcoming.length) {
     return <EmptyState message={`Nothing is due in the next ${horizonDays} days.`} />
   }
-  const total = upcoming.reduce((sum, s) => sum + (Number(s.expected_amount) || 0), 0)
+  const shown = upcoming.filter(matches)
+  if (!shown.length) {
+    return <EmptyState message={`Nothing due in the next ${horizonDays} days matches your search.`} />
+  }
+  const total = shown.reduce((sum, s) => sum + (Number(s.expected_amount) || 0), 0)
   return (
     <div style={{
       border: '1px solid color-mix(in srgb, var(--border) 80%, transparent)',
@@ -319,11 +335,11 @@ export function RecurringUpcomingView({ signals, horizonDays }) {
       }}>
         <span style={{ fontWeight: 600 }}>Next {horizonDays} days</span>
         <span>
-          {upcoming.length} charge{upcoming.length === 1 ? '' : 's'} ·{' '}
+          {shown.length} charge{shown.length === 1 ? '' : 's'} ·{' '}
           <span style={{ fontWeight: 700, color: getTransactionAmountColor(total) }}>{formatCurrency(total)}</span>
         </span>
       </div>
-      {upcoming.map(s => (
+      {shown.map(s => (
         <div
           key={s.key}
           style={{

@@ -31,11 +31,14 @@ vi.mock('../../lib/api.js', () => ({
     getTags: vi.fn(() => Promise.resolve([])),
   },
 }))
-// Preferences and the help layer are orthogonal to what this file is about; stub them to their defaults.
-vi.mock('../../lib/UserPreferencesContext.jsx', () => ({
-  useUserPreference: (_key, fallback) => [fallback, vi.fn()],
-}))
+// Preferences and the help layer are orthogonal to what this file is about. A preference is plain component
+// state here, so a control that writes one (the status pills) still takes effect on screen.
+vi.mock('../../lib/UserPreferencesContext.jsx', async () => {
+  const { useState } = await import('react')
+  return { useUserPreference: (_key, fallback) => useState(fallback) }
+})
 vi.mock('../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
+vi.mock('../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 
 const SERIES = {
   id: 's1', payee_key: 'streamly', display_name: 'Streamly', category_id: 'c1', category_name: 'Streaming',
@@ -99,7 +102,7 @@ describe('Recurring page views', () => {
     await userEvent.click(screen.getByText('Needs attention'))
     await waitFor(() => expect(screen.getByText(/from its established amount/)).toBeTruthy())
     // The series list is gone, and so are the controls that only apply to it.
-    expect(screen.queryByPlaceholderText(/Search merchant/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
     expect(screen.queryByText('Confirm')).toBeNull()
   })
 
@@ -113,13 +116,13 @@ describe('Recurring page views', () => {
     // whose filters might not even include this series.
     await waitFor(() => expect(api.getTransactions).toHaveBeenCalled())
     expect(screen.getByText(/from its established amount/)).toBeTruthy()
-    expect(screen.queryByPlaceholderText(/Search merchant/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
   })
 
   it('lands on the findings view when the Tasks page links to a kind', async () => {
     renderPage('/recurring?signal=price_change')
     expect(await screen.findByText(/from its established amount/)).toBeTruthy()
-    expect(screen.queryByPlaceholderText(/Search merchant/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
   })
 
   it('keeps upcoming off the attention view and out of its count', async () => {
@@ -130,5 +133,95 @@ describe('Recurring page views', () => {
 
     await userEvent.click(screen.getByText('Upcoming'))
     expect(await screen.findByText('Next 30 days')).toBeTruthy()
+  })
+})
+
+// A movement between two of the user's accounts: one series owning both legs.
+const MOVEMENT = {
+  ...SERIES, id: 's2', payee_key: 'transfer:a1:a2', display_name: 'Alpha Transfer', category_name: 'Transfers',
+  account_id: 'a1', account_name: 'Riverstone Checking', counterpart_account_id: 'a2',
+  counterpart_account_name: 'Harborline Savings', expected_amount: 200, amount_min: 200, amount_max: 200,
+  money_movement: true,
+}
+const MOVEMENT_PRICE_SIGNAL = {
+  ...PRICE_SIGNAL, key: 'price_change:t8', series_id: 's2', series_name: 'Alpha Transfer',
+  category_name: 'Transfers', account_name: 'Riverstone Checking', txn_id: 't8', amount: 210,
+  baseline_amount: 200, delta: 10, percent: 5,
+}
+const MOVEMENT_UPCOMING_SIGNAL = {
+  ...UPCOMING_SIGNAL, key: 'upcoming:s2:2026-09-20', series_id: 's2', series_name: 'Alpha Transfer',
+  due_date: '2026-09-20', days_until: 13, expected_amount: 200,
+}
+
+function renderWithMovement() {
+  mockApi()
+  api.getRecurringSeries.mockResolvedValue({ series: [SERIES, MOVEMENT] })
+  api.getRecurringSignals.mockResolvedValue({
+    signals: [PRICE_SIGNAL, MOVEMENT_PRICE_SIGNAL, UPCOMING_SIGNAL, MOVEMENT_UPCOMING_SIGNAL],
+    counts: { price_change: 2, upcoming: 2 },
+    anomaly_count: 2,
+    dismissed_count: 0,
+    horizon_days: 30,
+  })
+  return render(<MemoryRouter initialEntries={['/recurring']}><Recurring /></MemoryRouter>)
+}
+
+const searchBox = () => screen.getByPlaceholderText(/Search merchant/)
+
+describe('Recurring page controls', () => {
+  it('sorts a movement between two accounts among the bills rather than after them', async () => {
+    renderWithMovement()
+    const movement = await screen.findByText('Alpha Transfer')
+    const bill = screen.getByText('Streamly')
+    // "Alpha Transfer" precedes "Streamly" by name; clustering movements last put it after.
+    expect(movement.compareDocumentPosition(bill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('names the create action + New', async () => {
+    renderWithMovement()
+    await screen.findByText('Streamly')
+    expect(screen.getByRole('button', { name: '+ New' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add manually' })).toBeNull()
+  })
+
+  it('deselects every status in one click, and says why the list is empty', async () => {
+    renderWithMovement()
+    await screen.findByText('Streamly')
+    await userEvent.click(screen.getByRole('button', { name: 'Deselect all' }))
+    expect(await screen.findByText(/No statuses are selected/)).toBeTruthy()
+    expect(screen.queryByText('Streamly')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Deselect all' }).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('narrows the findings by the same search, matching a movement by its second account', async () => {
+    renderWithMovement()
+    await screen.findByText('Streamly')
+    await userEvent.click(screen.getByText('Needs attention'))
+    await waitFor(() => expect(screen.getAllByText(/from its established amount/)).toHaveLength(2))
+
+    // The finding itself names only the paying account; the receiving one comes from its series.
+    await userEvent.type(searchBox(), 'harborline')
+    await waitFor(() => expect(screen.getAllByText(/from its established amount/)).toHaveLength(1))
+    expect(screen.getByText('Alpha Transfer')).toBeTruthy()
+    // The kind pill still counts what is open, not what the search leaves.
+    expect(screen.getByRole('button', { name: /All/ }).textContent).toContain('2')
+
+    await userEvent.clear(searchBox())
+    await userEvent.type(searchBox(), 'nothing like this')
+    expect(await screen.findByText('No findings match your search.')).toBeTruthy()
+  })
+
+  it('totals only the upcoming charges the search leaves', async () => {
+    renderWithMovement()
+    await screen.findByText('Streamly')
+    await userEvent.click(screen.getByText('Upcoming'))
+    const header = (await screen.findByText('Next 30 days')).parentElement
+    expect(header.textContent).toContain('2 charges')
+
+    await userEvent.type(searchBox(), 'streamly')
+    await waitFor(() => expect(header.textContent).toContain('1 charge ·'))
+    expect(header.textContent).toContain('$19.99')
+    expect(header.textContent).not.toContain('$219.99')
+    expect(screen.queryByText('Alpha Transfer')).toBeNull()
   })
 })

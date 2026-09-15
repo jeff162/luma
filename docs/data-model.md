@@ -915,7 +915,9 @@ Key invariants:
 - **Money-movement series are classified, not hidden.** A series whose category (or its parent group)
   is `exclude_from_totals` — a transfer or a credit-card payment — is *money movement*, not spending or
   income. Rather than dropping these from detection, the series is flagged (derived at read time from
-  the category, no stored column) so the UI marks it and clusters money-movement series after the bills.
+  the category, no stored column) so the UI marks it with a badge. It sorts in among the bills: it once
+  clustered after them to keep a transfer's two legs adjacent, which stopped applying when a pair became one
+  series owning both legs (below).
   This keeps a recurring CC payment from masquerading as a bill while still surfacing genuine recurring
   transfers.
 
