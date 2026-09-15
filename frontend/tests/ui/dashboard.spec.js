@@ -19,6 +19,49 @@ test('dashboard renders and switches chart modes with demo data', async ({ page 
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
 })
 
+// The single-period trend pans by scrolling, and its hover card is PanningChartTooltip, placed against what
+// can be seen rather than against the whole scrolled canvas. This is the in-page check of that wiring: the
+// card appears for a hover near either end of a narrowed scroll area and stays inside it. Near the right end
+// the hovered bar's centre — what Recharts anchors on — lies past the visible edge, which is how this check
+// caught a flip that cleared only one edge.
+//
+// It does not reproduce the originally reported clipping on the demo data: the few months draw the plot at
+// its minimum width (420px) in wide buckets, so Recharts' own flip at the canvas edge happens to land in view
+// too, and this passes with Recharts' tooltip as well (checked). That contract is pinned in
+// components/__tests__/PanningChartTooltip.test.jsx. The scroll area is narrowed directly because a window
+// narrow enough to overflow the plot also overflows the page around it.
+test('single-period trend tooltips stay inside the visible part of a narrowed scroll area', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+
+  // Found by computed style: Chrome writes an element with both overflow axes set as the `overflow`
+  // shorthand, so an attribute selector on `overflow-x` matches nothing. The innermost match (the last in
+  // document order) is the trend's own scroll area; the page's content column also scrolls and holds it.
+  const findScroller = `[...document.querySelectorAll('div')].filter(el => (
+    getComputedStyle(el).overflowX === 'auto' && el.querySelector('.recharts-bar-rectangle')
+  )).pop()`
+  await expect.poll(() => page.evaluate(`!!(${findScroller})`)).toBe(true)
+  const scroller = await page.evaluateHandle(findScroller)
+  await scroller.evaluate(el => { el.style.maxWidth = '220px' })
+  await expect.poll(() => scroller.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(180)
+  await scroller.evaluate(el => el.scrollIntoView({ block: 'center' }))
+
+  const area = await scroller.boundingBox()
+  for (const x of [14, area.width - 14]) {
+    await scroller.hover({ position: { x, y: area.height * 0.45 } })
+    const card = page.locator('.recharts-default-tooltip').filter({ visible: true }).first()
+    await expect(card).toBeVisible()
+    const box = await card.boundingBox()
+    const viewport = page.viewportSize()
+    expect(box.x).toBeGreaterThanOrEqual(area.x - 1)
+    expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width + 1)
+    expect(box.y).toBeGreaterThanOrEqual(0)
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height)
+  }
+})
+
 // The Trends tab's monthly-averages table drills like the rest of the page: a group row opens that
 // group's categories, and a category's ↗ opens the transactions behind its figure, in a report scoped to
 // the category and the table's window.

@@ -46,6 +46,7 @@ import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
 import { buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
 import ClippedBar from '../components/ClippedBar.jsx'
+import PanningChartTooltip from '../components/PanningChartTooltip.jsx'
 import {
   trendPlotLayout, centeredScrollLeft, bucketAnchorMonth, bucketIndexAtScroll, trendScrollTargetIndex,
 } from '../lib/trendPlotLayout.js'
@@ -547,7 +548,10 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
             {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
                 view; with a left axis it scrolls off-screen until the user drags back to the start. */}
             <YAxis orientation="right" tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+            {/* This row pans, so the card is placed against what is visible — see PanningChartTooltip. */}
             <Tooltip
+              content={<PanningChartTooltip />}
+              isAnimationActive={false}
               formatter={v => formatSignedMoneyAmount(v)}
               contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
               labelStyle={CHART_TOOLTIP_LABEL_STYLE}
@@ -3246,6 +3250,10 @@ export default function Dashboard() {
                               allowDataOverflow={trendClamp.clamped}
                             />
                             <Tooltip
+                              // The plot pans, so the card is placed against what is visible rather than
+                              // against the whole canvas — see PanningChartTooltip.
+                              content={<PanningChartTooltip />}
+                              isAnimationActive={false}
                               // The drawn value is clamped; the tooltip reports the real one.
                               formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
                               contentStyle={CHART_TOOLTIP_CONTENT_STYLE}

@@ -1742,6 +1742,8 @@ Recharts is the visualization library. A few conventions keep charts consistent 
 
   *Why the split:* clicking a trend bar must set the timeframe for the breakdown (the thing you can't get any other way), so the transaction report moved to the double-click + header link and became available at every bar width — where it was previously reachable only for single-month bars. The `PeriodDetail` panel is the generalization of the former single-month `MonthDetail`: it takes an inclusive `start`/`end` range plus a `label`, so months, quarters, whole periods, and years all share one drawer.
 
+- **A chart that pans needs a tooltip placed against what is visible.** Recharts keeps a tooltip inside the chart's own box and flips it only at that box's edge — and for a chart drawn wider than its card and panned by scrolling, that box is the whole canvas. Once panned, a bar near the *visible* edge is nowhere near the canvas's, so its card opened into the part the scroll area hides. Such a chart passes `PanningChartTooltip` as its tooltip `content`: the same card, portaled out of the chart and flipped and clamped inside every clipping ancestor and the window, using the placement rule the app's hover `Tooltip` uses. It gives way to a scroll, as that tooltip does, since a card fixed in screen space would otherwise point at a bar that has moved. The Trends tab's "Total per month" avoided the problem instead by not scrolling.
+
 - **Tooltip offset on dense charts.** Stacked area charts can have many elements clustered near the cursor; bump the `<Tooltip offset>` past the default 10 (the dashboard's "Monthly spending by group" uses 20) so the tooltip card does not obscure the column the user is reading.
 
 ### Pie partition with Other-drill

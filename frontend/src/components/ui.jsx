@@ -7,6 +7,7 @@ import { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState } from 
 import { createPortal } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
+import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 
 /*
  * These primitives define the app-wide visual language for everyday UI chrome: category markers and badges,
@@ -88,16 +89,12 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     const trigger = triggerRef.current?.getBoundingClientRect()
     const tip = tipRef.current?.getBoundingClientRect()
     if (!trigger || !tip) return
-    const margin = 8
     const vw = document.documentElement.clientWidth
     const vh = document.documentElement.clientHeight
-    let left = align === 'right' ? trigger.right - tip.width : trigger.left
-    left = Math.min(Math.max(margin, left), Math.max(margin, vw - margin - tip.width))
-    let top = trigger.bottom + 6
-    if (top + tip.height > vh - margin) {
-      const above = trigger.top - 6 - tip.height
-      top = above >= margin ? above : Math.max(margin, vh - margin - tip.height)
-    }
+    const left = alignOnAxis({
+      start: align === 'right' ? trigger.right - tip.width : trigger.left, size: tip.width, lo: 0, hi: vw,
+    })
+    const top = besideOnAxis({ before: trigger.top, after: trigger.bottom, size: tip.height, lo: 0, hi: vh })
     setPos({ top, left })
   }, [open, content, align])
   if (!content) return children
