@@ -15,10 +15,12 @@ response's `summary`, while the rest of the request still commits.
 Every action answers with an `undo` payload (`null` when it changed nothing), which the page holds and
 posts back to `/undo` to reverse rules, rows and review state in one transaction. The payload is exact
 rather than replayed: the prior review-state entry and status of every suggestion the action touched —
-including the covered siblings an accept discarded and the follow-ups it created — the first-captured
-categorization of every row it changed, the rules it created (trashed on undo, never deleted, so they stay
-recoverable) and the rules it trashed (restored on undo). Like `/transactions/restore-categorization`,
-undo trusts the payload it is handed.
+including the covered siblings an accept discarded and the remainder partitions it created — the
+first-captured categorization of every row it changed, the rules it created (trashed on undo, never
+deleted, so they stay recoverable), the rules it trashed (restored on undo), and a whole-row snapshot of
+every *pre-existing* rule it wrote to (`rules._rule_snapshot`), including one a collision merge deleted —
+so an edit to a rule the review does not own is reversed along with everything else. Like
+`restore_categorization_rows`, undo trusts the payload it is handed.
 
 The recurring rescan runs after commit, outside the transaction, over every row an action changed —
 membership is a cache only a scan rewrites (see `rules._rescan_recurring`).
@@ -39,6 +41,7 @@ from backend.routers.rules import (
     RuleUpdate,
     _apply_rule_to_existing,
     _rescan_recurring,
+    _restore_rule_snapshot,
     _restore_trashed_rule,
     _trash_rule,
     create_rule_core,
@@ -127,11 +130,20 @@ class RuleSuggestionReviewSnapshot(BaseModel):
     status: Optional[dict[str, Any]] = None
 
 
+class RuleSuggestionApplyRulesRequest(BaseModel):
+    # The rules a merge/replace changed, which the resolve banner offers to re-apply to everything they
+    # already match (not only the rows behind the suggestion that changed them).
+    rule_ids: list[str] = []
+
+
 class RuleSuggestionUndoRequest(BaseModel):
     review: dict[str, RuleSuggestionReviewSnapshot] = {}
     rows: list[CategorizationSnapshot] = []
     trash_rule_ids: list[str] = []
     restore_rule_ids: list[str] = []
+    # Whole-row snapshots of rules the action edited but did not create (`rules._rule_snapshot`), including
+    # one it merged away — restored before the created/trashed lists, which own disjoint rules.
+    rules: list[dict[str, Any]] = []
 
 
 def _json_copy(value):
@@ -147,6 +159,8 @@ class _ActionEffects:
         self.rows: dict[str, dict] = {}
         self.created_rule_ids: list[str] = []
         self.trashed_rule_ids: list[str] = []
+        # Rules this action edited that it did not create — filled by the rule cores as they write.
+        self.rule_snapshots: list[dict] = []
         self.rescan_ids: set[str] = set()
         self.rescan_prior_keys: set = set()
 
@@ -165,7 +179,7 @@ class _ActionEffects:
             if self._suggestions_before.get(suggestion_id) != suggestions_after.get(suggestion_id)
             or self._statuses_before.get(suggestion_id) != statuses_after.get(suggestion_id)
         )
-        if not (touched or self.rows or self.created_rule_ids or self.trashed_rule_ids):
+        if not (touched or self.rows or self.created_rule_ids or self.trashed_rule_ids or self.rule_snapshots):
             return None
         return {
             "review": {
@@ -178,6 +192,7 @@ class _ActionEffects:
             "rows": list(self.rows.values()),
             "trash_rule_ids": list(self.created_rule_ids),
             "restore_rule_ids": list(self.trashed_rule_ids),
+            "rules": list(self.rule_snapshots),
         }
 
 
@@ -323,7 +338,8 @@ def _note_merge(summary: dict, response: dict) -> None:
 
 
 def _settle_rule_conflict(conn, suggestion_id: str, merchant_label: Optional[str], proposed: RuleCreate,
-                          response: dict, *, replace_existing: bool, summary: dict) -> Optional[str]:
+                          response: dict, *, replace_existing: bool, summary: dict,
+                          effects: "_ActionEffects") -> Optional[str]:
     """A same-matcher rule already assigns something different. Replacing overwrites that rule's category and
     rename and returns its id; otherwise the conflict is named in the summary and the suggestion stays
     pending (None)."""
@@ -345,6 +361,7 @@ def _settle_rule_conflict(conn, suggestion_id: str, merchant_label: Optional[str
         existing_rule_id,
         RuleUpdate(category_id=proposed.category_id or None, clean_name=proposed.clean_name or None),
         on_existing="merge",
+        capture_rules=effects.rule_snapshots,
     )
     if updated.get("status") == "conflict":
         raise HTTPException(
@@ -362,7 +379,7 @@ def _claim_rule(conn, suggestion_id: str, merchant_label: Optional[str], propose
     """Create the suggestion's rule, or fold it into the rule that already has its matcher. Returns
     `(rule_id, created_rule_id)` — the second only when this action created the rule, which is the only rule
     returning the suggestion to pending may trash — or None when a conflict leaves the suggestion pending."""
-    response = create_rule_core(conn, proposed, on_existing="merge")
+    response = create_rule_core(conn, proposed, on_existing="merge", capture_rules=effects.rule_snapshots)
     if response["status"] == "created":
         summary["created"] += 1
         effects.created_rule_ids.append(response["id"])
@@ -371,7 +388,8 @@ def _claim_rule(conn, suggestion_id: str, merchant_label: Optional[str], propose
         _note_merge(summary, response)
         return response["id"], None
     rule_id = _settle_rule_conflict(
-        conn, suggestion_id, merchant_label, proposed, response, replace_existing=replace_existing, summary=summary,
+        conn, suggestion_id, merchant_label, proposed, response, replace_existing=replace_existing,
+        summary=summary, effects=effects,
     )
     return (rule_id, None) if rule_id else None
 
@@ -427,14 +445,17 @@ def _save_accepted(conn, scope, effects: _ActionEffects, item: RuleSuggestionAcc
     created_rule_id = stored.get("created_rule_id")
     stored_prior_rows = list(stored.get("accepted_prior_rows") or [])
     if rule_id:
-        response, _, _ = update_rule_core(conn, rule_id, _validated_rule(RuleUpdate, item.rule), on_existing="merge")
+        response, _, _ = update_rule_core(
+            conn, rule_id, _validated_rule(RuleUpdate, item.rule), on_existing="merge",
+            capture_rules=effects.rule_snapshots,
+        )
         if response["status"] == "merged":
             _note_merge(summary, response)
             rule_id, created_rule_id = response["id"], None
         elif response["status"] != "updated":
             rule_id = _settle_rule_conflict(
                 conn, item.suggestion_id, item.merchant_label, proposed, response,
-                replace_existing=item.replace_existing, summary=summary,
+                replace_existing=item.replace_existing, summary=summary, effects=effects,
             )
             if not rule_id:
                 return
@@ -644,9 +665,30 @@ def _resolve_rule_suggestion_conflict_set(open_scope: _ReviewScopeOpener, body: 
     return _run_action(open_scope, perform)
 
 
+def _apply_reconciled_rules(open_scope: _ReviewScopeOpener, body: RuleSuggestionApplyRulesRequest) -> dict:
+    """Re-apply rules an accept changed to every row they already match — the resolve banner's offer after a
+    merge or a replace repoints a rule the review did not create.
+
+    A review action rather than a bare rule apply, because it writes transaction categories from this screen
+    and so owes what every other control here gives: rows captured before the write and one undo entry that
+    puts them back. Preserve-manual, since a merge deliberately changes the governing rule while a manual
+    per-transaction edit still wins. Every named rule goes in one transaction, so a failure part way leaves
+    none of them applied and the banner cannot half-succeed across several rules."""
+    def perform(conn, scope, effects):
+        updated = 0
+        for rule_id in _unique_ids(body.rule_ids):
+            affected, _ = _apply_rule(conn, effects, rule_id, preserve_manual=True)
+            updated += len(affected)
+        return {"updated": updated}
+
+    return _run_action(open_scope, perform)
+
+
 def _undo_rule_suggestion_action(open_scope: _ReviewScopeOpener, body: RuleSuggestionUndoRequest) -> dict:
     with get_db() as conn:
         scope = open_scope(conn)
+        for snapshot in body.rules:
+            _restore_rule_snapshot(conn, snapshot)
         for rule_id in body.trash_rule_ids:
             _trash_rule(conn, rule_id)
         for rule_id in body.restore_rule_ids:
@@ -683,6 +725,11 @@ def resolve_batch_rule_suggestion_conflict_set(batch_id: str, body: RuleSuggesti
     return _resolve_rule_suggestion_conflict_set(lambda conn: _open_batch_review_scope(conn, batch_id), body)
 
 
+@router.post("/batches/{batch_id}/rule-suggestions/apply-rules")
+def apply_batch_reconciled_rules(batch_id: str, body: RuleSuggestionApplyRulesRequest):
+    return _apply_reconciled_rules(lambda conn: _open_batch_review_scope(conn, batch_id), body)
+
+
 @router.post("/batches/{batch_id}/rule-suggestions/undo")
 def undo_batch_rule_suggestion_action(batch_id: str, body: RuleSuggestionUndoRequest):
     return _undo_rule_suggestion_action(lambda conn: _open_batch_review_scope(conn, batch_id), body)
@@ -703,6 +750,11 @@ def resolve_profile_rule_suggestion_conflict_set(profile_id: str, body: RuleSugg
     return _resolve_rule_suggestion_conflict_set(lambda conn: _open_profile_review_scope(conn, profile_id), body)
 
 
+@router.post("/profiles/{profile_id}/rule-suggestions/apply-rules")
+def apply_profile_reconciled_rules(profile_id: str, body: RuleSuggestionApplyRulesRequest):
+    return _apply_reconciled_rules(lambda conn: _open_profile_review_scope(conn, profile_id), body)
+
+
 @router.post("/profiles/{profile_id}/rule-suggestions/undo")
 def undo_profile_rule_suggestion_action(profile_id: str, body: RuleSuggestionUndoRequest):
     return _undo_rule_suggestion_action(lambda conn: _open_profile_review_scope(conn, profile_id), body)
@@ -721,6 +773,11 @@ def set_system_rule_suggestion_status(body: RuleSuggestionStatusRequest):
 @router.post("/rule-suggestions/resolve-conflict-set")
 def resolve_system_rule_suggestion_conflict_set(body: RuleSuggestionConflictSetRequest):
     return _resolve_rule_suggestion_conflict_set(_open_system_review_scope, body)
+
+
+@router.post("/rule-suggestions/apply-rules")
+def apply_system_reconciled_rules(body: RuleSuggestionApplyRulesRequest):
+    return _apply_reconciled_rules(_open_system_review_scope, body)
 
 
 @router.post("/rule-suggestions/undo")

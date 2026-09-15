@@ -91,6 +91,12 @@ export const txnMutations = {
     return result
   },
 
+  async applyRuleSuggestionRules(scope, ruleIds) {
+    const result = await api.applyRuleSuggestionRules(scope, ruleIds)
+    notifyTransactionsChanged()
+    return result
+  },
+
   async undoRuleSuggestionAction(scope, undo) {
     const result = await api.undoRuleSuggestionAction(scope, undo)
     notifyTransactionsChanged()

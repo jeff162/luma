@@ -1,10 +1,10 @@
 # `ImportRuleSuggestionReview` in-component JSX extraction
 
-> **Status: backlog, behind [import-rule-suggestion-review-model.md](import-rule-suggestion-review-model.md).**
-> Do that first: its stage 2 moves the page's action orchestration server-side and its stage 3 replaces the
-> component's id-parsed grouping, which changes what is left here to extract. This is otherwise the one
-> remaining piece of the import/export size refactor (backend `import_export/` package;
-> `ImportExport.jsx` 7,595 → 4,354; this file's top-level extractions). Reconciled 2026-06-24.
+> **Status: backlog, and no longer blocked.** The review-model work it waited on has landed: the page's
+> action orchestration moved server-side and its id-parsed grouping is gone, so what is left here to
+> extract is smaller than this file describes (see `docs/data-model.md` → the rule-suggestion sections).
+> This is otherwise the one remaining piece of the import/export size refactor (backend `import_export/`
+> package; `ImportExport.jsx` 7,595 → 4,354; this file's top-level extractions). Reconciled 2026-06-24.
 
 ## What's left
 

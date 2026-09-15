@@ -29,7 +29,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers.import_export import run_import
 from backend.routers.import_export.core import _set_batch_imported_category_usage
 from backend.routers.rules import delete_rule
-from backend.routers.transactions import CategorizationRestore, CategorizationSnapshot, restore_categorization
+from backend.routers.transactions import restore_categorization_rows
 from backend.services.categorizer import recategorize_all
 
 
@@ -206,13 +206,13 @@ class TrustedImportYieldsToRulesTests(unittest.IsolatedAsyncioTestCase):
                            "2026-01-03,WBWB STORE,Checking,12.00,Gadgets")
         imported, other = self._row("ZZQX MERCHANT"), self._row("WBWB STORE")
         # An Undo snapshot taken before trusted imports were unlocked still says `import` + locked.
-        with self._use_db():
-            restore_categorization(CategorizationRestore(rows=[
-                CategorizationSnapshot(id=imported["id"], category_id=imported["category_id"],
-                                       category_source="import", category_overridden=1),
-                CategorizationSnapshot(id=other["id"], category_id=other["category_id"],
-                                       category_source="manual", category_overridden=1),
-            ]))
+        with self._use_db(), get_db() as conn:
+            restore_categorization_rows(conn, [
+                {"id": imported["id"], "category_id": imported["category_id"],
+                 "category_source": "import", "category_overridden": 1},
+                {"id": other["id"], "category_id": other["category_id"],
+                 "category_source": "manual", "category_overridden": 1},
+            ])
         self.assertEqual(self._row("ZZQX MERCHANT")["category_overridden"], 0)
         self.assertEqual(self._row("WBWB STORE")["category_overridden"], 1, "a manual snapshot keeps its lock")
 

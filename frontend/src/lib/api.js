@@ -1013,6 +1013,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ members, winner_id: winnerId }),
     }),
+  applyRuleSuggestionRules: (scope, ruleIds) =>
+    request(`${ruleSuggestionScopePath(scope)}/apply-rules`, {
+      method: 'POST',
+      body: JSON.stringify({ rule_ids: ruleIds }),
+    }),
   undoRuleSuggestionAction: (scope, undo) =>
     request(`${ruleSuggestionScopePath(scope)}/undo`, {
       method: 'POST',

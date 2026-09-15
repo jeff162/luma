@@ -26,6 +26,7 @@ from backend.routers.import_export import (
     BatchRuleSuggestionMatchRequest,
     BatchRuleSuggestionMatchRefineRequest,
     RuleSuggestionAcceptRequest,
+    RuleSuggestionApplyRulesRequest,
     RuleSuggestionConflictSetRequest,
     RuleSuggestionReviewUpdate,
     RuleSuggestionStatusRequest,
@@ -36,6 +37,7 @@ from backend.routers.import_export import (
     accept_batch_rule_suggestions,
     accept_profile_rule_suggestions,
     accept_system_rule_suggestions,
+    apply_system_reconciled_rules,
     clear_batch_rule_suggestions,
     clear_profile_rule_suggestions,
     clear_system_rule_suggestions,
@@ -68,9 +70,8 @@ from backend.routers.import_export.core import (
     _open_system_review_scope,
 )
 from backend.routers.rules import (
-    ApplyToTransactionsBody,
     RuleCreate,
-    apply_rule_to_transactions,
+    _apply_rule_to_existing,
     create_rule,
 )
 from backend.routers.transactions import CategoryOverride, set_imported_category
@@ -1193,7 +1194,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual({s["target_category_id"] for s in owner_b_conflict}, {payment, membership})
         self.assertEqual({s["txn_count"] for s in owner_b_conflict}, {1, 54})
 
-    def test_apply_rule_to_transactions_scopes_to_listed_rows_and_skips_manual(self):
+    def test_a_scoped_rule_apply_covers_listed_rows_and_skips_manual(self):
         account_id = self._insert_account("Card")
         streaming = self._insert_expense_leaf("FixtureStreaming2")
         other = self._insert_expense_leaf("FixtureOther")
@@ -1214,10 +1215,10 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             self.assertEqual(created["status"], "created")
             # Accept applies to exactly the suggestion's own rows — and even though we list the preserved
             # row, preserve_manual leaves it alone; the bystander row isn't listed at all.
-            apply_rule_to_transactions(
-                created["id"],
-                ApplyToTransactionsBody(transaction_ids=[src1, src2, preserved]),
-            )
+            with get_db() as conn:
+                _apply_rule_to_existing(
+                    conn, created["id"], preserve_manual=True, txn_ids=[src1, src2, preserved],
+                )
             with get_db() as conn:
                 cats = {
                     row["id"]: (row["category_id"], row["category_source"])
@@ -1975,6 +1976,176 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         review = self._stored_review(open_scope)
         self.assertEqual(review["suggestions"][suggestion_id], before_edit["suggestions"][suggestion_id])
         self.assertEqual(review["statuses"][suggestion_id], before_edit["statuses"][suggestion_id])
+
+    # --- undo of an edit to a rule the review did not create ---------------------------------------
+    # Three paths mutate a pre-existing rule: an accept folding into one, an accepted-card edit whose new
+    # matcher collides (which *deletes* the edited rule), and Replace existing. Each snapshots the rules it
+    # writes to, so undo puts them back rather than leaving the edit standing.
+
+    def _rule_state(self, rule_id: str) -> dict | None:
+        with self._use_db_path(), get_db() as conn:
+            row = conn.execute("SELECT * FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+            if not row:
+                return None
+            return {
+                **dict(row),
+                "tag_ids": sorted(
+                    r["tag_id"] for r in
+                    conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
+                ),
+            }
+
+    def test_undo_restores_the_actions_an_accept_folded_into_a_pre_existing_rule(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureMergeTarget")
+        batch_id = self._insert_import_batch()
+        rows = [
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_id, category_id=leaf,
+                imported_category="FixtureMergeTarget", merchant_name="Harborline Market", amount=amount,
+            )
+            for amount in (12, 18)
+        ]
+
+        with self._use_db_path():
+            # A rule the user already had for this merchant, carrying only a rename.
+            existing = create_rule(RuleCreate(keyword="harborline market", clean_name="Harborline"))
+            suggestion = next(
+                s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "harborline market"
+            )
+            accepted = accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                suggestion["id"], rows, {"keyword": "harborline market", "category_id": leaf},
+            )]))
+
+        # The accept folded its category into the rule that already owned the matcher, creating nothing.
+        self.assertEqual(accepted["summary"]["merged"], 1)
+        self.assertEqual(self._rule_state(existing["id"])["category_id"], leaf)
+
+        with self._use_db_path():
+            undo_system_rule_suggestion_action(RuleSuggestionUndoRequest(**accepted["undo"]))
+
+        restored = self._rule_state(existing["id"])
+        self.assertIsNone(restored["category_id"])          # the folded-in action is gone again
+        self.assertEqual(restored["clean_name"], "Harborline")  # what the rule already had is untouched
+        self.assertEqual(set(self._sources(rows).values()), {"import"})
+
+    def test_undo_reinstates_a_rule_an_accepted_card_edit_merged_away(self):
+        account_id = self._insert_account("Card")
+        dues = self._insert_expense_leaf("FixtureDues")
+        tag_id = self._insert_tag("FixtureMergeTag")
+        batch_id = self._insert_import_batch()
+        rows = [
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_id, category_id=dues,
+                imported_category="FixtureDues", merchant_name="Riverstone Dues", amount=amount,
+            )
+            for amount in (40, 45)
+        ]
+
+        with self._use_db_path():
+            # A second rule the review knows nothing about, which the edit below will collide with.
+            other = create_rule(RuleCreate(keyword="riverstone club", clean_name="Riverstone"))
+            suggestion = next(
+                s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "riverstone dues"
+            )
+            accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                suggestion["id"], rows,
+                {"keyword": "riverstone dues", "category_id": dues, "tag_ids": [tag_id]},
+            )]))
+            created_rule_id = self._stored_review(_open_system_review_scope)["statuses"][suggestion["id"]]["created_rule_id"]
+            # Editing the accepted card onto the other rule's matcher: its actions fold in and it is deleted.
+            edited = accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                suggestion["id"], rows, {"keyword": "riverstone club", "category_id": dues},
+            )]))
+
+        self.assertEqual(edited["summary"]["merged"], 1)
+        self.assertIsNone(self._rule_state(created_rule_id))                  # hard-deleted by the merge
+        self.assertEqual(self._rule_state(other["id"])["category_id"], dues)  # filled by the fold
+        self.assertEqual(self._rule_state(other["id"])["tag_ids"], [tag_id])
+
+        with self._use_db_path():
+            undo_system_rule_suggestion_action(RuleSuggestionUndoRequest(**edited["undo"]))
+
+        reinstated = self._rule_state(created_rule_id)
+        self.assertIsNotNone(reinstated)                       # the deleted rule is back
+        self.assertEqual(reinstated["keyword"], "riverstone dues")
+        self.assertEqual(reinstated["category_id"], dues)
+        self.assertEqual(reinstated["tag_ids"], [tag_id])      # with the tags it carried
+        survivor = self._rule_state(other["id"])
+        self.assertIsNone(survivor["category_id"])             # and the fold into the other rule is reversed
+        self.assertEqual(survivor["tag_ids"], [])
+        self.assertEqual(survivor["clean_name"], "Riverstone")
+
+    def test_undo_restores_a_rule_replace_existing_overwrote(self):
+        account_id = self._insert_account("Card")
+        pharmacy = self._insert_expense_leaf("FixturePharmacyReplace")
+        household = self._insert_expense_leaf("FixtureHouseholdReplace")
+        batch_id = self._insert_import_batch()
+        rows = [
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_id, category_id=pharmacy,
+                imported_category="FixturePharmacyReplace", merchant_name="Northgate Pharmacy", amount=amount,
+            )
+            for amount in (22, 26)
+        ]
+
+        with self._use_db_path():
+            # Same matcher, different category: a conflict rather than a merge, settled by Replace existing.
+            existing = create_rule(RuleCreate(keyword="northgate pharmacy", category_id=household))
+            suggestion = next(
+                s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "northgate pharmacy"
+            )
+            accepted = accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                suggestion["id"], rows, {"keyword": "northgate pharmacy", "category_id": pharmacy},
+                replace_existing=True,
+            )]))
+
+        self.assertEqual(accepted["summary"]["replaced"], 1)
+        self.assertEqual(self._rule_state(existing["id"])["category_id"], pharmacy)
+
+        with self._use_db_path():
+            undo_system_rule_suggestion_action(RuleSuggestionUndoRequest(**accepted["undo"]))
+
+        self.assertEqual(self._rule_state(existing["id"])["category_id"], household)
+
+    def test_re_applying_reconciled_rules_is_one_undoable_action(self):
+        # The resolve banner's offer after a merge/replace reaches rows *outside* the suggestion that
+        # changed the rule. It is a review action, so those rows are captured and one Undo puts them back —
+        # and two rules move together rather than one request each.
+        account_id = self._insert_account("Card")
+        coffee = self._insert_expense_leaf("FixtureCoffeeBanner")
+        transit = self._insert_expense_leaf("FixtureTransitBanner")
+        other = self._insert_expense_leaf("FixtureOtherBanner")
+        batch_id = self._insert_import_batch()
+        outsiders = [
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_id, category_id=other,
+                imported_category="FixtureOtherBanner", merchant_name=merchant, amount=7,
+            )
+            for merchant in ("Harborline Coffee", "Northgate Transit")
+        ]
+
+        with self._use_db_path():
+            coffee_rule = create_rule(RuleCreate(keyword="harborline coffee", category_id=coffee))
+            transit_rule = create_rule(RuleCreate(keyword="northgate transit", category_id=transit))
+            applied = apply_system_reconciled_rules(RuleSuggestionApplyRulesRequest(
+                rule_ids=[coffee_rule["id"], transit_rule["id"]],
+            ))
+
+        self.assertEqual(applied["updated"], 2)
+        self.assertEqual(
+            self._categorization(outsiders),
+            {outsiders[0]: (coffee, "rule"), outsiders[1]: (transit, "rule")},
+        )
+
+        with self._use_db_path():
+            undo_system_rule_suggestion_action(RuleSuggestionUndoRequest(**applied["undo"]))
+
+        # Both rules' rows are back at the categorization they carried before the banner's apply.
+        self.assertEqual(
+            self._categorization(outsiders),
+            {outsiders[0]: (other, "import"), outsiders[1]: (other, "import")},
+        )
 
     def test_returning_to_pending_trashes_only_a_rule_the_review_created_and_undo_reinstates_it(self):
         account_id = self._insert_account("Card")

@@ -92,15 +92,10 @@ scale — rather than by feature.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
   the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
   per-detail-panel Refresh seam.
-- [import-rule-suggestion-review-model.md](import-rule-suggestion-review-model.md) — **all four stages
-  done; two open questions only.** The Generate Rules review model is explicit — one implementation per
-  endpoint family across the three scopes, one atomic request per page action, server-computed working-set
-  grouping, and partition records in place of the old flags and parsed ids. What remains is a decision on
-  each of the two questions stage 2 left: whether undo should reverse an edit to a rule that already
-  existed, and whether three routes that lost their only caller stay as API.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
-  `ImportRuleSuggestionReview` component into prop-driven seams. Waits on the review-model item above.
+  `ImportRuleSuggestionReview` component into prop-driven seams. No longer blocked — the review-model
+  work it waited on has landed (see the Ledger).
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount
@@ -296,6 +291,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/reimbursable-expenses.md` | 2026-09-03 | data-model — the reminder model (record-level date, the transaction-dated clock, the three-way answer, the ledger-level default and why it is not `db_meta`), owner grouping, moving a claim, and the rejections that had no home yet: the unstored expected total, the removed free-text note, and settling per record rather than per position. ui-patterns — a record's terminal action lives in its dialog, not on a right-click menu. shared-components — the symmetric match picker, and the rejected dropping of named portions. **C** (`scale-and-limits.md`) — `/tasks` is recomputed on every mutation, and what that costs here | **No** — deleted, 377 lines. The mechanism, invariants and every guard were already in `data-model.md` as the work landed; this pass added the reminder half and relocated the four rejections the topic docs did not yet carry. `services/reimbursements.py` repointed to `data-model.md` and `mechanism-index.md` |
 | `docs/import-source-fields-plan.md` | 2026-09-03 | data-model — the source-text rule's **perf gate** (the per-row evidence parse is conditional on a source-text rule existing) and the correction that a provider sync captures evidence but does not pass it to the categorizer at insert time; ui-patterns — the registry as the single seam for "what the source said", and why it is dynamic | **No** — deleted, 169 lines. It sat outside `docs/backlog/` and so escaped the disposal pass; Phases 1 and 2 were both marked DONE and already folded into the topic docs as they landed. The unstarted remainder became `backlog/import-source-field-registry.md`, reached from `data-model.md` → *Open*. Four citations repointed (`lib/importSourceFields.js`, `services/categorizer.py`, `data-model.md`, `backlog/online-categorizer.md`) |
 | `docs/backlog/vault-passphrase-recovery.md` | 2026-09-03 | **A** (`security-model.md`) — the recovery ladder, reset as compromise response, the mint-a-method gate and both reversals (the two narrower rules that each miss a case; the other-member refusal that became a redirect). The one owed test moved to `test-coverage-gaps.md` | **No** — deleted, 674 lines. The A-slice was ingested 2026-09-02 but the file was never reduced; on re-reading, nothing survived the diff except that test, and the running test checklist is its natural owner |
+| `docs/backlog/import-rule-suggestion-review-model.md` | 2026-09-15 | data-model — the review's state lifecycle (what owns the rows, which rule, and what `source_row_ids` means in each state), the partition record and the rejected read-time normalization, undo's exactness and its reversal of an edit to a rule the review did not create, and the rejected raw review-write route; architecture — what a review scope carries and what may not branch on it | **No** — deleted. All four stages shipped and both questions stage 2 left were settled (undo now reverses an edit to a pre-existing rule; the three routes that had lost their only caller were removed). What remained past the fold was the stage-by-stage work log |
 
 
 ### Checked, and found to owe nothing

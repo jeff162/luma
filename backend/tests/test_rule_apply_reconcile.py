@@ -18,12 +18,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.rules import _apply_rule_to_existing, apply_rule_to_transactions, ApplyToTransactionsBody
+from backend.routers.rules import _apply_rule_to_existing
 from backend.routers.transactions import (
     list_transactions,
-    restore_categorization,
-    CategorizationRestore,
-    CategorizationSnapshot,
+    restore_categorization_rows,
 )
 
 
@@ -123,10 +121,10 @@ class RuleApplyReconcileTests(unittest.TestCase):
         for row in refetched["transactions"]:
             self.assertEqual(row["category_id"], category_id)
 
-    def test_apply_to_transactions_returns_prior_rows_that_restore_round_trips(self):
-        # The undo of an accepted rule-suggestion relies on this: apply returns each changed row's prior
-        # categorization snapshot, which restore-categorization puts back exactly. Without it, undo can't
-        # reverse the accept and the suggestion is lost (its rows stay rule-claimed).
+    def test_a_scoped_apply_captures_prior_rows_that_restore_round_trips(self):
+        # The undo of an accepted rule-suggestion relies on this: a capturing apply hands back each changed
+        # row's prior categorization snapshot, which `restore_categorization_rows` puts back exactly.
+        # Without it, undo can't reverse the accept and the suggestion is lost (its rows stay rule-claimed).
         account_id = self._account()
         prior_cat = self._expense_leaf("Groceries")
         rule_cat = self._expense_leaf("Coffee")
@@ -141,24 +139,26 @@ class RuleApplyReconcileTests(unittest.TestCase):
                 (txn_id, account_id, SHARED_OWNER_ID, prior_cat),
             )
 
-        with self._use_db_path():
-            result = apply_rule_to_transactions(rule_id, ApplyToTransactionsBody(transaction_ids=[txn_id]))
+        prior_rows: list = []
+        with self._use_db_path(), get_db() as conn:
+            affected_ids = _apply_rule_to_existing(
+                conn, rule_id, preserve_manual=True, txn_ids=[txn_id], capture_prior=prior_rows,
+            )
 
         # The row moved to the rule's category, and its pre-apply state is captured for undo.
-        self.assertEqual(result["transaction_ids"], [txn_id])
-        self.assertEqual(len(result["prior_rows"]), 1)
-        prior = result["prior_rows"][0]
+        self.assertEqual(affected_ids, [txn_id])
+        self.assertEqual(len(prior_rows), 1)
+        prior = prior_rows[0]
         self.assertEqual(prior["id"], txn_id)
         self.assertEqual(prior["category_id"], prior_cat)
         self.assertEqual(prior["category_source"], "import")
 
-        with self._use_db_path():
-            restore_categorization(CategorizationRestore(rows=[CategorizationSnapshot(**prior)]))
-            with get_db() as conn:
-                row = conn.execute(
-                    "SELECT category_id, category_source, category_overridden FROM txn WHERE id = ?",
-                    (txn_id,),
-                ).fetchone()
+        with self._use_db_path(), get_db() as conn:
+            restore_categorization_rows(conn, [prior])
+            row = conn.execute(
+                "SELECT category_id, category_source, category_overridden FROM txn WHERE id = ?",
+                (txn_id,),
+            ).fetchone()
 
         # Undo put the row back exactly where it started.
         self.assertEqual(row["category_id"], prior_cat)

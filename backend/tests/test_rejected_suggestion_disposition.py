@@ -2,7 +2,7 @@
 Contract for what happens to the transactions behind a *rejected* rule suggestion.
 
 When a Generate-rules suggestion is rejected, the rows it covered still need a disposition, and the
-intent differs by case. `set_rejected_suggestion_disposition` settles them:
+intent differs by case. `settle_rejected_suggestion_rows` settles them:
 
   - 'keep' (no category, or the row's own category) -> KEEP AS IMPORTED: leave the row at `import`.
               Keeping the file's category is not an override, so it stays re-derivable and reclaimable by
@@ -30,11 +30,8 @@ from pathlib import Path
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.core import _set_batch_imported_category_usage
 from backend.routers.transactions import (
-    CategorizationRestore,
-    CategorizationSnapshot,
-    RejectedSuggestionDisposition,
-    restore_categorization,
-    set_rejected_suggestion_disposition,
+    restore_categorization_rows,
+    settle_rejected_suggestion_rows,
 )
 from backend.services.categorizer import recategorize_all
 
@@ -127,10 +124,9 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
             return recategorize_all(conn)
 
     def _dispose(self, ids, mode, category_id=None):
-        with self._use_db_path():
-            return set_rejected_suggestion_disposition(
-                RejectedSuggestionDisposition(transaction_ids=ids, mode=mode, category_id=category_id)
-            )
+        with self._use_db_path(), get_db() as conn:
+            prior = settle_rejected_suggestion_rows(conn, ids, mode, category_id)
+        return {"updated": len(prior), "rows": prior}
 
     # -- keep -------------------------------------------------------------------------------------
 
@@ -254,8 +250,8 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in result["rows"]}, {txn})
         self.assertEqual(self._get(txn)["category_source"], "cleared")
 
-        with self._use_db_path():
-            restore_categorization(CategorizationRestore(rows=[CategorizationSnapshot(**row) for row in result["rows"]]))
+        with self._use_db_path(), get_db() as conn:
+            restore_categorization_rows(conn, result["rows"])
         restored = self._get(txn)
         self.assertEqual(restored["category_source"], "import")
         self.assertEqual(restored["category_id"], membership)

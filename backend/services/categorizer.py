@@ -570,7 +570,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
 
         # Category: a rule match sets/changes it to 'rule'; on no match we retain (leave it) or, in a
         # reconcile pass, clear it (a `cleared` row keeps its marker so a rename/tag-only match doesn't
-        # silently drop it — see set_rejected_suggestion_disposition). A reconcile never clears an
+        # silently drop it — see settle_rejected_suggestion_rows). A reconcile never clears an
         # `import` row: it is already the fallback a cleared row is about to be offered below.
         if cat_id is not None:
             next_category_id, next_source = cat_id, "rule"

@@ -121,27 +121,12 @@ class TransactionTagUpdate(BaseModel):
     present: bool
 
 
-class RejectedSuggestionDisposition(BaseModel):
-    # When a rule suggestion is rejected, the rows it covered still need a disposition. `mode` chooses
-    # between keeping their imported category as a settled manual decision, or clearing it. See
-    # set_rejected_suggestion_disposition. `category_id` is only meaningful in 'keep' mode: when given
-    # the rows are *re-pointed* to that category as the manual decision (the conflict screen's "keep
-    # these, but as a different category" case); when omitted 'keep' leaves the existing category.
-    transaction_ids: list[str] = []
-    mode: str  # 'keep' | 'clear'
-    category_id: Optional[str] = None
-
-
 class CategorizationSnapshot(BaseModel):
-    # One row's category state captured before a change, for Undo (see restore_categorization).
+    # One row's category state captured before a change, for Undo (see restore_categorization_rows).
     id: str
     category_id: Optional[str] = None
     category_source: Optional[str] = None
     category_overridden: int = 0
-
-
-class CategorizationRestore(BaseModel):
-    rows: list[CategorizationSnapshot] = []
 
 
 # Bulk edit applies one or more field changes to a selection that is either an explicit id list or
@@ -1565,13 +1550,6 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
     return {"ok": True, **resolved}
 
 
-@router.post("/rejected-suggestion-disposition")
-def set_rejected_suggestion_disposition(body: RejectedSuggestionDisposition):
-    with get_db() as conn:
-        prior = settle_rejected_suggestion_rows(conn, body.transaction_ids, body.mode, body.category_id)
-    return {"updated": len(prior), "rows": prior}
-
-
 def settle_rejected_suggestion_rows(conn, transaction_ids: list[str], mode: str, category_id: Optional[str] = None) -> list[dict]:
     # Settle the imported rows behind a rejected rule suggestion. Three outcomes by intent:
     #
@@ -1611,8 +1589,8 @@ def settle_rejected_suggestion_rows(conn, transaction_ids: list[str], mode: str,
         if not target["is_active"]:
             raise HTTPException(status_code=400, detail="Cannot assign transactions to an inactive category")
     # Snapshot the prior state of exactly the rows we are about to change (the same `IS NOT 'manual'`
-    # filter the UPDATE uses) so the caller can stash it for Undo and later POST it to
-    # /restore-categorization. Only the affected rows are returned, so restore touches nothing else.
+    # filter the UPDATE uses) so the caller can stash it for Undo and later hand it to
+    # `restore_categorization_rows`. Only the affected rows are returned, so restore touches nothing else.
     prior: list[dict] = []
     for chunk in _chunk(ids):
         placeholders = ",".join("?" * len(chunk))
@@ -1648,14 +1626,6 @@ def settle_rejected_suggestion_rows(conn, transaction_ids: list[str], mode: str,
                 list(chunk),
             )
     return prior
-
-
-@router.post("/restore-categorization")
-def restore_categorization(body: CategorizationRestore):
-    with get_db() as conn:
-        restored = restore_categorization_rows(conn, [row.model_dump() for row in body.rows])
-        rescan_edited_transactions(conn, restored)
-    return {"restored": len(restored)}
 
 
 def restore_categorization_rows(conn, rows: list[dict]) -> list[str]:

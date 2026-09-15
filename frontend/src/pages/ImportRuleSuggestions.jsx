@@ -461,18 +461,18 @@ export default function ImportRuleSuggestions() {
     const ids = resolveSummary?.reconciledRuleIds || []
     if (!ids.length || recategorizingMatches) return
     setRecategorizingMatches(true)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
     try {
-      let total = 0
-      for (const ruleId of ids) {
-        const result = await txnMutations.applyRule(ruleId, { preserveManual: true })
-        total += result?.updated || 0
-      }
-      setReconcileApplyNote(total)
+      // A review action like every other control here, so the rows it recategorizes are captured and the
+      // Undo button reverses them — and all the named rules move in one transaction rather than one
+      // request each.
+      const result = await runReviewAction(
+        () => txnMutations.applyRuleSuggestionRules(reviewScope, ids),
+        { fallbackError: 'Unable to re-categorize matching transactions.' },
+      )
+      if (!result) return
+      setReconcileApplyNote(result.updated || 0)
       setResolveSummary(prev => (prev ? { ...prev, reconciledRuleIds: [] } : prev))
       reloadRecategorizePreview()
-    } catch (err) {
-      setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to re-categorize matching transactions.' }))
     } finally {
       setRecategorizingMatches(false)
     }

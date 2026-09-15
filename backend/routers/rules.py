@@ -234,7 +234,7 @@ def _rule_affected_txn_ids(conn, rule) -> list[str]:
 def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None, skipped_splits: Optional[list] = None, capture_prior_keys: Optional[set] = None) -> list[str]:
     # `capture_prior` (optional): when given, the prior (category_id, category_source, category_overridden)
     # of each row whose category this apply changes is appended to it — the same snapshot shape
-    # `/restore-categorization` consumes — so an accept can stash it for Undo and put the rows back.
+    # `restore_categorization_rows` consumes — so an accept can stash it for Undo and put the rows back.
     # `preserve_manual` reclaims the rows a rule should own — including trusted-import ones
     # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
     # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
@@ -721,7 +721,8 @@ def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag
         conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (target["id"], tag_id))
 
 
-def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> dict:
+def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject", *,
+                     capture_rules: Optional[list] = None) -> dict:
     """Create a rule against an already-open connection, reconciling against any existing rule with the
     same matcher. This is the reusable core of the POST endpoint below (a thin ``get_db()`` wrapper) and of
     any in-process caller that already owns a transaction — e.g. the PayPal money-movement Type rules
@@ -737,6 +738,9 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> d
     a collision and is created normally. `status` is 'created' | 'merged' | 'duplicate' | 'mergeable'
     | 'conflict'; a 'merged' result also carries `relation` ('mergeable' vs. a no-op 'duplicate') so a
     caller can tell whether anything actually changed.
+
+    `capture_rules` (optional): when given, a whole-row snapshot of any *pre-existing* rule this call
+    writes to is appended to it (`_rule_snapshot`), so an undoable caller can put that rule back as it was.
     """
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
@@ -756,6 +760,7 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> d
         # Turning an existing matcher recurring is always an additive, non-conflicting action, so a save
         # that only adds is_recurring should merge rather than be reported as a bare duplicate.
         if on_existing == "merge" and (relation in ("mergeable", "duplicate") or body.is_recurring):
+            _capture_rule_snapshot(conn, capture_rules, existing["id"])
             _merge_actions_into_rule(
                 conn, existing,
                 category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
@@ -864,7 +869,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 
 
 def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str = "reject",
-                     reconcile: bool = False) -> tuple[dict, list[str], set]:
+                     reconcile: bool = False, capture_rules: Optional[list] = None) -> tuple[dict, list[str], set]:
     """Update a rule against an already-open connection, guarding the case where the edit makes its matcher
     collide with *another* rule.
 
@@ -880,6 +885,10 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     uncategorized) instead of retaining their old category. It is captured from the pre-edit matcher, so it
     catches exactly the rows a narrowed keyword/scope drops. Only applied on a clean update (not a
     collision merge/report).
+
+    `capture_rules` (optional): a whole-row snapshot of every rule this call writes to is appended to it
+    (`_rule_snapshot`) — the edited rule, and on a collision merge the rule it folds into as well, since
+    the merge fills that rule's actions and deletes this one. That is what lets undo restore both.
     """
     current = conn.execute(
         """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
@@ -911,6 +920,8 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
             category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
         )
         if on_existing == "merge" and relation in ("mergeable", "duplicate"):
+            _capture_rule_snapshot(conn, capture_rules, rule_id)
+            _capture_rule_snapshot(conn, capture_rules, other["id"])
             _merge_actions_into_rule(
                 conn, other,
                 category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
@@ -955,9 +966,11 @@ def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str =
     if body.clean_name  is not None and not body.clear_clean_name:
         fields.append("clean_name = ?"); params.append(body.clean_name)
     if fields:
+        _capture_rule_snapshot(conn, capture_rules, rule_id)
         params.append(rule_id)
         conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
     if body.tag_ids is not None:
+        _capture_rule_snapshot(conn, capture_rules, rule_id)
         conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
         for tag_id in body.tag_ids:
             conn.execute(
@@ -1097,34 +1110,6 @@ def widen_rule_range(rule_id: str, body: RuleWidenBody):
     }
 
 
-class ApplyToTransactionsBody(BaseModel):
-    transaction_ids: list[str] = []
-
-
-@router.post("/{rule_id}/apply-to-transactions")
-def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
-    """Apply a rule's outputs (category/rename/tags) to a specific set of transactions — the rows that
-    generated an accepted import-rule suggestion — so the user's review edits land on exactly those
-    rows. Skips manual rows (deliberate exceptions) and rows the matcher no longer matches."""
-    prior_rows: list = []
-    skipped_splits: list = []
-    prior_keys: set = set()
-    with get_db() as conn:
-        affected_ids = _apply_rule_to_existing(
-            conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids, capture_prior=prior_rows,
-            skipped_splits=skipped_splits, capture_prior_keys=prior_keys,
-        )
-    _rescan_recurring(affected_ids, prior_payee_keys=prior_keys)
-    # `prior_rows` is the pre-apply categorization snapshot of the changed rows (restore-categorization
-    # shape), so an accepted suggestion's Undo can put the rows back before deleting the rule.
-    return {
-        "updated": len(affected_ids),
-        "transaction_ids": affected_ids,
-        "prior_rows": prior_rows,
-        "skipped_splits": len(skipped_splits),
-    }
-
-
 @router.delete("/{rule_id}")
 def delete_rule(rule_id: str, reconcile: bool = False):
     """Move a rule to the trash (soft-delete: recoverable from Settings until purged), so it stops
@@ -1138,6 +1123,73 @@ def delete_rule(rule_id: str, reconcile: bool = False):
         reverted, prior_keys = _trash_rule(conn, rule_id, reconcile=reconcile)
     _rescan_recurring(reverted, prior_payee_keys=prior_keys)
     return {"ok": True}
+
+
+def _rule_snapshot(conn, rule_id: str) -> Optional[dict]:
+    """A rule's whole row plus its tag ids, for an undo that has to put the rule back as it was.
+
+    Taken before an action edits a rule it did not create — including the collision merge that folds one
+    rule's actions into another and deletes it — so undo can restore the rule whether it was changed or
+    removed. The row is read as whatever columns the table currently has rather than a fixed list, so a
+    column added later travels without this being edited."""
+    row = conn.execute("SELECT * FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+    if not row:
+        return None
+    return {
+        "rule": dict(row),
+        "tag_ids": [
+            r["tag_id"] for r in
+            conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
+        ],
+    }
+
+
+def _capture_rule_snapshot(conn, capture_rules: Optional[list], rule_id: str) -> None:
+    # First capture wins, as for row snapshots: a later one would record a state this action produced.
+    if capture_rules is None or not rule_id:
+        return
+    if any(str((snapshot.get("rule") or {}).get("id")) == str(rule_id) for snapshot in capture_rules):
+        return
+    snapshot = _rule_snapshot(conn, rule_id)
+    if snapshot:
+        capture_rules.append(snapshot)
+
+
+def _restore_rule_snapshot(conn, snapshot: dict) -> Optional[str]:
+    """Put a rule back exactly as `_rule_snapshot` found it — row, tags and recurring series.
+
+    An upsert rather than an update, because the edit being reversed may have been a collision merge that
+    deleted the rule outright. Restoring writes the pre-edit matcher, which by definition did not collide
+    with the rule that survived that merge, so the one-rule-per-matcher invariant holds without a guard
+    here. A re-created series does not recover its cadence (it resets to monthly) — the same accepted edge
+    as restoring a trashed rule."""
+    rule = dict(snapshot.get("rule") or {})
+    rule_id = str(rule.get("id") or "").strip()
+    if not rule_id:
+        return None
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(category_rule)")}
+    fields = [name for name in rule if name in columns and name != "id"]
+    if not fields:
+        return None
+    values = [rule[name] for name in fields]
+    updated = conn.execute(
+        f"UPDATE category_rule SET {', '.join(f'{name} = ?' for name in fields)} WHERE id = ?",
+        [*values, rule_id],
+    ).rowcount
+    if not updated:
+        placeholders = ", ".join("?" * (len(fields) + 1))
+        conn.execute(
+            f"INSERT INTO category_rule (id, {', '.join(fields)}) VALUES ({placeholders})",
+            [rule_id, *values],
+        )
+    conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
+    for tag_id in snapshot.get("tag_ids") or []:
+        conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule_id, tag_id))
+    if rule.get("is_recurring"):
+        _ensure_recurring_series(conn, rule_id, "monthly")
+    else:
+        _drop_recurring_series_for_rule(conn, rule_id)
+    return rule_id
 
 
 def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> tuple[list[str], set]:

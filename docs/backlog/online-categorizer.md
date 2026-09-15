@@ -9,7 +9,7 @@
 ## The unifying insight — "the rule is the cache"
 
 Both features terminate in the existing `category_rule` store: accepting a suggestion builds a rule,
-and the categorizer then owns that merchant forever (existing rows via apply-to-transactions, future
+and the categorizer then owns that merchant forever (existing rows via a scoped preserve-manual apply, future
 rows on import). So neither feature needs its own persistence — no stored canonical-merchant column,
 no merchant→category cache. Auto-building a rule on confirm is safe *because it happens during review*
 (consistent with the app's reviewed/approve-before-add stance for data-mutating rules). A one-off

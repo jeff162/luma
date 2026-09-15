@@ -2512,7 +2512,7 @@ def _adopt_batch_file_labels(conn, batch_id: str, txn_ids: Optional[list[str]] =
         # Skip manual mappings, rule-categorized rows, AND user-cleared rows — adopting file labels
         # must not override a category the user's rules already chose, must not mint an unused label
         # category for a row a rule has placed, and must not resurrect a label the user deliberately
-        # discarded (`category_source = 'cleared'`; see set_rejected_suggestion_disposition). The label is
+        # discarded (`category_source = 'cleared'`; see settle_rejected_suggestion_rows). The label is
         # only a bootstrap fallback for rows nothing else owns; `cleared` is a distinct source from NULL
         # precisely so this re-grab can tell "user discarded this" apart from "ordinary uncategorized"
         # (which it still fills). A feature-owned row is skipped for the reason every automatic pass
