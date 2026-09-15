@@ -1,15 +1,16 @@
 # Import rule-suggestion review — making the review model explicit
 
-> **Status: in progress.** Stages 1–3 are done; stage 4 remains. Stage 2 left two questions open and
-> stage 4 still owes a decision (below). Supersedes
+> **Status: all four stages are done.** What remains is the two questions stage 2 left open (below);
+> neither is implementation. Supersedes
 > [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) as the next
 > work on this surface — stage 2 removed most of the page code that item would have split up.
 
-The Generate Rules review behaves correctly and its behavior is the thing to preserve. What is wrong is
-the shape: the model of *which rows are being worked together, and what owns them* is implicit, so
-several places rediscover it independently — `pending_override` and `synthetic` flags in the stored
-review state, `:followup:` / `:refined` suffixes parsed back out of ids, merchant labels as grouping keys — and every user action is orchestrated from the browser as a sequence of independent
-requests with no atomicity.
+The Generate Rules review behaved correctly and its behavior was the thing to preserve. What was wrong was
+the shape: the model of *which rows are being worked together, and what owns them* was implicit, so
+several places rediscovered it independently — `pending_override` and `synthetic` flags in the stored
+review state, `:followup:` / `:refined` suffixes parsed back out of ids, merchant labels as grouping keys —
+and every user action was orchestrated from the browser as a sequence of independent requests with no
+atomicity.
 
 Read first: `docs/data-model.md` → the rule-suggestion sections (*Conflict-set matcher refinement*,
 *Rejecting a rule suggestion*, the conflict-set card, merchant containers, *Look-back lens*, *Bulk
@@ -35,8 +36,8 @@ three scopes over deliberately different populations; extend it when a new endpo
 | State | What owns the rows | Rule | What `source_row_ids` means |
 | --- | --- | --- | --- |
 | pending, generated | nothing — rows stay `import` | none | rows the generator grouped on this read (recomputed every read) |
-| pending, refined (`pending_override`) | the persisted entry; its rows are excluded from canonical generation | none | rows matched by the refined matcher at refine time |
-| pending, follow-up (`synthetic`, `…:followup:<root>`) | the persisted entry | none | the remainder of a partial accept, or of a refinement whose remainder id collided |
+| pending, refined (partition `refined`) | the persisted entry; its rows are excluded from canonical generation | none | rows matched by the refined matcher at refine time |
+| pending, remainder (partition `remainder`) | the persisted entry | none | the leftover of a partial accept, or of a refinement whose remainder id collided |
 | accepted | the rule — rows reclaimed to `rule` by a scoped preserve-manual apply | `rule_id`; `created_rule_id` only if this review created it | rows the accept applied to; `accepted_prior_rows` is their pre-apply snapshot |
 | deferred (`skipped`) | unchanged | none | rows as they stood at deferral |
 | discarded | `import` (keep) / `manual` (re-pointed) / `cleared` | none | rows settled; `review_action` records the category transition |
@@ -46,7 +47,7 @@ Transitions:
 
 - **Narrow or broaden a pending card's criteria** → re-partition (`_refine_pending_conflict_group`).
   Broadening back to the merchant's ordinary matcher releases the rows to canonical generation.
-- **Accept with a stricter matcher than the entry's rows** → a synthetic follow-up holds the leftover rows.
+- **Accept with a stricter matcher than the entry's rows** → a remainder partition holds the leftover rows.
 - **Edit an accepted card** → redraw its partition: newly matching rows join, rows that no longer match
   get `accepted_prior_rows` restored so they regenerate as pending.
 - **Return an accepted card to pending** → restore `accepted_prior_rows`, trash `created_rule_id` (never a
@@ -67,7 +68,7 @@ module beside `core` whose endpoints each take a scope opener, and each commits 
 
 - **Undo is exact, not replayed.** The payload holds the prior entry and status of every suggestion whose
   review state the action changed — found by diffing the review state before and after, so covered
-  siblings and synthetic follow-ups need no enumeration — plus each changed row's first capture, the rules
+  siblings and remainder partitions need no enumeration — plus each changed row's first capture, the rules
   the action created (trashed on undo) and the rules it trashed (restored on undo). Replaying statuses
   through the review write re-ran an accept's side effects and could not reinstate a trashed rule.
 - **There is no raw review-write route.** Its logic is `core.record_rule_suggestion_review`, the
@@ -99,24 +100,28 @@ merchant containers, their `# rows` ordering and the look-back lens read it; the
 page never edits the suggestion list in place — every action reloads — so a server-computed group cannot
 go stale on screen.
 
-That function is now the only reader of the `:followup:` / `:refined` id formats, which are minted with
-`RULE_SUGGESTION_FOLLOWUP_ID_MARKER` / `RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX`. Its split root is
-the follow-up's *remainder* id, not `derived_from_suggestion_id`: for a refinement's collision follow-up
-the remainder id is the refined card's id, which the seed id need not be.
+That function was, until stage 4, the only reader of the `:followup:` / `:refined` id formats, which are
+minted with `RULE_SUGGESTION_FOLLOWUP_ID_MARKER` / `RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX`.
 
-## Stage 4 — explicit partition records
+## Where stage 4 left things
 
-Replace the `pending_override` and `synthetic` flags with explicit partition records. The flags are
-special-cased in five places today — the entry builder (`_build_rule_suggestion_review_entry`),
-`_prune_phantom_rule_suggestion_entry`, `refresh_rule_suggestion_review`, `_merge_review_state_suggestions`,
-and the row exclusion in `_build_rule_suggestion_response` — plus `_refine_pending_conflict_group` and
-`_build_synthetic_rule_suggestion_entries`, which create them. A partition record gives
-`_assign_rule_suggestion_review_groups` a real split root in place of the parsed id — which matters for a
-partial accept, where the follow-up's remainder id equals the accepted card's id only if the leftover rows
-regenerate under the same keyword, scope and target. Where they do not (say they come back owner-scoped),
-the follow-up presumably renders in a container of its own, apart from its merchant; not yet reproduced.
+A review entry that owns its rows says so with a `partition` record, and nothing reads an id to find out —
+the two kinds, what each names, and why a remainder's two relations differ are in `docs/data-model.md` →
+*A review entry's partition*. The record rides on the entry, so undo (which diffs entries and statuses) and
+the trash sets (which store whole entries) carry it with no changes of their own; a separate collection
+would have been a second copy of the membership for both to keep in sync.
 
-**Owed decision:** the stored review state lives in batch `config_snapshot`, profile `column_map` and the
-system workflow state, and older backups carry the flag shape. Choose between normalizing on read (in
-`get_rule_suggestion_review_state`, which already normalizes older snapshots "without migrations") and a
-migration — a restore of an older backup has to keep working either way.
+The parsed split root was not merely indirect, it was wrong in a reachable case, now covered by
+`test_partial_accept_followup_stays_with_its_card_when_the_remainder_regenerates_under_another_scope`: the
+leftover of a stricter accept on an owner-scoped card regenerates from that card's rows alone, so it comes
+back **global** once no other owner still files the merchant elsewhere — an id sharing nothing with the card
+it was split from, which put the remainder in a working set of its own, away from the card the user was
+resolving.
+
+**Decision taken** on the stored shape: a one-time migration (v57) converts all three containers and their
+trash sets, and is deliberately *not* registered in `POST_RESTORE_DATA_INIT`. Normalizing on read was the
+alternative and does not pay for itself — old backups exist forever, so that path keeps a legacy reader in
+the live code permanently, where restoring a pre-v57 backup instead degrades gracefully: its pending
+refinements and remainders are not recognized and their rows return to ordinary generation, which is all.
+Measured on the real database before choosing: 9 entries in the old shape, all in the system review, of
+which 2 were pending.

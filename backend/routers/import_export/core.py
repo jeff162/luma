@@ -988,6 +988,35 @@ def _restore_rule_suggestion_trash_set(review_state: dict, trash_set_id: str) ->
     }
 
 
+# A review entry's `partition` records that the entry, rather than canonical generation, owns its
+# `source_row_ids`. Without one, an entry is a snapshot of what the generator produced and a pending entry
+# regenerates from live rows on every read. With one, a pending entry's rows are withheld from generation and
+# the entry persists as it stands:
+#
+# - `{"kind": "refined"}` — the matched subset of a pending card whose selection criteria were edited
+#   (`_refine_pending_conflict_group`). A multi-member refined set's `conflict_group_id` names the seed
+#   suggestion, not a keyword.
+# - `{"kind": "remainder", "origin_id", "split_root_id"}` — rows split away from another card: the leftover
+#   of an accept stricter than the rows its entry held, or a refinement's remainder whose natural id collides
+#   with the refined card's. `origin_id` is the suggestion whose re-refinement or return to pending discards
+#   the remainder; `split_root_id` is the card it renders beside. They differ for a refinement, whose root is
+#   the refined card rather than the seed it was refined from.
+#
+# The record, not the id, is what readers consult: a remainder's id (`<generated id>:followup:<origin>`) only
+# keeps it distinct from the suggestion its rows would otherwise regenerate as.
+RULE_SUGGESTION_PARTITION_REFINED = "refined"
+RULE_SUGGESTION_PARTITION_REMAINDER = "remainder"
+
+
+def _rule_suggestion_partition(entry) -> Optional[dict]:
+    partition = entry.get("partition") if isinstance(entry, dict) else None
+    return partition if isinstance(partition, dict) else None
+
+
+def _rule_suggestion_partition_kind(entry) -> Optional[str]:
+    return (_rule_suggestion_partition(entry) or {}).get("kind")
+
+
 def _build_rule_suggestion_review_entry(payload: dict) -> dict:
     return {
         "merchant_label": payload.get("merchant_label"),
@@ -1011,9 +1040,7 @@ def _build_rule_suggestion_review_entry(payload: dict) -> dict:
         "imported_categories": list(payload.get("imported_categories") or []),
         "needs_resolution": bool(payload.get("needs_resolution")),
         "resolution_reason": payload.get("resolution_reason"),
-        "synthetic": bool(payload.get("synthetic")),
-        "pending_override": bool(payload.get("pending_override")),
-        "derived_from_suggestion_id": payload.get("derived_from_suggestion_id"),
+        "partition": _rule_suggestion_partition(payload),
         "source_row_ids": sorted({str(value) for value in (payload.get("source_row_ids") or payload.get("_row_ids") or []) if str(value).strip()}),
     }
 
@@ -1103,7 +1130,7 @@ def _remove_pending_derived_rule_suggestions(review_state: dict, suggestion_id: 
     statuses = dict(review_state.get("statuses") or {})
 
     for other_suggestion_id, entry in list(suggestions.items()):
-        if not isinstance(entry, dict) or entry.get("derived_from_suggestion_id") != suggestion_id:
+        if (_rule_suggestion_partition(entry) or {}).get("origin_id") != suggestion_id:
             continue
         status = (statuses.get(other_suggestion_id) or {}).get("status")
         if status == "accepted":
@@ -1123,20 +1150,18 @@ def _prune_phantom_rule_suggestion_entry(review_state: dict, suggestion_id: str,
     `len(suggestions)`). Two cases get dropped here, entry and status together:
 
       - returning a suggestion to `pending` (it belongs back in the generated pool, where it regenerates
-        from live rows with its real row count and sorts correctly) — except a synthetic follow-up, which
-        has no live rows to regenerate from and must persist;
+        from live rows with its real row count and sorts correctly) — except a partitioned entry, which
+        owns its rows rather than regenerating them and must persist;
       - any entry left without identifying content (no keyword, merchant, or rows), which is never a
         real suggestion and is only ever the residue of a data-less restore.
     """
     suggestions = review_state.get("suggestions") or {}
     statuses = review_state.get("statuses") or {}
     entry = suggestions.get(suggestion_id)
-    is_synthetic = isinstance(entry, dict) and entry.get("synthetic")
-    is_pending_override = isinstance(entry, dict) and entry.get("pending_override")
     has_content = isinstance(entry, dict) and (
         entry.get("keyword") or entry.get("merchant_label") or entry.get("source_row_ids")
     )
-    if (status == "pending" and not is_synthetic and not is_pending_override) or not has_content:
+    if (status == "pending" and not _rule_suggestion_partition(entry)) or not has_content:
         suggestions.pop(suggestion_id, None)
         statuses.pop(suggestion_id, None)
     review_state["suggestions"] = suggestions
@@ -1154,7 +1179,7 @@ def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) 
         if suggestion_id in trashed_ids:
             continue
         existing_entry = existing_entries.get(suggestion_id)
-        if isinstance(existing_entry, dict) and existing_entry.get("pending_override"):
+        if _rule_suggestion_partition(existing_entry):
             next_entries[suggestion_id] = existing_entry
             continue
         next_entry = _build_rule_suggestion_review_entry(suggestion)
@@ -1165,8 +1190,7 @@ def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) 
     for suggestion_id, entry in existing_entries.items():
         status = (statuses.get(suggestion_id) or {}).get("status")
         if suggestion_id not in next_entries and (
-            status in RULE_SUGGESTION_REVIEW_STATUSES
-            or (isinstance(entry, dict) and (entry.get("synthetic") or entry.get("pending_override")))
+            status in RULE_SUGGESTION_REVIEW_STATUSES or _rule_suggestion_partition(entry)
         ):
             next_entries[suggestion_id] = entry if isinstance(entry, dict) else {}
 
@@ -1614,7 +1638,7 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
     return suggestions, threshold_meta
 
 
-def _build_synthetic_rule_suggestion_entries(
+def _build_remainder_rule_suggestion_entries(
     conn,
     review_state: dict,
     suggestion_id: str,
@@ -1630,17 +1654,23 @@ def _build_synthetic_rule_suggestion_entries(
         return []
 
     suggestions, _ = _generate_rule_suggestions(conn, remaining_rows, [])
-    synthetic_entries = []
-    for suggestion in suggestions:
-        synthetic_entries.append({
+    # The accepted card is both the origin and the split root: these rows left it, and they belong beside it
+    # in the review however they regenerate — the leftover of an owner-scoped card can come back global, under
+    # an id that shares nothing with the card it was split from.
+    return [
+        {
             **_build_rule_suggestion_review_entry({
                 **suggestion,
-                "synthetic": True,
-                "derived_from_suggestion_id": suggestion_id,
+                "partition": {
+                    "kind": RULE_SUGGESTION_PARTITION_REMAINDER,
+                    "origin_id": suggestion_id,
+                    "split_root_id": suggestion_id,
+                },
             }),
             "id": f"{suggestion['id']}{RULE_SUGGESTION_FOLLOWUP_ID_MARKER}{suggestion_id}",
-        })
-    return synthetic_entries
+        }
+        for suggestion in suggestions
+    ]
 
 
 def _merge_review_state_suggestions(generated_suggestions: list[dict], review_state: dict, selected_owner_ids: list[str]) -> list[dict]:
@@ -1652,7 +1682,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
         if suggestion_id in generated_ids or not isinstance(entry, dict):
             continue
         # Re-add entries that no longer regenerate from live rows but still belong in the review:
-        #   - synthetic pending follow-ups (created when an accept only partially covered its rows), and
+        #   - partitioned entries, which own their rows rather than regenerating them, and
         #   - reviewed entries (accepted / discarded / skipped) whose rows have left the candidate pool
         #     (accepting makes the rows rule-sourced; discard-and-clear drops their category), so
         #     _generate_rule_suggestions no longer rebuilds them.
@@ -1660,7 +1690,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
         # them; without re-adding here the accepted/discarded filters showed only the few suggestions
         # whose rows happened to still regenerate while the pills counted the full reviewed set.
         status = (review_statuses.get(suggestion_id) or {}).get("status")
-        if not (entry.get("synthetic") or entry.get("pending_override") or status in RULE_SUGGESTION_REVIEW_STATUSES):
+        if not (_rule_suggestion_partition(entry) or status in RULE_SUGGESTION_REVIEW_STATUSES):
             continue
         if selected_owner_ids and entry.get("owner_id") not in selected_owner_ids:
             continue
@@ -1687,7 +1717,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
             "needs_resolution": bool(entry.get("needs_resolution")),
             "resolution_reason": entry.get("resolution_reason"),
             "match_source_text": bool(entry.get("match_source_text")),
-            "pending_override": bool(entry.get("pending_override")),
+            "partition": _rule_suggestion_partition(entry),
             "review_status": (review_statuses.get(suggestion_id) or {}).get("status") or "pending",
             # The rule this suggestion was accepted into, so editing it later updates that rule in place
             # instead of spawning a duplicate (see the matching field on the generated path below).
@@ -1711,40 +1741,34 @@ def _normalize_review_group_text(value) -> str:
     return " ".join(str(value or "").split()).lower()
 
 
-def _rule_suggestion_split_root_id(suggestion_id: str) -> Optional[str]:
-    marker_index = suggestion_id.find(RULE_SUGGESTION_FOLLOWUP_ID_MARKER)
-    return suggestion_id[:marker_index] if marker_index >= 0 else None
-
-
 def _assign_rule_suggestion_review_groups(suggestions: list[dict]) -> None:
     """Stamp each suggestion with `review_group_id`, the working set the review renders it in.
 
     The review's merchant containers, their ordering, and the look-back lens all treat one group as a
     unit (`docs/data-model.md` → *Look-back lens*). Precedence, strongest first:
 
-    - **split root** — a follow-up (`<remainder id>:followup:<seed>`) and the card whose id is its
-      remainder id, so label cleanup differences cannot separate the chunks of one split;
+    - **split root** — a remainder partition and the card it was split from, so neither label cleanup
+      differences nor a remainder that regenerates under another scope can separate the chunks of one split;
     - **canonical conflict keyword** — an unresolved conflict set's `<keyword>:<scope>` group, so members
-      with differing sampled labels stay together (a `:refined` group names a suggestion id, not a
-      keyword, and falls through);
+      with differing sampled labels stay together (a refined partition's conflict group names a suggestion
+      id, not a keyword, and falls through);
     - **normalized merchant label**, then **normalized keyword**.
 
-    Computed over the whole list being returned, because a split key exists only while its follow-up is in
-    that list. This reads the id formats the generator and `_refine_pending_conflict_group` mint; it is the
-    last reader of those suffixes.
+    Computed over the whole list being returned, because a split key exists only while its remainder is in
+    that list.
     """
     split_root_ids = {
         root_id
         for suggestion in suggestions
-        if (root_id := _rule_suggestion_split_root_id(str(suggestion.get("id") or "")))
+        if (root_id := (_rule_suggestion_partition(suggestion) or {}).get("split_root_id"))
     }
     for suggestion in suggestions:
         suggestion_id = str(suggestion.get("id") or "")
-        split_root_id = _rule_suggestion_split_root_id(suggestion_id) or suggestion_id
+        split_root_id = (_rule_suggestion_partition(suggestion) or {}).get("split_root_id") or suggestion_id
         conflict_group_id = str(suggestion.get("conflict_group_id") or "")
         conflict_keyword = (
             _normalize_review_group_text(conflict_group_id.rpartition(":")[0])
-            if conflict_group_id and not conflict_group_id.endswith(RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX)
+            if conflict_group_id and _rule_suggestion_partition_kind(suggestion) != RULE_SUGGESTION_PARTITION_REFINED
             else ""
         )
         merchant_label = _normalize_review_group_text(suggestion.get("merchant_label"))
@@ -1767,8 +1791,7 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
     pending_partition_row_ids = {
         str(row_id)
         for suggestion_id, entry in (review_state.get("suggestions") or {}).items()
-        if isinstance(entry, dict)
-        and (entry.get("synthetic") or entry.get("pending_override"))
+        if _rule_suggestion_partition(entry)
         and not (review_statuses.get(suggestion_id) or {}).get("status")
         for row_id in (entry.get("source_row_ids") or [])
         if str(row_id).strip()
@@ -1852,10 +1875,10 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
     }
 
 
-def _build_pending_override_entry(suggestion: dict) -> dict:
+def _build_refined_rule_suggestion_entry(suggestion: dict) -> dict:
     return _build_rule_suggestion_review_entry({
         **suggestion,
-        "pending_override": True,
+        "partition": {"kind": RULE_SUGGESTION_PARTITION_REFINED},
     })
 
 
@@ -1892,7 +1915,7 @@ def _refined_match_can_rejoin_canonical_generation(
     # canonical generator so it can recompute owner scoping and conflicts with the rest of the merchant.
     suggestions = review_state.get("suggestions") or {}
     return bool(source_suggestions) and all(
-        isinstance(suggestions.get(source.id), dict) and suggestions[source.id].get("pending_override")
+        _rule_suggestion_partition_kind(suggestions.get(source.id)) == RULE_SUGGESTION_PARTITION_REFINED
         for source in source_suggestions
     )
 
@@ -1994,22 +2017,27 @@ def _refine_pending_conflict_group(
     if not release_matched_rows:
         for suggestion in matched_suggestions:
             suggestion_id = suggestion["id"]
-            suggestions[suggestion_id] = _build_pending_override_entry(suggestion)
+            suggestions[suggestion_id] = _build_refined_rule_suggestion_entry(suggestion)
             statuses.pop(suggestion_id, None)
 
     # The canonical generator rebuilds non-matching rows on the next read, together with analogous rows
-    # outside this conflict card. Persist a synthetic remainder only when its natural id collides with a
-    # refined override; otherwise persisting a card-local remainder would strand equivalent owner slices
+    # outside this conflict card. Persist a remainder partition only when its natural id collides with a
+    # refined one; otherwise persisting a card-local remainder would strand equivalent owner slices
     # as duplicate global suggestions instead of letting them coalesce.
     matched_suggestion_ids = {suggestion["id"] for suggestion in matched_suggestions} if not release_matched_rows else set()
     seed_suggestion_id = source_suggestions[0].id
     for suggestion in remaining_suggestions:
         if suggestion["id"] not in matched_suggestion_ids:
             continue
+        # Split from the refined card (same id, hence the collision) but discarded with the seed it was
+        # refined from, so the two relations name different suggestions here.
         suggestions[f"{suggestion['id']}{RULE_SUGGESTION_FOLLOWUP_ID_MARKER}{seed_suggestion_id}"] = _build_rule_suggestion_review_entry({
             **suggestion,
-            "synthetic": True,
-            "derived_from_suggestion_id": seed_suggestion_id,
+            "partition": {
+                "kind": RULE_SUGGESTION_PARTITION_REMAINDER,
+                "origin_id": seed_suggestion_id,
+                "split_root_id": suggestion["id"],
+            },
         })
 
     review_state["suggestions"] = suggestions
@@ -4441,8 +4469,8 @@ def record_rule_suggestion_review(conn, scope: _RuleSuggestionReviewScope, updat
     This is the review-state half of every rule-suggestion action (`rule_suggestion_actions`), which owns
     the transaction, the rule and row writes around this call, and the one `scope.save` at its end. An
     accept also discards the pending suggestions its matcher covers and, when the accepted matcher is
-    stricter than the rows the entry held, persists synthetic follow-ups for the leftover rows. Returns the
-    ids the accept discarded as covered.
+    stricter than the rows the entry held, persists a remainder partition holding the leftover rows. Returns
+    the ids the accept discarded as covered.
     """
     status = (update.status or "").strip().lower()
     if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
@@ -4496,7 +4524,7 @@ def record_rule_suggestion_review(conn, scope: _RuleSuggestionReviewScope, updat
             suggestion_entries[update.suggestion_id].pop("review_action", None)
 
     statuses = dict(review_state.get("statuses") or {})
-    synthetic_entries: list[dict] = []
+    remainder_entries: list[dict] = []
     if status == "pending":
         statuses.pop(update.suggestion_id, None)
     else:
@@ -4527,7 +4555,7 @@ def record_rule_suggestion_review(conn, scope: _RuleSuggestionReviewScope, updat
                 and _rule_suggestion_entry_covers(old_entry, suggestion_entries[update.suggestion_id], allow_equal_keyword=True)
                 and not _rule_suggestion_entry_covers(suggestion_entries[update.suggestion_id], old_entry, allow_equal_keyword=True)
             ):
-                synthetic_entries = _build_synthetic_rule_suggestion_entries(
+                remainder_entries = _build_remainder_rule_suggestion_entries(
                     conn,
                     review_state,
                     update.suggestion_id,
@@ -4537,8 +4565,8 @@ def record_rule_suggestion_review(conn, scope: _RuleSuggestionReviewScope, updat
 
     review_state["suggestions"] = suggestion_entries
     review_state["statuses"] = statuses
-    if synthetic_entries:
-        for entry in synthetic_entries:
+    if remainder_entries:
+        for entry in remainder_entries:
             suggestion_id = entry.pop("id")
             review_state["suggestions"][suggestion_id] = entry
     _prune_phantom_rule_suggestion_entry(review_state, update.suggestion_id, status)

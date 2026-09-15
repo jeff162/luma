@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 56
+CURRENT_VERSION = 57
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1520,6 +1520,91 @@ def _sync_log_rows_go_with_their_connection(conn):
     conn.execute("ALTER TABLE connection_sync_log_v56 RENAME TO connection_sync_log")
     # Dropped with the old table; the baseline script that creates it has already run by now.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started ON connection_sync_log(started_at)")
+
+
+# The pre-v57 shape of a stored rule-suggestion review entry. An entry's partition — whether the entry owns
+# its rows rather than regenerating them from the import pool — was carried as two booleans plus a
+# back-reference, and the card a split remainder belonged beside had to be parsed back out of its id. These
+# names are frozen copies rather than imports from the router, which is free to rename its own constants.
+_LEGACY_RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
+_LEGACY_RULE_SUGGESTION_FOLLOWUP_ID_MARKER = ":followup:"
+_LEGACY_RULE_SUGGESTION_PARTITION_KEYS = ("synthetic", "pending_override", "derived_from_suggestion_id")
+
+
+def _legacy_rule_suggestion_partition(entry_id: str, entry: dict) -> dict | None:
+    if entry.get("synthetic"):
+        # The id of a remainder is `<the id its rows regenerate as>:followup:<origin>`, and the prefix is the
+        # card it renders beside — which is what the old grouping parsed out of it on every read.
+        origin_id = entry.get("derived_from_suggestion_id") or entry_id
+        root_id, marker, _ = entry_id.partition(_LEGACY_RULE_SUGGESTION_FOLLOWUP_ID_MARKER)
+        return {"kind": "remainder", "origin_id": origin_id, "split_root_id": root_id if marker else origin_id}
+    if entry.get("pending_override"):
+        return {"kind": "refined"}
+    return None
+
+
+def _rewrite_rule_suggestion_partitions(review_state) -> bool:
+    if not isinstance(review_state, dict):
+        return False
+    entry_groups = [review_state.get("suggestions")]
+    entry_groups.extend(
+        trash_set.get("suggestions")
+        for trash_set in (review_state.get("trash_sets") or [])
+        if isinstance(trash_set, dict)
+    )
+    changed = False
+    for suggestions in entry_groups:
+        if not isinstance(suggestions, dict):
+            continue
+        for entry_id, entry in suggestions.items():
+            if not isinstance(entry, dict) or not any(key in entry for key in _LEGACY_RULE_SUGGESTION_PARTITION_KEYS):
+                continue
+            partition = _legacy_rule_suggestion_partition(str(entry_id), entry)
+            for key in _LEGACY_RULE_SUGGESTION_PARTITION_KEYS:
+                entry.pop(key, None)
+            entry["partition"] = partition
+            changed = True
+    return changed
+
+
+@migration(57)
+def _rule_suggestion_review_partitions_become_records(conn):
+    """Convert every stored rule-suggestion review to explicit partition records.
+
+    The review state lives in three containers — a batch's `config_snapshot`, a data source's `column_map`,
+    and the system workflow state — and each can also hold entries inside a trash set, so all of them are
+    walked. Deliberately **not** registered in `POST_RESTORE_DATA_INIT`: restoring a backup older than this
+    leaves its flagged entries unrecognized, which costs the pending refinements and split remainders in that
+    backup (their rows return to ordinary generation) and nothing else, and the alternative was carrying the
+    old shape's reader forever for a case a fresh backup settles.
+    """
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    containers = [
+        ("import_batch", "id", "config_snapshot", "SELECT id, config_snapshot AS payload FROM import_batch"),
+        ("csv_import_profile", "id", "column_map", "SELECT id, column_map AS payload FROM csv_import_profile"),
+        ("import_workflow_state", "key", "payload_json",
+         "SELECT key AS id, payload_json AS payload FROM import_workflow_state WHERE key = 'system_rule_suggestion_review'"),
+    ]
+    for table, key_column, payload_column, query in containers:
+        # Guarded on the columns, not just the table: the isolated per-migration tests hand-build minimal
+        # schemas holding only what the migration under test reads, and run the whole chain over them.
+        if table not in tables:
+            continue
+        columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not {key_column, payload_column} <= columns:
+            continue
+        for row in conn.execute(query).fetchall():
+            try:
+                container = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(container, dict):
+                continue
+            if _rewrite_rule_suggestion_partitions(container.get(_LEGACY_RULE_SUGGESTION_REVIEW_KEY)):
+                conn.execute(
+                    f"UPDATE {table} SET {payload_column} = ? WHERE {key_column} = ?",
+                    (json.dumps(container), row["id"]),
+                )
 
 
 def get_db_version(conn) -> int:

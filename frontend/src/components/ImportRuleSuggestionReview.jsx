@@ -114,6 +114,13 @@ function bulkLinkButtonStyle(disabled) {
   }
 }
 
+// A refined partition still awaiting disposition is edited as *selection criteria* rather than as a rule:
+// saving it re-partitions the review (see `docs/data-model.md` → *Conflict-set matcher refinement*), so the
+// card labels its editor for that and routes the save through the refinement endpoint.
+function isRefinedPendingSuggestion(suggestion) {
+  return suggestion?.partition?.kind === 'refined' && suggestion.review_status === 'pending'
+}
+
 export default function ImportRuleSuggestionReview({
   onLoadSuggestionMatches,
   ruleSuggestionState,
@@ -1415,7 +1422,7 @@ export default function ImportRuleSuggestionReview({
 
     actions.push({
       key: 'editor',
-      label: resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+      label: isRefinedPendingSuggestion(resolvedSuggestion)
         ? 'Selection criteria'
         : 'Rule Editor',
       onClick: () => onEditSuggestion(suggestion.id),
@@ -2410,10 +2417,10 @@ export default function ImportRuleSuggestionReview({
             runRowStatusAction={runRowStatusAction}
             runRowSaveAction={runRowSaveAction}
             onRejectSuggestionDisposition={onRejectSuggestionDisposition}
-            editLabel={resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+            editLabel={isRefinedPendingSuggestion(resolvedSuggestion)
               ? 'Edit selection criteria'
               : undefined}
-            editOpenLabel={resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+            editOpenLabel={isRefinedPendingSuggestion(resolvedSuggestion)
               ? 'Selection editor open'
               : undefined}
           />
@@ -2563,8 +2570,7 @@ export default function ImportRuleSuggestionReview({
     />
   ) : null
   const editingSuggestionUsesSelectionEditor = Boolean(
-    resolvedEditingSuggestion?.pending_override
-    && resolvedEditingSuggestion.review_status === 'pending'
+    isRefinedPendingSuggestion(resolvedEditingSuggestion)
     && !resolvedEditingSuggestion.conflict_group_id
   )
   const shouldRefinePendingFullSuggestion = data => Boolean(

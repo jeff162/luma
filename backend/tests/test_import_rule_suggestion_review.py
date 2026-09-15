@@ -76,6 +76,11 @@ from backend.routers.rules import (
 from backend.routers.transactions import CategoryOverride, set_imported_category
 
 
+def _is_remainder(entry: dict) -> bool:
+    """A partition holding rows split away from another card — the shape a follow-up is recognized by."""
+    return (entry.get("partition") or {}).get("kind") == "remainder"
+
+
 def _record_review(update: RuleSuggestionReviewUpdate, open_scope=_open_system_review_scope) -> dict:
     """Write one review update the way an action's review-state half does, without its rule and row writes."""
     with get_db() as conn:
@@ -342,11 +347,14 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertNotIn("alpha", state["suggestions"])
         self.assertNotIn("alpha", state["statuses"])
 
-    def test_returning_synthetic_followup_to_pending_keeps_it(self):
-        # A synthetic follow-up has no live rows to regenerate from, so unlike a normal suggestion it
-        # must survive a return to pending rather than vanishing.
+    def test_returning_a_remainder_partition_to_pending_keeps_it(self):
+        # A partitioned entry owns its rows rather than regenerating from them, so unlike a normal
+        # suggestion it must survive a return to pending rather than vanishing.
         self._save_review_state({
-            "suggestions": {"syn": {"merchant_label": "Syn", "keyword": "syn", "synthetic": True, "source_row_ids": ["r2"]}},
+            "suggestions": {"syn": {
+                "merchant_label": "Syn", "keyword": "syn", "source_row_ids": ["r2"],
+                "partition": {"kind": "remainder", "origin_id": "root", "split_root_id": "root"},
+            }},
             "statuses": {},
         })
         with self._use_db_path():
@@ -757,7 +765,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             after = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
             after_again = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
 
-        unsuffixed = [s for s in after if ":followup:" not in s["id"]]
+        unsuffixed = [s for s in after if not _is_remainder(s)]
         self.assertEqual(len(unsuffixed), 2)
         refined = [
             s for s in unsuffixed
@@ -769,7 +777,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(refined[0]["amount_max"], 44.99)
         self.assertEqual(refined[0]["review_status"], "pending")
 
-        followups = [s for s in after if ":followup:" in s["id"]]
+        followups = [s for s in after if _is_remainder(s)]
         self.assertEqual(len(followups), 1)
         self.assertEqual(followups[0]["txn_count"], 1)
         self.assertTrue(all(s["review_status"] == "pending" for s in followups))
@@ -781,7 +789,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(refined_source_ids | followup_source_ids, original_source_ids)
         canonical_remainder = [
             s for s in after
-            if s["target_category_name"] == "FixtureTrashSplit" and ":followup:" not in s["id"]
+            if s["target_category_name"] == "FixtureTrashSplit" and not _is_remainder(s)
         ]
         self.assertEqual(len(canonical_remainder), 1)
         self.assertEqual(canonical_remainder[0]["txn_count"], 4)
@@ -936,8 +944,8 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             ))
             split = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "walgreens"]
 
-        refined = [s for s in split if ":followup:" not in s["id"]]
-        followups = [s for s in split if ":followup:" in s["id"]]
+        refined = [s for s in split if not _is_remainder(s)]
+        followups = [s for s in split if _is_remainder(s)]
         self.assertEqual(len(refined), 1)
         self.assertEqual(len(followups), 1)
         self.assertEqual(refined[0]["owner_id"], owner_a)
@@ -979,9 +987,54 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(accepted[0]["owner_id"], owner_a)
         self.assertEqual(accepted[0]["txn_count"], 3)
         self.assertEqual(len(pending), 1)
-        self.assertIn(":followup:", pending[0]["id"])
+        self.assertEqual(pending[0]["partition"]["split_root_id"], refined[0]["id"])
         self.assertEqual(pending[0]["txn_count"], 2)
         self.assertEqual(accepted[0]["review_group_id"], pending[0]["review_group_id"])
+
+    def test_partial_accept_followup_stays_with_its_card_when_the_remainder_regenerates_under_another_scope(self):
+        # Owner B's rows are owner-scoped only because owner A files the merchant elsewhere. The leftover of a
+        # stricter accept is regenerated from B's rows alone, so it comes back global — under an id that is
+        # not the accepted card's — and must still render in the accepted card's working set.
+        owner_a = str(uuid.uuid4())
+        owner_b = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany(
+                "INSERT INTO owner (id, name) VALUES (?, ?)",
+                [(owner_a, "Owner A"), (owner_b, "Owner B")],
+            )
+        account_a = self._insert_account("Owner A Card", owner_a)
+        account_b = self._insert_account("Owner B Card", owner_b)
+        pharmacy = self._insert_expense_leaf("FixturePharmacyScope")
+        household = self._insert_expense_leaf("FixtureHouseholdScope")
+        batch_id = self._insert_import_batch()
+        for _ in range(2):
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_a, owner_id=owner_a, category_id=household,
+                imported_category="FixtureHouseholdScope", merchant_name="Northgate Drug", amount=25,
+            )
+        for amount in (10, 20, 20):
+            self._insert_import_transaction(
+                batch_id=batch_id, account_id=account_b, owner_id=owner_b, category_id=pharmacy,
+                imported_category="FixturePharmacyScope", merchant_name="Northgate Drug", amount=amount,
+            )
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["owner_id"] == owner_b]
+            self.assertEqual(len(before), 1)
+            accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                before[0]["id"],
+                before[0]["source_row_ids"],
+                {"keyword": "northgate drug", "category_id": pharmacy, "owner_id": owner_b, "amount_min": 10, "amount_max": 10},
+            )]))
+            after = get_system_rule_suggestions("")["suggestions"]
+
+        accepted = next(s for s in after if s["id"] == before[0]["id"])
+        followup = next(s for s in after if s["review_status"] == "pending" and s["target_category_id"] == pharmacy)
+        self.assertEqual(accepted["review_status"], "accepted")
+        self.assertIsNone(followup["owner_id"])
+        self.assertEqual(followup["txn_count"], 2)
+        self.assertFalse(followup["id"].startswith(f"{accepted['id']}:"))
+        self.assertEqual(followup["review_group_id"], accepted["review_group_id"])
 
     def test_review_group_precedence_is_split_root_then_conflict_keyword_then_label_then_keyword(self):
         suggestions = [
@@ -990,6 +1043,11 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                 "id": "walgreens:__global__:pharmacy:followup:walgreens:__global__:seed",
                 "merchant_label": "WALGREENS #13081",
                 "keyword": "walgreens",
+                "partition": {
+                    "kind": "remainder",
+                    "origin_id": "walgreens:__global__:seed",
+                    "split_root_id": "walgreens:__global__:pharmacy",
+                },
             },
             # A conflict set whose sampled labels differ, beside a broad sibling of the same merchant.
             {"id": "7-eleven:owner-a:fuel", "merchant_label": "7-Eleven Store 402", "keyword": "7-eleven",
@@ -997,9 +1055,10 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             {"id": "7-eleven:owner-a:food", "merchant_label": "Quick Stop", "keyword": "7-eleven",
              "conflict_group_id": "7-eleven:owner-a"},
             {"id": "7-eleven:__global__:general", "merchant_label": "  7-ELEVEN ", "keyword": "7-eleven"},
-            # A refined conflict group names a suggestion id, not a keyword, so its members group by label.
+            # A refined partition's conflict group names a suggestion id, not a keyword, so its members
+            # group by label.
             {"id": "riverstone:__global__:dues", "merchant_label": "Riverstone", "keyword": "riverstone renewal",
-             "conflict_group_id": "riverstone:__global__:seed:refined"},
+             "conflict_group_id": "riverstone:__global__:seed:refined", "partition": {"kind": "refined"}},
             {"id": "riverstone:__global__:card", "merchant_label": "Riverstone", "keyword": "riverstone"},
             {"id": "no-label", "merchant_label": None, "keyword": "  Stop   & Shop  "},
             {"id": "nothing", "merchant_label": "", "keyword": ""},
@@ -1017,7 +1076,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(groups["no-label"], "keyword:stop & shop")
         self.assertEqual(groups["nothing"], "suggestion:nothing")
 
-        # Without its follow-up in the list, a card is not a split and groups by label again.
+        # Without its remainder in the list, a card is not a split and groups by label again.
         alone = [{"id": "walgreens:__global__:pharmacy", "merchant_label": "Walgreens", "keyword": "walgreens"}]
         _assign_rule_suggestion_review_groups(alone)
         self.assertEqual(alone[0]["review_group_id"], "merchant:walgreens")
@@ -1100,7 +1159,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         ]
         self.assertEqual(len(narrowed_membership), 1)
         self.assertEqual(narrowed_membership[0]["txn_count"], 1)
-        self.assertTrue(narrowed_membership[0]["pending_override"])
+        self.assertEqual(narrowed_membership[0]["partition"]["kind"], "refined")
 
         with self._use_db_path():
             refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
@@ -1427,7 +1486,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                     )
                     state = stored(name)
                     self.assertEqual(state["statuses"][suggestion["id"]]["status"], "accepted")
-                    followups = [entry for entry in state["suggestions"].values() if entry.get("synthetic")]
+                    followups = [entry for entry in state["suggestions"].values() if _is_remainder(entry)]
                     self.assertEqual(len(followups), 1)
                     self.assertEqual(set(followups[0]["source_row_ids"]), scope["rows"] - {batch_rows[2]})
 
@@ -1440,7 +1499,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                     self.assertEqual(state["statuses"][suggestion["id"]]["status"], "accepted")
 
                     followup_id, followup = next(
-                        (entry_id, entry) for entry_id, entry in state["suggestions"].items() if entry.get("synthetic")
+                        (entry_id, entry) for entry_id, entry in state["suggestions"].items() if _is_remainder(entry)
                     )
                     scope["refine"](BatchRuleSuggestionMatchRefineRequest(
                         source_suggestions=[{"id": followup_id, "source_row_ids": followup["source_row_ids"]}],
@@ -1448,7 +1507,10 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                         amount_min=20,
                         amount_max=20,
                     ))
-                    overrides = [entry for entry in stored(name)["suggestions"].values() if entry.get("pending_override")]
+                    overrides = [
+                        entry for entry in stored(name)["suggestions"].values()
+                        if (entry.get("partition") or {}).get("kind") == "refined"
+                    ]
                     self.assertEqual(len(overrides), 1)
                     self.assertEqual(set(overrides[0]["source_row_ids"]), scope["rows"] - {batch_rows[2]})
 
