@@ -3799,7 +3799,13 @@ def get_batch_duplicates_unified(batch_id: str):
         # normal case; it only ever adds a candidate to an entry that had none.
         refresh_unexplained_coverage_candidates(conn, batch_id)
         entries = list_unified_batch_duplicates(conn, batch_id)
-        hard = sum(1 for e in entries if e["kind"] == "hard_reject")
+        # Three separate populations, because the header states them apart: rows turned away while the file
+        # imported, rows that landed and were removed later by a decision (a Replace, a Reject, a merge — each
+        # entry says `removed`), and suspects still awaiting one. Removed rows share the settled `hard_reject`
+        # kind with the first, and counting them there is how "6373 rejected at import" came to include 18
+        # rows that were imported and removed weeks afterwards.
+        removed = sum(1 for e in entries if e.get("removed"))
+        hard = sum(1 for e in entries if e["kind"] == "hard_reject" and not e.get("removed"))
         soft = sum(1 for e in entries if e["kind"] == "soft_flag")
         # Per-rule rollup so the UI can show a clickable breakdown of which rules contributed
         # how many entries. Each item carries the rule_key, the human label, the confidence
@@ -3823,6 +3829,7 @@ def get_batch_duplicates_unified(batch_id: str):
             "filename": batch["filename"],
             "entries": entries,
             "hard_reject_count": hard,
+            "removed_count": removed,
             "soft_flag_count": soft,
             "total_count": len(entries),
             "rule_breakdown": rule_breakdown,
@@ -3833,35 +3840,31 @@ def get_batch_duplicates_unified(batch_id: str):
         }
 
 
-# Rows this batch imported that were later removed as confirmed duplicates — via the duplicate
-# report's Reject/Replace or an account merge. The file-scoped ledger drawer surfaces these as an
-# audit trail ("removed → kept on <account>") instead of dropping them silently: a Replace done
-# from another file's report trashes THIS file's matching row, which would otherwise just vanish
-# from the file view. The surviving row is resolved through `suspect_duplicate_of`.
-@router.get("/batches/{batch_id}/deduped-rows")
-def get_batch_deduped_rows(batch_id: str):
+def removed_duplicate_count(conn, batch_id: str) -> int:
+    """Rows this batch imported that were later removed as confirmed duplicates — by a duplicate report's
+    Reject or Replace (possibly another file's: a Replace removes the *older* copy), an account merge, or
+    the Amazon reconciliation. Each keeps `suspect_duplicate_of` pointing at the copy it deferred to, which
+    is exactly what puts it in this batch's duplicate report as a settled entry with Restore — so the
+    predicate here is that report's, and the count never names a row the report cannot show."""
+    return int(conn.execute(
+        """
+        SELECT COUNT(*) FROM txn
+        WHERE  import_batch_id = ?
+          AND  rejection_reason = 'duplicate_confirmed'
+          AND  suspect_duplicate_of IS NOT NULL
+        """,
+        (batch_id,),
+    ).fetchone()[0] or 0)
+
+
+# The file ledger's "Removed as duplicates (N)" line. Only the count: the rows themselves are reviewed —
+# and restored — in the batch's duplicate report, which the line opens. A removed row is trashed, so it
+# never comes back from the ledger's own transaction query; without this a Replace done from another
+# file's report would make this file's matching row vanish from its ledger with no trace.
+@router.get("/batches/{batch_id}/removed-duplicates")
+def get_batch_removed_duplicates(batch_id: str):
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                t.id, t.date, t.amount,
-                COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), NULLIF(t.raw_name,'')) AS merchant,
-                t.dedupe_resolved_by AS resolved_by,
-                s.id                 AS surviving_id,
-                sa.name              AS surviving_account_name,
-                COALESCE(NULLIF(sap.display_name,''), sap.name) AS surviving_account_merged_into
-            FROM   txn t
-            LEFT JOIN txn     s   ON s.id = t.suspect_duplicate_of
-            LEFT JOIN account sa  ON sa.id = s.account_id
-            LEFT JOIN account sap ON sap.id = sa.parent_account_id
-            WHERE  t.import_batch_id = ?
-              AND  t.trashed_at IS NOT NULL
-              AND  t.rejection_reason = 'duplicate_confirmed'
-            ORDER  BY t.date DESC, t.id
-            """,
-            (batch_id,),
-        ).fetchall()
-    return {"batch_id": batch_id, "rows": [dict(r) for r in rows], "count": len(rows)}
+        return {"batch_id": batch_id, "count": removed_duplicate_count(conn, batch_id)}
 
 
 @router.post("/batches/{batch_id}/duplicates/mark-reviewed")
@@ -4250,6 +4253,10 @@ def list_batches():
             """, (b["id"],)).fetchone()
             d["duplicate_row_count"] = int(dup_counts["total"] or 0)
             d["enriched_duplicate_count"] = int(dup_counts["enriched"] or 0)
+            # Settled like an import-time reject, so the card's duplicates pill counts it with those: it is
+            # what makes the report — and its Restore — reachable from a card whose only duplicates were
+            # decided after the import.
+            d["removed_duplicate_count"] = removed_duplicate_count(conn, b["id"])
             d["suspect_duplicate_count"] = int(conn.execute("""
                 SELECT COUNT(*) AS n
                 FROM   txn

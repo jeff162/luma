@@ -34,12 +34,13 @@ const card = (id, needsReview) => ({
   suspect_duplicate_count: 0, accounts: [],
 })
 
-function renderSection(rows, setExpandedSourceRows = vi.fn()) {
+function renderSection(rows, setExpandedSourceRows = vi.fn(), expandedSourceRows = {}) {
   render(
     <ImportHistorySection
       dataSourceRows={rows}
       profiles={[]}
-      expandedSourceRows={{}}
+      expandedSourceRows={expandedSourceRows}
+      buildBatchImportedCategoryChoices={() => []}
       setExpandedSourceRows={setExpandedSourceRows}
       totalSystemCategoryWorkspaceCount={0}
       pendingSystemCategoryCount={0}
@@ -75,6 +76,32 @@ describe('a collapsed data-source row', () => {
   it('says nothing about recency once disconnected, since the sync record went with the connection', () => {
     renderSection([{ ...connectionRow([card('August 2026', 0)]), connectionId: null, disconnected: true }])
     expect(screen.queryByText(/Last synced|Last used|imported file/)).toBeNull()
+  })
+
+  it('counts rows removed after the import in the card\'s duplicates pill, so its report stays reachable', async () => {
+    const openReport = vi.fn()
+    render(
+      <ImportHistorySection
+        dataSourceRows={[connectionRow([{ ...card('August 2026', 0), deduped_count: 2, removed_duplicate_count: 1 }])]}
+        profiles={[]}
+        expandedSourceRows={{ 'connection:c1': true }}
+        buildBatchImportedCategoryChoices={() => []}
+        setExpandedSourceRows={vi.fn()}
+        totalSystemCategoryWorkspaceCount={0}
+        pendingSystemCategoryCount={0}
+        hasSystemRuleSuggestionWork={false}
+        pendingSystemRuleSuggestionCount={0}
+        getSourceNameEditKey={() => ''}
+        openUnifiedDuplicatesViewer={openReport}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '3 duplicates' }))
+    expect(openReport).toHaveBeenCalled()
+  })
+
+  it('shows a duplicates pill for a card whose only duplicates were removed after the import', () => {
+    renderSection([connectionRow([{ ...card('August 2026', 0), removed_duplicate_count: 2 }])], vi.fn(), { 'connection:c1': true })
+    expect(screen.getByRole('button', { name: '2 duplicates' })).toBeTruthy()
   })
 
   it('points its review count at the connection\'s cards rather than at imported files', () => {

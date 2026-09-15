@@ -2712,6 +2712,9 @@ _SOFT_FLAG_CLASSIFIERS = {
     # because the *occasion* is what the user needs explained: this row entered the ledger before the
     # mapping existed, and was re-judged afterwards — not flagged when it arrived.
     "connection_rescan":  ("connection_rescan",  "medium"),
+    # Written by Replace onto the row it removes. That row was the *existing* side of someone else's flag,
+    # so it had no reason of its own to show, and whatever it did carry described a different pairing.
+    "replaced":           ("replaced",           "medium"),
 }
 
 # User-facing labels keyed by rule_key. Short label is what shows up in the badge; long label is
@@ -2775,8 +2778,16 @@ _RULE_LABELS = {
                                         "Matched an existing transaction when this data connection's rows were re-checked after its accounts were mapped."),
     "connection_rescan_confirmed":     ("Found by re-scan (removed)",
                                         "This synced row arrived before its account was mapped, so it was never checked for duplicates. A re-scan matched it to a transaction already in the ledger and removed it; Restore brings it back with its category and edits intact."),
+    # Rows removed by a decision rather than flagged by a rule, named for what removed them (see
+    # `_REMOVED_WITHOUT_REASON_RULE_KEYS`). The unconfirmed form is what a restored Replace leaves behind.
+    "replaced":                        ("Replaced copy (restored)", ""),
+    "replaced_confirmed":              ("Replaced by another copy",
+                                        "A Replace in a duplicate report kept another copy of this transaction instead."),
+    "amazon_merge_confirmed":          ("Merged on Amazon reconciliation",
+                                        "Copies of this charge were merged on the Amazon reconciliation report, keeping another one."),
     "other_hard":                      ("Other (hard-reject)", "Hard-rejected with a reason this report does not yet have a friendly label for."),
     "other_soft":                      ("Other (review)",     "Soft-flagged with a reason this report does not yet have a friendly label for."),
+    "other_soft_confirmed":            ("Removed as a duplicate", ""),
 }
 
 # How a coverage reject's candidate agreed with the incoming row's text — the same three tiers the
@@ -2820,6 +2831,23 @@ _IN_ACCOUNT_RULE_KEYS = {
     "cross_account": "in_account",
     "cross_account_fuzzy": "in_account_fuzzy",
     "cross_account_weak": "in_account_weak",
+}
+
+# A removed row with no match reason of its own is described by what removed it (`dedupe_resolved_by`).
+# The reason alone cannot say: an Amazon reconciliation merge records none, and neither did Replace until
+# it began writing 'replaced' — so a user-resolved row without one is a Replace from before then, since a
+# Reject always acts on a flagged row, which carries its flag's reason. Anything else stays the generic
+# `other_soft`, labelled for what it is rather than shown as a raw key.
+_REMOVED_WITHOUT_REASON_RULE_KEYS = {
+    "user": "replaced",
+    "amazon_merge": "amazon_merge",
+}
+
+# How a removed entry explains itself in the report's reason column, by the occasion its rule names.
+_REMOVED_REASON_TEXT = {
+    "replaced": "Replaced by another copy of this transaction on {side}",
+    "amazon_merge": "Merged into another copy of this charge on {side}",
+    "connection_rescan": "Removed by a re-scan as a duplicate of a transaction on {side}",
 }
 
 
@@ -3481,6 +3509,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.suspect_duplicate_reason AS reason_key,
             t1.suspect_resolved_at      AS resolved_at,
             t1.rejection_reason         AS rejection_reason,
+            t1.dedupe_resolved_by       AS resolved_by,
             t2.id                       AS existing_id,
             t2.date                     AS existing_date,
             t2.amount                   AS existing_amount,
@@ -3507,6 +3536,8 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     ).fetchall():
         is_confirmed = row["rejection_reason"] == "duplicate_confirmed"
         base_rule_key, confidence = _classify_soft_flag_reason(row["reason_key"])
+        if is_confirmed and base_rule_key == "other_soft":
+            base_rule_key = _REMOVED_WITHOUT_REASON_RULE_KEYS.get(row["resolved_by"], base_rule_key)
         # Re-derive the account relationship from the grouping in force now (see `_IN_ACCOUNT_RULE_KEYS`).
         same_account_now = bool(row["new_account_root"]) and row["new_account_root"] == row["existing_account_root"]
         if same_account_now:
@@ -3542,15 +3573,20 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             # routes them through the same UI path as import-time rejects. The rule_key keeps
             # `_confirmed` so the badge text can distinguish the two histories; the confidence
             # band is overridden to 'medium' so the pill renders in the "settled" blue family
-            # rather than the "needs attention" orange used for unresolved soft-flags.
+            # rather than the "needs attention" orange used for unresolved soft-flags. `removed` is what tells
+            # this row apart from an import-time reject: it landed in the ledger and a later decision took it
+            # out, which the report counts and filters separately.
+            reason_template = _REMOVED_REASON_TEXT.get(
+                base_rule_key, "Removed as a duplicate of a transaction on {side}")
             entries.append({
                 "kind": "hard_reject",
                 "rule_key": rule_key,
                 "rule_label": rule_label,
                 "rule_description": rule_description,
                 "confidence": "medium",
-                "reason_text": f"Confirmed duplicate of a transaction on {matched_side} (resolved from soft-flag review)",
+                "reason_text": reason_template.format(side=matched_side),
                 "resolved": True,
+                "removed": True,
                 "incoming": incoming,
                 "matched": matched,
             })
@@ -3669,7 +3705,8 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
                    suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                    rejection_reason = 'duplicate_confirmed',
                    dedupe_resolved_by = 'user',
-                   suspect_duplicate_of = ?
+                   suspect_duplicate_of = ?,
+                   suspect_duplicate_reason = 'replaced'
             WHERE  id = ?
             """,
             (txn_id, existing["id"]),

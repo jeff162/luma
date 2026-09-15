@@ -15,7 +15,7 @@ vi.mock('../../lib/api.js', () => ({
   api: {
     getTransactions: vi.fn(),
     getFilterAttributes: vi.fn(),
-    getBatchDedupedRows: vi.fn(),
+    getBatchRemovedDuplicates: vi.fn(),
     // Bulk edit's tag picker loads the tag list on mount.
     getTags: vi.fn(() => Promise.resolve([])),
   },
@@ -25,6 +25,10 @@ vi.mock('../TransactionListTable.jsx', () => ({ default: () => null }))
 vi.mock('../TransactionDetail.jsx', () => ({ default: () => null }))
 vi.mock('../../help/FeatureExplainer.jsx', () => ({ default: () => null }))
 vi.mock('../../lib/transactionTablePreferences.js', () => ({ useTransactionTableLayout: () => [null, () => {}] }))
+const openDuplicatesReport = vi.fn()
+vi.mock('../../contexts/UnifiedDuplicatesViewerContext.jsx', () => ({
+  useUnifiedDuplicatesViewer: () => ({ open: openDuplicatesReport, viewer: null }),
+}))
 
 const ATTRIBUTES = [
   { key: 'needs-review', label: 'Needs review', description: '' },
@@ -34,7 +38,7 @@ const BATCH = { id: 'b1', filename: 'harborline-august.csv', imported_at: '2026-
 
 function serve() {
   api.getFilterAttributes.mockResolvedValue(ATTRIBUTES)
-  api.getBatchDedupedRows.mockResolvedValue({ rows: [] })
+  api.getBatchRemovedDuplicates.mockResolvedValue({ count: 0 })
   api.getTransactions.mockImplementation(params => Promise.resolve({
     transactions: [],
     total: params.require_all_attribute_ids === 'needs-review' ? 12 : 240,
@@ -82,5 +86,24 @@ describe('ImportBatchDetail quick filter', () => {
     await user.click(await screen.findByRole('button', { name: 'Needs review' }))
     expect(await screen.findByText('Needs review: 12 of 240 synced transactions on this card')).toBeTruthy()
     expect(screen.queryByText(/this file/)).toBeNull()
+  })
+})
+
+describe('ImportBatchDetail removed duplicates', () => {
+  it('says how many rows were removed and opens the report where they can be restored', async () => {
+    serve()
+    api.getBatchRemovedDuplicates.mockResolvedValue({ count: 3 })
+    render(<ImportBatchDetail batch={BATCH} />)
+
+    expect(await screen.findByText('Removed as duplicates (3)')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /Review or restore in the duplicate report/ }))
+    expect(openDuplicatesReport).toHaveBeenCalledWith({ batchId: 'b1', title: 'harborline-august.csv', kindFilter: 'removed' })
+  })
+
+  it('says nothing when no row was removed', async () => {
+    serve()
+    render(<ImportBatchDetail batch={BATCH} />)
+    await screen.findByText('240 imported transactions from this file')
+    expect(screen.queryByText(/Removed as duplicates/)).toBeNull()
   })
 })

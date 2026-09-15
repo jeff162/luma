@@ -447,6 +447,12 @@ export function ImportHistorySection({
                         <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
                           {row.batches.map(b => {
                             const summary = summarizeImportOutcome(b)
+                            // Every duplicate the card's report lists: rejected at import, removed by a later
+                            // decision (Replace, Reject, a merge), and suspects still awaiting one. One total,
+                            // since all three open the same report; only the suspects need action.
+                            const suspectDuplicates = Number(b.suspect_duplicate_count || 0)
+                            const settledDuplicates = summary.dedupedCount + Number(b.removed_duplicate_count || 0)
+                            const duplicateTotal = settledDuplicates + suspectDuplicates
                             const batchImportedCategoryChoices = buildBatchImportedCategoryChoices(b)
                             const batchImportedCategorySummary = summarizeImportedCategorySettings(
                               extractImportedCategorySettings(b),
@@ -455,7 +461,7 @@ export function ImportHistorySection({
                             )
                             return (
                               <div key={b.id}>
-                                <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: (b.accounts?.length || summary.rejectedCount > 0 || summary.dedupedCount > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+                                <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: (b.accounts?.length || summary.rejectedCount > 0 || duplicateTotal > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px 90px', gap: 12, alignItems: 'start' }}>
                                     <div style={{ minWidth: 0 }}>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -606,7 +612,7 @@ export function ImportHistorySection({
                                     ) : null}
                                   </div>
                                 </div>
-                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || summary.dedupedCount > 0 || Number(b.needs_review_count || 0) > 0) && (
+                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) && (
                                   <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                                     {/* Descriptive account chips (how many rows came from each account) wrap on
                                         their own row; the clickable action pills are split out into the labeled
@@ -625,7 +631,7 @@ export function ImportHistorySection({
                                     ))}
                                       </div>
                                     ) : null}
-                                    {(summary.rejectedCount > 0 || (summary.dedupedCount + Number(b.suspect_duplicate_count || 0)) > 0 || Number(b.needs_review_count || 0) > 0) ? (
+                                    {(summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) ? (
                                       <div style={{
                                         marginTop: b.accounts?.length > 0 ? 8 : 0,
                                         display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
@@ -658,14 +664,11 @@ export function ImportHistorySection({
                                       </button>
                                     ) : null}
                                     {(() => {
-                                      // Unified pill: combines hard-reject (`deduped_count`)
-                                      // and soft-flag (`suspect_duplicate_count`) totals into
-                                      // one entry point. Pill colors warm when soft flags are
-                                      // present — those need user review, whereas hard rejects
-                                      // are already resolved.
-                                      const hard = summary.dedupedCount
-                                      const soft = Number(b.suspect_duplicate_count || 0)
-                                      const total = hard + soft
+                                      // Unified pill: every duplicate the report lists, in one entry point.
+                                      // Pill colors warm when soft flags are present — those need user
+                                      // review, whereas import rejects and later removals are settled.
+                                      const soft = suspectDuplicates
+                                      const total = duplicateTotal
                                       if (total <= 0) return null
                                       const hasSoft = soft > 0
                                       return (

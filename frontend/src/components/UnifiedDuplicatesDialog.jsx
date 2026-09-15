@@ -31,7 +31,7 @@
 //   shared pattern across tables, the right move is to extend PillGridTable's header to accept
 //   custom node labels and migrate this dialog at the same time as the others.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -59,7 +59,8 @@ import HelpHoverCard from '../help/HelpHoverCard.jsx'
 // merchant-asc gets it on the next visit; panel geometry is restored if the user has dragged
 // or resized the dialog. The active rule filter intentionally does NOT persist — opening the
 // report should always start from the "All" view so the user sees every entry by default
-// rather than landing on a stale filter from a previous session.
+// rather than landing on a stale filter from a previous session. The one exception is a caller that
+// opens it *for* a kind of entry (`kindFilter`), and that is chosen per open, never remembered.
 const UNIFIED_DUPLICATES_SORT_PREF_KEY = 'ui.unifiedDuplicates.sort'
 const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
@@ -82,6 +83,15 @@ const REVIEW_KIND_PILLS = [
 // twin anywhere). The backend clears the
 // substate once the row is acknowledged (`reviewed`), so a reviewed row returns null here and
 // drops out of the needs-attention pills.
+// Whether an entry belongs to the active kind filter. 'removed' is the settled counterpart of the pills
+// above: rows that landed in the ledger and were taken out later by a decision (Replace, Reject, a merge).
+// They need no action, but they are what a file ledger's "Removed as duplicates" line sends the user to
+// find, and they share the settled kind with import rejects that can outnumber them by thousands.
+function matchesKindFilter(entry, key) {
+  if (key === 'removed') return !!entry.removed
+  return reviewKindOf(entry) === key
+}
+
 function reviewKindOf(entry) {
   if (entry.kind === 'soft_flag') return 'review'
   if (entry.review_substate === 'matched_near_date') return 'matched_near_date'
@@ -159,6 +169,7 @@ function actionsFor(entry) {
 export default function UnifiedDuplicatesDialog({
   entries = [],
   hardRejectCount = 0,
+  removedCount = 0,
   softFlagCount = 0,
   ruleBreakdown = [],
   accountPairs = [],
@@ -166,6 +177,8 @@ export default function UnifiedDuplicatesDialog({
   batchId = '',
   accountFilter = null,
   onClearAccountFilter,
+  kindFilter = null,
+  openedWith = null,
   loading = false,
   error = '',
   onClose,
@@ -191,7 +204,14 @@ export default function UnifiedDuplicatesDialog({
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [activeRuleFilter, setActiveRuleFilter] = useState(null)
   // Kind/status quick-filter, mutually exclusive with the rule filter (picking one clears the other).
-  const [activeKindFilter, setActiveKindFilter] = useState(null)
+  const [activeKindFilter, setActiveKindFilter] = useState(kindFilter)
+  // Each open starts from what that open asked for. The dialog stays mounted when a second report is opened
+  // over the first, so this follows the open (a new params object) rather than only the initial mount —
+  // otherwise the ledger link would land on whatever filter the previous report was left showing.
+  useEffect(() => {
+    setActiveKindFilter(kindFilter)
+    setActiveRuleFilter(null)
+  }, [openedWith]) // eslint-disable-line react-hooks/exhaustive-deps -- keyed to the open, not to its fields
   const [sortState, setSortState] = useUserPreference(UNIFIED_DUPLICATES_SORT_PREF_KEY, DEFAULT_SORT_STATE)
   const [pendingBulk, setPendingBulk] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -267,6 +287,8 @@ export default function UnifiedDuplicatesDialog({
       : entries
   ), [entries, accountFilter])
 
+  const scopedRemovedCount = useMemo(() => scopedEntries.filter(e => e.removed).length, [scopedEntries])
+
   const reviewKindBreakdown = useMemo(() => {
     const counts = { review: 0, matched_near_date: 0, transfer_match: 0, no_match: 0 }
     for (const e of scopedEntries) {
@@ -278,7 +300,7 @@ export default function UnifiedDuplicatesDialog({
 
   const visibleEntries = useMemo(() => {
     const filtered = activeKindFilter
-      ? scopedEntries.filter(e => reviewKindOf(e) === activeKindFilter)
+      ? scopedEntries.filter(e => matchesKindFilter(e, activeKindFilter))
       : activeRuleFilter
         ? scopedEntries.filter(e => (e.rule_key || '') === activeRuleFilter)
         : scopedEntries
@@ -630,7 +652,7 @@ export default function UnifiedDuplicatesDialog({
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>
           {accountFilter?.id
             ? `${scopedEntries.length} duplicate${scopedEntries.length === 1 ? '' : 's'} for ${accountFilter.name}`
-            : `${entries.length} total · ${hardRejectCount} rejected at import · ${softFlagCount} flagged for review`}
+            : `${entries.length} total · ${hardRejectCount} rejected at import${removedCount ? ` · ${removedCount} removed later` : ''} · ${softFlagCount} flagged for review`}
         </div>
       </div>
       {onMinimize ? (
@@ -683,6 +705,28 @@ export default function UnifiedDuplicatesDialog({
                 Show all duplicates in this import
               </button>
             ) : null}
+          </div>
+        ) : null}
+        {kindFilter === 'removed' && activeKindFilter === 'removed' ? (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            padding: '8px 16px', borderBottom: '1px solid var(--border)',
+            background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', fontSize: 12,
+          }}>
+            <span style={{ color: 'var(--muted)' }}>
+              Showing only rows <strong style={{ color: 'var(--text)' }}>removed as duplicates after the import</strong>.
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveKindFilter(null)}
+              onMouseDown={e => e.stopPropagation()}
+              style={{
+                background: 'none', border: 'none', padding: 0,
+                color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
+              }}
+            >
+              Show all duplicates in this import
+            </button>
           </div>
         ) : null}
         {/* One question that settles a whole pile, offered above the list rather than inside it: every
@@ -775,6 +819,27 @@ export default function UnifiedDuplicatesDialog({
                 </HelpHoverCard>
               )
             })}
+            {scopedRemovedCount > 0 ? (
+              <>
+                <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
+                <HelpHoverCard topic="removed-as-duplicates">
+                  <button
+                    type="button"
+                    onClick={() => { setActiveKindFilter(activeKindFilter === 'removed' ? null : 'removed'); setActiveRuleFilter(null) }}
+                    style={{
+                      fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
+                      // Settled, not needing attention — the rule pills' blue rather than the review amber.
+                      background: activeKindFilter === 'removed' ? 'var(--accent2)' : 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
+                      color: activeKindFilter === 'removed' ? 'white' : 'var(--accent2)',
+                      border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
+                      fontWeight: activeKindFilter === 'removed' ? 600 : 500,
+                    }}
+                  >
+                    Removed later ({scopedRemovedCount})
+                  </button>
+                </HelpHoverCard>
+              </>
+            ) : null}
             </div>
           </div>
         ) : null}

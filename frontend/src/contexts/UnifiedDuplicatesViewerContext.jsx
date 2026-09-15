@@ -53,6 +53,7 @@ async function loadDuplicates(params, prev) {
   return {
     entries: Array.isArray(result.entries) ? result.entries : [],
     hardRejectCount: Number(result.hard_reject_count || 0),
+    removedCount: Number(result.removed_count || 0),
     softFlagCount: Number(result.soft_flag_count || 0),
     ruleBreakdown: Array.isArray(result.rule_breakdown) ? result.rule_breakdown : [],
     // The account pairs the unresolved cross-account flags span — what lets the dialog ask the one
@@ -71,8 +72,10 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
 
   // `accountFilter` ({ id, name }) scopes the report to one account's rows — used by the deep link
   // from an empty account's detail panel so the user lands on exactly its skipped duplicates rather
-  // than scrolling the whole batch report. Defaulted here so callers can omit it.
-  const open = useCallback((params) => openViewer({ accountFilter: null, ...params }), [openViewer])
+  // than scrolling the whole batch report. `kindFilter` opens the report on one kind of entry — 'removed'
+  // from a file ledger's "Removed as duplicates" line, whose rows are otherwise lost among the file's import
+  // rejects. Both defaulted here so callers can omit them.
+  const open = useCallback((params) => openViewer({ accountFilter: null, kindFilter: null, ...params }), [openViewer])
 
   // Clear the account scope without reloading — the dialog's "Show all" banner action.
   const clearAccountFilter = useCallback(() => {
@@ -155,12 +158,15 @@ export function UnifiedDuplicatesViewerRenderer() {
       <UnifiedDuplicatesDialog
         entries={data?.entries || []}
         hardRejectCount={data?.hardRejectCount || 0}
+        removedCount={data?.removedCount || 0}
         softFlagCount={data?.softFlagCount || 0}
         ruleBreakdown={data?.ruleBreakdown || []}
         accountPairs={data?.accountPairs || []}
         title={params?.title}
         batchId={params?.batchId}
         accountFilter={params?.accountFilter || null}
+        kindFilter={params?.kindFilter || null}
+        openedWith={params}
         onClearAccountFilter={clearAccountFilter}
         loading={!!viewer.loading}
         error={viewer.error || ''}

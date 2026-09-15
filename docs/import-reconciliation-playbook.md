@@ -135,9 +135,10 @@ for "I've triaged this, leave it in Unassigned"; use Delete for "stop bringing t
 
 ### "Where did a removed duplicate go?"
 
-Open a file's ledger (the `↗`); a collapsible **Removed as duplicates** list shows each removed row
-and which account the kept copy lives on — so a Replace/merge done from another file doesn't make a
-row vanish without a trace.
+A row removed by a Replace, a Reject or a merge stays on its own file's **duplicate report**, under
+**Removed later**. A Replace removes the older copy, so the row can belong to a different file than the
+one where the decision was made; that file's ledger (the `↗`) links to it. **Restore** puts it back;
+detaching a merged account restores every removal the merge made.
 
 ### Finding a transaction in a long ledger
 
@@ -198,7 +199,7 @@ A mistaken merge or discard is undoable: the removed copy sits in Settings → T
 **Duplicate transactions** section, in a collapsible group named for the file it was imported from
 (ordinary deletes stay in the separate Transactions section), and **Restore** brings it back — the
 reconciliation grouping simply re-derives on the next refresh. A merge loser also appears in its
-source file's "Removed as duplicates" ledger list, pointing at the kept copy.
+source file's duplicate report, pointing at the kept copy.
 
 ### An Amazon order shows "Matched · review" (a split shipment)
 
@@ -284,7 +285,7 @@ the pattern. Each situation is a help topic, reachable three ways from that sing
 pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
 reconciliation and import-detail report headers, the amount-convention picker, the Group Imported
 Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search and
-removed-as-duplicates list), and a context-triggered
+removed-as-duplicates line), and a context-triggered
 "explain this" tip that appears only when the app recognizes the situation (cross-account matches,
 covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
 

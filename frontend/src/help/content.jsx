@@ -346,8 +346,8 @@ export const HELP_TOPICS = [
             reporting switches: a group{' '}
             <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> still keeps its
             transactions, and a{' '}
-            <HelpLink to="/help/removed-as-duplicates">removed duplicate</HelpLink> is still listed
-            on its file. Little is permanent, so experimenting is safe.
+            <HelpLink to="/help/removed-as-duplicates">removed duplicate</HelpLink> stays on its
+            file's duplicate report, ready to restore. Little is permanent, so experimenting is safe.
           </li>
           <li>
             <strong>Overlapping sources are safe to import.</strong> Strong duplicate detection is
@@ -2225,7 +2225,7 @@ export const HELP_TOPICS = [
                 <td>The &#8599; button</td>
                 <td>The transactions the file brought in, with a search box of its own
                   (see <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>) and,
-                  at the top, the rows <HelpLink to="/help/removed-as-duplicates">removed as
+                  at the top, how many rows were <HelpLink to="/help/removed-as-duplicates">removed as
                   duplicates</HelpLink>.</td>
               </tr>
               <tr>
@@ -2867,17 +2867,21 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Where a removed duplicate went',
     surfaces: ['File ledger (↗)'],
-    summary: 'Rows which are replaced or merged as part of duplicate transaction resolution are visible in the "Removed as duplicates" section at the top of each import file card\'s transaction report.',
+    summary: 'A removed duplicate stays on its import\'s duplicate report, where it can be restored.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
-          When a <HelpLink to="/help/cross-account-duplicates">Replace</HelpLink> or a{' '}
-          <HelpLink to="/help/merging-accounts">merge</HelpLink> removes a duplicate, the row is added
-          to the removed duplicates report for the import. Open a file's ledger (the <strong>↗</strong>) and expand the collapsible
-          <strong> Removed as duplicates</strong> list: it shows each removed row and which account the retained
-          copy now lives on. Duplicate charge copies merged away on the <em>Amazon reconciliation
-            report</em> land here too &mdash; for those the kept copy is usually on the <em>same</em> account (a
-          doubled import of one charge), and the removed copy is restorable from Settings → Trash.
+          A row removed by a <HelpLink to="/help/cross-account-duplicates">Replace</HelpLink>, a Reject or
+          a <HelpLink to="/help/merging-accounts">merge</HelpLink> stays on the{' '}
+          <HelpLink to="/help/duplicate-report">duplicate report</HelpLink> of the import it came from,
+          under <strong>Removed later</strong>. A Replace removes the older copy, so the row can belong to
+          a different file than the one where the decision was made. That file's ledger
+          (the <strong>↗</strong>) links to it.
+        </p>
+        <p>
+          <strong>Restore</strong> on the row puts it back. Detaching a merged account restores every
+          removal the merge made.
         </p>
       </>
     ),

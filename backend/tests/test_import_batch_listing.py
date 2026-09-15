@@ -25,7 +25,8 @@ from backend.db.database import (
     set_current_db_path,
 )
 from backend.routers.import_export import run_import
-from backend.routers.import_export.core import list_batches
+from backend.routers.import_export.core import get_batch_removed_duplicates, list_batches
+from backend.services.duplicate_detection import restore_rejected_duplicate
 
 
 class FakeUploadFile:
@@ -117,6 +118,38 @@ class ImportBatchListingTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path():
             batches = list_batches()
         self.assertEqual(len(batches), count)
+
+    async def test_rows_removed_after_import_are_counted_on_the_card_and_uncounted_by_restore(self):
+        # A card whose duplicates were all decided after its import — here, another file's Replace removed
+        # this file's older copy — had no duplicates pill, so its report and that report's Restore were
+        # unreachable from the card. The count must name exactly the rows the report lists.
+        batch_id = self._insert_completed_batch("harborline-march.csv", "2026-03-31T09:00:00")
+        account_id = self._insert_account("Harborline Checking")
+        with self._use_db_path(), get_db() as conn:
+            def txn(txn_id, *, batch=None, removed_in_favor_of=None):
+                conn.execute(
+                    """
+                    INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, is_pending,
+                                     import_batch_id, suspect_duplicate_of, trashed_at, rejection_reason,
+                                     dedupe_resolved_by)
+                    VALUES (?, ?, ?, 12.5, 'Corner Cafe', 'Corner Cafe', '2026-03-14', 0, ?, ?, ?, ?, ?)
+                    """,
+                    (txn_id, account_id, SHARED_OWNER_ID, batch, removed_in_favor_of,
+                     "2026-04-01T00:00:00Z" if removed_in_favor_of else None,
+                     "duplicate_confirmed" if removed_in_favor_of else None,
+                     "user" if removed_in_favor_of else None),
+                )
+            txn("kept")                                              # the other file's copy that replaced it
+            txn("removed", batch=batch_id, removed_in_favor_of="kept")
+            txn("untouched", batch=batch_id)
+        with self._use_db_path():
+            card = next(b for b in list_batches() if b["id"] == batch_id)
+            self.assertEqual(card["removed_duplicate_count"], 1)
+            self.assertEqual(get_batch_removed_duplicates(batch_id)["count"], 1)
+            with get_db() as conn:
+                restore_rejected_duplicate(conn, "removed")
+            card = next(b for b in list_batches() if b["id"] == batch_id)
+            self.assertEqual(card["removed_duplicate_count"], 0, "a restored row is an ordinary transaction again")
 
 
 if __name__ == "__main__":

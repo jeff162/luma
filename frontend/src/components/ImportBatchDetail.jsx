@@ -29,10 +29,10 @@
  * Transactions page does.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
-import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
+import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { Button, RefreshButton, Spinner } from './ui.jsx'
 import AttributeFilterControl from './AttributeFilterControl.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -74,7 +74,7 @@ export default function ImportBatchDetail({
 }) {
   const dateFilter = batch?._dateFilter || null
   const dateStart = dateFilter?.dateStart || null
-  const dateEnd   = dateFilter?.dateEnd   || null
+  const dateEnd = dateFilter?.dateEnd || null
   // Scoped to one sync's rows. Only the connection id travels: the row ids live on the connection's stored
   // sync summary and the server expands them, so this stays one short param on every page, sort and count
   // rather than several kilobytes of query string.
@@ -96,7 +96,7 @@ export default function ImportBatchDetail({
     if (!onReviewCountChange) return
     api.getTransactions({ import_batch_id: batch.id, needs_review: true, limit: 1 })
       .then(result => onReviewCountChange(batch.id, Number(result?.total || 0)))
-      .catch(() => {})
+      .catch(() => { })
   }, [onReviewCountChange, batch.id])
   const handleClose = useCallback(() => {
     reportReviewCount()
@@ -115,7 +115,7 @@ export default function ImportBatchDetail({
   // Fetched, as on the Transactions page, so the two cannot drift in keys or labels.
   const [filterAttributes, setFilterAttributes] = useState([])
   useEffect(() => {
-    api.getFilterAttributes().then(setFilterAttributes).catch(() => {})
+    api.getFilterAttributes().then(setFilterAttributes).catch(() => { })
   }, [])
   const activeAttribute = attributeFilter.active ? attributeFilter.attribute : null
   const activeAttributeLabel = activeAttribute
@@ -147,7 +147,7 @@ export default function ImportBatchDetail({
     import_batch_id: batch.id,
     ...(syncConnectionId ? { sync_connection_id: syncConnectionId } : {}),
     ...(dateStart ? { date_start: dateStart } : {}),
-    ...(dateEnd   ? { date_end:   dateEnd   } : {}),
+    ...(dateEnd ? { date_end: dateEnd } : {}),
     ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
   }), [batch.id, syncConnectionId, dateStart, dateEnd, debouncedFilter])
   // The quick filter ANDs, through the same parameter the Transactions page sends it on.
@@ -211,27 +211,30 @@ export default function ImportBatchDetail({
     return () => { cancelled = true }
   }, [scopeParams, unfilteredScopeParams, activeAttribute, refreshNonce])
 
-  // Rows this file imported that were later removed as confirmed duplicates (via the duplicate
-  // report's Discard new / Replace existing, or an account merge). They are trashed, so they
-  // never come back from getTransactions — we surface them here as an audit trail so a Replace
-  // done from another file's report doesn't make this file's matching row vanish without a trace.
-  const [dedupedRows, setDedupedRows] = useState([])
-  const [dedupedOpen, setDedupedOpen] = useState(false)
+  // Rows this file imported that were later removed as confirmed duplicates (a duplicate report's Discard new
+  // or Replace existing — possibly another file's — or an account merge). They are trashed, so they never
+  // come back from getTransactions, and without a trace here a Replace done elsewhere would make this file's
+  // matching row simply vanish. Only the count is shown: the rows are reviewed, and restored, in the file's
+  // duplicate report, which the line opens — a second read-only rendering here left no way to act on them.
+  const duplicatesViewer = useUnifiedDuplicatesViewer()
+  const [removedCount, setRemovedCount] = useState(0)
   useEffect(() => {
     let cancelled = false
-    api.getBatchDedupedRows(batch.id)
-      .then(result => { if (!cancelled) setDedupedRows(result?.rows || []) })
-      .catch(() => { if (!cancelled) setDedupedRows([]) })
+    api.getBatchRemovedDuplicates(batch.id)
+      .then(result => { if (!cancelled) setRemovedCount(Number(result?.count || 0)) })
+      .catch(() => { if (!cancelled) setRemovedCount(0) })
     return () => { cancelled = true }
-  }, [batch.id])
-  const visibleDeduped = useMemo(() => {
-    // Best-effort merchant-substring filter on the small removed-rows audit list; the main table's
-    // search is backend-resolved (date/amount/etc.) and this list isn't, so a non-name query
-    // (e.g. a date) simply hides it.
-    const term = debouncedFilter.toLowerCase()
-    if (!term) return dedupedRows
-    return dedupedRows.filter(r => (r.merchant || '').toLowerCase().includes(term))
-  }, [dedupedRows, debouncedFilter])
+  }, [batch.id, refreshNonce])
+  // A Restore in that report puts a row back in this ledger and takes it off the count, so each reload of
+  // the report refreshes this panel. Keyed to the version seen at mount, so opening the ledger after the
+  // report was used earlier does not repeat the load it just did.
+  const duplicatesVersion = duplicatesViewer.viewer?.data?.version || 0
+  const handledDuplicatesVersionRef = useRef(duplicatesVersion)
+  useEffect(() => {
+    if (duplicatesVersion === handledDuplicatesVersionRef.current) return
+    handledDuplicatesVersionRef.current = duplicatesVersion
+    setRefreshNonce(n => n + 1)
+  }, [duplicatesVersion])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
@@ -281,135 +284,110 @@ export default function ImportBatchDetail({
 
   return (
     <>
-    <DetailPanelShell
-      pos={pos}
-      panelRef={panelRef}
-      onDragStart={onDragStart}
-      onClose={handleClose}
-      header={header}
-      isTopmost={isTopmost}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <input
-            type="search"
-            value={filterInput}
-            onChange={(e) => setFilterInput(e.target.value)}
-            placeholder="Search names, imported text, amounts, or dates (2023, 03/15, -42.10)…"
-            aria-label={isSyncCard ? "Search this card's transactions" : "Search this file's transactions"}
-            title="Matches names, imported text, category, account, amount, or date. -42.10 is money paid out, +42.10 money received. Dates can be a year (2023), month-in-year (03/2023), or day (03/15/2023); a month (03) or month/day (03/15) matches every year. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or amount:-68."
-            style={{
-              flex: '0 1 360px',
-              minWidth: 240,
-              padding: '8px 12px',
-              fontSize: 13,
-              borderRadius: 8,
-              border: '1px solid var(--accent)',
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              outline: 'none',
-            }}
-          />
-          <AttributeFilterControl
-            attributes={filterAttributes}
-            value={attributeFilter.attribute}
-            active={attributeFilter.active}
-            onChange={setAttributeFilter}
-          />
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 220px' }}>
-            {isSyncCard ? 'Synced transactions on this card.' : 'Imported transactions from this file.'} Category changes made here update the underlying transactions directly.
+      <DetailPanelShell
+        pos={pos}
+        panelRef={panelRef}
+        onDragStart={onDragStart}
+        onClose={handleClose}
+        header={header}
+        isTopmost={isTopmost}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <input
+              type="search"
+              value={filterInput}
+              onChange={(e) => setFilterInput(e.target.value)}
+              placeholder="Search names, imported text, amounts, or dates (2023, 03/15, -42.10)…"
+              aria-label={isSyncCard ? "Search this card's transactions" : "Search this file's transactions"}
+              title="Matches names, imported text, category, account, amount, or date. -42.10 is money paid out, +42.10 money received. Dates can be a year (2023), month-in-year (03/2023), or day (03/15/2023); a month (03) or month/day (03/15) matches every year. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or amount:-68."
+              style={{
+                flex: '0 1 360px',
+                minWidth: 240,
+                padding: '8px 12px',
+                fontSize: 13,
+                borderRadius: 8,
+                border: '1px solid var(--accent)',
+                background: 'var(--surface2)',
+                color: 'var(--text)',
+                outline: 'none',
+              }}
+            />
+            <AttributeFilterControl
+              attributes={filterAttributes}
+              value={attributeFilter.attribute}
+              active={attributeFilter.active}
+              onChange={setAttributeFilter}
+            />
+            <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
+            <Button variant="ghost" small onClick={bulk.toggle}>
+              {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+            </Button>
           </div>
-          <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
-          <Button variant="ghost" small onClick={bulk.toggle}>
-            {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
-          </Button>
-        </div>
-        <BulkEditChrome controller={bulk} />
-        {visibleDeduped.length > 0 ? (
-          <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 6%, var(--surface2))', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
+          <BulkEditChrome controller={bulk} />
+          {removedCount > 0 ? (
+            <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '7px 12px', border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 6%, var(--surface2))', fontSize: 12.5 }}>
+              <span style={{ fontWeight: 600 }}>Removed as duplicates ({removedCount})</span>
               <button
                 type="button"
-                onClick={() => setDedupedOpen(open => !open)}
-                style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
+                // Opens on just the removed rows: the report holds every duplicate of the file, and landing on
+                // thousands of import rejects left the ones this line counts nowhere to be found.
+                onClick={() => duplicatesViewer.open({ batchId: batch.id, title: batch.filename, kindFilter: 'removed' })}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12.5 }}
               >
-                <span style={{ color: 'var(--warning)' }}>{dedupedOpen ? '▾' : '▸'}</span>
-                <span style={{ fontWeight: 600 }}>Removed as duplicates ({visibleDeduped.length})</span>
-                <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— the matching copy is kept on another account</span>
+                Review or restore in the duplicate report ↗
               </button>
-              <span style={{ paddingRight: 10, display: 'inline-flex' }}>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
                 <FeatureExplainer topic="removed-as-duplicates" placement="bottom-left" />
               </span>
             </div>
-            {dedupedOpen ? (
-              <div style={{ maxHeight: 180, overflow: 'auto', borderTop: '1px solid color-mix(in srgb, var(--warning) 24%, var(--border))' }}>
-                {visibleDeduped.map(r => {
-                  const survivor = r.surviving_account_name
-                    ? (r.surviving_account_merged_into && r.surviving_account_merged_into !== r.surviving_account_name
-                      ? `${r.surviving_account_name} → ${r.surviving_account_merged_into}`
-                      : r.surviving_account_name)
-                    : 'another account'
-                  return (
-                    <div key={r.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 12px', fontSize: 12, borderTop: '1px solid color-mix(in srgb, var(--border) 50%, transparent)' }}>
-                      <span style={{ color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r.date}</span>
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'line-through', textDecorationColor: 'color-mix(in srgb, var(--muted) 55%, transparent)' }}>{r.merchant || '—'}</span>
-                      <span style={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatMoneyMagnitude(Math.abs(r.amount || 0))}</span>
-                      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>
-                        {r.resolved_by === 'auto_merge' ? '→ merged into ' : '→ kept on '}{survivor}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {loading && rows.length === 0 ? (
-          <Spinner />
-        ) : (
-          <TransactionListTable
-            rows={rows}
-            categories={categories}
-            {...bulk.tableProps}
-            onCategorySave={handleCategorySave}
-            onCategoryOpenDetail={setCategoryDetail}
-            onTransactionOpenDetail={setPayeeDetail}
-            onTrashed={txnId => {
-              setTotalCount(prev => Math.max(0, prev - 1))
-              setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))
-            }}
-            onAddCategory={onAddCategory}
-            onRowsChange={setRows}
-            columnConfig={columnConfig}
-            onColumnConfigChange={setColumnConfig}
-            fillHeight
-            scrollRef={listRef}
-            sortState={sortState}
-            onSort={onSort}
-            emptyMessage={isSyncCard ? 'No synced transactions remain on this card.' : 'No imported transactions remain for this file.'}
-          />
-        )}
-      </div>
-    </DetailPanelShell>
-    {payeeDetail && (
-      <TransactionDetail
-        txn={payeeDetail}
-        categories={categories}
-        onClose={() => setPayeeDetail(null)}
-        onReconcile={makeRowReconciler(setRows, { onRemoved: () => setTotalCount(prev => Math.max(0, prev - 1)) })}
-        forceFloating
-        stackIndex={stackIndex + 1}
-      />
-    )}
-    {categoryDetail && (
-      <CategoryDetail
-        category={categoryDetail}
-        categories={categories}
-        onClose={() => setCategoryDetail(null)}
-        forceFloating
-        stackIndex={stackIndex + 1}
-      />
-    )}
+          ) : null}
+          {loading && rows.length === 0 ? (
+            <Spinner />
+          ) : (
+            <TransactionListTable
+              rows={rows}
+              categories={categories}
+              {...bulk.tableProps}
+              onCategorySave={handleCategorySave}
+              onCategoryOpenDetail={setCategoryDetail}
+              onTransactionOpenDetail={setPayeeDetail}
+              onTrashed={txnId => {
+                setTotalCount(prev => Math.max(0, prev - 1))
+                setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))
+              }}
+              onAddCategory={onAddCategory}
+              onRowsChange={setRows}
+              columnConfig={columnConfig}
+              onColumnConfigChange={setColumnConfig}
+              fillHeight
+              scrollRef={listRef}
+              sortState={sortState}
+              onSort={onSort}
+              emptyMessage={isSyncCard ? 'No synced transactions remain on this card.' : 'No imported transactions remain for this file.'}
+            />
+          )}
+        </div>
+      </DetailPanelShell>
+      {payeeDetail && (
+        <TransactionDetail
+          txn={payeeDetail}
+          categories={categories}
+          onClose={() => setPayeeDetail(null)}
+          onReconcile={makeRowReconciler(setRows, { onRemoved: () => setTotalCount(prev => Math.max(0, prev - 1)) })}
+          forceFloating
+          stackIndex={stackIndex + 1}
+        />
+      )}
+      {categoryDetail && (
+        <CategoryDetail
+          category={categoryDetail}
+          categories={categories}
+          onClose={() => setCategoryDetail(null)}
+          forceFloating
+          stackIndex={stackIndex + 1}
+        />
+      )}
     </>
   )
 }

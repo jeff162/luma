@@ -1150,6 +1150,48 @@ class SuspectDuplicateTests(unittest.TestCase):
             with get_db() as conn:
                 pairs = conn.execute("SELECT COUNT(*) AS n FROM account_pair_distinct").fetchone()
         self.assertEqual(pairs["n"], 0)
+        # Its own file's report names what removed it, and counts it as removed later — not among the rows
+        # that file rejected at import, where it used to disappear under an unlabelled raw rule key.
+        entry = self._report_entry(existing_batch, existing_id)
+        self.assertEqual((entry["rule_key"], entry["rule_label"]), ("replaced_confirmed", "Replaced by another copy"))
+        self.assertTrue(entry["removed"])
+        with self._use_db_path():
+            report = get_batch_duplicates_unified(existing_batch)
+        self.assertEqual((report["removed_count"], report["hard_reject_count"]), (1, 0))
+
+    def test_a_removal_without_a_stored_reason_is_named_for_what_removed_it(self):
+        # Replace wrote no reason before it began writing 'replaced', and an Amazon reconciliation merge
+        # writes none, so the reason alone cannot tell the two apart — the resolver can. Both used to fall to
+        # the catch-all and show its raw key.
+        batch = self._insert_batch(filename="harborline_june.csv")
+        account = self._insert_account("Harborline Card")
+        kept = self._insert_txn(account_id=account, date="2026-06-02", amount=9.5, merchant_name="Corner Cafe")
+        replaced = self._insert_txn(account_id=account, date="2026-06-02", amount=9.5, merchant_name="CORNER CAFE", batch_id=batch)
+        merged = self._insert_txn(account_id=account, date="2026-06-03", amount=41.0, merchant_name="AMZN Mktp", batch_id=batch)
+        self._confirm_as_duplicate(replaced, kept, "user")
+        self._confirm_as_duplicate(merged, kept, "amazon_merge")
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET suspect_duplicate_reason = NULL WHERE id IN (?, ?)", (replaced, merged))
+
+        self.assertEqual(self._report_entry(batch, replaced)["rule_key"], "replaced_confirmed")
+        merged_entry = self._report_entry(batch, merged)
+        self.assertEqual(merged_entry["rule_key"], "amazon_merge_confirmed")
+        self.assertIn("Merged into another copy", merged_entry["reason_text"])
+
+    def test_every_rule_the_report_can_show_has_a_label(self):
+        # `rule_label_for` falls back to the raw key so a missing label renders rather than crashes — which is
+        # exactly how `other_soft_confirmed` reached the screen unnoticed. Enumerated from the same tables the
+        # report reads, so a new classifier, account re-description or removal occasion fails here first.
+        from backend.services import duplicate_detection as dd
+
+        import_rejects = {key for _, key, _ in dd._RULE_REASON_CLASSIFIERS} | {"other_hard"}
+        flags = {key for key, _ in dd._SOFT_FLAG_CLASSIFIERS.values()} | {"other_soft"}
+        flags |= {dd._IN_ACCOUNT_RULE_KEYS.get(key, key) for key in flags}
+        removals = flags | set(dd._REMOVED_WITHOUT_REASON_RULE_KEYS.values())
+        emittable = import_rejects | flags | {f"{key}_confirmed" for key in removals}
+
+        unlabelled = sorted(key for key in emittable if dd.rule_label_for(key)[0] == key)
+        self.assertEqual(unlabelled, [], "rules the report would show as a raw key")
 
     def test_replace_category_follows_use_imported_categories_flag(self):
         # The surviving (incoming) row keeps its OWN category only when the incoming file is the
