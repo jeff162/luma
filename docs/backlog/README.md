@@ -92,9 +92,14 @@ scale — rather than by feature.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
   the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
   per-detail-panel Refresh seam.
+- [import-rule-suggestion-review-model.md](import-rule-suggestion-review-model.md) — **in progress;
+  stage 1 of 4 done.** Make the Generate Rules review model explicit while preserving its behavior: one
+  transactional backend endpoint per action plus an undo endpoint (stage 2, decisions settled), a
+  backend-sent grouping id in place of frontend id parsing (stage 3), and explicit partition records in
+  place of the `pending_override` / `synthetic` flags (stage 4, one decision owed).
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
-  `ImportRuleSuggestionReview` component into prop-driven seams.
+  `ImportRuleSuggestionReview` component into prop-driven seams. Waits on the review-model item above.
 - [recurring-detection.md](recurring-detection.md) — **reduced 2026-09-03 to the pool-load
   optimization, the only item left.** The subsystem is live end to end — detection and curation, the
   rule-backed path, the ended/canceled lifecycle, the anomaly/forecast signals (2026-08-27) and amount

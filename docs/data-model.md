@@ -2209,6 +2209,10 @@ decisions go*.
   categorical field clusters candidates the way a merchant name already does. The account-type scoping
   this once waited on shipped with migration v13.
   → [`backlog/paypal-money-movement-recognition.md`](backlog/paypal-money-movement-recognition.md)
+- **The rule-suggestion review's partition model.** Which rows a review card owns is carried today by
+  `pending_override` / `synthetic` flags and id suffixes; making partitions explicit changes the stored
+  review state, and whether older snapshots and backups are normalized on read or migrated is undecided.
+  → [`backlog/import-rule-suggestion-review-model.md`](backlog/import-rule-suggestion-review-model.md)
 - **The recurring pool-load optimization.** The payee filter is applied after a full pool load, so a
   scoped scan costs what a full one does — now on the path of every category edit. Revisit threshold is
   roughly 50,000 rows. → [`backlog/recurring-detection.md`](backlog/recurring-detection.md)

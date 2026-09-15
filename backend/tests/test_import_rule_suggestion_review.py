@@ -18,8 +18,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import (
+    RULE_SUGGESTION_REVIEW_KEY,
     BatchRuleSuggestionMatchRequest,
     BatchRuleSuggestionMatchRefineRequest,
     BatchRuleSuggestionReviewUpdateRequest,
@@ -27,14 +30,24 @@ from backend.routers.import_export import (
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
+    clear_batch_rule_suggestions,
+    clear_profile_rule_suggestions,
     clear_system_rule_suggestions,
     get_batch_rule_suggestion_matches,
+    get_batch_rule_suggestions,
     get_profile_rule_suggestion_matches,
+    get_profile_rule_suggestions,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
+    refine_batch_rule_suggestion_match,
+    refine_profile_rule_suggestion_match,
     refine_system_rule_suggestion_match,
+    restore_batch_rule_suggestion_trash_set,
+    restore_profile_rule_suggestion_trash_set,
     restore_system_rule_suggestion_trash_set,
     RuleSuggestionClearRequest,
+    update_batch_rule_suggestion_review,
+    update_profile_rule_suggestion_review,
     update_system_rule_suggestion_review,
     write_rule_suggestion_debug_trace,
 )
@@ -1189,6 +1202,148 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             [{row["id"] for row in result["transactions"]} for result in results],
             [{row_id}, {row_id}, {row_id}],
         )
+
+    # --- review scopes -----------------------------------------------------------------------------
+    # The same review runs against three stores — one batch's snapshot, a profile's column map, and the
+    # system workflow state — each over its own row population. A scope reading another's rows or writing
+    # another's store is silent (the page still renders plausible cards), so every endpoint family is
+    # driven through every scope over populations that differ, and each store is checked in isolation.
+
+    def test_every_review_scope_reads_its_own_rows_and_writes_its_own_store(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureScopeMarket")
+        profile_id = self._insert_import_profile("Scope Profile")
+        batch_id = self._insert_import_batch()
+        sibling_batch_id = self._insert_import_batch()
+        outside_batch_id = self._insert_import_batch()
+        self._assign_batch_to_profile(batch_id, profile_id)
+        self._assign_batch_to_profile(sibling_batch_id, profile_id)
+
+        def add_rows(target_batch_id, amounts):
+            return [
+                self._insert_import_transaction(
+                    batch_id=target_batch_id,
+                    account_id=account_id,
+                    category_id=leaf,
+                    imported_category="FixtureScopeMarket",
+                    merchant_name="Harborline Market",
+                    amount=amount,
+                )
+                for amount in amounts
+            ]
+
+        batch_rows = add_rows(batch_id, [20, 20, 35])
+        sibling_rows = add_rows(sibling_batch_id, [20])
+        outside_rows = add_rows(outside_batch_id, [20])
+
+        scopes = {
+            "batch": {
+                "rows": set(batch_rows),
+                "get": lambda: get_batch_rule_suggestions(batch_id, None),
+                "review": lambda body: update_batch_rule_suggestion_review(batch_id, body),
+                "clear": lambda body: clear_batch_rule_suggestions(batch_id, body),
+                "restore": lambda trash_id: restore_batch_rule_suggestion_trash_set(batch_id, trash_id),
+                "refine": lambda body: refine_batch_rule_suggestion_match(batch_id, body),
+                "matches": lambda body: get_batch_rule_suggestion_matches(batch_id, body),
+                "identity": {"batch_id": batch_id, "filename": "fixture.csv"},
+            },
+            "profile": {
+                "rows": set(batch_rows + sibling_rows),
+                "get": lambda: get_profile_rule_suggestions(profile_id, None),
+                "review": lambda body: update_profile_rule_suggestion_review(profile_id, body),
+                "clear": lambda body: clear_profile_rule_suggestions(profile_id, body),
+                "restore": lambda trash_id: restore_profile_rule_suggestion_trash_set(profile_id, trash_id),
+                "refine": lambda body: refine_profile_rule_suggestion_match(profile_id, body),
+                "matches": lambda body: get_profile_rule_suggestion_matches(profile_id, body),
+                "identity": {"profile_id": profile_id, "profile_name": "Scope Profile"},
+            },
+            "system": {
+                "rows": set(batch_rows + sibling_rows + outside_rows),
+                "get": lambda: get_system_rule_suggestions(None),
+                "review": update_system_rule_suggestion_review,
+                "clear": clear_system_rule_suggestions,
+                "restore": restore_system_rule_suggestion_trash_set,
+                "refine": refine_system_rule_suggestion_match,
+                "matches": get_system_rule_suggestion_matches,
+                "identity": {},
+            },
+        }
+
+        def stored(scope_name):
+            with get_db() as conn:
+                if scope_name == "batch":
+                    raw = conn.execute("SELECT config_snapshot FROM import_batch WHERE id = ?", (batch_id,)).fetchone()[0]
+                    return json.loads(raw or "{}").get(RULE_SUGGESTION_REVIEW_KEY) or {}
+                if scope_name == "profile":
+                    raw = conn.execute("SELECT column_map FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()[0]
+                    return json.loads(raw or "{}").get(RULE_SUGGESTION_REVIEW_KEY) or {}
+                return _get_system_rule_suggestion_review_state(conn)
+
+        with self._use_db_path():
+            for name, scope in scopes.items():
+                with self.subTest(scope=name):
+                    # Nothing an earlier scope did may have reached this scope's store.
+                    self.assertEqual(stored(name).get("statuses") or {}, {})
+
+                    suggestions = [s for s in scope["get"]()["suggestions"] if s["keyword"] == "harborline market"]
+                    self.assertEqual(len(suggestions), 1)
+                    suggestion = suggestions[0]
+                    self.assertEqual(set(suggestion["source_row_ids"]), scope["rows"])
+                    self.assertIn(suggestion["id"], stored(name)["suggestions"])
+
+                    matches = scope["matches"](BatchRuleSuggestionMatchRequest(keyword="harborline market"))
+                    self.assertEqual({row["id"] for row in matches["transactions"]}, scope["rows"])
+                    for key, value in scope["identity"].items():
+                        self.assertEqual(matches[key], value)
+
+                    # A stricter accept leaves a follow-up built from this scope's rows.
+                    scope["review"](BatchRuleSuggestionReviewUpdateRequest(
+                        suggestion_id=suggestion["id"],
+                        status="accepted",
+                        keyword="harborline market",
+                        merchant_label=suggestion["merchant_label"],
+                        target_category_id=leaf,
+                        target_category_name="FixtureScopeMarket",
+                        amount_min=30,
+                        amount_max=40,
+                    ))
+                    state = stored(name)
+                    self.assertEqual(state["statuses"][suggestion["id"]]["status"], "accepted")
+                    followups = [entry for entry in state["suggestions"].values() if entry.get("synthetic")]
+                    self.assertEqual(len(followups), 1)
+                    self.assertEqual(set(followups[0]["source_row_ids"]), scope["rows"] - {batch_rows[2]})
+
+                    cleared = scope["clear"](RuleSuggestionClearRequest(status="accepted"))
+                    self.assertEqual(cleared["cleared_count"], 1)
+                    self.assertEqual(len(stored(name)["trash_sets"]), 1)
+                    scope["restore"](cleared["trash_sets"][0]["id"])
+                    state = stored(name)
+                    self.assertEqual(state["trash_sets"], [])
+                    self.assertEqual(state["statuses"][suggestion["id"]]["status"], "accepted")
+
+                    followup_id, followup = next(
+                        (entry_id, entry) for entry_id, entry in state["suggestions"].items() if entry.get("synthetic")
+                    )
+                    scope["refine"](BatchRuleSuggestionMatchRefineRequest(
+                        source_suggestions=[{"id": followup_id, "source_row_ids": followup["source_row_ids"]}],
+                        keyword="harborline market",
+                        amount_min=20,
+                        amount_max=20,
+                    ))
+                    overrides = [entry for entry in stored(name)["suggestions"].values() if entry.get("pending_override")]
+                    self.assertEqual(len(overrides), 1)
+                    self.assertEqual(set(overrides[0]["source_row_ids"]), scope["rows"] - {batch_rows[2]})
+
+            missing = str(uuid.uuid4())
+            with self.assertRaises(HTTPException) as batch_missing:
+                get_batch_rule_suggestions(missing, None)
+            self.assertEqual(batch_missing.exception.status_code, 404)
+            with self.assertRaises(HTTPException) as profile_missing:
+                update_profile_rule_suggestion_review(
+                    missing,
+                    BatchRuleSuggestionReviewUpdateRequest(suggestion_id="any", status="skipped"),
+                )
+            self.assertEqual(profile_missing.exception.status_code, 404)
 
     def test_generated_suggestion_carries_latest_txn_date(self):
         # The look-back lens hides stale suggestions by recency, so each suggestion must report the most

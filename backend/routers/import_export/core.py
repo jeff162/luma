@@ -39,9 +39,10 @@ import uuid
 import os
 import re
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
@@ -1191,125 +1192,132 @@ def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) 
     return summarize_rule_suggestion_review(review_state)
 
 
-def _load_profile_column_map(conn, profile_id: str) -> dict:
-    row = conn.execute(
-        "SELECT column_map FROM csv_import_profile WHERE id = ?",
-        (profile_id,),
+@dataclass(frozen=True)
+class _RuleSuggestionReviewScope:
+    """One place a Generate-rules review lives, opened for the length of a request.
+
+    The review runs over three populations — one import batch, every completed batch of a saved data
+    source (profile), or every completed batch that uses its file's categories (system) — and the
+    whole endpoint family is one implementation run against whichever scope the URL names. A scope
+    differs from the others in exactly three ways, and nothing else in the family may branch on which
+    scope it has:
+
+    - **where the review state is stored**: a batch's `config_snapshot`, a profile's `column_map`, or the
+      system workflow state. `review_state` is loaded from that container and `save` writes it back into
+      the same container.
+    - **which imported rows it covers**: `batch_join` + `txn_filter`, shared by the generator's row query
+      and the matching-rows report so the two can never disagree about the population.
+    - **what the matching-rows report identifies itself with**: its amount convention and identity fields.
+    """
+
+    review_state: dict
+    persist: Callable[[Any, dict], None]
+    batch_join: str
+    txn_filter: str
+    txn_params: tuple
+    amount_convention: str
+    report_identity: dict
+
+    def save(self, conn) -> None:
+        self.persist(conn, self.review_state)
+
+    def rows(self, conn):
+        return conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.date,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
+                t.owner_id,
+                t.amount,
+                t.merchant_name,
+                t.display_name,
+                t.raw_name,
+                t.import_evidence_json,
+                t.imported_category,
+                t.category_id,
+                t.category_overridden,
+                t.category_source,
+                t.import_batch_id,
+                COALESCE(a.display_name, a.name) AS account_name,
+                o.name AS owner_name
+            FROM txn t
+            {self.batch_join}
+            LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN owner o ON o.id = t.owner_id
+            WHERE {self.txn_filter}
+              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
+              AND t.category_source IN ('import', 'manual')
+              AND t.category_id IS NOT NULL
+            """,
+            self.txn_params,
+        ).fetchall()
+
+
+_COMPLETED_BATCH_JOIN = "JOIN import_batch b ON b.id = t.import_batch_id"
+
+
+def _open_batch_review_scope(conn, batch_id: str) -> _RuleSuggestionReviewScope:
+    batch = conn.execute(
+        "SELECT id, filename, config_snapshot FROM import_batch WHERE id = ?",
+        (batch_id,),
     ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return safe_json_dict(row["column_map"])
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    snapshot = safe_json_dict(batch["config_snapshot"])
 
+    def persist(conn, review_state: dict) -> None:
+        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        save_batch_snapshot(conn, batch_id, snapshot)
 
-def _save_profile_column_map(conn, profile_id: str, column_map: dict) -> None:
-    conn.execute(
-        "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
-        (json.dumps(column_map or {}), profile_id),
+    return _RuleSuggestionReviewScope(
+        review_state=get_rule_suggestion_review_state(snapshot),
+        persist=persist,
+        batch_join="",
+        txn_filter="t.import_batch_id = ?",
+        txn_params=(batch_id,),
+        amount_convention=snapshot.get("amount_convention", "single_signed"),
+        report_identity={"batch_id": batch_id, "filename": batch["filename"]},
     )
 
 
-def _get_profile_rule_suggestion_review_state(column_map: dict) -> dict:
-    return get_rule_suggestion_review_state(column_map if isinstance(column_map, dict) else {})
+def _open_profile_review_scope(conn, profile_id: str) -> _RuleSuggestionReviewScope:
+    profile = conn.execute(
+        "SELECT id, name, amount_convention, column_map FROM csv_import_profile WHERE id = ?",
+        (profile_id,),
+    ).fetchone()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    column_map = safe_json_dict(profile["column_map"])
+
+    def persist(conn, review_state: dict) -> None:
+        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        conn.execute(
+            "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+            (json.dumps(column_map), profile_id),
+        )
+
+    return _RuleSuggestionReviewScope(
+        review_state=get_rule_suggestion_review_state(column_map),
+        persist=persist,
+        batch_join=_COMPLETED_BATCH_JOIN,
+        txn_filter="b.profile_id = ? AND b.status = 'completed'",
+        txn_params=(profile_id,),
+        amount_convention=profile["amount_convention"] or "single_signed",
+        report_identity={"profile_id": profile_id, "profile_name": profile["name"]},
+    )
 
 
-def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile_id: Optional[str] = None, system_wide: bool = False):
-    if batch_id:
-        return conn.execute(
-            """
-            SELECT
-                t.id,
-                t.date,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.import_evidence_json,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_batch_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                o.name AS owner_name
-            FROM txn t
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE t.import_batch_id = ?
-              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
-            """,
-            (batch_id,),
-        ).fetchall()
-
-    if profile_id:
-        return conn.execute(
-            """
-            SELECT
-                t.id,
-                t.date,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.import_evidence_json,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_batch_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                o.name AS owner_name
-            FROM txn t
-            JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE b.profile_id = ?
-              AND b.status = 'completed'
-              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
-            """,
-            (profile_id,),
-        ).fetchall()
-
-    if system_wide:
-        return conn.execute(
-            """
-            SELECT
-                t.id,
-                t.date,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.import_evidence_json,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_batch_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                o.name AS owner_name
-            FROM txn t
-            JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE b.status = 'completed'
-              AND b.use_imported_categories = 1
-              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
-            """
-        ).fetchall()
-
-    return []
+def _open_system_review_scope(conn) -> _RuleSuggestionReviewScope:
+    return _RuleSuggestionReviewScope(
+        review_state=_get_system_rule_suggestion_review_state(conn),
+        persist=_save_system_rule_suggestion_review_state,
+        batch_join=_COMPLETED_BATCH_JOIN,
+        txn_filter="b.status = 'completed' AND b.use_imported_categories = 1",
+        txn_params=(),
+        amount_convention="single_signed",
+        report_identity={},
+    )
 
 
 def _calculate_rule_suggestion_threshold(rows) -> dict:
@@ -2215,7 +2223,7 @@ def _load_rule_suggestion_trace_review_state(conn, body: RuleSuggestionDebugTrac
             "SELECT column_map FROM csv_import_profile WHERE id = ?",
             (body.context_id,),
         ).fetchone()
-        return _get_profile_rule_suggestion_review_state(safe_json_dict(row["column_map"])) if row else {}
+        return get_rule_suggestion_review_state(safe_json_dict(row["column_map"])) if row else {}
     return _get_system_rule_suggestion_review_state(conn)
 
 
@@ -4490,346 +4498,335 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
     }
 
 
+# The rule-suggestion endpoint family. Each route names a scope (see `_RuleSuggestionReviewScope`) and
+# hands its opener to the one shared implementation, which owns the transaction.
+_ReviewScopeOpener = Callable[[Any], _RuleSuggestionReviewScope]
+
+
+def _parse_owner_ids(owner_ids: Optional[str]) -> list[str]:
+    return [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
+
+
+def _get_rule_suggestions(open_scope: _ReviewScopeOpener, owner_ids: Optional[str]) -> dict:
+    with get_db() as conn:
+        scope = open_scope(conn)
+        result = _build_rule_suggestion_response(conn, scope.rows(conn), scope.review_state, _parse_owner_ids(owner_ids))
+        if result.pop("should_persist", False):
+            scope.save(conn)
+    return result
+
+
+def _update_rule_suggestion_review(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionReviewUpdateRequest) -> dict:
+    status = (body.status or "").strip().lower()
+    if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
+        raise HTTPException(status_code=400, detail="Invalid review status")
+
+    with get_db() as conn:
+        scope = open_scope(conn)
+        review_state = scope.review_state
+        suggestion_entries = dict(review_state.get("suggestions") or {})
+        suggestion_entries.setdefault(body.suggestion_id, {})
+        auto_discarded_suggestion_ids: list[str] = []
+        old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
+        if status == "pending":
+            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
+        suggestion_entries = dict(review_state.get("suggestions") or {})
+        suggestion_entries.setdefault(body.suggestion_id, {})
+
+        if body.merchant_label:
+            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
+        if body.target_category_name:
+            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
+        if body.target_category_id is not None:
+            suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
+        if body.keyword is not None:
+            suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
+        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
+        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
+        # its old scope even though the created rule was generalized.
+        if body.owner_id is not None or "owner_id" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
+        if body.account_id is not None or "account_id" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
+        if body.amount_min is not None or "amount_min" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
+        if body.amount_max is not None or "amount_max" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
+        if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
+        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
+        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
+        if body.txn_count is not None or "txn_count" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
+        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
+                str(value) for value in (body.source_row_ids or []) if str(value).strip()
+            })
+        if body.review_action is not None or "review_action" in body.model_fields_set:
+            if isinstance(body.review_action, dict):
+                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
+            else:
+                suggestion_entries[body.suggestion_id].pop("review_action", None)
+
+        statuses = dict(review_state.get("statuses") or {})
+        synthetic_entries: list[dict] = []
+        if status == "pending":
+            statuses.pop(body.suggestion_id, None)
+        else:
+            next_status = {
+                "status": status,
+                "updated_at": utcnow_iso(),
+            }
+            if body.rule_id:
+                next_status["rule_id"] = body.rule_id
+            if body.created_rule_id:
+                next_status["created_rule_id"] = body.created_rule_id
+            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
+                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
+            if body.review_action is not None or "review_action" in body.model_fields_set:
+                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
+            statuses[body.suggestion_id] = next_status
+            review_state["statuses"] = statuses
+            if status == "accepted":
+                auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
+                    review_state,
+                    body.suggestion_id,
+                    suggestion_entries[body.suggestion_id],
+                )
+                statuses = dict(review_state.get("statuses") or {})
+                rows = scope.rows(conn)
+                if (
+                    old_entry
+                    and old_entry.get("source_row_ids")
+                    and _rule_suggestion_entry_covers(old_entry, suggestion_entries[body.suggestion_id], allow_equal_keyword=True)
+                    and not _rule_suggestion_entry_covers(suggestion_entries[body.suggestion_id], old_entry, allow_equal_keyword=True)
+                ):
+                    synthetic_entries = _build_synthetic_rule_suggestion_entries(
+                        conn,
+                        review_state,
+                        body.suggestion_id,
+                        suggestion_entries[body.suggestion_id],
+                        [dict(row) for row in rows],
+                    )
+
+        review_state["suggestions"] = suggestion_entries
+        review_state["statuses"] = statuses
+        if synthetic_entries:
+            for entry in synthetic_entries:
+                suggestion_id = entry.pop("id")
+                review_state["suggestions"][suggestion_id] = entry
+        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
+        review_summary = summarize_rule_suggestion_review(review_state)
+        scope.save(conn)
+
+    return {
+        "ok": True,
+        "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
+        "generated_at": review_state.get("generated_at"),
+        "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
+    }
+
+
+def _clear_rule_suggestions(open_scope: _ReviewScopeOpener, body: RuleSuggestionClearRequest) -> dict:
+    with get_db() as conn:
+        scope = open_scope(conn)
+        result = _clear_rule_suggestion_review_status(scope.review_state, body.status, body.suggestion_ids)
+        scope.save(conn)
+    return result
+
+
+def _restore_rule_suggestion_trash(open_scope: _ReviewScopeOpener, trash_set_id: str) -> dict:
+    with get_db() as conn:
+        scope = open_scope(conn)
+        result = _restore_rule_suggestion_trash_set(scope.review_state, trash_set_id)
+        scope.save(conn)
+    return result
+
+
+def _refine_rule_suggestion_match(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionMatchRefineRequest) -> dict:
+    with get_db() as conn:
+        scope = open_scope(conn)
+        rows = [dict(row) for row in scope.rows(conn)]
+        result = _refine_pending_conflict_group(conn, scope.review_state, rows, body)
+        scope.save(conn)
+    return result
+
+
+def _rule_suggestion_matches(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionMatchRequest) -> dict:
+    keyword = normalize_rule_keyword(body.keyword or "")
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword required")
+
+    with get_db() as conn:
+        scope = open_scope(conn)
+        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
+        rows = conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.date,
+                t.amount,
+                t.merchant_name,
+                t.display_name,
+                t.raw_name,
+                t.imported_category,
+                t.category_id,
+                t.category_overridden,
+                t.category_source,
+                t.import_evidence_json,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
+                t.owner_id,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask) AS account_mask,
+                o.name AS owner_name
+            FROM txn t
+            {scope.batch_join}
+            LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
+            LEFT JOIN owner o ON o.id = t.owner_id
+            WHERE {scope.txn_filter}
+              {row_scope_clause}
+              {candidate_source_clause}
+            ORDER BY t.date DESC, t.id DESC
+            """,
+            [*scope.txn_params, *row_ids],
+        ).fetchall()
+
+    matching_rows = []
+    for base_row in rows:
+        row = dict(base_row)
+        row["display_amount"] = get_import_display_amount(row["amount"], scope.amount_convention)
+        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
+            continue
+        if body.owner_id and row["owner_id"] != body.owner_id:
+            continue
+        if body.account_id and row["account_id"] != body.account_id:
+            continue
+
+        abs_amount = abs(row["amount"])
+        if body.amount_min is not None and abs_amount < body.amount_min:
+            continue
+        if body.amount_max is not None and abs_amount > body.amount_max:
+            continue
+
+        target_category_id, target_category_name, target_category_group_name = _resolve_import_rule_target(
+            row,
+            categories_by_name,
+            categories_by_id,
+        )
+        row["target_category_id"] = target_category_id
+        row["target_category_name"] = target_category_name
+        row["target_category_group_name"] = target_category_group_name
+        row["conflicts_with_reference"] = bool(
+            body.reference_target_category_id
+            and target_category_id
+            and target_category_id != body.reference_target_category_id
+            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
+            and row["category_source"] != "manual"
+        )
+        matching_rows.append(row)
+
+    return {
+        **scope.report_identity,
+        "keyword": keyword,
+        "amount_convention": scope.amount_convention,
+        "count": len(matching_rows),
+        "transactions": matching_rows,
+    }
+
+
 @router.get("/batches/{batch_id}/rule-suggestions")
 def get_batch_rule_suggestions(batch_id: str, owner_ids: Optional[str] = Query(None)):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        review_state = get_rule_suggestion_review_state(snapshot)
-        selected_owner_ids = [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
-        rows = _query_rule_suggestion_rows(conn, batch_id=batch_id)
-        result = _build_rule_suggestion_response(conn, rows, review_state, selected_owner_ids)
-        if result.pop("should_persist", False):
-            snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
-            save_batch_snapshot(conn, batch_id, snapshot)
-    return result
-
-
-@router.get("/profiles/{profile_id}/rule-suggestions")
-def get_profile_rule_suggestions(profile_id: str, owner_ids: Optional[str] = Query(None)):
-    with get_db() as conn:
-        column_map = _load_profile_column_map(conn, profile_id)
-        review_state = _get_profile_rule_suggestion_review_state(column_map)
-        selected_owner_ids = [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
-        rows = _query_rule_suggestion_rows(conn, profile_id=profile_id)
-        result = _build_rule_suggestion_response(conn, rows, review_state, selected_owner_ids)
-        if result.pop("should_persist", False):
-            column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
-            _save_profile_column_map(conn, profile_id, column_map)
-    return result
+    return _get_rule_suggestions(lambda conn: _open_batch_review_scope(conn, batch_id), owner_ids)
 
 
 @router.post("/batches/{batch_id}/rule-suggestions/review")
 def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestionReviewUpdateRequest):
-    status = (body.status or "").strip().lower()
-    if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
-        raise HTTPException(status_code=400, detail="Invalid review status")
-
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        review_state = get_rule_suggestion_review_state(snapshot)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-        auto_discarded_suggestion_ids: list[str] = []
-        old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        if status == "pending":
-            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-
-        if body.merchant_label:
-            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
-        if body.target_category_name:
-            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
-        if body.target_category_id is not None:
-            suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
-        if body.keyword is not None:
-            suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
-        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
-        # its old scope even though the created rule was generalized.
-        if body.owner_id is not None or "owner_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None or "account_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
-        if body.amount_min is not None or "amount_min" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
-        if body.amount_max is not None or "amount_max" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
-        if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
-        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
-        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
-        if body.txn_count is not None or "txn_count" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
-        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
-                str(value) for value in (body.source_row_ids or []) if str(value).strip()
-            })
-        if body.review_action is not None or "review_action" in body.model_fields_set:
-            if isinstance(body.review_action, dict):
-                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
-            else:
-                suggestion_entries[body.suggestion_id].pop("review_action", None)
-
-        statuses = dict(review_state.get("statuses") or {})
-        synthetic_entries: list[dict] = []
-        if status == "pending":
-            statuses.pop(body.suggestion_id, None)
-        else:
-            next_status = {
-                "status": status,
-                "updated_at": utcnow_iso(),
-            }
-            if body.rule_id:
-                next_status["rule_id"] = body.rule_id
-            if body.created_rule_id:
-                next_status["created_rule_id"] = body.created_rule_id
-            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
-                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
-            if body.review_action is not None or "review_action" in body.model_fields_set:
-                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
-            statuses[body.suggestion_id] = next_status
-            review_state["statuses"] = statuses
-            if status == "accepted":
-                auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
-                    review_state,
-                    body.suggestion_id,
-                    suggestion_entries[body.suggestion_id],
-                )
-                statuses = dict(review_state.get("statuses") or {})
-                rows = _query_rule_suggestion_rows(conn, batch_id=batch_id)
-                if (
-                    old_entry
-                    and old_entry.get("source_row_ids")
-                    and _rule_suggestion_entry_covers(old_entry, suggestion_entries[body.suggestion_id], allow_equal_keyword=True)
-                    and not _rule_suggestion_entry_covers(suggestion_entries[body.suggestion_id], old_entry, allow_equal_keyword=True)
-                ):
-                    synthetic_entries = _build_synthetic_rule_suggestion_entries(
-                        conn,
-                        review_state,
-                        body.suggestion_id,
-                        suggestion_entries[body.suggestion_id],
-                        [dict(row) for row in rows],
-                    )
-
-        review_state["suggestions"] = suggestion_entries
-        review_state["statuses"] = statuses
-        if synthetic_entries:
-            for entry in synthetic_entries:
-                suggestion_id = entry.pop("id")
-                review_state["suggestions"][suggestion_id] = entry
-        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
-        review_summary = summarize_rule_suggestion_review(review_state)
-        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        save_batch_snapshot(conn, batch_id, snapshot)
-
-    return {
-        "ok": True,
-        "review_summary": review_summary,
-        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
-        "generated_at": review_state.get("generated_at"),
-        "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
-    }
+    return _update_rule_suggestion_review(lambda conn: _open_batch_review_scope(conn, batch_id), body)
 
 
 @router.post("/batches/{batch_id}/rule-suggestions/clear")
 def clear_batch_rule_suggestions(batch_id: str, body: RuleSuggestionClearRequest):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        review_state = get_rule_suggestion_review_state(snapshot)
-        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
-        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        save_batch_snapshot(conn, batch_id, snapshot)
-    return result
+    return _clear_rule_suggestions(lambda conn: _open_batch_review_scope(conn, batch_id), body)
 
 
 @router.post("/batches/{batch_id}/rule-suggestions/trash/{trash_set_id}/restore")
 def restore_batch_rule_suggestion_trash_set(batch_id: str, trash_set_id: str):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        review_state = get_rule_suggestion_review_state(snapshot)
-        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
-        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        save_batch_snapshot(conn, batch_id, snapshot)
-    return result
+    return _restore_rule_suggestion_trash(lambda conn: _open_batch_review_scope(conn, batch_id), trash_set_id)
+
+
+@router.post("/batches/{batch_id}/rule-suggestions/refine-match")
+def refine_batch_rule_suggestion_match(batch_id: str, body: BatchRuleSuggestionMatchRefineRequest):
+    return _refine_rule_suggestion_match(lambda conn: _open_batch_review_scope(conn, batch_id), body)
+
+
+@router.post("/batches/{batch_id}/rule-suggestions/matches")
+def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMatchRequest):
+    return _rule_suggestion_matches(lambda conn: _open_batch_review_scope(conn, batch_id), body)
+
+
+@router.get("/profiles/{profile_id}/rule-suggestions")
+def get_profile_rule_suggestions(profile_id: str, owner_ids: Optional[str] = Query(None)):
+    return _get_rule_suggestions(lambda conn: _open_profile_review_scope(conn, profile_id), owner_ids)
 
 
 @router.post("/profiles/{profile_id}/rule-suggestions/review")
 def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSuggestionReviewUpdateRequest):
-    status = (body.status or "").strip().lower()
-    if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
-        raise HTTPException(status_code=400, detail="Invalid review status")
-
-    with get_db() as conn:
-        column_map = _load_profile_column_map(conn, profile_id)
-        review_state = _get_profile_rule_suggestion_review_state(column_map)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-        auto_discarded_suggestion_ids: list[str] = []
-        old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        if status == "pending":
-            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-
-        if body.merchant_label:
-            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
-        if body.target_category_name:
-            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
-        if body.target_category_id is not None:
-            suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
-        if body.keyword is not None:
-            suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
-        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
-        # its old scope even though the created rule was generalized.
-        if body.owner_id is not None or "owner_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None or "account_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
-        if body.amount_min is not None or "amount_min" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
-        if body.amount_max is not None or "amount_max" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
-        if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
-        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
-        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
-        if body.txn_count is not None or "txn_count" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
-        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
-                str(value) for value in (body.source_row_ids or []) if str(value).strip()
-            })
-        if body.review_action is not None or "review_action" in body.model_fields_set:
-            if isinstance(body.review_action, dict):
-                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
-            else:
-                suggestion_entries[body.suggestion_id].pop("review_action", None)
-
-        statuses = dict(review_state.get("statuses") or {})
-        synthetic_entries: list[dict] = []
-        if status == "pending":
-            statuses.pop(body.suggestion_id, None)
-        else:
-            next_status = {
-                "status": status,
-                "updated_at": utcnow_iso(),
-            }
-            if body.rule_id:
-                next_status["rule_id"] = body.rule_id
-            if body.created_rule_id:
-                next_status["created_rule_id"] = body.created_rule_id
-            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
-                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
-            if body.review_action is not None or "review_action" in body.model_fields_set:
-                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
-            statuses[body.suggestion_id] = next_status
-            review_state["statuses"] = statuses
-            if status == "accepted":
-                auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
-                    review_state,
-                    body.suggestion_id,
-                    suggestion_entries[body.suggestion_id],
-                )
-                statuses = dict(review_state.get("statuses") or {})
-                rows = _query_rule_suggestion_rows(conn, profile_id=profile_id)
-                if (
-                    old_entry
-                    and old_entry.get("source_row_ids")
-                    and _rule_suggestion_entry_covers(old_entry, suggestion_entries[body.suggestion_id], allow_equal_keyword=True)
-                    and not _rule_suggestion_entry_covers(suggestion_entries[body.suggestion_id], old_entry, allow_equal_keyword=True)
-                ):
-                    synthetic_entries = _build_synthetic_rule_suggestion_entries(
-                        conn,
-                        review_state,
-                        body.suggestion_id,
-                        suggestion_entries[body.suggestion_id],
-                        [dict(row) for row in rows],
-                    )
-
-        review_state["suggestions"] = suggestion_entries
-        review_state["statuses"] = statuses
-        if synthetic_entries:
-            for entry in synthetic_entries:
-                suggestion_id = entry.pop("id")
-                review_state["suggestions"][suggestion_id] = entry
-        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
-        review_summary = summarize_rule_suggestion_review(review_state)
-        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        _save_profile_column_map(conn, profile_id, column_map)
-
-    return {
-        "ok": True,
-        "review_summary": review_summary,
-        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
-        "generated_at": review_state.get("generated_at"),
-        "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
-    }
+    return _update_rule_suggestion_review(lambda conn: _open_profile_review_scope(conn, profile_id), body)
 
 
 @router.post("/profiles/{profile_id}/rule-suggestions/clear")
 def clear_profile_rule_suggestions(profile_id: str, body: RuleSuggestionClearRequest):
-    with get_db() as conn:
-        column_map = _load_profile_column_map(conn, profile_id)
-        review_state = _get_profile_rule_suggestion_review_state(column_map)
-        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
-        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        _save_profile_column_map(conn, profile_id, column_map)
-    return result
+    return _clear_rule_suggestions(lambda conn: _open_profile_review_scope(conn, profile_id), body)
 
 
 @router.post("/profiles/{profile_id}/rule-suggestions/trash/{trash_set_id}/restore")
 def restore_profile_rule_suggestion_trash_set(profile_id: str, trash_set_id: str):
-    with get_db() as conn:
-        column_map = _load_profile_column_map(conn, profile_id)
-        review_state = _get_profile_rule_suggestion_review_state(column_map)
-        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
-        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        _save_profile_column_map(conn, profile_id, column_map)
-    return result
+    return _restore_rule_suggestion_trash(lambda conn: _open_profile_review_scope(conn, profile_id), trash_set_id)
+
+
+@router.post("/profiles/{profile_id}/rule-suggestions/refine-match")
+def refine_profile_rule_suggestion_match(profile_id: str, body: BatchRuleSuggestionMatchRefineRequest):
+    return _refine_rule_suggestion_match(lambda conn: _open_profile_review_scope(conn, profile_id), body)
+
+
+@router.post("/profiles/{profile_id}/rule-suggestions/matches")
+def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggestionMatchRequest):
+    return _rule_suggestion_matches(lambda conn: _open_profile_review_scope(conn, profile_id), body)
 
 
 @router.get("/rule-suggestions")
 def get_system_rule_suggestions(owner_ids: Optional[str] = Query(None)):
-    with get_db() as conn:
-        review_state = _get_system_rule_suggestion_review_state(conn)
-        selected_owner_ids = [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
-        rows = _query_rule_suggestion_rows(conn, system_wide=True)
-        result = _build_rule_suggestion_response(conn, rows, review_state, selected_owner_ids)
-        if result.pop("should_persist", False):
-            _save_system_rule_suggestion_review_state(conn, review_state)
-    return result
+    return _get_rule_suggestions(_open_system_review_scope, owner_ids)
+
+
+@router.post("/rule-suggestions/review")
+def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRequest):
+    return _update_rule_suggestion_review(_open_system_review_scope, body)
+
+
+@router.post("/rule-suggestions/clear")
+def clear_system_rule_suggestions(body: RuleSuggestionClearRequest):
+    return _clear_rule_suggestions(_open_system_review_scope, body)
+
+
+@router.post("/rule-suggestions/trash/{trash_set_id}/restore")
+def restore_system_rule_suggestion_trash_set(trash_set_id: str):
+    return _restore_rule_suggestion_trash(_open_system_review_scope, trash_set_id)
+
+
+@router.post("/rule-suggestions/refine-match")
+def refine_system_rule_suggestion_match(body: BatchRuleSuggestionMatchRefineRequest):
+    return _refine_rule_suggestion_match(_open_system_review_scope, body)
+
+
+@router.post("/rule-suggestions/matches")
+def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
+    return _rule_suggestion_matches(_open_system_review_scope, body)
 
 
 @router.post("/rule-suggestions/debug-trace")
@@ -4841,458 +4838,6 @@ def write_rule_suggestion_debug_trace(body: RuleSuggestionDebugTraceRequest):
     with path.open("a", encoding="utf-8") as trace_file:
         trace_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
     return {"ok": True}
-
-
-@router.post("/rule-suggestions/review")
-def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRequest):
-    status = (body.status or "").strip().lower()
-    if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
-        raise HTTPException(status_code=400, detail="Invalid review status")
-
-    with get_db() as conn:
-        review_state = _get_system_rule_suggestion_review_state(conn)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-        auto_discarded_suggestion_ids: list[str] = []
-        old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        if status == "pending":
-            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-
-        if body.merchant_label:
-            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
-        if body.target_category_name:
-            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
-        if body.target_category_id is not None:
-            suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
-        if body.keyword is not None:
-            suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
-        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
-        # its old scope even though the created rule was generalized.
-        if body.owner_id is not None or "owner_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None or "account_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
-        if body.amount_min is not None or "amount_min" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
-        if body.amount_max is not None or "amount_max" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
-        if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
-        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
-        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
-        if body.txn_count is not None or "txn_count" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
-        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
-                str(value) for value in (body.source_row_ids or []) if str(value).strip()
-            })
-        if body.review_action is not None or "review_action" in body.model_fields_set:
-            if isinstance(body.review_action, dict):
-                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
-            else:
-                suggestion_entries[body.suggestion_id].pop("review_action", None)
-
-        statuses = dict(review_state.get("statuses") or {})
-        synthetic_entries: list[dict] = []
-        if status == "pending":
-            statuses.pop(body.suggestion_id, None)
-        else:
-            next_status = {
-                "status": status,
-                "updated_at": utcnow_iso(),
-            }
-            if body.rule_id:
-                next_status["rule_id"] = body.rule_id
-            if body.created_rule_id:
-                next_status["created_rule_id"] = body.created_rule_id
-            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
-                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
-            if body.review_action is not None or "review_action" in body.model_fields_set:
-                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
-            statuses[body.suggestion_id] = next_status
-            review_state["statuses"] = statuses
-            if status == "accepted":
-                auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
-                    review_state,
-                    body.suggestion_id,
-                    suggestion_entries[body.suggestion_id],
-                )
-                statuses = dict(review_state.get("statuses") or {})
-                rows = _query_rule_suggestion_rows(conn, system_wide=True)
-                if (
-                    old_entry
-                    and old_entry.get("source_row_ids")
-                    and _rule_suggestion_entry_covers(old_entry, suggestion_entries[body.suggestion_id], allow_equal_keyword=True)
-                    and not _rule_suggestion_entry_covers(suggestion_entries[body.suggestion_id], old_entry, allow_equal_keyword=True)
-                ):
-                    synthetic_entries = _build_synthetic_rule_suggestion_entries(
-                        conn,
-                        review_state,
-                        body.suggestion_id,
-                        suggestion_entries[body.suggestion_id],
-                        [dict(row) for row in rows],
-                    )
-
-        review_state["suggestions"] = suggestion_entries
-        review_state["statuses"] = statuses
-        if synthetic_entries:
-            for entry in synthetic_entries:
-                suggestion_id = entry.pop("id")
-                review_state["suggestions"][suggestion_id] = entry
-        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
-        review_summary = summarize_rule_suggestion_review(review_state)
-        _save_system_rule_suggestion_review_state(conn, review_state)
-
-    return {
-        "ok": True,
-        "review_summary": review_summary,
-        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
-        "generated_at": review_state.get("generated_at"),
-        "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
-    }
-
-
-@router.post("/rule-suggestions/clear")
-def clear_system_rule_suggestions(body: RuleSuggestionClearRequest):
-    with get_db() as conn:
-        review_state = _get_system_rule_suggestion_review_state(conn)
-        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
-        _save_system_rule_suggestion_review_state(conn, review_state)
-    return result
-
-
-@router.post("/rule-suggestions/trash/{trash_set_id}/restore")
-def restore_system_rule_suggestion_trash_set(trash_set_id: str):
-    with get_db() as conn:
-        review_state = _get_system_rule_suggestion_review_state(conn)
-        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
-        _save_system_rule_suggestion_review_state(conn, review_state)
-    return result
-
-
-@router.post("/batches/{batch_id}/rule-suggestions/refine-match")
-def refine_batch_rule_suggestion_match(batch_id: str, body: BatchRuleSuggestionMatchRefineRequest):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        review_state = get_rule_suggestion_review_state(snapshot)
-        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, batch_id=batch_id)]
-        result = _refine_pending_conflict_group(conn, review_state, rows, body)
-        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        save_batch_snapshot(conn, batch_id, snapshot)
-    return result
-
-
-@router.post("/profiles/{profile_id}/rule-suggestions/refine-match")
-def refine_profile_rule_suggestion_match(profile_id: str, body: BatchRuleSuggestionMatchRefineRequest):
-    with get_db() as conn:
-        column_map = _load_profile_column_map(conn, profile_id)
-        review_state = _get_profile_rule_suggestion_review_state(column_map)
-        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, profile_id=profile_id)]
-        result = _refine_pending_conflict_group(conn, review_state, rows, body)
-        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
-        conn.execute(
-            "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
-            (json.dumps(column_map), profile_id),
-        )
-    return result
-
-
-@router.post("/rule-suggestions/refine-match")
-def refine_system_rule_suggestion_match(body: BatchRuleSuggestionMatchRefineRequest):
-    with get_db() as conn:
-        review_state = _get_system_rule_suggestion_review_state(conn)
-        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, system_wide=True)]
-        result = _refine_pending_conflict_group(conn, review_state, rows, body)
-        _save_system_rule_suggestion_review_state(conn, review_state)
-    return result
-
-
-@router.post("/rule-suggestions/matches")
-def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
-    keyword = normalize_rule_keyword(body.keyword or "")
-    if not keyword:
-        raise HTTPException(status_code=400, detail="keyword required")
-
-    with get_db() as conn:
-        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
-        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
-        rows = conn.execute(
-            f"""
-            SELECT
-                t.id,
-                t.date,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_evidence_json,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                COALESCE(p.mask, a.mask) AS account_mask,
-                o.name AS owner_name
-            FROM txn t
-            JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE b.status = 'completed'
-              AND b.use_imported_categories = 1
-              {row_scope_clause}
-              {candidate_source_clause}
-            ORDER BY t.date DESC, t.id DESC
-            """,
-            row_ids,
-        ).fetchall()
-
-    row_ids_set = {str(value) for value in body.row_ids} if body.row_ids else None
-    matching_rows = []
-    for base_row in rows:
-        row = dict(base_row)
-        # When the caller passes the card's own source rows, the report is exactly those rows — so a
-        # generic suggestion doesn't pull in same-keyword rows owned by other (e.g. discarded) suggestions.
-        if row_ids_set is not None and str(row["id"]) not in row_ids_set:
-            continue
-        row["display_amount"] = get_import_display_amount(row["amount"], "single_signed")
-        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
-            continue
-        if body.owner_id and row["owner_id"] != body.owner_id:
-            continue
-        if body.account_id and row["account_id"] != body.account_id:
-            continue
-
-        abs_amount = abs(row["amount"])
-        if body.amount_min is not None and abs_amount < body.amount_min:
-            continue
-        if body.amount_max is not None and abs_amount > body.amount_max:
-            continue
-
-        target_category_id, target_category_name, target_category_group_name = _resolve_import_rule_target(
-            row,
-            categories_by_name,
-            categories_by_id,
-        )
-        row["target_category_id"] = target_category_id
-        row["target_category_name"] = target_category_name
-        row["target_category_group_name"] = target_category_group_name
-        row["conflicts_with_reference"] = bool(
-            body.reference_target_category_id
-            and target_category_id
-            and target_category_id != body.reference_target_category_id
-            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
-            and row["category_source"] != "manual"
-        )
-        matching_rows.append(row)
-
-    return {
-        "keyword": keyword,
-        "amount_convention": "single_signed",
-        "count": len(matching_rows),
-        "transactions": matching_rows,
-    }
-
-
-@router.post("/batches/{batch_id}/rule-suggestions/matches")
-def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMatchRequest):
-    keyword = normalize_rule_keyword(body.keyword or "")
-    if not keyword:
-        raise HTTPException(status_code=400, detail="keyword required")
-
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, filename, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        amount_convention = snapshot.get("amount_convention", "single_signed")
-
-        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
-        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
-        rows = conn.execute(
-            f"""
-            SELECT
-                t.id,
-                t.date,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_evidence_json,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                COALESCE(p.mask, a.mask) AS account_mask,
-                o.name AS owner_name
-            FROM txn t
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE t.import_batch_id = ?
-              {row_scope_clause}
-              {candidate_source_clause}
-            ORDER BY t.date DESC, t.id DESC
-            """,
-            [batch_id, *row_ids],
-        ).fetchall()
-
-    matching_rows = []
-    for base_row in rows:
-        row = dict(base_row)
-        row["display_amount"] = get_import_display_amount(row["amount"], amount_convention)
-        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
-            continue
-        if body.owner_id and row["owner_id"] != body.owner_id:
-            continue
-        if body.account_id and row["account_id"] != body.account_id:
-            continue
-
-        abs_amount = abs(row["amount"])
-        if body.amount_min is not None and abs_amount < body.amount_min:
-            continue
-        if body.amount_max is not None and abs_amount > body.amount_max:
-            continue
-
-        target_category_id, target_category_name, target_category_group_name = _resolve_import_rule_target(
-            row,
-            categories_by_name,
-            categories_by_id,
-        )
-        row["target_category_id"] = target_category_id
-        row["target_category_name"] = target_category_name
-        row["target_category_group_name"] = target_category_group_name
-        row["conflicts_with_reference"] = bool(
-            body.reference_target_category_id
-            and target_category_id
-            and target_category_id != body.reference_target_category_id
-            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
-            and row["category_source"] != "manual"
-        )
-        matching_rows.append(row)
-
-    return {
-        "batch_id": batch_id,
-        "filename": batch["filename"],
-        "keyword": keyword,
-        "amount_convention": amount_convention,
-        "count": len(matching_rows),
-        "transactions": matching_rows,
-    }
-
-
-@router.post("/profiles/{profile_id}/rule-suggestions/matches")
-def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggestionMatchRequest):
-    keyword = normalize_rule_keyword(body.keyword or "")
-    if not keyword:
-        raise HTTPException(status_code=400, detail="keyword required")
-
-    with get_db() as conn:
-        profile = conn.execute(
-            "SELECT id, name, amount_convention FROM csv_import_profile WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
-        if not profile:
-            raise HTTPException(status_code=404, detail="Profile not found")
-        amount_convention = profile["amount_convention"] or "single_signed"
-
-        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
-        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
-        rows = conn.execute(
-            f"""
-            SELECT
-                t.id,
-                t.date,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_evidence_json,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                COALESCE(p.mask, a.mask) AS account_mask,
-                o.name AS owner_name
-            FROM txn t
-            JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE b.profile_id = ?
-              AND b.status = 'completed'
-              {row_scope_clause}
-              {candidate_source_clause}
-            ORDER BY t.date DESC, t.id DESC
-            """,
-            [profile_id, *row_ids],
-        ).fetchall()
-
-    matching_rows = []
-    for base_row in rows:
-        row = dict(base_row)
-        row["display_amount"] = get_import_display_amount(row["amount"], amount_convention)
-        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
-            continue
-        if body.owner_id and row["owner_id"] != body.owner_id:
-            continue
-        if body.account_id and row["account_id"] != body.account_id:
-            continue
-
-        abs_amount = abs(row["amount"])
-        if body.amount_min is not None and abs_amount < body.amount_min:
-            continue
-        if body.amount_max is not None and abs_amount > body.amount_max:
-            continue
-
-        target_category_id, target_category_name, target_category_group_name = _resolve_import_rule_target(
-            row,
-            categories_by_name,
-            categories_by_id,
-        )
-        row["target_category_id"] = target_category_id
-        row["target_category_name"] = target_category_name
-        row["target_category_group_name"] = target_category_group_name
-        row["conflicts_with_reference"] = bool(
-            body.reference_target_category_id
-            and target_category_id
-            and target_category_id != body.reference_target_category_id
-            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
-            and row["category_source"] != "manual"
-        )
-        matching_rows.append(row)
-
-    return {
-        "profile_id": profile_id,
-        "profile_name": profile["name"],
-        "keyword": keyword,
-        "amount_convention": amount_convention,
-        "count": len(matching_rows),
-        "transactions": matching_rows,
-    }
 
 
 @router.patch("/batches/{batch_id}/imported-category-usage")

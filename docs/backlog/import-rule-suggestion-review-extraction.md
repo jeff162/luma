@@ -1,8 +1,10 @@
 # `ImportRuleSuggestionReview` in-component JSX extraction
 
-> **Status: backlog** — the one remaining piece of the import/export size refactor. The rest of that
-> refactor is done (backend `import_export/` package; `ImportExport.jsx` 7,595 → 4,354; this file's
-> top-level extractions). Reconciled 2026-06-24.
+> **Status: backlog, behind [import-rule-suggestion-review-model.md](import-rule-suggestion-review-model.md).**
+> Do that first: its stage 2 moves the page's action orchestration server-side and its stage 3 replaces the
+> component's id-parsed grouping, which changes what is left here to extract. This is otherwise the one
+> remaining piece of the import/export size refactor (backend `import_export/` package;
+> `ImportExport.jsx` 7,595 → 4,354; this file's top-level extractions). Reconciled 2026-06-24.
 
 ## What's left
 
