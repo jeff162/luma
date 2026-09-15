@@ -1,9 +1,9 @@
 # Import rule-suggestion review — making the review model explicit
 
-> **Status: in progress.** Stage 1 is done; stages 2–4 remain, in order. Stage 2's decisions are
-> settled (below); stage 4 still owes one. Supersedes
+> **Status: in progress.** Stages 1 and 2 are done; stages 3–4 remain, in order. Stage 2 left two
+> questions open and stage 4 still owes a decision (below). Supersedes
 > [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) as the next
-> work on this surface — stage 2 removes most of the page code that item would have split up.
+> work on this surface — stage 2 removed most of the page code that item would have split up.
 
 The Generate Rules review behaves correctly and its behavior is the thing to preserve. What is wrong is
 the shape: the model of *which rows are being worked together, and what owns them* is implicit, so
@@ -54,85 +54,42 @@ Transitions:
   pre-existing rule it merged into).
 - **Undo** → reverse rules, rows and review state together.
 
-## Stage 2 — one transactional endpoint per action, and an undo endpoint
+## Where stage 2 left things
 
-### What each page action does today
+Every page action is one request to `backend/routers/import_export/rule_suggestion_actions.py`, a leaf
+module beside `core` whose endpoints each take a scope opener, and each commits whole or not at all:
 
-All in `frontend/src/pages/ImportRuleSuggestions.jsx`; each arrow is a separate request.
-
-| Action | Sequence |
+| Endpoint (per scope) | Page actions it serves |
 | --- | --- |
-| `saveSuggestion` | create rule → scoped apply → push undo → review update → optional full-force apply ("apply to existing") |
-| `saveAcceptedSuggestion` | update or create rule → load matches → scoped apply → restore released rows → load snapshots → push undo → review update |
-| `applyConflictSet` | create rule → accept winner → per member: disposition + discard → apply to rule rows → re-accept winner → re-discard members with `review_action` |
-| `saveSuggestionsAsIsBulk` | per suggestion: create rule → scoped apply → review update |
-| `rejectSuggestionWithDisposition` / `bulkRejectWithDisposition` | disposition → push undo → review update(s) |
-| `replaceConflictingRule` / `keepExistingRule` | update existing rule → scoped apply → review update / review update to `skipped` |
-| return to pending (`applySuggestionStatus`, `setSuggestionStatusBulk`) | restore prior rows → trash created rule → review update |
-| `performUndo` | trash rules → restore rows → replay each status — every step `.catch(() => {})` |
+| `…/rule-suggestions/accept` | save, save as-is, bulk save, editing an accepted card (told apart by the stored status), and *Replace existing* (`replace_existing`) |
+| `…/rule-suggestions/status` | defer, resume, restore, return to pending (restores `accepted_prior_rows`, trashes `created_rule_id`), discard keep / clear (`clear_categories`), *Keep existing* |
+| `…/rule-suggestions/resolve-conflict-set` | the conflict-set card's Apply |
+| `…/rule-suggestions/undo` | Undo |
 
-### Defects this fixes, found while mapping the above
+- **Undo is exact, not replayed.** The payload holds the prior entry and status of every suggestion whose
+  review state the action changed — found by diffing the review state before and after, so covered
+  siblings and synthetic follow-ups need no enumeration — plus each changed row's first capture, the rules
+  the action created (trashed on undo) and the rules it trashed (restored on undo). Replaying statuses
+  through the review write re-ran an accept's side effects and could not reinstate a trashed rule.
+- **There is no raw review-write route.** Its logic is `core.record_rule_suggestion_review`, the
+  review-state half every action calls; a route writing review state apart from rules and rows is the
+  non-atomic primitive this stage retired. Tests of the review-state rules call it through `_record_review`.
+- Conn-taking cores: `rules.update_rule_core`, `rules._restore_trashed_rule`,
+  `transactions.settle_rejected_suggestion_rows`, `transactions.restore_categorization_rows`, and
+  `core._rule_suggestion_matching_rows` (the matching-rows report's row selection, reused by the accepted-card
+  partition redraw).
+- The trace and its test, `getCoveredSuggestionIds`, `ruleSuggestionReviewStatus.js`, and the client
+  wrappers for apply-to-transactions, the rejected-suggestion disposition and restore-categorization are gone.
 
-- **Partial writes.** A failure mid-sequence leaves, for example, a created rule with its suggestion still
-  pending. Several steps are deliberately best-effort (a failed scoped apply or disposition still records
-  the accept/discard).
-- **Undo can half-succeed silently**, because every undo step swallows its own error.
-- **Undo misses "apply to existing".** `saveSuggestion` pushes the undo entry before the full-force
-  `txnMutations.applyRule`, and that call's result is discarded — undo then trashes the rule, but the rows
-  it claimed keep its category.
-- **Covered-suggestion detection is implemented twice**: `getCoveredSuggestionIds` on the page and
-  `_rule_suggestion_entry_covers` / `_discard_covered_rule_suggestions` on the backend.
+### Open from stage 2
 
-### Decisions (settled)
-
-1. **Roll back everything on failure.** An action is one transaction; a failure writes nothing. The
-   best-effort steps go away. *Expected* outcomes are not failures: a rule `conflict` still leaves that
-   suggestion pending and is named in the summary, and in a bulk save the non-conflicting suggestions
-   still commit. This is a deliberate behavior change from today.
-2. **Undo stays client-held.** The action returns an undo payload; the page keeps its stack (session-local,
-   lost on reload, as today) and posts the payload to a single undo endpoint that reverses rules, rows and
-   review state in one transaction. `restore-categorization` already accepts client-supplied snapshots, so
-   this adds no new trust.
-3. **"Apply to existing" rows join the undo payload.** When an accept opts into the full-force apply, its
-   prior-row snapshot is captured and restored on undo.
-4. **Delete the debug trace.** `traceRuleSuggestionAction` and its correlation plumbing on the page,
-   `POST /rule-suggestions/debug-trace`, `_build_rule_suggestion_trace_record` and friends,
-   `RuleSuggestionDebugTraceRequest`, `LUMA_RULE_SUGGESTION_TRACE_PATH`, and
-   `test_debug_trace_enriches_identifiers_from_committed_database_state`. It was a temporary diagnostic;
-   with actions server-side the per-step client trail describes nothing useful.
-
-### Building blocks and gaps
-
-Conn-taking cores that already exist: `create_rule_core(conn, body, on_existing)` and
-`_apply_rule_to_existing(conn, rule_id, preserve_manual=…, txn_ids=…, capture_prior=…)` and
-`_trash_rule(conn, rule_id)` in `backend/routers/rules.py`. Route handlers that open their own `get_db()`
-and need a conn-taking core extracted first: `update_rule` (rules.py), `set_rejected_suggestion_disposition`
-and `restore_categorization` (transactions.py).
-
-Obstacles to respect:
-
-- **`_rescan_recurring` runs after commit**, outside the transaction, with the affected ids and prior payee
-  keys collected during it — every action endpoint must do the same, or recurring membership goes stale.
-- **An action is one `with get_db()` block.** `get_db()` commits only when the block exits normally; an
-  exception skips the commit and closing the connection discards the uncommitted writes, which is the
-  rollback decision 1 relies on. It holds only while nothing inside the block calls `conn.commit()` —
-  none of the rules/transactions cores do today — so pin it in the rollback test rather than trusting it.
-- **The frontend's transaction-change notification.** `txnMutations.js` is the only sanctioned caller of
-  transaction writes (an eslint `no-restricted-properties` rule enforces it) because it fires
-  `luma:transactions-changed`. The new action calls change transactions, so route them through
-  `txnMutations` rather than calling `api.*` from the page.
-- **Undo trashes rather than deletes** a created rule (`api.deleteRule` → `_trash_rule`, soft delete); keep
-  that, so an undone accept's rule is still recoverable from Settings.
-
-### Tests first
-
-Backend tests in `backend/tests/test_import_rule_suggestion_review.py`, one per transition in the lifecycle
-table, each asserting rules, rows and review state together — plus one test that forces a failure
-partway through an action and asserts nothing was written, and one for undo of an accept that used "apply
-to existing". Drive each through at least one non-system scope. Then remove the page orchestration,
-`getCoveredSuggestionIds`, and the trace, and run the full gate plus
-`npx playwright test tests/ui/a11y-rule-suggestions.spec.js --config=playwright.config.js --project=a11y --no-deps`
-(the only browser spec that loads this page; the default gate does not run the a11y lane).
+- **Undo does not reverse a change to a rule that already existed.** Editing an accepted card updates its
+  rule in place (a collision merge also hard-deletes the edited rule), and accepting into a pre-existing
+  rule fills that rule's actions; undo restores rows and review state around both but leaves the rule as
+  edited, as the page did before. Reversing it means snapshotting the rule row and its tags in the payload.
+- **Three routes lost their only caller.** `POST /rules/{id}/apply-to-transactions`,
+  `/transactions/rejected-suggestion-disposition` and `/transactions/restore-categorization` remain as thin
+  wrappers over the cores, with their tests. Keep them as API, or remove them.
 
 ## Stage 3 — the backend sends the grouping
 

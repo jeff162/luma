@@ -1567,6 +1567,12 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
 
 @router.post("/rejected-suggestion-disposition")
 def set_rejected_suggestion_disposition(body: RejectedSuggestionDisposition):
+    with get_db() as conn:
+        prior = settle_rejected_suggestion_rows(conn, body.transaction_ids, body.mode, body.category_id)
+    return {"updated": len(prior), "rows": prior}
+
+
+def settle_rejected_suggestion_rows(conn, transaction_ids: list[str], mode: str, category_id: Optional[str] = None) -> list[dict]:
     # Settle the imported rows behind a rejected rule suggestion. Three outcomes by intent:
     #
     #   'keep' (no category_id, or category_id == the row's current category) -> KEEP AS IMPORTED: leave
@@ -1585,86 +1591,90 @@ def set_rejected_suggestion_disposition(body: RejectedSuggestionDisposition):
     #
     # All spare a row the user already settled by hand (`category_source = 'manual'`): a deliberate
     # per-transaction edit is the final say and is never undone here.
-    ids = [str(i) for i in body.transaction_ids if str(i).strip()]
-    mode = (body.mode or "").strip().lower()
+    ids = [str(i) for i in transaction_ids if str(i).strip()]
+    mode = (mode or "").strip().lower()
     if mode not in ("keep", "clear"):
         raise HTTPException(status_code=400, detail="mode must be 'keep' or 'clear'")
-    keep_category_id = (body.category_id or "").strip() or None
+    keep_category_id = (category_id or "").strip() or None
     if keep_category_id and mode != "keep":
         raise HTTPException(status_code=400, detail="category_id is only valid with mode 'keep'")
     if not ids:
-        return {"updated": 0, "rows": []}
+        return []
     if keep_category_id:
         # Re-pointing requires an assignable leaf (the shared group guard) that is also active — a stale
         # decision can't park rows on an inactive branch, the same invariant rules/imports honor.
-        with get_db() as conn:
-            _reject_group_category_assignment(conn, keep_category_id)
-            target = conn.execute(
-                "SELECT COALESCE(is_active, 1) AS is_active FROM category WHERE id = ?",
-                (keep_category_id,),
-            ).fetchone()
+        _reject_group_category_assignment(conn, keep_category_id)
+        target = conn.execute(
+            "SELECT COALESCE(is_active, 1) AS is_active FROM category WHERE id = ?",
+            (keep_category_id,),
+        ).fetchone()
         if not target["is_active"]:
             raise HTTPException(status_code=400, detail="Cannot assign transactions to an inactive category")
     # Snapshot the prior state of exactly the rows we are about to change (the same `IS NOT 'manual'`
     # filter the UPDATE uses) so the caller can stash it for Undo and later POST it to
     # /restore-categorization. Only the affected rows are returned, so restore touches nothing else.
     prior: list[dict] = []
-    with get_db() as conn:
-        for chunk in _chunk(ids):
-            placeholders = ",".join("?" * len(chunk))
-            rows = conn.execute(
-                f"SELECT id, category_id, category_source, category_overridden FROM txn "
+    for chunk in _chunk(ids):
+        placeholders = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            f"SELECT id, category_id, category_source, category_overridden FROM txn "
+            f"WHERE id IN ({placeholders}) AND category_source IS NOT 'manual'",
+            list(chunk),
+        ).fetchall()
+        if mode == "keep" and keep_category_id:
+            # Re-point only the rows whose category actually changes. Keeping a row at the category it
+            # already has is not an override, so it stays `import` (re-derivable, toast-claimable) —
+            # only a genuine move to a different category becomes `manual`.
+            changing = [row for row in rows if str(row["category_id"] or "") != str(keep_category_id)]
+            prior.extend(dict(row) for row in changing)
+            for change_chunk in _chunk([row["id"] for row in changing]):
+                change_placeholders = ",".join("?" * len(change_chunk))
+                conn.execute(
+                    # Re-pointing to a different category is a manual edit, so it also reviews the row.
+                    f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual', "
+                    f"needs_review = 0 "
+                    f"WHERE id IN ({change_placeholders})",
+                    [keep_category_id, *change_chunk],
+                )
+        elif mode == "keep":
+            # Keep exactly as imported: leave the rows untouched at `import` (nothing changes, so
+            # nothing to snapshot for undo). The caller marks the suggestion discarded.
+            pass
+        else:
+            prior.extend(dict(row) for row in rows)
+            conn.execute(
+                f"UPDATE txn SET category_id = NULL, category_overridden = 0, category_source = 'cleared' "
                 f"WHERE id IN ({placeholders}) AND category_source IS NOT 'manual'",
                 list(chunk),
-            ).fetchall()
-            if mode == "keep" and keep_category_id:
-                # Re-point only the rows whose category actually changes. Keeping a row at the category it
-                # already has is not an override, so it stays `import` (re-derivable, toast-claimable) —
-                # only a genuine move to a different category becomes `manual`.
-                changing = [row for row in rows if str(row["category_id"] or "") != str(keep_category_id)]
-                prior.extend(dict(row) for row in changing)
-                for change_chunk in _chunk([row["id"] for row in changing]):
-                    change_placeholders = ",".join("?" * len(change_chunk))
-                    conn.execute(
-                        # Re-pointing to a different category is a manual edit, so it also reviews the row.
-                        f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual', "
-                        f"needs_review = 0 "
-                        f"WHERE id IN ({change_placeholders})",
-                        [keep_category_id, *change_chunk],
-                    )
-            elif mode == "keep":
-                # Keep exactly as imported: leave the rows untouched at `import` (nothing changes, so
-                # nothing to snapshot for undo). The caller marks the suggestion discarded.
-                pass
-            else:
-                prior.extend(dict(row) for row in rows)
-                conn.execute(
-                    f"UPDATE txn SET category_id = NULL, category_overridden = 0, category_source = 'cleared' "
-                    f"WHERE id IN ({placeholders}) AND category_source IS NOT 'manual'",
-                    list(chunk),
-                )
-    return {"updated": len(prior), "rows": prior}
+            )
+    return prior
 
 
 @router.post("/restore-categorization")
 def restore_categorization(body: CategorizationRestore):
-    # Undo support: set each row back to a previously captured (category_id, category_source,
-    # category_overridden) snapshot. Used to reverse a rejected-suggestion disposition; the rows come
-    # from set_rejected_suggestion_disposition's `rows`, so only the deliberately-changed rows are
-    # restored and exactly to their pre-change state.
-    restored = 0
     with get_db() as conn:
-        for row in body.rows:
-            if not str(row.id or "").strip():
-                continue
-            conn.execute(
-                "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
-                (row.category_id, row.category_source,
-                 category_lock_for(row.category_source, row.category_overridden), row.id),
-            )
-            restored += 1
-        rescan_edited_transactions(conn, [r.id for r in body.rows])
-    return {"restored": restored}
+        restored = restore_categorization_rows(conn, [row.model_dump() for row in body.rows])
+        rescan_edited_transactions(conn, restored)
+    return {"restored": len(restored)}
+
+
+def restore_categorization_rows(conn, rows: list[dict]) -> list[str]:
+    # Undo support: set each row back to a previously captured (category_id, category_source,
+    # category_overridden) snapshot — the shape `settle_rejected_suggestion_rows` and a capturing rule
+    # apply return, so only the deliberately-changed rows are restored and exactly to their pre-change
+    # state. Returns the restored ids; the caller owns the recurring rescan they need.
+    restored: list[str] = []
+    for row in rows:
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            continue
+        conn.execute(
+            "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
+            (row.get("category_id"), row.get("category_source"),
+             category_lock_for(row.get("category_source"), row.get("category_overridden")), row_id),
+        )
+        restored.append(row_id)
+    return restored
 
 
 @router.patch("/{txn_id}/merchant")

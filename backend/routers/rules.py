@@ -853,7 +853,20 @@ def _colliding_rule(conn, rule_id: str, resulting: dict):
 @router.patch("/{rule_id}")
 def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "merge"] = "reject",
                 reconcile: bool = False):
-    """Update a rule, guarding the case where the edit makes its matcher collide with *another* rule.
+    """Update a rule — the HTTP wrapper around :func:`update_rule_core` (see it for the collision and
+    reconcile contract), running the recurring rescan once the edit has committed."""
+    with get_db() as conn:
+        result, rescan_ids, rescan_prior_keys = update_rule_core(
+            conn, rule_id, body, on_existing=on_existing, reconcile=reconcile,
+        )
+    _rescan_recurring(rescan_ids, prior_payee_keys=rescan_prior_keys)
+    return result
+
+
+def update_rule_core(conn, rule_id: str, body: RuleUpdate, *, on_existing: str = "reject",
+                     reconcile: bool = False) -> tuple[dict, list[str], set]:
+    """Update a rule against an already-open connection, guarding the case where the edit makes its matcher
+    collide with *another* rule.
 
     Unlike create, both rules already exist, so reconciling means one has to go: by default
     (`on_existing='reject'`) the collision is classified and reported without writing; with 'merge' the
@@ -868,131 +881,129 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     catches exactly the rows a narrowed keyword/scope drops. Only applied on a clean update (not a
     collision merge/report).
     """
+    current = conn.execute(
+        """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
+                  amount_min, amount_max, debit_credit, match_source_text, is_recurring
+           FROM category_rule WHERE id = ?""",
+        (rule_id,),
+    ).fetchone()
+    if not current:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    # Capture the rows the *old* rule owned before the edit changes its matcher, so a scoped reconcile
+    # below can re-evaluate exactly the rows an edit drops from scope.
+    affected = _rule_affected_txn_ids(conn, current) if reconcile else []
+
+    resulting = _resulting_rule_state(current, body)
+    resulting_tag_ids = (
+        list(body.tag_ids) if body.tag_ids is not None
+        else [r["tag_id"] for r in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()]
+    )
+    # Another rule (not this one) that the edited matcher would now collide with.
+    other = _colliding_rule(conn, rule_id, resulting)
+    if other:
+        other_tag_ids = {
+            r["tag_id"] for r in
+            conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (other["id"],)).fetchall()
+        }
+        relation = _classify_rule_collision(
+            other, other_tag_ids,
+            category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+        )
+        if on_existing == "merge" and relation in ("mergeable", "duplicate"):
+            _merge_actions_into_rule(
+                conn, other,
+                category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+            )
+            # The edited rule is about to be deleted; drop any recurring series it backed so it doesn't
+            # dangle at a now-gone rule (the surviving rule keeps its own recurring status, if any).
+            _drop_recurring_series_for_rule(conn, rule_id)
+            conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
+            conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
+            return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}, [], set()
+        return {
+            "status": relation,
+            "existing_rule_id": other["id"],
+            "existing_category_id": other["category_id"],
+            "existing_clean_name": other["clean_name"],
+            "edited_rule_id": rule_id,
+        }, [], set()
+
+    # No collision — apply the patch.
+    fields, params = [], []
+    # `clauses` or `keyword` redefines the merchant matcher; write keyword + match_expr together so the
+    # derived keyword and the stored expr can never drift (a clauses→single or single→clauses edit flips
+    # match_expr on or off). `resulting` already resolved both under _resulting_matcher's precedence.
+    if body.clauses is not None or body.keyword is not None:
+        fields.append("keyword = ?");    params.append(resulting["keyword"])
+        fields.append("match_expr = ?"); params.append(resulting["match_expr"])
+    if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
+    if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
+    if body.amount_max  is not None: fields.append("amount_max = ?");  params.append(body.amount_max)
+    if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
+    if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
+    if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
+    if body.account_type is not None: fields.append("account_type = ?"); params.append(body.account_type)
+    if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
+    if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
+    if body.clear_amount_min:        fields.append("amount_min = NULL")
+    if body.clear_amount_max:        fields.append("amount_max = NULL")
+    if body.clear_clean_name:        fields.append("clean_name = NULL")
+    if body.clear_owner:             fields.append("owner_id = NULL")
+    if body.clear_account:           fields.append("account_id = NULL")
+    if body.clear_account_type:      fields.append("account_type = NULL")
+    if body.clean_name  is not None and not body.clear_clean_name:
+        fields.append("clean_name = ?"); params.append(body.clean_name)
+    if fields:
+        params.append(rule_id)
+        conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
+    if body.tag_ids is not None:
+        conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
+        for tag_id in body.tag_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
+                (rule_id, tag_id),
+            )
+    post = conn.execute(
+        "SELECT category_id, clean_name, is_recurring FROM category_rule WHERE id = ?",
+        (rule_id,),
+    ).fetchone()
+    post_tag_ids = [
+        row["tag_id"]
+        for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
+    ]
+    if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids and not post["is_recurring"]:
+        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
+    # Reconcile the rule's recurring series with the post-edit state: create/refresh it when the rule is
+    # (now or still) recurring — picking up a cadence change or a matcher edit that shifts membership —
+    # and drop it when the flag was turned off. Skipped entirely when the edit never touched recurring
+    # and the rule isn't recurring, so ordinary rule edits pay nothing.
+    if post and post["is_recurring"]:
+        _ensure_recurring_series(conn, rule_id, body.cadence)
+    elif body.is_recurring is False:
+        _drop_recurring_series_for_rule(conn, rule_id)
+    # Opt-in reconcile: re-evaluate the rows the pre-edit rule owned. Rows still matching the edited
+    # rule are unchanged; rows the edit dropped from scope clear or fall to another rule. Union with the
+    # rows the edited rule now matches so a broadened edit also stamps the newly-covered rows.
     rescan_ids: list[str] = []
     rescan_prior_keys: set = set()
-    with get_db() as conn:
-        current = conn.execute(
-            """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
-                      amount_min, amount_max, debit_credit, match_source_text, is_recurring
+    if reconcile:
+        affected_ids = set(affected)
+        post_rule = conn.execute(
+            f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
+                      owner_id, {rule_scope_account_sql()}, account_type, match_source_text
                FROM category_rule WHERE id = ?""",
             (rule_id,),
         ).fetchone()
-        if not current:
-            raise HTTPException(status_code=404, detail="Rule not found")
-
-        # Capture the rows the *old* rule owned before the edit changes its matcher, so a scoped reconcile
-        # below can re-evaluate exactly the rows an edit drops from scope.
-        affected = _rule_affected_txn_ids(conn, current) if reconcile else []
-
-        resulting = _resulting_rule_state(current, body)
-        resulting_tag_ids = (
-            list(body.tag_ids) if body.tag_ids is not None
-            else [r["tag_id"] for r in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()]
-        )
-        # Another rule (not this one) that the edited matcher would now collide with.
-        other = _colliding_rule(conn, rule_id, resulting)
-        if other:
-            other_tag_ids = {
-                r["tag_id"] for r in
-                conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (other["id"],)).fetchall()
-            }
-            relation = _classify_rule_collision(
-                other, other_tag_ids,
-                category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
-            )
-            if on_existing == "merge" and relation in ("mergeable", "duplicate"):
-                _merge_actions_into_rule(
-                    conn, other,
-                    category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
-                )
-                # The edited rule is about to be deleted; drop any recurring series it backed so it doesn't
-                # dangle at a now-gone rule (the surviving rule keeps its own recurring status, if any).
-                _drop_recurring_series_for_rule(conn, rule_id)
-                conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
-                conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
-                return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}
-            return {
-                "status": relation,
-                "existing_rule_id": other["id"],
-                "existing_category_id": other["category_id"],
-                "existing_clean_name": other["clean_name"],
-                "edited_rule_id": rule_id,
-            }
-
-        # No collision — apply the patch.
-        fields, params = [], []
-        # `clauses` or `keyword` redefines the merchant matcher; write keyword + match_expr together so the
-        # derived keyword and the stored expr can never drift (a clauses→single or single→clauses edit flips
-        # match_expr on or off). `resulting` already resolved both under _resulting_matcher's precedence.
-        if body.clauses is not None or body.keyword is not None:
-            fields.append("keyword = ?");    params.append(resulting["keyword"])
-            fields.append("match_expr = ?"); params.append(resulting["match_expr"])
-        if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
-        if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
-        if body.amount_max  is not None: fields.append("amount_max = ?");  params.append(body.amount_max)
-        if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
-        if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
-        if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
-        if body.account_type is not None: fields.append("account_type = ?"); params.append(body.account_type)
-        if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
-        if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
-        if body.clear_amount_min:        fields.append("amount_min = NULL")
-        if body.clear_amount_max:        fields.append("amount_max = NULL")
-        if body.clear_clean_name:        fields.append("clean_name = NULL")
-        if body.clear_owner:             fields.append("owner_id = NULL")
-        if body.clear_account:           fields.append("account_id = NULL")
-        if body.clear_account_type:      fields.append("account_type = NULL")
-        if body.clean_name  is not None and not body.clear_clean_name:
-            fields.append("clean_name = ?"); params.append(body.clean_name)
-        if fields:
-            params.append(rule_id)
-            conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
-        if body.tag_ids is not None:
-            conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
-            for tag_id in body.tag_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
-                    (rule_id, tag_id),
-                )
-        post = conn.execute(
-            "SELECT category_id, clean_name, is_recurring FROM category_rule WHERE id = ?",
-            (rule_id,),
-        ).fetchone()
-        post_tag_ids = [
-            row["tag_id"]
-            for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
-        ]
-        if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids and not post["is_recurring"]:
-            raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
-        # Reconcile the rule's recurring series with the post-edit state: create/refresh it when the rule is
-        # (now or still) recurring — picking up a cadence change or a matcher edit that shifts membership —
-        # and drop it when the flag was turned off. Skipped entirely when the edit never touched recurring
-        # and the rule isn't recurring, so ordinary rule edits pay nothing.
-        if post and post["is_recurring"]:
-            _ensure_recurring_series(conn, rule_id, body.cadence)
-        elif body.is_recurring is False:
-            _drop_recurring_series_for_rule(conn, rule_id)
-        # Opt-in reconcile: re-evaluate the rows the pre-edit rule owned. Rows still matching the edited
-        # rule are unchanged; rows the edit dropped from scope clear or fall to another rule. Union with the
-        # rows the edited rule now matches so a broadened edit also stamps the newly-covered rows.
-        if reconcile:
-            affected_ids = set(affected)
-            post_rule = conn.execute(
-                f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
-                          owner_id, {rule_scope_account_sql()}, account_type, match_source_text
-                   FROM category_rule WHERE id = ?""",
-                (rule_id,),
-            ).fetchone()
-            if post_rule:
-                affected_ids.update(_rule_affected_txn_ids(conn, post_rule))
-            if affected_ids:
-                # Read before the write: a reconcile re-derives renames as well as categories, so a row
-                # can leave the payee group it is in now (see `_rescan_recurring`).
-                rescan_ids = list(affected_ids)
-                rescan_prior_keys = payee_keys_for_ids(conn, rescan_ids)
-                recategorize_all(conn, txn_ids=rescan_ids, retain_unmatched=False)
-    _rescan_recurring(rescan_ids, prior_payee_keys=rescan_prior_keys)
-    return {"ok": True, "status": "updated"}
+        if post_rule:
+            affected_ids.update(_rule_affected_txn_ids(conn, post_rule))
+        if affected_ids:
+            # Read before the write: a reconcile re-derives renames as well as categories, so a row
+            # can leave the payee group it is in now (see `_rescan_recurring`).
+            rescan_ids = list(affected_ids)
+            rescan_prior_keys = payee_keys_for_ids(conn, rescan_ids)
+            recategorize_all(conn, txn_ids=rescan_ids, retain_unmatched=False)
+    return {"ok": True, "status": "updated"}, rescan_ids, rescan_prior_keys
 
 
 @router.post("/{rule_id}/apply")
@@ -1194,34 +1205,38 @@ def list_trashed_rules():
 
 @router.post("/{rule_id}/restore")
 def restore_rule(rule_id: str):
+    with get_db() as conn:
+        _restore_trashed_rule(conn, rule_id)
+    return {"ok": True}
+
+
+def _restore_trashed_rule(conn, rule_id: str) -> None:
     """Restore a trashed rule. Refused if an *active* rule now shares its matcher (restoring would violate
     one-rule-per-matcher); the user resolves that by editing or purging."""
-    with get_db() as conn:
-        rule = conn.execute(
-            """SELECT id, keyword, match_expr, owner_id, account_id, account_type, amount_min, amount_max,
-                      debit_credit, match_source_text, is_recurring
-               FROM category_rule WHERE id = ? AND deleted_at IS NOT NULL""",
-            (rule_id,),
-        ).fetchone()
-        if not rule:
-            raise HTTPException(status_code=404, detail="Trashed rule not found")
-        clash = conn.execute(
-            """SELECT id FROM category_rule
-               WHERE id != ? AND deleted_at IS NULL
-                 AND keyword = ? AND match_expr IS ? AND owner_id IS ? AND account_id IS ?
-                 AND account_type IS ? AND amount_min IS ? AND amount_max IS ? AND debit_credit IS ?
-                 AND match_source_text IS ?""",
-            (rule_id, rule["keyword"], rule["match_expr"], rule["owner_id"], rule["account_id"],
-             rule["account_type"], rule["amount_min"], rule["amount_max"], rule["debit_credit"], rule["match_source_text"]),
-        ).fetchone()
-        if clash:
-            raise HTTPException(status_code=409, detail="An active rule with the same matcher already exists")
-        conn.execute("UPDATE category_rule SET deleted_at = NULL WHERE id = ?", (rule_id,))
-        if rule["is_recurring"]:
-            # The rule-backed series was dropped on trash; re-create it. The exact cadence isn't preserved
-            # across a trash/restore (a minor edge) — it resets to monthly and the user can adjust.
-            _ensure_recurring_series(conn, rule_id, "monthly")
-    return {"ok": True}
+    rule = conn.execute(
+        """SELECT id, keyword, match_expr, owner_id, account_id, account_type, amount_min, amount_max,
+                  debit_credit, match_source_text, is_recurring
+           FROM category_rule WHERE id = ? AND deleted_at IS NOT NULL""",
+        (rule_id,),
+    ).fetchone()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Trashed rule not found")
+    clash = conn.execute(
+        """SELECT id FROM category_rule
+           WHERE id != ? AND deleted_at IS NULL
+             AND keyword = ? AND match_expr IS ? AND owner_id IS ? AND account_id IS ?
+             AND account_type IS ? AND amount_min IS ? AND amount_max IS ? AND debit_credit IS ?
+             AND match_source_text IS ?""",
+        (rule_id, rule["keyword"], rule["match_expr"], rule["owner_id"], rule["account_id"],
+         rule["account_type"], rule["amount_min"], rule["amount_max"], rule["debit_credit"], rule["match_source_text"]),
+    ).fetchone()
+    if clash:
+        raise HTTPException(status_code=409, detail="An active rule with the same matcher already exists")
+    conn.execute("UPDATE category_rule SET deleted_at = NULL WHERE id = ?", (rule_id,))
+    if rule["is_recurring"]:
+        # The rule-backed series was dropped on trash; re-create it. The exact cadence isn't preserved
+        # across a trash/restore (a minor edge) — it resets to monthly and the user can adjust.
+        _ensure_recurring_series(conn, rule_id, "monthly")
 
 
 @router.delete("/{rule_id}/purge")

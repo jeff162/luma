@@ -36,12 +36,10 @@ import io
 import json
 import sqlite3
 import uuid
-import os
 import re
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
@@ -320,7 +318,7 @@ class BatchImportedCategoryUsageUpdateRequest(BaseModel):
     imported_category_unassigned_account_tokens: Optional[list[str]] = None
 
 
-class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
+class RuleSuggestionReviewUpdate(BaseModel):
     suggestion_id: str
     status: str
     rule_id: Optional[str] = None
@@ -370,21 +368,6 @@ class BatchRuleSuggestionMatchRefineRequest(BaseModel):
     amount_min: Optional[float] = None
     amount_max: Optional[float] = None
     match_source_text: bool = False
-
-
-class RuleSuggestionDebugTraceRequest(BaseModel):
-    correlation_id: str
-    client_sequence: int
-    event: str
-    phase: str
-    context_type: str
-    context_id: Optional[str] = None
-    suggestion_ids: list[str] = Field(default_factory=list)
-    transaction_ids: list[str] = Field(default_factory=list)
-    rule_ids: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
-    undo_snapshot: Optional[dict[str, Any]] = None
-    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class BatchRuleSuggestionMatchRequest(BaseModel):
@@ -2198,129 +2181,6 @@ def _save_system_rule_suggestion_review_state(conn, review_state: dict) -> None:
         SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY,
         {RULE_SUGGESTION_REVIEW_KEY: review_state},
     )
-
-
-# Temporary Generate Rules diagnostic trail:
-# - The client supplies workflow identities and correlation metadata, never transaction descriptions.
-# - The server enriches each event from committed SQLite state so optimistic UI cannot mask the cause.
-# - Output is a fixed local JSONL file under data/ui (or a test-only environment override).
-def _rule_suggestion_trace_path() -> Path:
-    override = os.getenv("LUMA_RULE_SUGGESTION_TRACE_PATH")
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[3] / "data" / "ui" / "import-rule-suggestion-debug.jsonl"
-
-
-def _load_rule_suggestion_trace_review_state(conn, body: RuleSuggestionDebugTraceRequest) -> dict:
-    if body.context_type == "batch" and body.context_id:
-        row = conn.execute(
-            "SELECT config_snapshot FROM import_batch WHERE id = ?",
-            (body.context_id,),
-        ).fetchone()
-        return get_rule_suggestion_review_state(safe_json_dict(row["config_snapshot"])) if row else {}
-    if body.context_type == "profile" and body.context_id:
-        row = conn.execute(
-            "SELECT column_map FROM csv_import_profile WHERE id = ?",
-            (body.context_id,),
-        ).fetchone()
-        return get_rule_suggestion_review_state(safe_json_dict(row["column_map"])) if row else {}
-    return _get_system_rule_suggestion_review_state(conn)
-
-
-def _build_rule_suggestion_trace_record(conn, body: RuleSuggestionDebugTraceRequest) -> dict:
-    transaction_ids = list(dict.fromkeys(str(value) for value in body.transaction_ids if str(value).strip()))[:5000]
-    rule_ids = list(dict.fromkeys(str(value) for value in body.rule_ids if str(value).strip()))[:500]
-    keywords = list(dict.fromkeys(normalize_rule_keyword(value) for value in body.keywords if normalize_rule_keyword(value)))[:500]
-    suggestion_ids = list(dict.fromkeys(str(value) for value in body.suggestion_ids if str(value).strip()))[:5000]
-
-    transactions = []
-    if transaction_ids:
-        placeholders = ",".join("?" * len(transaction_ids))
-        transactions = [
-            dict(row)
-            for row in conn.execute(
-                f"""
-                SELECT
-                    t.id,
-                    t.category_id,
-                    t.category_source,
-                    t.category_overridden,
-                    t.import_batch_id,
-                    b.use_imported_categories
-                FROM txn t
-                LEFT JOIN import_batch b ON b.id = t.import_batch_id
-                WHERE t.id IN ({placeholders})
-                ORDER BY t.id
-                """,
-                transaction_ids,
-            ).fetchall()
-        ]
-
-    rules = []
-    rule_where = []
-    rule_params = []
-    if rule_ids:
-        rule_where.append(f"r.id IN ({','.join('?' * len(rule_ids))})")
-        rule_params.extend(rule_ids)
-    if keywords:
-        rule_where.append(f"lower(r.keyword) IN ({','.join('?' * len(keywords))})")
-        rule_params.extend(keywords)
-    if rule_where:
-        rules = [
-            dict(row)
-            for row in conn.execute(
-                f"""
-                SELECT
-                    r.id,
-                    r.keyword,
-                    r.category_id,
-                    r.amount_min,
-                    r.amount_max,
-                    r.debit_credit,
-                    r.owner_id,
-                    r.account_id,
-                    r.match_source_text
-                FROM category_rule r
-                WHERE {" OR ".join(rule_where)}
-                ORDER BY r.id
-                """,
-                rule_params,
-            ).fetchall()
-        ]
-
-    review_state = _load_rule_suggestion_trace_review_state(conn, body)
-    review_statuses = review_state.get("statuses") or {}
-    review_entries = review_state.get("suggestions") or {}
-    suggestions = {
-        suggestion_id: {
-            "status": (review_statuses.get(suggestion_id) or {}).get("status") or "pending",
-            "rule_id": (review_statuses.get(suggestion_id) or {}).get("rule_id"),
-            "source_row_count": len((review_entries.get(suggestion_id) or {}).get("source_row_ids") or []),
-            "synthetic": bool((review_entries.get(suggestion_id) or {}).get("synthetic")),
-            "pending_override": bool((review_entries.get(suggestion_id) or {}).get("pending_override")),
-        }
-        for suggestion_id in suggestion_ids
-    }
-
-    return {
-        "server_timestamp": utcnow_iso(),
-        "correlation_id": body.correlation_id,
-        "client_sequence": body.client_sequence,
-        "event": body.event,
-        "phase": body.phase,
-        "context": {"type": body.context_type, "id": body.context_id},
-        "suggestion_ids": suggestion_ids,
-        "transaction_ids": transaction_ids,
-        "rule_ids": rule_ids,
-        "keywords": keywords,
-        "undo_snapshot": body.undo_snapshot,
-        "details": body.details,
-        "database": {
-            "transactions": transactions,
-            "rules": rules,
-            "suggestions": suggestions,
-        },
-    }
 
 
 def _get_unassigned_group(conn):
@@ -4516,118 +4376,114 @@ def _get_rule_suggestions(open_scope: _ReviewScopeOpener, owner_ids: Optional[st
     return result
 
 
-def _update_rule_suggestion_review(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionReviewUpdateRequest) -> dict:
-    status = (body.status or "").strip().lower()
+def record_rule_suggestion_review(conn, scope: _RuleSuggestionReviewScope, update: RuleSuggestionReviewUpdate) -> list[str]:
+    """Write one suggestion's review status and entry fields into `scope.review_state`, in place.
+
+    This is the review-state half of every rule-suggestion action (`rule_suggestion_actions`), which owns
+    the transaction, the rule and row writes around this call, and the one `scope.save` at its end. An
+    accept also discards the pending suggestions its matcher covers and, when the accepted matcher is
+    stricter than the rows the entry held, persists synthetic follow-ups for the leftover rows. Returns the
+    ids the accept discarded as covered.
+    """
+    status = (update.status or "").strip().lower()
     if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
         raise HTTPException(status_code=400, detail="Invalid review status")
 
-    with get_db() as conn:
-        scope = open_scope(conn)
-        review_state = scope.review_state
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
-        auto_discarded_suggestion_ids: list[str] = []
-        old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        if status == "pending":
-            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
-        suggestion_entries = dict(review_state.get("suggestions") or {})
-        suggestion_entries.setdefault(body.suggestion_id, {})
+    review_state = scope.review_state
+    suggestion_entries = dict(review_state.get("suggestions") or {})
+    suggestion_entries.setdefault(update.suggestion_id, {})
+    auto_discarded_suggestion_ids: list[str] = []
+    old_entry = dict(suggestion_entries.get(update.suggestion_id) or {})
+    if status == "pending":
+        _remove_pending_derived_rule_suggestions(review_state, update.suggestion_id)
+    suggestion_entries = dict(review_state.get("suggestions") or {})
+    suggestion_entries.setdefault(update.suggestion_id, {})
 
-        if body.merchant_label:
-            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
-        if body.target_category_name:
-            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
-        if body.target_category_id is not None:
-            suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
-        if body.keyword is not None:
-            suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
-        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
-        # its old scope even though the created rule was generalized.
-        if body.owner_id is not None or "owner_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None or "account_id" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
-        if body.amount_min is not None or "amount_min" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
-        if body.amount_max is not None or "amount_max" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
-        if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
-        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
-        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
-        if body.txn_count is not None or "txn_count" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
-        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
-            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
-                str(value) for value in (body.source_row_ids or []) if str(value).strip()
-            })
-        if body.review_action is not None or "review_action" in body.model_fields_set:
-            if isinstance(body.review_action, dict):
-                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
-            else:
-                suggestion_entries[body.suggestion_id].pop("review_action", None)
-
-        statuses = dict(review_state.get("statuses") or {})
-        synthetic_entries: list[dict] = []
-        if status == "pending":
-            statuses.pop(body.suggestion_id, None)
+    if update.merchant_label:
+        suggestion_entries[update.suggestion_id]["merchant_label"] = update.merchant_label
+    if update.target_category_name:
+        suggestion_entries[update.suggestion_id]["target_category_name"] = update.target_category_name
+    if update.target_category_id is not None:
+        suggestion_entries[update.suggestion_id]["target_category_id"] = update.target_category_id
+    if update.keyword is not None:
+        suggestion_entries[update.suggestion_id]["keyword"] = normalize_rule_keyword(update.keyword)
+    # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
+    # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
+    # its old scope even though the created rule was generalized.
+    if update.owner_id is not None or "owner_id" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["owner_id"] = update.owner_id or None
+    if update.account_id is not None or "account_id" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["account_id"] = update.account_id or None
+    if update.amount_min is not None or "amount_min" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["amount_min"] = update.amount_min
+    if update.amount_max is not None or "amount_max" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["amount_max"] = update.amount_max
+    if update.clean_name_suggestion is not None or "clean_name_suggestion" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["clean_name_suggestion"] = update.clean_name_suggestion
+    if update.match_source_text is not None or "match_source_text" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["match_source_text"] = bool(update.match_source_text)
+    if update.latest_txn_date is not None or "latest_txn_date" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["latest_txn_date"] = update.latest_txn_date
+    if update.txn_count is not None or "txn_count" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["txn_count"] = update.txn_count
+    if update.source_row_ids is not None or "source_row_ids" in update.model_fields_set:
+        suggestion_entries[update.suggestion_id]["source_row_ids"] = sorted({
+            str(value) for value in (update.source_row_ids or []) if str(value).strip()
+        })
+    if update.review_action is not None or "review_action" in update.model_fields_set:
+        if isinstance(update.review_action, dict):
+            suggestion_entries[update.suggestion_id]["review_action"] = update.review_action
         else:
-            next_status = {
-                "status": status,
-                "updated_at": utcnow_iso(),
-            }
-            if body.rule_id:
-                next_status["rule_id"] = body.rule_id
-            if body.created_rule_id:
-                next_status["created_rule_id"] = body.created_rule_id
-            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
-                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
-            if body.review_action is not None or "review_action" in body.model_fields_set:
-                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
-            statuses[body.suggestion_id] = next_status
-            review_state["statuses"] = statuses
-            if status == "accepted":
-                auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
-                    review_state,
-                    body.suggestion_id,
-                    suggestion_entries[body.suggestion_id],
-                )
-                statuses = dict(review_state.get("statuses") or {})
-                rows = scope.rows(conn)
-                if (
-                    old_entry
-                    and old_entry.get("source_row_ids")
-                    and _rule_suggestion_entry_covers(old_entry, suggestion_entries[body.suggestion_id], allow_equal_keyword=True)
-                    and not _rule_suggestion_entry_covers(suggestion_entries[body.suggestion_id], old_entry, allow_equal_keyword=True)
-                ):
-                    synthetic_entries = _build_synthetic_rule_suggestion_entries(
-                        conn,
-                        review_state,
-                        body.suggestion_id,
-                        suggestion_entries[body.suggestion_id],
-                        [dict(row) for row in rows],
-                    )
+            suggestion_entries[update.suggestion_id].pop("review_action", None)
 
-        review_state["suggestions"] = suggestion_entries
+    statuses = dict(review_state.get("statuses") or {})
+    synthetic_entries: list[dict] = []
+    if status == "pending":
+        statuses.pop(update.suggestion_id, None)
+    else:
+        next_status = {
+            "status": status,
+            "updated_at": utcnow_iso(),
+        }
+        if update.rule_id:
+            next_status["rule_id"] = update.rule_id
+        if update.created_rule_id:
+            next_status["created_rule_id"] = update.created_rule_id
+        if update.accepted_prior_rows is not None or "accepted_prior_rows" in update.model_fields_set:
+            next_status["accepted_prior_rows"] = list(update.accepted_prior_rows or [])
+        if update.review_action is not None or "review_action" in update.model_fields_set:
+            next_status["review_action"] = update.review_action if isinstance(update.review_action, dict) else None
+        statuses[update.suggestion_id] = next_status
         review_state["statuses"] = statuses
-        if synthetic_entries:
-            for entry in synthetic_entries:
-                suggestion_id = entry.pop("id")
-                review_state["suggestions"][suggestion_id] = entry
-        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
-        review_summary = summarize_rule_suggestion_review(review_state)
-        scope.save(conn)
+        if status == "accepted":
+            auto_discarded_suggestion_ids = _discard_covered_rule_suggestions(
+                review_state,
+                update.suggestion_id,
+                suggestion_entries[update.suggestion_id],
+            )
+            statuses = dict(review_state.get("statuses") or {})
+            if (
+                old_entry
+                and old_entry.get("source_row_ids")
+                and _rule_suggestion_entry_covers(old_entry, suggestion_entries[update.suggestion_id], allow_equal_keyword=True)
+                and not _rule_suggestion_entry_covers(suggestion_entries[update.suggestion_id], old_entry, allow_equal_keyword=True)
+            ):
+                synthetic_entries = _build_synthetic_rule_suggestion_entries(
+                    conn,
+                    review_state,
+                    update.suggestion_id,
+                    suggestion_entries[update.suggestion_id],
+                    [dict(row) for row in scope.rows(conn)],
+                )
 
-    return {
-        "ok": True,
-        "review_summary": review_summary,
-        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
-        "generated_at": review_state.get("generated_at"),
-        "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
-    }
+    review_state["suggestions"] = suggestion_entries
+    review_state["statuses"] = statuses
+    if synthetic_entries:
+        for entry in synthetic_entries:
+            suggestion_id = entry.pop("id")
+            review_state["suggestions"][suggestion_id] = entry
+    _prune_phantom_rule_suggestion_entry(review_state, update.suggestion_id, status)
+    return auto_discarded_suggestion_ids
 
 
 def _clear_rule_suggestions(open_scope: _ReviewScopeOpener, body: RuleSuggestionClearRequest) -> dict:
@@ -4655,46 +4511,44 @@ def _refine_rule_suggestion_match(open_scope: _ReviewScopeOpener, body: BatchRul
     return result
 
 
-def _rule_suggestion_matches(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionMatchRequest) -> dict:
+def _rule_suggestion_matching_rows(conn, scope: _RuleSuggestionReviewScope, body: BatchRuleSuggestionMatchRequest) -> list[dict]:
+    """The scope's rows a suggestion matcher reaches, each carrying its resolved import target — the rows
+    behind the matching-rows report, and the candidates an accepted suggestion's edit redraws its partition
+    over."""
     keyword = normalize_rule_keyword(body.keyword or "")
-    if not keyword:
-        raise HTTPException(status_code=400, detail="keyword required")
-
-    with get_db() as conn:
-        scope = open_scope(conn)
-        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
-        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
-        rows = conn.execute(
-            f"""
-            SELECT
-                t.id,
-                t.date,
-                t.amount,
-                t.merchant_name,
-                t.display_name,
-                t.raw_name,
-                t.imported_category,
-                t.category_id,
-                t.category_overridden,
-                t.category_source,
-                t.import_evidence_json,
-                COALESCE(a.parent_account_id, t.account_id) AS account_id,
-                t.owner_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                COALESCE(p.mask, a.mask) AS account_mask,
-                o.name AS owner_name
-            FROM txn t
-            {scope.batch_join}
-            LEFT JOIN account a ON a.id = t.account_id
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            WHERE {scope.txn_filter}
-              {row_scope_clause}
-              {candidate_source_clause}
-            ORDER BY t.date DESC, t.id DESC
-            """,
-            [*scope.txn_params, *row_ids],
-        ).fetchall()
+    categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+    row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
+    rows = conn.execute(
+        f"""
+        SELECT
+            t.id,
+            t.date,
+            t.amount,
+            t.merchant_name,
+            t.display_name,
+            t.raw_name,
+            t.imported_category,
+            t.category_id,
+            t.category_overridden,
+            t.category_source,
+            t.import_evidence_json,
+            COALESCE(a.parent_account_id, t.account_id) AS account_id,
+            t.owner_id,
+            COALESCE(a.display_name, a.name) AS account_name,
+            COALESCE(p.mask, a.mask) AS account_mask,
+            o.name AS owner_name
+        FROM txn t
+        {scope.batch_join}
+        LEFT JOIN account a ON a.id = t.account_id
+        LEFT JOIN account p ON p.id = a.parent_account_id
+        LEFT JOIN owner o ON o.id = t.owner_id
+        WHERE {scope.txn_filter}
+          {row_scope_clause}
+          {candidate_source_clause}
+        ORDER BY t.date DESC, t.id DESC
+        """,
+        [*scope.txn_params, *row_ids],
+    ).fetchall()
 
     matching_rows = []
     for base_row in rows:
@@ -4730,6 +4584,18 @@ def _rule_suggestion_matches(open_scope: _ReviewScopeOpener, body: BatchRuleSugg
         )
         matching_rows.append(row)
 
+    return matching_rows
+
+
+def _rule_suggestion_matches(open_scope: _ReviewScopeOpener, body: BatchRuleSuggestionMatchRequest) -> dict:
+    keyword = normalize_rule_keyword(body.keyword or "")
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword required")
+
+    with get_db() as conn:
+        scope = open_scope(conn)
+        matching_rows = _rule_suggestion_matching_rows(conn, scope, body)
+
     return {
         **scope.report_identity,
         "keyword": keyword,
@@ -4742,11 +4608,6 @@ def _rule_suggestion_matches(open_scope: _ReviewScopeOpener, body: BatchRuleSugg
 @router.get("/batches/{batch_id}/rule-suggestions")
 def get_batch_rule_suggestions(batch_id: str, owner_ids: Optional[str] = Query(None)):
     return _get_rule_suggestions(lambda conn: _open_batch_review_scope(conn, batch_id), owner_ids)
-
-
-@router.post("/batches/{batch_id}/rule-suggestions/review")
-def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestionReviewUpdateRequest):
-    return _update_rule_suggestion_review(lambda conn: _open_batch_review_scope(conn, batch_id), body)
 
 
 @router.post("/batches/{batch_id}/rule-suggestions/clear")
@@ -4774,11 +4635,6 @@ def get_profile_rule_suggestions(profile_id: str, owner_ids: Optional[str] = Que
     return _get_rule_suggestions(lambda conn: _open_profile_review_scope(conn, profile_id), owner_ids)
 
 
-@router.post("/profiles/{profile_id}/rule-suggestions/review")
-def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSuggestionReviewUpdateRequest):
-    return _update_rule_suggestion_review(lambda conn: _open_profile_review_scope(conn, profile_id), body)
-
-
 @router.post("/profiles/{profile_id}/rule-suggestions/clear")
 def clear_profile_rule_suggestions(profile_id: str, body: RuleSuggestionClearRequest):
     return _clear_rule_suggestions(lambda conn: _open_profile_review_scope(conn, profile_id), body)
@@ -4804,11 +4660,6 @@ def get_system_rule_suggestions(owner_ids: Optional[str] = Query(None)):
     return _get_rule_suggestions(_open_system_review_scope, owner_ids)
 
 
-@router.post("/rule-suggestions/review")
-def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRequest):
-    return _update_rule_suggestion_review(_open_system_review_scope, body)
-
-
 @router.post("/rule-suggestions/clear")
 def clear_system_rule_suggestions(body: RuleSuggestionClearRequest):
     return _clear_rule_suggestions(_open_system_review_scope, body)
@@ -4827,17 +4678,6 @@ def refine_system_rule_suggestion_match(body: BatchRuleSuggestionMatchRefineRequ
 @router.post("/rule-suggestions/matches")
 def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
     return _rule_suggestion_matches(_open_system_review_scope, body)
-
-
-@router.post("/rule-suggestions/debug-trace")
-def write_rule_suggestion_debug_trace(body: RuleSuggestionDebugTraceRequest):
-    with get_db() as conn:
-        record = _build_rule_suggestion_trace_record(conn, body)
-    path = _rule_suggestion_trace_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as trace_file:
-        trace_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-    return {"ok": True}
 
 
 @router.patch("/batches/{batch_id}/imported-category-usage")

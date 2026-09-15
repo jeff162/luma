@@ -133,6 +133,12 @@ function summaryFilterParams(opts = {}) {
   return out
 }
 
+function ruleSuggestionScopePath({ batchId, profileId } = {}) {
+  if (batchId) return `/import-export/batches/${batchId}/rule-suggestions`
+  if (profileId) return `/import-export/profiles/${profileId}/rule-suggestions`
+  return '/import-export/rule-suggestions'
+}
+
 export const api = {
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
@@ -414,24 +420,6 @@ export const api = {
       body: JSON.stringify({ category_id, notes }),
     }),
 
-  // Settle the rows behind a rejected rule suggestion. mode 'keep' records a category as a manual
-  // decision (the existing one, or `category_id` when given — the conflict screen's "keep as a
-  // different category"); mode 'clear' discards it to the `cleared` source (rule-eligible, label kept,
-  // not re-grabbed by a trust-flag re-toggle). Both clear the `import` source and spare manual edits.
-  setRejectedSuggestionDisposition: (transaction_ids, mode, category_id = null) =>
-    request('/transactions/rejected-suggestion-disposition', {
-      method: 'POST',
-      body: JSON.stringify({ transaction_ids, mode, category_id }),
-    }),
-
-  // Undo for the above: restore each row to a previously captured category snapshot (the `rows`
-  // returned by setRejectedSuggestionDisposition).
-  restoreCategorization: (rows) =>
-    request('/transactions/restore-categorization', {
-      method: 'POST',
-      body: JSON.stringify({ rows }),
-    }),
-
   // Re-pin an imported transaction's category as a corrected *file* categorization (keeps it driving
   // rule suggestions), vs overrideCategory which marks it a manual exception.
   setImportedCategory: (txnId, category_id) =>
@@ -692,20 +680,10 @@ export const api = {
   // the charge unclaimed.
   widenRuleRange: (id, bound, amount) =>
     request(`/rules/${id}/widen`, { method: 'POST', body: JSON.stringify({ bound, amount }) }),
-  // Apply a rule's outputs to a specific set of transactions (the rows that generated an accepted
-  // import-rule suggestion), leaving conflicting rows and manual exceptions alone.
-  applyRuleToTransactions: (id, transaction_ids) =>
-    request(`/rules/${id}/apply-to-transactions`, { method: 'POST', body: JSON.stringify({ transaction_ids }) }),
   // `reconcile` (default off) re-evaluates the transactions this rule categorized so they revert instead
   // of retaining the deleted rule's category.
   deleteRule: (id, { reconcile } = {}) =>
     request(`/rules/${id}${reconcile ? '?reconcile=true' : ''}`, { method: 'DELETE' }),
-  traceImportRuleSuggestionAction: data =>
-    request('/import-export/rule-suggestions/debug-trace', {
-      method: 'POST',
-      body: JSON.stringify(data),
-      suppressMutationSignal: true,
-    }),
 
   // days <= 0 means "all available history" (the connect/refresh backfill). connectionId scopes the sync
   // to one connection so a backfill doesn't re-pull every other bank; omit it to sync all connections.
@@ -982,11 +960,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  updateBatchRuleSuggestionReview: (id, payload) =>
-    request(`/import-export/batches/${id}/rule-suggestions/review`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
   clearBatchRuleSuggestions: (id, status, suggestionIds = null) =>
     request(`/import-export/batches/${id}/rule-suggestions/clear`, {
       method: 'POST',
@@ -996,11 +969,6 @@ export const api = {
     request(`/import-export/batches/${id}/rule-suggestions/trash/${trashSetId}/restore`, { method: 'POST' }),
   refineBatchRuleSuggestionMatch: (id, payload) =>
     request(`/import-export/batches/${id}/rule-suggestions/refine-match`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  updateSystemRuleSuggestionReview: (payload) =>
-    request('/import-export/rule-suggestions/review', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -1016,11 +984,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  updateProfileRuleSuggestionReview: (id, payload) =>
-    request(`/import-export/profiles/${id}/rule-suggestions/review`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
   clearProfileRuleSuggestions: (id, status, suggestionIds = null) =>
     request(`/import-export/profiles/${id}/rule-suggestions/clear`, {
       method: 'POST',
@@ -1032,6 +995,28 @@ export const api = {
     request(`/import-export/profiles/${id}/rule-suggestions/refine-match`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  // The review's actions, each one transaction server-side that answers with an `undo` payload for
+  // undoRuleSuggestionAction. `scope` names the review: `{ batchId }`, `{ profileId }`, or `{}` for system.
+  acceptRuleSuggestions: (scope, items) =>
+    request(`${ruleSuggestionScopePath(scope)}/accept`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
+  setRuleSuggestionStatus: (scope, items, status, { clearCategories = false } = {}) =>
+    request(`${ruleSuggestionScopePath(scope)}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ items, status, clear_categories: clearCategories }),
+    }),
+  resolveRuleSuggestionConflictSet: (scope, members, winnerId) =>
+    request(`${ruleSuggestionScopePath(scope)}/resolve-conflict-set`, {
+      method: 'POST',
+      body: JSON.stringify({ members, winner_id: winnerId }),
+    }),
+  undoRuleSuggestionAction: (scope, undo) =>
+    request(`${ruleSuggestionScopePath(scope)}/undo`, {
+      method: 'POST',
+      body: JSON.stringify(undo),
     }),
   applyBatchCategoryMappings: (id, assignments) =>
     request(`/import-export/batches/${id}/category-mappings`, { method: 'POST', body: JSON.stringify({ assignments }) }),

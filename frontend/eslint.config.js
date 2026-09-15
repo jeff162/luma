@@ -25,6 +25,10 @@ const txnMutationRestrictions = [
   { object: 'api', property: 'widenRuleRange', message: 'Use txnMutations.widenRuleRange so derived counts get invalidated.' },
   { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
   { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
+  { object: 'api', property: 'acceptRuleSuggestions', message: 'Use txnMutations.acceptRuleSuggestions so derived counts get invalidated.' },
+  { object: 'api', property: 'setRuleSuggestionStatus', message: 'Use txnMutations.setRuleSuggestionStatus so derived counts get invalidated.' },
+  { object: 'api', property: 'resolveRuleSuggestionConflictSet', message: 'Use txnMutations.resolveRuleSuggestionConflictSet so derived counts get invalidated.' },
+  { object: 'api', property: 'undoRuleSuggestionAction', message: 'Use txnMutations.undoRuleSuggestionAction so derived counts get invalidated.' },
 ]
 
 // User preferences have a single public pathway: useUserPreference / setPreference from

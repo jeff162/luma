@@ -71,26 +71,28 @@ export const txnMutations = {
     return result
   },
 
-  // Apply a rule's outputs to the specific rows that generated an accepted import-rule suggestion.
-  async applyRuleToTransactions(ruleId, transactionIds) {
-    const result = await api.applyRuleToTransactions(ruleId, transactionIds)
+  // The Generate Rules review actions: each is one transaction that may claim, settle or restore rows, and
+  // each answers with an `undo` payload that undoRuleSuggestionAction reverses.
+  async acceptRuleSuggestions(scope, items) {
+    const result = await api.acceptRuleSuggestions(scope, items)
     notifyTransactionsChanged()
     return result
   },
 
-  // Settle the rows behind a rejected suggestion: 'keep' marks them manual (category kept, or set to
-  // `categoryId` when given — the conflict screen's "keep as a different category"), 'clear' discards
-  // the category to the `cleared` source. Both drop the import lock and spare manual edits. Returns
-  // `{ updated, rows }` where `rows` is the prior state of the changed rows (for Undo).
-  async setRejectedSuggestionDisposition(transactionIds, mode, categoryId = null) {
-    const result = await api.setRejectedSuggestionDisposition(transactionIds, mode, categoryId)
+  async setRuleSuggestionStatus(scope, items, status, options) {
+    const result = await api.setRuleSuggestionStatus(scope, items, status, options)
     notifyTransactionsChanged()
     return result
   },
 
-  // Undo a disposition: restore rows to the prior-state snapshot returned above.
-  async restoreCategorization(rows) {
-    const result = await api.restoreCategorization(rows)
+  async resolveRuleSuggestionConflictSet(scope, members, winnerId) {
+    const result = await api.resolveRuleSuggestionConflictSet(scope, members, winnerId)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  async undoRuleSuggestionAction(scope, undo) {
+    const result = await api.undoRuleSuggestionAction(scope, undo)
     notifyTransactionsChanged()
     return result
   },

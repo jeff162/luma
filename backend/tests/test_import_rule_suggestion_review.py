@@ -25,11 +25,17 @@ from backend.routers.import_export import (
     RULE_SUGGESTION_REVIEW_KEY,
     BatchRuleSuggestionMatchRequest,
     BatchRuleSuggestionMatchRefineRequest,
-    BatchRuleSuggestionReviewUpdateRequest,
-    RuleSuggestionDebugTraceRequest,
+    RuleSuggestionAcceptRequest,
+    RuleSuggestionConflictSetRequest,
+    RuleSuggestionReviewUpdate,
+    RuleSuggestionStatusRequest,
+    RuleSuggestionUndoRequest,
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
+    accept_batch_rule_suggestions,
+    accept_profile_rule_suggestions,
+    accept_system_rule_suggestions,
     clear_batch_rule_suggestions,
     clear_profile_rule_suggestions,
     clear_system_rule_suggestions,
@@ -39,18 +45,23 @@ from backend.routers.import_export import (
     get_profile_rule_suggestions,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
+    record_rule_suggestion_review,
     refine_batch_rule_suggestion_match,
     refine_profile_rule_suggestion_match,
     refine_system_rule_suggestion_match,
+    resolve_batch_rule_suggestion_conflict_set,
     restore_batch_rule_suggestion_trash_set,
     restore_profile_rule_suggestion_trash_set,
     restore_system_rule_suggestion_trash_set,
     RuleSuggestionClearRequest,
-    update_batch_rule_suggestion_review,
-    update_profile_rule_suggestion_review,
-    update_system_rule_suggestion_review,
-    write_rule_suggestion_debug_trace,
+    set_batch_rule_suggestion_status,
+    set_profile_rule_suggestion_status,
+    summarize_rule_suggestion_review,
+    undo_batch_rule_suggestion_action,
+    undo_profile_rule_suggestion_action,
+    undo_system_rule_suggestion_action,
 )
+from backend.routers.import_export.core import _open_batch_review_scope, _open_profile_review_scope, _open_system_review_scope
 from backend.routers.rules import (
     ApplyToTransactionsBody,
     RuleCreate,
@@ -58,6 +69,16 @@ from backend.routers.rules import (
     create_rule,
 )
 from backend.routers.transactions import CategoryOverride, set_imported_category
+
+
+def _record_review(update: RuleSuggestionReviewUpdate, open_scope=_open_system_review_scope) -> dict:
+    """Write one review update the way an action's review-state half does, without its rule and row writes."""
+    with get_db() as conn:
+        scope = open_scope(conn)
+        auto_discarded = record_rule_suggestion_review(conn, scope, update)
+        review_summary = summarize_rule_suggestion_review(scope.review_state)
+        scope.save(conn)
+    return {"review_summary": review_summary, "auto_discarded_suggestion_ids": auto_discarded}
 
 
 class ImportRuleSuggestionReviewTests(unittest.TestCase):
@@ -234,6 +255,51 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                         ),
                     )
 
+    def _categorization(self, txn_ids) -> dict:
+        txn_ids = list(txn_ids)
+        with self._use_db_path(), get_db() as conn:
+            return {
+                row["id"]: (row["category_id"], row["category_source"])
+                for row in conn.execute(
+                    f"SELECT id, category_id, category_source FROM txn WHERE id IN ({','.join('?' * len(txn_ids))})",
+                    txn_ids,
+                ).fetchall()
+            }
+
+    def _sources(self, txn_ids) -> dict:
+        return {txn_id: source for txn_id, (_, source) in self._categorization(txn_ids).items()}
+
+    def _rule_row(self, rule_id: str) -> dict | None:
+        with self._use_db_path(), get_db() as conn:
+            row = conn.execute("SELECT id, category_id, amount_min, deleted_at FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+        return dict(row) if row else None
+
+    def _stored_review(self, open_scope) -> dict:
+        with self._use_db_path(), get_db() as conn:
+            return open_scope(conn).review_state
+
+    def _accept_item(self, suggestion_id: str, row_ids, rule: dict, **extra) -> dict:
+        return {
+            "suggestion_id": suggestion_id,
+            "source_row_ids": list(row_ids),
+            "merchant_label": rule["keyword"].title(),
+            "rule": rule,
+            **extra,
+        }
+
+    def _import_rows(self, *, batch_id: str, account_id: str, category_id: str, merchant_name: str, amounts) -> list[str]:
+        return [
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_id,
+                category_id=category_id,
+                imported_category=merchant_name,
+                merchant_name=merchant_name,
+                amount=amount,
+            )
+            for amount in amounts
+        ]
+
     # --- undo / data-less restore invariants -----------------------------------------------------
     # Undo replays only {suggestion_id, status} (no entry data). The review endpoints `setdefault` an
     # entry for whatever id they're given, so a data-less call could persist an empty `{}` card and
@@ -245,7 +311,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "statuses": {"alpha": {"status": "accepted"}},
         })
         with self._use_db_path():
-            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            result = _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="ghost", status="accepted",
             ))
         self.assertEqual(result["review_summary"]["total_count"], 1)
@@ -263,7 +329,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "statuses": {"alpha": {"status": "accepted"}},
         })
         with self._use_db_path():
-            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            result = _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="alpha", status="pending",
             ))
         self.assertEqual(result["review_summary"]["total_count"], 0)
@@ -279,7 +345,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "statuses": {},
         })
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="syn", status="pending",
             ))
         state = self._load_review_state()
@@ -317,7 +383,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "statuses": {},
         })
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id=suggestion_id,
                 status="accepted",
                 rule_id=rule_id,
@@ -408,7 +474,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         })
 
         with self._use_db_path():
-            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            result = _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="wholefds",
                 status="accepted",
                 keyword="wholefds",
@@ -446,7 +512,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         })
 
         with self._use_db_path():
-            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            result = _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="wholefds acct1",
                 status="accepted",
                 keyword="wholefds acct1",
@@ -485,7 +551,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         })
 
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id=source_suggestion_id,
                 status="accepted",
                 keyword="wholefds brklne",
@@ -881,7 +947,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             conn.commit()
 
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id=refined[0]["id"],
                 status="accepted",
                 rule_id="fixture-rule-id",
@@ -1240,7 +1306,8 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "batch": {
                 "rows": set(batch_rows),
                 "get": lambda: get_batch_rule_suggestions(batch_id, None),
-                "review": lambda body: update_batch_rule_suggestion_review(batch_id, body),
+                "accept": lambda body: accept_batch_rule_suggestions(batch_id, body),
+                "undo": lambda body: undo_batch_rule_suggestion_action(batch_id, body),
                 "clear": lambda body: clear_batch_rule_suggestions(batch_id, body),
                 "restore": lambda trash_id: restore_batch_rule_suggestion_trash_set(batch_id, trash_id),
                 "refine": lambda body: refine_batch_rule_suggestion_match(batch_id, body),
@@ -1250,7 +1317,8 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "profile": {
                 "rows": set(batch_rows + sibling_rows),
                 "get": lambda: get_profile_rule_suggestions(profile_id, None),
-                "review": lambda body: update_profile_rule_suggestion_review(profile_id, body),
+                "accept": lambda body: accept_profile_rule_suggestions(profile_id, body),
+                "undo": lambda body: undo_profile_rule_suggestion_action(profile_id, body),
                 "clear": lambda body: clear_profile_rule_suggestions(profile_id, body),
                 "restore": lambda trash_id: restore_profile_rule_suggestion_trash_set(profile_id, trash_id),
                 "refine": lambda body: refine_profile_rule_suggestion_match(profile_id, body),
@@ -1260,7 +1328,8 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             "system": {
                 "rows": set(batch_rows + sibling_rows + outside_rows),
                 "get": lambda: get_system_rule_suggestions(None),
-                "review": update_system_rule_suggestion_review,
+                "accept": accept_system_rule_suggestions,
+                "undo": undo_system_rule_suggestion_action,
                 "clear": clear_system_rule_suggestions,
                 "restore": restore_system_rule_suggestion_trash_set,
                 "refine": refine_system_rule_suggestion_match,
@@ -1296,17 +1365,17 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                     for key, value in scope["identity"].items():
                         self.assertEqual(matches[key], value)
 
-                    # A stricter accept leaves a follow-up built from this scope's rows.
-                    scope["review"](BatchRuleSuggestionReviewUpdateRequest(
-                        suggestion_id=suggestion["id"],
-                        status="accepted",
-                        keyword="harborline market",
-                        merchant_label=suggestion["merchant_label"],
-                        target_category_id=leaf,
-                        target_category_name="FixtureScopeMarket",
-                        amount_min=30,
-                        amount_max=40,
-                    ))
+                    # A stricter accept claims only the row its matcher reaches and leaves a follow-up built
+                    # from this scope's other rows.
+                    accepted = scope["accept"](RuleSuggestionAcceptRequest(items=[self._accept_item(
+                        suggestion["id"],
+                        suggestion["source_row_ids"],
+                        {"keyword": "harborline market", "category_id": leaf, "amount_min": 30, "amount_max": 40},
+                    )]))
+                    self.assertEqual(
+                        self._sources(scope["rows"]),
+                        {row_id: "rule" if row_id == batch_rows[2] else "import" for row_id in scope["rows"]},
+                    )
                     state = stored(name)
                     self.assertEqual(state["statuses"][suggestion["id"]]["status"], "accepted")
                     followups = [entry for entry in state["suggestions"].values() if entry.get("synthetic")]
@@ -1334,14 +1403,19 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                     self.assertEqual(len(overrides), 1)
                     self.assertEqual(set(overrides[0]["source_row_ids"]), scope["rows"] - {batch_rows[2]})
 
+                    # Undo reverses the accept through the same scope, so the next scope starts from import rows.
+                    scope["undo"](RuleSuggestionUndoRequest(**accepted["undo"]))
+                    self.assertEqual(set(self._sources(scope["rows"]).values()), {"import"})
+                    self.assertNotIn(suggestion["id"], stored(name)["statuses"])
+
             missing = str(uuid.uuid4())
             with self.assertRaises(HTTPException) as batch_missing:
                 get_batch_rule_suggestions(missing, None)
             self.assertEqual(batch_missing.exception.status_code, 404)
             with self.assertRaises(HTTPException) as profile_missing:
-                update_profile_rule_suggestion_review(
+                set_profile_rule_suggestion_status(
                     missing,
-                    BatchRuleSuggestionReviewUpdateRequest(suggestion_id="any", status="skipped"),
+                    RuleSuggestionStatusRequest(items=[{"suggestion_id": "any"}], status="skipped"),
                 )
             self.assertEqual(profile_missing.exception.status_code, 404)
 
@@ -1383,18 +1457,12 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
             suggestion = pending[0]
 
-            # Accept it the way the UI does: create the rule, apply it to the rows (flipping them to
-            # category_source='rule'), then record the acceptance.
-            created = create_rule(RuleCreate(keyword=suggestion["keyword"], category_id=category_id))
-            apply_rule_to_transactions(created["id"], ApplyToTransactionsBody(transaction_ids=row_ids))
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
-                suggestion_id=suggestion["id"],
-                status="accepted",
-                rule_id=created["id"],
-                keyword=suggestion["keyword"],
-                target_category_id=category_id,
-                target_category_name="Groceries",
-            ))
+            # Accept it the way the UI does: one action creates the rule, claims the rows (flipping them to
+            # category_source='rule') and records the acceptance.
+            result = accept_system_rule_suggestions(RuleSuggestionAcceptRequest(items=[self._accept_item(
+                suggestion["id"], suggestion["source_row_ids"], {"keyword": suggestion["keyword"], "category_id": category_id},
+            )]))
+            created_rule_id = result["undo"]["trash_rule_ids"][0]
 
             after = get_system_rule_suggestions("")
 
@@ -1413,7 +1481,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(accepted["review_status"], "accepted")
         # The accepted rule's id is surfaced so the editor updates that rule in place instead of
         # creating a duplicate when an already-accepted suggestion is edited.
-        self.assertEqual(accepted["rule_id"], created["id"])
+        self.assertEqual(accepted["rule_id"], created_rule_id)
 
         # The returned list must match the summary pills the UI renders, status for status.
         status_counts = Counter(s["review_status"] for s in after["suggestions"])
@@ -1562,7 +1630,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         with self._use_db_path():
             initial = get_system_rule_suggestions("")
             suggestion = next(s for s in initial["suggestions"] if s["keyword"] == "fixture power")
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id=suggestion["id"],
                 status="discarded",
                 keyword=suggestion["keyword"],
@@ -1601,7 +1669,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         })
 
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="aji restaurant",
                 status="accepted",
                 rule_id="rule-1",
@@ -1633,7 +1701,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         })
 
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="fixture pharmacy",
                 status="accepted",
                 rule_id="rule-1",
@@ -1675,7 +1743,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         }
 
         with self._use_db_path():
-            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+            _record_review(RuleSuggestionReviewUpdate(
                 suggestion_id="fixture cafe",
                 status="discarded",
                 keyword="fixture cafe",
@@ -1688,69 +1756,305 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(review_state["suggestions"]["fixture cafe"]["review_action"], review_action)
         self.assertEqual(review_state["statuses"]["fixture cafe"]["review_action"], review_action)
 
-    def test_debug_trace_enriches_identifiers_from_committed_database_state(self):
-        account_id = self._insert_account("Primary Checking")
-        category_id = self._insert_expense_leaf("Groceries")
+    # --- review actions ----------------------------------------------------------------------------------
+    # Each action is one transaction over rules, rows and review state, and its undo payload reverses all
+    # three. These drive the lifecycle transitions through non-system scopes and assert the three together,
+    # before and after undo.
+
+    def test_accept_claims_the_suggestion_rows_and_undo_reverses_rule_rows_and_review(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureRiverstoneBakery")
         batch_id = self._insert_import_batch()
-        txn_id = self._insert_import_transaction(
-            batch_id=batch_id,
-            account_id=account_id,
-            category_id=category_id,
-            merchant_name="Fixture Merchant",
-            amount=12.34,
-        )
-        rule_id = str(uuid.uuid4())
-        self._save_review_state({
-            "suggestions": {
-                "fixture merchant": {
-                    "keyword": "fixture merchant",
-                    "merchant_label": "Fixture Merchant",
-                    "source_row_ids": [txn_id],
-                },
-            },
-            "statuses": {},
-        })
+        row_ids = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Riverstone Bakery", amounts=[8, 9])
+        open_scope = lambda conn: _open_batch_review_scope(conn, batch_id)
+
         with self._use_db_path():
-            with get_db() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO category_rule (id, category_id, keyword)
-                    VALUES (?, ?, 'fixture merchant')
-                    """,
-                    (rule_id, category_id),
-                )
+            suggestion = next(s for s in get_batch_rule_suggestions(batch_id, None)["suggestions"] if s["keyword"] == "riverstone bakery")
+            result = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                self._accept_item(suggestion["id"], suggestion["source_row_ids"], {"keyword": "riverstone bakery", "category_id": leaf}),
+            ]))
 
-        trace_path = Path(self.tempdir.name) / "trace.jsonl"
-        with patch.dict("os.environ", {"LUMA_RULE_SUGGESTION_TRACE_PATH": str(trace_path)}):
-            with self._use_db_path():
-                result = write_rule_suggestion_debug_trace(RuleSuggestionDebugTraceRequest(
-                    correlation_id="trace-1",
-                    client_sequence=1,
-                    event="bulk-save",
-                    phase="before",
-                    context_type="system",
-                    suggestion_ids=["fixture merchant"],
-                    transaction_ids=[txn_id],
-                    rule_ids=[rule_id],
-                    keywords=["fixture merchant"],
-                    undo_snapshot={"rows": [], "rule_ids": []},
-                    details={"selected_count": 1},
-                ))
+        rule_id = result["undo"]["trash_rule_ids"][0]
+        self.assertEqual(result["summary"]["created"], 1)
+        self.assertIsNone(self._rule_row(rule_id)["deleted_at"])
+        self.assertEqual(set(self._sources(row_ids).values()), {"rule"})
+        status = self._stored_review(open_scope)["statuses"][suggestion["id"]]
+        self.assertEqual((status["status"], status["rule_id"], status["created_rule_id"]), ("accepted", rule_id, rule_id))
+        self.assertEqual({row["id"] for row in status["accepted_prior_rows"]}, set(row_ids))
 
-        self.assertEqual(result, {"ok": True})
-        record = json.loads(trace_path.read_text(encoding="utf-8").strip())
-        self.assertEqual(record["correlation_id"], "trace-1")
-        self.assertEqual(record["database"]["transactions"], [{
-            "id": txn_id,
-            "category_id": category_id,
-            "category_source": "import",
-            "category_overridden": 0,
-            "import_batch_id": batch_id,
-            "use_imported_categories": 1,
-        }])
-        self.assertEqual(record["database"]["rules"][0]["id"], rule_id)
-        self.assertEqual(record["database"]["suggestions"]["fixture merchant"]["status"], "pending")
-        self.assertEqual(record["database"]["suggestions"]["fixture merchant"]["source_row_count"], 1)
+        with self._use_db_path():
+            undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**result["undo"]))
+            regenerated = [s for s in get_batch_rule_suggestions(batch_id, None)["suggestions"] if s["id"] == suggestion["id"]]
+
+        # Trashed rather than deleted, so an undone accept's rule stays recoverable.
+        self.assertIsNotNone(self._rule_row(rule_id)["deleted_at"])
+        self.assertEqual(self._categorization(row_ids), {row_id: (leaf, "import") for row_id in row_ids})
+        self.assertNotIn(suggestion["id"], self._stored_review(open_scope)["statuses"])
+        self.assertEqual([s["review_status"] for s in regenerated], ["pending"])
+
+    def test_undo_of_accept_with_apply_to_existing_restores_rows_outside_the_suggestion(self):
+        account_id = self._insert_account("Card")
+        fuel = self._insert_expense_leaf("FixtureNorthgateFuel")
+        other = self._insert_expense_leaf("FixtureNorthgateOther")
+        profile_id = self._insert_import_profile()
+        batch_id = self._insert_import_batch()
+        outside_batch_id = self._insert_import_batch()
+        self._assign_batch_to_profile(batch_id, profile_id)
+        row_ids = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=fuel, merchant_name="Northgate Fuel", amounts=[40, 42])
+        outside_id = self._import_rows(batch_id=outside_batch_id, account_id=account_id, category_id=other, merchant_name="Northgate Fuel", amounts=[41])[0]
+
+        with self._use_db_path():
+            result = accept_profile_rule_suggestions(profile_id, RuleSuggestionAcceptRequest(items=[
+                self._accept_item("northgate fuel", row_ids, {"keyword": "northgate fuel", "category_id": fuel}, apply_to_existing=True),
+            ]))
+
+        self.assertEqual(self._categorization([outside_id]), {outside_id: (fuel, "rule")})
+        # Returning the suggestion to pending restores only its own rows; the rows "apply to existing" reached
+        # are recorded in the undo payload alone.
+        status = self._stored_review(lambda conn: _open_profile_review_scope(conn, profile_id))["statuses"]["northgate fuel"]
+        self.assertNotIn(outside_id, {row["id"] for row in status["accepted_prior_rows"]})
+
+        with self._use_db_path():
+            undo_profile_rule_suggestion_action(profile_id, RuleSuggestionUndoRequest(**result["undo"]))
+
+        # The suggestion rows were captured by the scoped apply first and again by the full one; undo must put
+        # back the earlier state, not the rule state the scoped apply produced.
+        self.assertEqual(
+            self._categorization([*row_ids, outside_id]),
+            {**{row_id: (fuel, "import") for row_id in row_ids}, outside_id: (other, "import")},
+        )
+        self.assertIsNotNone(self._rule_row(result["undo"]["trash_rule_ids"][0])["deleted_at"])
+
+    def test_editing_an_accepted_suggestion_redraws_its_partition_and_undo_restores_it(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureHarborlinePharmacy")
+        batch_id = self._insert_import_batch()
+        low, mid, high = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Harborline Pharmacy", amounts=[10, 20, 30])
+        open_scope = lambda conn: _open_batch_review_scope(conn, batch_id)
+        suggestion_id = "harborline pharmacy"
+
+        with self._use_db_path():
+            accepted = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                self._accept_item(suggestion_id, [low, mid, high], {"keyword": "harborline pharmacy", "category_id": leaf}),
+            ]))
+            rule_id = accepted["undo"]["trash_rule_ids"][0]
+            before_edit = self._stored_review(open_scope)
+            edited = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                self._accept_item(suggestion_id, [low, mid, high], {
+                    "keyword": "harborline pharmacy", "category_id": leaf, "amount_min": 25, "amount_max": 35,
+                }),
+            ]))
+
+        # The rule is edited in place, the row it still reaches stays claimed, and the rows it no longer reaches
+        # get their pre-accept categorization back.
+        self.assertEqual(self._rule_row(rule_id)["amount_min"], 25)
+        self.assertEqual(edited["undo"]["trash_rule_ids"], [])
+        self.assertEqual(self._categorization([low, mid, high]), {low: (leaf, "import"), mid: (leaf, "import"), high: (leaf, "rule")})
+        review = self._stored_review(open_scope)
+        self.assertEqual(review["suggestions"][suggestion_id]["source_row_ids"], [high])
+        self.assertEqual(review["suggestions"][suggestion_id]["txn_count"], 1)
+        status = review["statuses"][suggestion_id]
+        self.assertEqual((status["rule_id"], status["created_rule_id"]), (rule_id, rule_id))
+        self.assertEqual(status["accepted_prior_rows"], [{"id": high, "category_id": leaf, "category_source": "import", "category_overridden": 0}])
+
+        with self._use_db_path():
+            undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**edited["undo"]))
+
+        self.assertEqual(set(self._sources([low, mid, high]).values()), {"rule"})
+        review = self._stored_review(open_scope)
+        self.assertEqual(review["suggestions"][suggestion_id], before_edit["suggestions"][suggestion_id])
+        self.assertEqual(review["statuses"][suggestion_id], before_edit["statuses"][suggestion_id])
+
+    def test_returning_to_pending_trashes_only_a_rule_the_review_created_and_undo_reinstates_it(self):
+        account_id = self._insert_account("Card")
+        books = self._insert_expense_leaf("FixtureOakridgeBooks")
+        cafe = self._insert_expense_leaf("FixtureOakridgeCafe")
+        profile_id = self._insert_import_profile()
+        batch_id = self._insert_import_batch()
+        self._assign_batch_to_profile(batch_id, profile_id)
+        book_rows = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=books, merchant_name="Oakridge Books", amounts=[12, 14])
+        cafe_rows = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=cafe, merchant_name="Oakridge Cafe", amounts=[5, 6])
+        open_scope = lambda conn: _open_profile_review_scope(conn, profile_id)
+
+        with self._use_db_path():
+            existing_cafe_rule = create_rule(RuleCreate(keyword="oakridge cafe", category_id=cafe))["id"]
+            accepted = accept_profile_rule_suggestions(profile_id, RuleSuggestionAcceptRequest(items=[
+                self._accept_item("oakridge books", book_rows, {"keyword": "oakridge books", "category_id": books}),
+                self._accept_item("oakridge cafe", cafe_rows, {"keyword": "oakridge cafe", "category_id": cafe}),
+            ]))
+            books_rule = accepted["undo"]["trash_rule_ids"][0]
+            self.assertEqual((accepted["summary"]["created"], accepted["summary"]["skipped"]), (1, 1))
+            returned = set_profile_rule_suggestion_status(profile_id, RuleSuggestionStatusRequest(
+                items=[{"suggestion_id": "oakridge books", "keyword": "oakridge books"}, {"suggestion_id": "oakridge cafe", "keyword": "oakridge cafe"}],
+                status="pending",
+            ))
+
+        self.assertEqual(set(self._sources([*book_rows, *cafe_rows]).values()), {"import"})
+        self.assertIsNotNone(self._rule_row(books_rule)["deleted_at"])
+        # The cafe suggestion merged into a rule that already existed, which is not the review's to remove.
+        self.assertIsNone(self._rule_row(existing_cafe_rule)["deleted_at"])
+        self.assertEqual(returned["undo"]["restore_rule_ids"], [books_rule])
+        self.assertEqual(self._stored_review(open_scope)["statuses"], {})
+
+        with self._use_db_path():
+            undo_profile_rule_suggestion_action(profile_id, RuleSuggestionUndoRequest(**returned["undo"]))
+
+        self.assertIsNone(self._rule_row(books_rule)["deleted_at"])
+        self.assertEqual(set(self._sources([*book_rows, *cafe_rows]).values()), {"rule"})
+        statuses = self._stored_review(open_scope)["statuses"]
+        self.assertEqual({key: value["status"] for key, value in statuses.items()}, {"oakridge books": "accepted", "oakridge cafe": "accepted"})
+
+    def test_discard_and_defer_settle_rows_by_intent_and_each_undoes(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureMapleHardware")
+        batch_id = self._insert_import_batch()
+        row_ids = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Maple Hardware", amounts=[30, 31])
+        open_scope = lambda conn: _open_batch_review_scope(conn, batch_id)
+        item = {"suggestion_id": "maple hardware", "source_row_ids": row_ids, "keyword": "maple hardware", "merchant_label": "Maple Hardware"}
+
+        for status, clear_categories, expected_rows in (
+            ("discarded", True, {row_id: (None, "cleared") for row_id in row_ids}),
+            ("discarded", False, {row_id: (leaf, "import") for row_id in row_ids}),
+            ("skipped", False, {row_id: (leaf, "import") for row_id in row_ids}),
+        ):
+            with self.subTest(status=status, clear_categories=clear_categories):
+                with self._use_db_path():
+                    result = set_batch_rule_suggestion_status(batch_id, RuleSuggestionStatusRequest(
+                        items=[item], status=status, clear_categories=clear_categories,
+                    ))
+                self.assertEqual(self._categorization(row_ids), expected_rows)
+                self.assertEqual(self._stored_review(open_scope)["statuses"]["maple hardware"]["status"], status)
+
+                with self._use_db_path():
+                    undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**result["undo"]))
+                self.assertEqual(self._categorization(row_ids), {row_id: (leaf, "import") for row_id in row_ids})
+                self.assertEqual(self._stored_review(open_scope)["suggestions"], {})
+                self.assertEqual(self._stored_review(open_scope)["statuses"], {})
+
+    def test_resolving_a_conflict_set_settles_every_member_in_one_undoable_action(self):
+        account_id = self._insert_account("Card")
+        produce = self._insert_expense_leaf("FixtureProduce")
+        bakery = self._insert_expense_leaf("FixtureBakery")
+        deli = self._insert_expense_leaf("FixtureDeli")
+        batch_id = self._insert_import_batch()
+
+        def rows(category_id, amounts):
+            return self._import_rows(batch_id=batch_id, account_id=account_id, category_id=category_id, merchant_name="Willowmere Grocer", amounts=amounts)
+
+        winner_rows, joining_rows, repointed_rows, emptied_rows = rows(produce, [3, 4]), rows(bakery, [5]), rows(bakery, [6]), rows(bakery, [7])
+
+        def member(suggestion_id, row_ids, target_id, target_name):
+            return {
+                "suggestion_id": suggestion_id, "source_row_ids": row_ids, "keyword": "willowmere grocer",
+                "merchant_label": "Willowmere Grocer", "target_category_id": target_id, "target_category_name": target_name,
+            }
+
+        members = [
+            member("winner", winner_rows, produce, "FixtureProduce"),
+            member("joining", joining_rows, produce, "FixtureProduce"),
+            member("repointed", repointed_rows, deli, "FixtureDeli"),
+            member("emptied", emptied_rows, None, None),
+        ]
+        all_rows = [*winner_rows, *joining_rows, *repointed_rows, *emptied_rows]
+        before = self._categorization(all_rows)
+        open_scope = lambda conn: _open_batch_review_scope(conn, batch_id)
+
+        with self._use_db_path():
+            result = resolve_batch_rule_suggestion_conflict_set(batch_id, RuleSuggestionConflictSetRequest(members=members, winner_id="winner"))
+
+        rule_id = result["undo"]["trash_rule_ids"][0]
+        self.assertEqual(self._categorization(all_rows), {
+            **{row_id: (produce, "rule") for row_id in [*winner_rows, *joining_rows]},
+            repointed_rows[0]: (deli, "manual"),
+            emptied_rows[0]: (None, "cleared"),
+        })
+        statuses = self._stored_review(open_scope)["statuses"]
+        self.assertEqual((statuses["winner"]["status"], statuses["winner"]["rule_id"]), ("accepted", rule_id))
+        transitions = {
+            suggestion_id: [
+                (change["from_category_name"], change["to_category_name"], change["count"])
+                for change in statuses[suggestion_id]["review_action"]["category_changes"]
+            ]
+            for suggestion_id in ("joining", "repointed", "emptied")
+        }
+        self.assertEqual(transitions, {
+            "joining": [("FixtureBakery", "FixtureProduce", 1)],
+            "repointed": [("FixtureBakery", "FixtureDeli", 1)],
+            "emptied": [("FixtureBakery", "Uncategorized", 1)],
+        })
+        self.assertEqual({statuses[key]["status"] for key in ("joining", "repointed", "emptied")}, {"discarded"})
+
+        with self._use_db_path():
+            undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**result["undo"]))
+
+        self.assertEqual(self._categorization(all_rows), before)
+        self.assertIsNotNone(self._rule_row(rule_id)["deleted_at"])
+        self.assertEqual(self._stored_review(open_scope)["statuses"], {})
+
+    def test_a_failure_part_way_through_an_action_writes_nothing(self):
+        # The rule create and the row apply both run before the review write fails. `get_db()` commits only on
+        # a clean exit, so this holds only while nothing the action calls commits on its own.
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureElmfieldDeli")
+        batch_id = self._insert_import_batch()
+        row_ids = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Elmfield Deli", amounts=[11, 12])
+
+        with patch(
+            "backend.routers.import_export.rule_suggestion_actions.record_rule_suggestion_review",
+            side_effect=RuntimeError("fixture failure"),
+        ):
+            with self._use_db_path(), self.assertRaises(RuntimeError):
+                accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                    self._accept_item("elmfield deli", row_ids, {"keyword": "elmfield deli", "category_id": leaf}, apply_to_existing=True),
+                ]))
+
+        with self._use_db_path(), get_db() as conn:
+            rule_count = conn.execute("SELECT COUNT(*) FROM category_rule WHERE keyword = 'elmfield deli'").fetchone()[0]
+        self.assertEqual(rule_count, 0)
+        self.assertEqual(self._categorization(row_ids), {row_id: (leaf, "import") for row_id in row_ids})
+        self.assertEqual(self._stored_review(lambda conn: _open_batch_review_scope(conn, batch_id))["statuses"], {})
+
+    def test_a_rule_conflict_leaves_that_suggestion_pending_while_the_rest_commits_and_replace_resolves_it(self):
+        account_id = self._insert_account("Card")
+        tailoring = self._insert_expense_leaf("FixtureTailoring")
+        clothing = self._insert_expense_leaf("FixtureClothing")
+        shoes = self._insert_expense_leaf("FixtureShoes")
+        batch_id = self._insert_import_batch()
+        tailor_rows = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=tailoring, merchant_name="Aspen Tailor", amounts=[50, 55])
+        cobbler_rows = self._import_rows(batch_id=batch_id, account_id=account_id, category_id=shoes, merchant_name="Birch Cobbler", amounts=[20, 25])
+        open_scope = lambda conn: _open_batch_review_scope(conn, batch_id)
+        tailor_item = self._accept_item("aspen tailor", tailor_rows, {"keyword": "aspen tailor", "category_id": tailoring})
+
+        with self._use_db_path():
+            existing_rule = create_rule(RuleCreate(keyword="aspen tailor", category_id=clothing))["id"]
+            result = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[
+                tailor_item,
+                self._accept_item("birch cobbler", cobbler_rows, {"keyword": "birch cobbler", "category_id": shoes}),
+            ]))
+
+        self.assertEqual([conflict["suggestion_id"] for conflict in result["summary"]["conflicts"]], ["aspen tailor"])
+        self.assertEqual(result["summary"]["conflicts"][0]["existing_rule_id"], existing_rule)
+        self.assertEqual(result["summary"]["created"], 1)
+        self.assertEqual(set(self._sources(tailor_rows).values()), {"import"})
+        self.assertEqual(set(self._sources(cobbler_rows).values()), {"rule"})
+        self.assertEqual(set(self._stored_review(open_scope)["statuses"]), {"birch cobbler"})
+
+        with self._use_db_path():
+            replaced = accept_batch_rule_suggestions(batch_id, RuleSuggestionAcceptRequest(items=[{**tailor_item, "replace_existing": True}]))
+
+        self.assertEqual(replaced["summary"]["replaced"], 1)
+        self.assertEqual(self._rule_row(existing_rule)["category_id"], tailoring)
+        self.assertEqual(self._categorization(tailor_rows), {row_id: (tailoring, "rule") for row_id in tailor_rows})
+        status = self._stored_review(open_scope)["statuses"]["aspen tailor"]
+        self.assertEqual((status["rule_id"], status.get("created_rule_id")), (existing_rule, None))
+        self.assertEqual(replaced["undo"]["trash_rule_ids"], [])
+
+        with self._use_db_path():
+            undo_batch_rule_suggestion_action(batch_id, RuleSuggestionUndoRequest(**replaced["undo"]))
+
+        self.assertEqual(set(self._sources(tailor_rows).values()), {"import"})
+        self.assertIsNone(self._rule_row(existing_rule)["deleted_at"])
+        self.assertNotIn("aspen tailor", self._stored_review(open_scope)["statuses"])
 
 
 if __name__ == "__main__":

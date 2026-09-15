@@ -10,7 +10,6 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { isReturningAcceptedSuggestionToPending, reverseAcceptedSuggestionSideEffects } from '../lib/importExport/ruleSuggestionReviewStatus.js'
 
 const IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.merchantFilterOpen'
 const IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.ownerFilterOpen'
@@ -26,39 +25,6 @@ function formatImportSummary(batch) {
 
 function formatImportedAt(value) {
   return value ? value.slice(0, 16).replace('T', ' ') : ''
-}
-
-function buildReviewSummary(suggestions, trashSets = []) {
-  return {
-    total_count: suggestions.length,
-    pending_count: suggestions.filter(suggestion => suggestion.review_status === 'pending').length,
-    accepted_count: suggestions.filter(suggestion => suggestion.review_status === 'accepted').length,
-    skipped_count: suggestions.filter(suggestion => suggestion.review_status === 'skipped').length,
-    discarded_count: suggestions.filter(suggestion => suggestion.review_status === 'discarded').length,
-    trash_set_count: trashSets.length,
-  }
-}
-
-function normalizeRuleKeyword(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
-  if (!normalized) return ''
-  const tokens = normalized.split(' ')
-  while (tokens.length > 1) {
-    const compact = tokens[tokens.length - 1].replace(/[^a-z0-9]/g, '')
-    if (/^\d{4,}$/.test(compact)) {
-      tokens.pop()
-      continue
-    }
-    break
-  }
-  const sanitized = tokens.join(' ').trim()
-  return /^\d+$/.test(sanitized.replace(/[^a-z0-9]/g, '')) ? '' : sanitized
-}
-
-function ruleSuggestionRangeCovers(coveringMin, coveringMax, coveredMin, coveredMax) {
-  if (coveringMin != null && (coveredMin == null || coveringMin > coveredMin)) return false
-  if (coveringMax != null && (coveredMax == null || coveringMax < coveredMax)) return false
-  return true
 }
 
 export default function ImportRuleSuggestions() {
@@ -101,8 +67,8 @@ export default function ImportRuleSuggestions() {
   // reload doesn't wipe it. `conflicts` carries one entry per unresolved conflict so the banner can show
   // the colliding rule and offer Replace/Keep inline; `reconciledRuleIds` collects the existing rules a
   // merge/replace changed, so the banner can offer to re-categorize the transactions those rules already
-  // match. Shape: { created, merged, skipped, replaced, conflicts: ConflictEntry[], reconciledRuleIds:
-  // string[] } | null (see buildConflictEntry).
+  // match. Shape: { merged, skipped, replaced, conflicts: ConflictEntry[], reconciledRuleIds: string[] }
+  // | null (see showResolveSummary).
   const [resolveSummary, setResolveSummary] = useState(null)
   // Suggestion id whose conflict is mid-resolution, so the banner can disable that row's actions.
   const [resolvingConflictId, setResolvingConflictId] = useState(null)
@@ -116,86 +82,20 @@ export default function ImportRuleSuggestions() {
   const [reviewFilter, setReviewFilter] = useState('pending')
   const [merchantFilterOpen, setMerchantFilterOpen] = useUserPreference(IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY, true)
   const [ownerFilterOpen, setOwnerFilterOpen] = useUserPreference(IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY, false)
+  // Each entry is `{ scope, undo }`: the payload an action answered with and the review it came from, so an
+  // undo always reaches the review that produced it. Session-local — lost on reload.
   const [undoStack, setUndoStack] = useState([])
+  const undoInFlightRef = useRef(false)
   const [applyingConflict, setApplyingConflict] = useState(false)
   const MAX_UNDO = 10
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
-    run: runRecategorizeWithoutTrace,
+    run: runRecategorize,
     reloadPreview: reloadRecategorizePreview,
     dismissResult: dismissRecategorizeResult,
   } = useRecategorize()
-  const traceSequenceRef = useRef(0)
-
-  // Temporary Generate Rules diagnostic trail:
-  // - Correlation ids tie one user action to its API writes and later Undo.
-  // - The backend enriches these identities from committed DB state and writes the local JSONL trace.
-  // - Trace failures are isolated from the workflow so instrumentation cannot change the reproduction.
-  function newTraceCorrelation(action) {
-    const randomPart = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2)
-    return `${action}:${Date.now()}:${randomPart}`
-  }
-
-  function compactUndoSnapshot(snapshot) {
-    if (!snapshot) return null
-    return {
-      statuses: snapshot.statuses || {},
-      rows: (snapshot.rows || []).map(row => ({
-        id: row.id,
-        category_id: row.category_id ?? null,
-        category_source: row.category_source ?? null,
-        category_overridden: row.category_overridden ?? 0,
-      })),
-      rule_ids: snapshot.ruleIds || [],
-      suggestions: snapshot.suggestions || [],
-      trace: snapshot.trace || null,
-    }
-  }
-
-  async function traceRuleSuggestionAction({
-    correlationId,
-    event,
-    phase,
-    suggestions = [],
-    transactionIds = [],
-    ruleIds = [],
-    keywords = [],
-    undoSnapshot = null,
-    details = {},
-  }) {
-    const sequence = traceSequenceRef.current + 1
-    traceSequenceRef.current = sequence
-    try {
-      await api.traceImportRuleSuggestionAction({
-        correlation_id: correlationId,
-        client_sequence: sequence,
-        event,
-        phase,
-        context_type: isSystemContext ? 'system' : (isProfileContext ? 'profile' : 'batch'),
-        context_id: isSystemContext ? null : (isProfileContext ? profileId : batchId),
-        suggestion_ids: suggestions.map(suggestion => suggestion.id).filter(Boolean),
-        transaction_ids: [...new Set([
-          ...transactionIds,
-          ...suggestions.flatMap(suggestion => suggestion.source_row_ids || []),
-        ])],
-        rule_ids: ruleIds.filter(Boolean),
-        keywords: [...new Set([
-          ...keywords,
-          ...suggestions.map(suggestion => suggestion.keyword),
-        ].filter(Boolean))],
-        undo_snapshot: compactUndoSnapshot(undoSnapshot),
-        details: {
-          client_timestamp: new Date().toISOString(),
-          ...details,
-        },
-      })
-    } catch {
-      // Diagnostics must never alter or block the workflow being diagnosed.
-    }
-  }
+  const reviewScope = useMemo(() => ({ batchId, profileId }), [batchId, profileId])
 
   const batch = useMemo(
     () => batches.find(item => item.id === batchId) || null,
@@ -216,13 +116,6 @@ export default function ImportRuleSuggestions() {
         ? api.getProfileRuleSuggestions(profileId, ownerIds)
         : api.getBatchRuleSuggestions(batchId, ownerIds)
   ), [isSystemContext, isProfileContext, profileId, batchId])
-  const updateSuggestionReviewForContext = payload => (
-    isSystemContext
-      ? api.updateSystemRuleSuggestionReview(payload)
-      : isProfileContext
-        ? api.updateProfileRuleSuggestionReview(profileId, payload)
-        : api.updateBatchRuleSuggestionReview(batchId, payload)
-  )
   const refineSuggestionMatchForContext = payload => (
     isSystemContext
       ? api.refineSystemRuleSuggestionMatch(payload)
@@ -371,398 +264,156 @@ export default function ImportRuleSuggestions() {
     reloadRecategorizePreview()
   }
 
-  async function runRecategorize() {
-    const correlationId = newTraceCorrelation('run-categorization')
-    const suggestions = ruleSuggestionState.suggestions.map(suggestion => ({
-      id: suggestion.id,
-      keyword: suggestion.keyword,
-      source_row_ids: suggestion.source_row_ids || [],
-    }))
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'run-categorization',
-      phase: 'before',
-      suggestions,
-      details: { preview_count: recategorizePendingCount },
-    })
+  // Every review action is one request that commits whole or not at all and answers with the payload that
+  // reverses it (backend `rule_suggestion_actions`), so the page only sends the user's intent, keeps the
+  // undo payload, and reloads. A save from the rule editor rethrows so the editor stays open showing the
+  // error; a card or bulk action reports it on the page.
+  async function runReviewAction(perform, { fallbackError, rethrow = false }) {
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
     try {
-      const result = await runRecategorizeWithoutTrace()
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'run-categorization',
-        phase: 'after',
-        suggestions,
-        details: { updated: result?.updated ?? null },
-      })
+      const result = await perform()
+      if (result?.undo) {
+        setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), { scope: reviewScope, undo: result.undo }])
+      }
+      await reloadSuggestions()
       return result
     } catch (err) {
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'run-categorization',
-        phase: 'error',
-        suggestions,
-        details: { error: err.message || 'Unable to apply categorization rules.' },
-      })
-      throw err
+      if (rethrow) throw err
+      setRuleSuggestionState(prev => ({ ...prev, loading: false, error: err.message || fallbackError }))
+      return null
     }
-  }
-
-  function applyLocalSuggestionUpdates(updatesById, options = {}) {
-    setRuleSuggestionState(prev => {
-      const nextSuggestions = prev.suggestions.map(suggestion => (
-        Object.prototype.hasOwnProperty.call(updatesById, suggestion.id)
-          ? { ...suggestion, ...updatesById[suggestion.id] }
-          : suggestion
-      ))
-      return {
-        ...prev,
-        loading: false,
-        error: '',
-        suggestions: nextSuggestions,
-        review_summary: options.review_summary || buildReviewSummary(nextSuggestions, prev.trash_sets || []),
-        generated_at: options.generated_at || prev.generated_at,
-      }
-    })
-  }
-
-  // `rowRestore` (optional) is the prior-state snapshot of transactions an action changed (a reject
-  // disposition, or a rule an accept applied to its rows), so undo can put the rows back as well as the
-  // suggestion's review status. `ruleIdsToDelete` (optional) are rules an accept *created*; undo must
-  // delete them, otherwise the rule keeps owning the rows and the suggestion can never regenerate —
-  // it vanishes and the total silently drops.
-  function pushUndo(suggestionIds, rowRestore = null, ruleIdsToDelete = null, trace = null) {
-    const idSet = new Set(suggestionIds)
-    const statuses = {}
-    const tracedSuggestions = []
-    for (const s of ruleSuggestionState.suggestions) {
-      if (idSet.has(s.id)) {
-        statuses[s.id] = {
-          review_status: s.review_status,
-          rule_id: s.rule_id ?? null,
-          created_rule_id: s.created_rule_id ?? null,
-          accepted_prior_rows: s.accepted_prior_rows || [],
-        }
-        tracedSuggestions.push({
-          id: s.id,
-          keyword: s.keyword,
-          source_row_ids: s.source_row_ids || [],
-        })
-      }
-    }
-    const snapshot = {
-      statuses,
-      rows: rowRestore && rowRestore.length ? rowRestore : null,
-      ruleIds: ruleIdsToDelete && ruleIdsToDelete.length ? ruleIdsToDelete : null,
-      suggestions: tracedSuggestions,
-      trace,
-    }
-    setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), snapshot])
-    const correlationId = trace?.correlationId || newTraceCorrelation('undo-entry')
-    void traceRuleSuggestionAction({
-      correlationId,
-      event: trace?.action || 'undo-entry',
-      phase: 'undo-entry-pushed',
-      suggestions: tracedSuggestions,
-      ruleIds: snapshot.ruleIds || [],
-      undoSnapshot: snapshot,
-    })
-    return snapshot
   }
 
   async function performUndo() {
-    if (undoStack.length === 0) return
-    const snapshot = undoStack[undoStack.length - 1]
-    const correlationId = newTraceCorrelation('undo')
-    const tracedSuggestions = snapshot.suggestions || Object.keys(snapshot.statuses || {}).map(id => ({ id }))
-    const transactionIds = (snapshot.rows || []).map(row => row.id)
-    const ruleIds = snapshot.ruleIds || []
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'undo',
-      phase: 'before',
-      suggestions: tracedSuggestions,
-      transactionIds,
-      ruleIds,
-      undoSnapshot: snapshot,
-      details: {
-        undoes_correlation_id: snapshot.trace?.correlationId || null,
-        undoes_action: snapshot.trace?.action || null,
-        remaining_undo_depth: undoStack.length - 1,
-      },
-    })
-    setUndoStack(prev => prev.slice(0, -1))
-    // Delete any rules the accept created, so the accept is truly reversed: with the rule gone its rows
-    // are import-candidates again and the suggestion regenerates instead of disappearing.
-    for (const ruleId of snapshot.ruleIds || []) {
-      await api.deleteRule(ruleId).catch(() => { })
+    const entry = undoStack[undoStack.length - 1]
+    // A ref, not state: a second press in the same tick would otherwise post the same payload twice and pop
+    // an entry that was never undone.
+    if (!entry || undoInFlightRef.current) return
+    undoInFlightRef.current = true
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    try {
+      await txnMutations.undoRuleSuggestionAction(entry.scope, entry.undo)
+      setUndoStack(prev => prev.slice(0, -1))
+      await reloadSuggestions()
+    } catch (err) {
+      setRuleSuggestionState(prev => ({ ...prev, loading: false, error: err.message || 'Unable to undo the last action.' }))
+    } finally {
+      undoInFlightRef.current = false
     }
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'undo',
-      phase: 'after-rule-delete',
-      suggestions: tracedSuggestions,
-      transactionIds,
-      ruleIds,
-      undoSnapshot: snapshot,
-    })
-    // Restore any row categorization the action changed, so the rows are back to their prior state before
-    // the suggestion returns to the queue.
-    if (snapshot.rows && snapshot.rows.length) {
-      await txnMutations.restoreCategorization(snapshot.rows).catch(() => { })
-    }
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'undo',
-      phase: 'after-row-restore',
-      suggestions: tracedSuggestions,
-      transactionIds,
-      ruleIds,
-      undoSnapshot: snapshot,
-    })
-    // Replay the server-side review status (an accept also touched it, and covered suggestions were
-    // auto-discarded), restoring each captured suggestion to where it was before the action.
-    for (const [suggestionId, prev] of Object.entries(snapshot.statuses || {})) {
-      await updateSuggestionReviewForContext({
-        suggestion_id: suggestionId,
-        status: prev.review_status,
-        rule_id: prev.rule_id || null,
-        created_rule_id: prev.created_rule_id || null,
-        accepted_prior_rows: prev.accepted_prior_rows || [],
-      }).catch(() => { })
-    }
-    await reloadSuggestions()
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'undo',
-      phase: 'after',
-      suggestions: tracedSuggestions,
-      transactionIds,
-      ruleIds,
-      undoSnapshot: snapshot,
-    })
   }
 
   function getCategoryName(categoryId) {
     return categories.find(category => String(category.id) === String(categoryId))?.name || null
   }
 
-  function getCategoryHistoryLabel(categoryId, fallback = null) {
-    if (!categoryId) return fallback || 'Uncategorized'
-    return getCategoryName(categoryId) || fallback || 'Unknown category'
-  }
-
-  function buildCategoryChangeReviewAction(priorRows, toCategoryId, toCategoryName = null) {
-    if (!priorRows?.length) return null
-    const toId = toCategoryId || null
-    const toName = getCategoryHistoryLabel(toId, toCategoryName)
-    const changesByPair = new Map()
-    for (const row of priorRows) {
-      const fromId = row.category_id || null
-      const key = `${fromId || ''}->${toId || ''}`
-      const existing = changesByPair.get(key) || {
-        from_category_id: fromId,
-        from_category_name: getCategoryHistoryLabel(fromId),
-        to_category_id: toId,
-        to_category_name: toName,
-        count: 0,
-      }
-      existing.count += 1
-      changesByPair.set(key, existing)
-    }
-    const categoryChanges = [...changesByPair.values()]
-      .filter(change => String(change.from_category_id || '') !== String(change.to_category_id || ''))
-    if (!categoryChanges.length) return null
+  function statusItem(suggestion) {
     return {
-      kind: 'category_changes',
-      category_changes: categoryChanges,
-    }
-  }
-
-  function getCoveredSuggestionIds(sourceSuggestion, data) {
-    const coveringKeyword = normalizeRuleKeyword(data.keyword)
-    if (!coveringKeyword) return []
-
-    const coveringCategoryId = String(data.category_id || '').trim()
-    const coveringCategoryName = String(getCategoryName(data.category_id) || sourceSuggestion.target_category_name || '').trim().toLowerCase()
-    const coveringOwnerId = String(data.owner_id || '').trim()
-    const coveringAccountId = String(data.account_id || '').trim()
-
-    return ruleSuggestionState.suggestions
-      .filter(otherSuggestion => {
-        if (otherSuggestion.id === sourceSuggestion.id) return false
-        if (otherSuggestion.review_status === 'accepted' || otherSuggestion.review_status === 'discarded') return false
-
-        const otherKeyword = normalizeRuleKeyword(otherSuggestion.keyword)
-        if (!otherKeyword || otherKeyword === coveringKeyword || !otherKeyword.includes(coveringKeyword)) return false
-
-        const otherCategoryId = String(otherSuggestion.target_category_id || '').trim()
-        const otherCategoryName = String(otherSuggestion.target_category_name || '').trim().toLowerCase()
-        if (coveringCategoryId && otherCategoryId) {
-          if (coveringCategoryId !== otherCategoryId) return false
-        } else if (coveringCategoryName !== otherCategoryName) {
-          return false
-        }
-
-        const otherOwnerId = String(otherSuggestion.owner_id || '').trim()
-        if (coveringOwnerId && coveringOwnerId !== otherOwnerId) return false
-
-        const otherAccountId = String(otherSuggestion.account_id || '').trim()
-        if (coveringAccountId && coveringAccountId !== otherAccountId) return false
-
-        return ruleSuggestionRangeCovers(
-          data.amount_min,
-          data.amount_max,
-          otherSuggestion.amount_min,
-          otherSuggestion.amount_max,
-        )
-      })
-      .map(suggestion => suggestion.id)
-  }
-
-  // Write a suggestion's review status (no undo bookkeeping — callers push the undo entry, so a reject
-  // with a row disposition can record both in one entry).
-  async function applySuggestionStatus(suggestion, status) {
-    setEditingSuggestionId(null)
-    const returningAcceptedToPending = isReturningAcceptedSuggestionToPending(suggestion, status)
-    if (returningAcceptedToPending) {
-      await reverseAcceptedSuggestion(suggestion)
-    }
-    const result = await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
-      status,
-      merchant_label: suggestion.merchant_label,
-      target_category_name: suggestion.target_category_name,
-      keyword: suggestion.keyword,
-    })
-    if (returningAcceptedToPending) {
-      await reloadSuggestions()
-      return
+      source_row_ids: suggestion.source_row_ids || [],
+      merchant_label: suggestion.merchant_label || null,
+      target_category_name: suggestion.target_category_name || null,
+      keyword: suggestion.keyword || null,
     }
-    applyLocalSuggestionUpdates({
-      [suggestion.id]: { review_status: status },
-    }, {
-      review_summary: result.review_summary || undefined,
-      generated_at: result.generated_at || undefined,
+  }
+
+  function suggestionRule(suggestion) {
+    return {
+      keyword: suggestion.keyword,
+      category_id: suggestion.target_category_id,
+      amount_min: suggestion.amount_min,
+      amount_max: suggestion.amount_max,
+      clean_name: suggestion.clean_name_suggestion || null,
+      owner_id: suggestion.owner_id || null,
+      account_id: suggestion.account_id || null,
+      tag_ids: suggestion.tag_ids || [],
+      match_source_text: !!suggestion.match_source_text,
+    }
+  }
+
+  function acceptItem(suggestion, rule, applyToExisting = false) {
+    return {
+      suggestion_id: suggestion.id,
+      source_row_ids: suggestion.source_row_ids || [],
+      merchant_label: suggestion.merchant_label || null,
+      rule,
+      apply_to_existing: applyToExisting,
+    }
+  }
+
+  // The banner recaps how an action's rules met existing ones. A conflict keeps the request item it came
+  // from, so Replace resends exactly what was asked, with `replace_existing`.
+  function showResolveSummary(summary, items) {
+    const itemsById = new Map(items.map(item => [item.suggestion_id, item]))
+    const conflicts = (summary?.conflicts || []).map(conflict => ({ ...conflict, item: itemsById.get(conflict.suggestion_id) }))
+    const reconciledRuleIds = summary?.reconciled_rule_ids || []
+    const notable = summary && (summary.merged || summary.skipped || summary.replaced || conflicts.length || reconciledRuleIds.length)
+    setReconcileApplyNote(null)
+    setResolveSummary(notable
+      ? { merged: summary.merged, skipped: summary.skipped, replaced: summary.replaced, conflicts, reconciledRuleIds }
+      : null)
+  }
+
+  function settleConflictEntry(suggestionId, { replaced = 0, reconciledRuleIds = [] } = {}) {
+    setResolveSummary(prev => {
+      if (!prev) return prev
+      const next = {
+        ...prev,
+        replaced: (prev.replaced || 0) + replaced,
+        conflicts: prev.conflicts.filter(entry => entry.suggestion_id !== suggestionId),
+        reconciledRuleIds: [...new Set([...(prev.reconciledRuleIds || []), ...reconciledRuleIds])],
+      }
+      const empty = !next.conflicts.length && !next.merged && !next.skipped && !next.replaced && !next.reconciledRuleIds.length
+      return empty ? null : next
     })
   }
 
-  async function reverseAcceptedSuggestion(suggestion) {
-    await reverseAcceptedSuggestionSideEffects(suggestion, {
-      restoreCategorization: txnMutations.restoreCategorization,
-      deleteRule: api.deleteRule,
-    })
+  // Saving covers a pending suggestion (create the rule and claim the suggestion's rows) and an accepted one
+  // (edit its rule and redraw the rows it owns); the backend tells the two apart from the stored review.
+  async function saveSuggestions(items, { rethrow = false } = {}) {
+    setResolveSummary(null)
+    setReconcileApplyNote(null)
+    const result = await runReviewAction(
+      () => txnMutations.acceptRuleSuggestions(reviewScope, items),
+      { fallbackError: 'Unable to save the selected rules.', rethrow },
+    )
+    if (!result) return
+    setEditingSuggestionId(null)
+    showResolveSummary(result.summary, items)
+  }
+
+  async function saveSuggestion(suggestion, data) {
+    const { applyToExisting, ...rule } = data
+    await saveSuggestions([acceptItem(suggestion, rule, !!applyToExisting)], { rethrow: true })
+  }
+
+  async function saveSuggestionAsIs(suggestion) {
+    await saveSuggestions([acceptItem(suggestion, suggestionRule(suggestion))])
+  }
+
+  async function saveSuggestionsAsIsBulk(suggestions) {
+    await saveSuggestions(suggestions.map(suggestion => acceptItem(suggestion, suggestionRule(suggestion))))
+  }
+
+  // Returning an accepted suggestion to pending also restores its rows and trashes the rule it created;
+  // discarding with 'clear' clears the rows' categories, while 'keep' leaves them as imported.
+  async function setSuggestionStatusBulk(suggestions, status, options) {
+    setEditingSuggestionId(null)
+    await runReviewAction(
+      () => txnMutations.setRuleSuggestionStatus(reviewScope, suggestions.map(statusItem), status, options),
+      { fallbackError: 'Unable to update the selected suggestions.' },
+    )
   }
 
   async function setSuggestionStatus(suggestion, status) {
-    pushUndo([suggestion.id])
-    await applySuggestionStatus(suggestion, status)
+    await setSuggestionStatusBulk([suggestion], status)
   }
 
-  // Reject a suggestion (no rule) and settle the rows it covered. 'keep' records the file's category
-  // as a manual decision; 'clear' discards it to the `cleared` source. The disposition returns the rows'
-  // prior state, which rides in the undo entry so undo restores the rows and the suggestion together.
-  // The disposition is best-effort: a failure there still records the rejection so the suggestion leaves
-  // the queue (the rows keep their imported category and can be settled by hand).
   async function rejectSuggestionWithDisposition(suggestion, mode) {
-    const rowIds = suggestion?.source_row_ids || []
-    let priorRows = null
-    if (rowIds.length) {
-      try {
-        const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, mode)
-        priorRows = result?.rows || null
-      } catch {
-        // fall through to record the rejection regardless
-      }
-    }
-    pushUndo([suggestion.id], priorRows)
-    await applySuggestionStatus(suggestion, 'discarded')
+    await setSuggestionStatusBulk([suggestion], 'discarded', { clearCategories: mode === 'clear' })
   }
 
-  // Bulk reject + settle, in one undo entry. 'keep' leaves the rows imported (status-only — the rows
-  // keep their category and stay reclaimable by a later apply); 'clear' clears their categories. Mirrors
-  // rejectSuggestionWithDisposition but bundles every selected suggestion's row snapshots into one undo
-  // entry, like applyConflictSet. A disposition failure still records the rejections (best-effort).
   async function bulkRejectWithDisposition(suggestions, mode) {
-    setEditingSuggestionId(null)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
-    let priorRows = null
-    if (mode === 'clear') {
-      const rowIds = suggestions.flatMap(s => s.source_row_ids || [])
-      if (rowIds.length) {
-        try {
-          const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, 'clear')
-          priorRows = result?.rows || null
-        } catch {
-          // fall through to record the rejections regardless
-        }
-      }
-    }
-    pushUndo(suggestions.map(s => s.id), priorRows)
-    try {
-      let lastResult = null
-      for (const suggestion of suggestions) {
-        lastResult = await updateSuggestionReviewForContext({
-          suggestion_id: suggestion.id,
-          status: 'discarded',
-          merchant_label: suggestion.merchant_label,
-          target_category_name: suggestion.target_category_name,
-          keyword: suggestion.keyword,
-        })
-      }
-      const updatesById = Object.fromEntries(
-        suggestions.map(suggestion => [suggestion.id, { review_status: 'discarded' }]),
-      )
-      applyLocalSuggestionUpdates(updatesById, {
-        review_summary: lastResult?.review_summary || undefined,
-        generated_at: lastResult?.generated_at || undefined,
-      })
-    } catch (err) {
-      setRuleSuggestionState(prev => ({
-        ...prev,
-        loading: false,
-        error: err.message || 'Unable to update selected suggestions.',
-      }))
-    }
-  }
-
-  async function setSuggestionStatusBulk(suggestions, status) {
-    setEditingSuggestionId(null)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
-    pushUndo(suggestions.map(s => s.id))
-    try {
-      let lastResult = null
-      let shouldReload = false
-      for (const suggestion of suggestions) {
-        if (isReturningAcceptedSuggestionToPending(suggestion, status)) {
-          await reverseAcceptedSuggestion(suggestion)
-          shouldReload = true
-        }
-        lastResult = await updateSuggestionReviewForContext({
-          suggestion_id: suggestion.id,
-          status,
-          merchant_label: suggestion.merchant_label,
-          target_category_name: suggestion.target_category_name,
-          keyword: suggestion.keyword,
-        })
-      }
-      if (shouldReload) {
-        await reloadSuggestions()
-        return
-      }
-      const updatesById = Object.fromEntries(
-        suggestions.map(suggestion => [suggestion.id, { review_status: status }]),
-      )
-      applyLocalSuggestionUpdates(updatesById, {
-        review_summary: lastResult?.review_summary || undefined,
-        generated_at: lastResult?.generated_at || undefined,
-      })
-    } catch (err) {
-      setRuleSuggestionState(prev => ({
-        ...prev,
-        loading: false,
-        error: err.message || 'Unable to update selected suggestions.',
-      }))
-    }
+    await setSuggestionStatusBulk(suggestions, 'discarded', { clearCategories: mode === 'clear' })
   }
 
   async function clearReviewedSuggestions(status, suggestionIds = null) {
@@ -796,58 +447,11 @@ export default function ImportRuleSuggestions() {
     }
   }
 
-  // A same-matcher 'conflict' from the rule API: the existing rule keeps a different category/rename
-  // than the suggestion wants. The matcher is identical by definition, so the only meaningful diff is
-  // the action — capture both sides so the banner can let the user Replace or Keep.
-  function buildConflictEntry(suggestion, data, conflictResponse) {
-    return {
-      suggestion_id: suggestion.id,
-      merchant_label: suggestion.merchant_label || suggestion.keyword,
-      keyword: data?.keyword ?? suggestion.keyword,
-      proposed_category_id: data?.category_id ?? suggestion.target_category_id ?? null,
-      proposed_clean_name: data?.clean_name ?? suggestion.clean_name_suggestion ?? null,
-      existing_rule_id: conflictResponse?.existing_rule_id || null,
-      existing_category_id: conflictResponse?.existing_category_id || null,
-      existing_clean_name: conflictResponse?.existing_clean_name || null,
-    }
-  }
-
   function describeRuleAction(categoryId, cleanName) {
     const categoryName = getCategoryName(categoryId)
     if (categoryName) return categoryName
     if (cleanName) return `rename to "${cleanName}"`
     return 'no category'
-  }
-
-  function dropConflictEntry(suggestionId) {
-    setResolveSummary(prev => {
-      if (!prev) return prev
-      const conflicts = prev.conflicts.filter(entry => entry.suggestion_id !== suggestionId)
-      const empty = !conflicts.length && !prev.merged && !prev.skipped && !prev.replaced && !(prev.reconciledRuleIds?.length)
-      if (empty) return null
-      return { ...prev, conflicts }
-    })
-  }
-
-  // Track an existing rule whose categorization a merge/replace just changed, so the banner can offer to
-  // re-categorize the transactions it already matches. `kind` bumps the matching count for the recap line.
-  function recordReconciledRule(ruleId, kind) {
-    if (!ruleId) return
-    setReconcileApplyNote(null)
-    setResolveSummary(prev => {
-      const base = prev || { created: 0, merged: 0, skipped: 0, replaced: 0, conflicts: [], reconciledRuleIds: [] }
-      const reconciledRuleIds = base.reconciledRuleIds?.includes(ruleId)
-        ? base.reconciledRuleIds
-        : [...(base.reconciledRuleIds || []), ruleId]
-      return {
-        created: base.created || 0,
-        merged: (base.merged || 0) + (kind === 'merged' ? 1 : 0),
-        skipped: base.skipped || 0,
-        replaced: (base.replaced || 0) + (kind === 'replaced' ? 1 : 0),
-        conflicts: base.conflicts || [],
-        reconciledRuleIds,
-      }
-    })
   }
 
   // Banner action: re-apply each merged/replaced rule to the transactions it already matches. Uses the
@@ -874,45 +478,22 @@ export default function ImportRuleSuggestions() {
     }
   }
 
-  // Replace: overwrite the colliding rule's action with the suggestion's (preserving the rule's id and
-  // tags), then accept the suggestion linked to that rule. The matcher is unchanged, so this edit can't
-  // re-collide unless a *third* rule shares it — in that case we leave the conflict for manual handling.
+  // Replace: overwrite the colliding rule's category and rename with the suggestion's, then accept the
+  // suggestion into that rule — the same save that conflicted, sent again with `replace_existing`.
   async function replaceConflictingRule(entry) {
-    if (!entry.existing_rule_id || resolvingConflictId) return
+    if (!entry.existing_rule_id || !entry.item || resolvingConflictId) return
     setResolvingConflictId(entry.suggestion_id)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
     try {
-      const updated = await api.updateRule(entry.existing_rule_id, {
-        category_id: entry.proposed_category_id || null,
-        clean_name: entry.proposed_clean_name || null,
-      }, { onExisting: 'merge' })
-      if (updated?.status === 'conflict') {
-        setRuleSuggestionState(prev => ({
-          ...prev,
-          error: `Another rule also matches “${entry.keyword}” with a different category. Resolve it from the Rules page first.`,
-        }))
-        return
-      }
-      const ruleId = updated?.id || entry.existing_rule_id
-      const suggestion = ruleSuggestionState.suggestions.find(item => item.id === entry.suggestion_id)
-      const applyResult = suggestion ? await applyRuleToSuggestionRows(ruleId, suggestion) : null
-      pushUndo([entry.suggestion_id], applyResult?.prior_rows || null)
-      await updateSuggestionReviewForContext({
-        suggestion_id: entry.suggestion_id,
-        status: 'accepted',
-        rule_id: ruleId,
-        accepted_prior_rows: applyResult?.prior_rows || [],
-        merchant_label: suggestion?.merchant_label ?? entry.merchant_label,
-        target_category_name: getCategoryName(entry.proposed_category_id),
-        target_category_id: entry.proposed_category_id || null,
-        keyword: entry.keyword,
-        clean_name_suggestion: entry.proposed_clean_name || null,
+      const result = await runReviewAction(
+        () => txnMutations.acceptRuleSuggestions(reviewScope, [{ ...entry.item, replace_existing: true }]),
+        { fallbackError: 'Unable to replace the existing rule.' },
+      )
+      if (!result) return
+      setReconcileApplyNote(null)
+      settleConflictEntry(entry.suggestion_id, {
+        replaced: result.summary?.replaced || 0,
+        reconciledRuleIds: result.summary?.reconciled_rule_ids || [],
       })
-      recordReconciledRule(ruleId, 'replaced')
-      dropConflictEntry(entry.suggestion_id)
-      await reloadSuggestions()
-    } catch (err) {
-      setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to replace the existing rule.' }))
     } finally {
       setResolvingConflictId(null)
     }
@@ -922,718 +503,64 @@ export default function ImportRuleSuggestions() {
   async function keepExistingRule(entry) {
     if (resolvingConflictId) return
     setResolvingConflictId(entry.suggestion_id)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
     try {
       const suggestion = ruleSuggestionState.suggestions.find(item => item.id === entry.suggestion_id)
-      if (suggestion) {
-        pushUndo([entry.suggestion_id])
-        await updateSuggestionReviewForContext({
-          suggestion_id: entry.suggestion_id,
-          status: 'skipped',
-          merchant_label: suggestion.merchant_label,
-          target_category_name: suggestion.target_category_name,
-          keyword: suggestion.keyword,
-        })
-      }
-      dropConflictEntry(entry.suggestion_id)
-      await reloadSuggestions()
-    } catch (err) {
-      setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to defer the suggestion.' }))
+      const result = suggestion
+        ? await runReviewAction(
+          () => txnMutations.setRuleSuggestionStatus(reviewScope, [statusItem(suggestion)], 'skipped'),
+          { fallbackError: 'Unable to defer the suggestion.' },
+        )
+        : {}
+      if (result) settleConflictEntry(entry.suggestion_id)
     } finally {
       setResolvingConflictId(null)
     }
   }
 
-  // Accepting a suggestion applies the rule's outputs (category / clean name / tags) to the rows that
-  // generated it — and only those rows. The backend uses preserve_manual, so any row a user Preserved
-  // (manual exception) is left untouched, and rows belonging to other (conflicting) suggestions aren't
-  // in this set — they're left alone rather than silently reassigned to this rule's category.
-  // Returns the apply result (notably `prior_rows`, the rows' pre-apply categorization snapshot) so the
-  // caller can stash it for Undo; null if there was nothing to apply or the apply failed.
-  async function applyRuleToSuggestionRows(ruleId, suggestion, trace = null) {
-    const rowIds = suggestion?.source_row_ids || []
-    if (!ruleId || !rowIds.length) return null
-    if (trace) {
-      await traceRuleSuggestionAction({
-        correlationId: trace.correlationId,
-        event: trace.action,
-        phase: `${trace.phasePrefix || 'apply'}-before`,
-        suggestions: [suggestion],
-        ruleIds: [ruleId],
-      })
-    }
-    try {
-      const result = await txnMutations.applyRuleToTransactions(ruleId, rowIds)
-      if (trace) {
-        await traceRuleSuggestionAction({
-          correlationId: trace.correlationId,
-          event: trace.action,
-          phase: `${trace.phasePrefix || 'apply'}-after`,
-          suggestions: [suggestion],
-          ruleIds: [ruleId],
-          details: {
-            updated: result?.updated || 0,
-            prior_row_count: result?.prior_rows?.length || 0,
-          },
-        })
-      }
-      return result
-    } catch {
-      if (trace) {
-        await traceRuleSuggestionAction({
-          correlationId: trace.correlationId,
-          event: trace.action,
-          phase: `${trace.phasePrefix || 'apply'}-error`,
-          suggestions: [suggestion],
-          ruleIds: [ruleId],
-        })
-      }
-      // The rule itself saved; a failure to back-apply to its own rows shouldn't fail the accept.
-      // The user can still re-apply from the rule, and the rows surface again on the next generate.
-      return null
-    }
-  }
-
-  function buildSuggestionMatchPayload(data) {
-    return {
-      keyword: data.keyword,
-      owner_id: data.owner_id || null,
-      account_id: data.account_id || null,
-      amount_min: data.amount_min,
-      amount_max: data.amount_max,
-      match_source_text: !!data.match_source_text,
-    }
-  }
-
-  function mergeAcceptedPriorRows(existingRows, newRows, retainedIds) {
-    const retained = new Set((retainedIds || []).map(String))
-    const byId = new Map()
-    for (const row of newRows || []) {
-      if (retained.has(String(row.id))) byId.set(String(row.id), row)
-    }
-    for (const row of existingRows || []) {
-      if (retained.has(String(row.id))) byId.set(String(row.id), row)
-    }
-    return [...byId.values()]
-  }
-
-  async function loadCategorizationSnapshots(rowIds) {
-    const ids = [...new Set((rowIds || []).map(String).filter(Boolean))]
-    if (!ids.length) return []
-    const result = await api.getTransactions({ ids: ids.join(','), limit: ids.length })
-    return (result?.transactions || []).map(row => ({
-      id: row.id,
-      category_id: row.category_id ?? null,
-      category_source: row.category_source ?? null,
-      category_overridden: row.category_overridden ?? 0,
-    }))
-  }
-
-  async function loadSuggestionRowsMetadata(rowIds) {
-    const ids = [...new Set((rowIds || []).map(String).filter(Boolean))]
-    if (!ids.length) return { sourceRowIds: [], txnCount: 0, latestTxnDate: null }
-    const result = await api.getTransactions({ ids: ids.join(','), limit: ids.length })
-    const rows = result?.transactions || []
-    return {
-      sourceRowIds: ids,
-      txnCount: ids.length,
-      latestTxnDate: rows.reduce((latest, row) => (
-        row.date && (!latest || row.date > latest) ? row.date : latest
-      ), null),
-    }
-  }
-
-  async function saveSuggestion(suggestion, data) {
-    const correlationId = newTraceCorrelation('save-suggestion')
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'save-suggestion',
-      phase: 'before',
-      suggestions: [suggestion],
-      details: { apply_to_existing: !!data.applyToExisting },
-    })
-    setResolveSummary(null)
-    setReconcileApplyNote(null)
-    const { applyToExisting, ...ruleData } = data
-    // Auto-resolve against an existing same-matcher rule (Generate Rules is the bulk flow): merge a
-    // mergeable/duplicate save into it. A conflict (a different category/rename on the same matcher)
-    // is left for the user — we don't fork or overwrite, so the suggestion stays pending and is named
-    // in the summary banner.
-    const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'save-suggestion',
-      phase: 'after-rule-create',
-      suggestions: [suggestion],
-      ruleIds: [createdRule?.id],
-      details: {
-        rule_status: createdRule?.status || null,
-        rule_relation: createdRule?.relation || null,
-      },
-    })
-    if (createdRule?.status === 'conflict') {
-      setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [buildConflictEntry(suggestion, data, createdRule)] })
-      setEditingSuggestionId(null)
-      await reloadSuggestions()
-      return
-    }
-    const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
-    // Auto-apply the rule's outputs to this suggestion's own source rows (no extra step), capturing the
-    // rows' prior categorization *first* so Undo can restore it. The broad "apply to all matches" action
-    // below is opt-in and a superset; this scoped pass is the default.
-    const applyResult = await applyRuleToSuggestionRows(createdRule?.id, suggestion, {
-      correlationId,
-      action: 'save-suggestion',
-      phasePrefix: 'scoped-apply',
-    })
-    // Only a freshly *created* rule is ours to delete on undo; a save that merged into a pre-existing
-    // rule must not delete that rule (it wasn't created here).
-    const ruleIdsToDelete = createdRule?.id && createdRule?.status === 'created' ? [createdRule.id] : null
-    pushUndo(
-      [suggestion.id, ...coveredSuggestionIds],
-      applyResult?.prior_rows || null,
-      ruleIdsToDelete,
-      { correlationId, action: 'save-suggestion' },
-    )
-    await updateSuggestionReviewForContext({
-      suggestion_id: suggestion.id,
-      status: 'accepted',
-      rule_id: createdRule?.id || null,
-      created_rule_id: createdRule?.status === 'created' ? createdRule.id : null,
-      accepted_prior_rows: applyResult?.prior_rows || [],
-      merchant_label: suggestion.merchant_label,
-      target_category_name: data.category_id ? getCategoryName(data.category_id) : suggestion.target_category_name,
-      target_category_id: data.category_id || null,
-      keyword: data.keyword,
-      owner_id: data.owner_id || null,
-      account_id: data.account_id || null,
-      amount_min: data.amount_min,
-      amount_max: data.amount_max,
-      clean_name_suggestion: data.clean_name || null,
-      match_source_text: !!data.match_source_text,
-    })
-    if (applyToExisting && createdRule?.id) await txnMutations.applyRule(createdRule.id)
-    // A merge that actually changed the existing rule (filled a category/rename or added tags — i.e. not
-    // a pure duplicate) is a candidate for re-categorizing the rows it already matches.
-    if (createdRule?.status === 'merged' && createdRule.relation !== 'duplicate') {
-      recordReconciledRule(createdRule.id, 'merged')
-    }
-    setEditingSuggestionId(null)
-    await reloadSuggestions()
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'save-suggestion',
-      phase: 'after',
-      suggestions: [suggestion],
-      ruleIds: [createdRule?.id],
-      undoSnapshot: {
-        rows: applyResult?.prior_rows || null,
-        ruleIds: ruleIdsToDelete,
-      },
-    })
-  }
-
-  async function saveAcceptedSuggestion(suggestion, data) {
-    setReconcileApplyNote(null)
-    // applyToExisting is irrelevant for already-accepted suggestions (just edits/re-saves
-    // the rule); destructure-and-discard so it isn't forwarded into the rule API payload.
-    // eslint-disable-next-line no-unused-vars
-    const { applyToExisting, ...ruleData } = data
-    let ruleId = suggestion.rule_id || null
-    let mergedRuleId = null
-    let createdRuleIdToDelete = null
-    let acceptedCreatedRuleId = suggestion.created_rule_id || null
-    const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
-
-    if (ruleId) {
-      // Editing an accepted suggestion's rule can make it collide with another rule; auto-resolve
-      // (merge folds it in and removes this one). A conflict can't be auto-merged — surface it.
-      const updated = await api.updateRule(ruleId, ruleData, { onExisting: 'merge' })
-      if (updated?.status === 'conflict') {
-        setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [buildConflictEntry(suggestion, data, updated)] })
-        setEditingSuggestionId(null)
-        await reloadSuggestions()
-        return
-      }
-      if (updated?.status === 'merged' && updated.id) {
-        ruleId = updated.id
-        createdRuleIdToDelete = null
-        acceptedCreatedRuleId = null
-        if (updated.relation !== 'duplicate') mergedRuleId = updated.id
-      }
-    } else {
-      const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
-      if (createdRule?.status === 'conflict') {
-        setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [buildConflictEntry(suggestion, data, createdRule)] })
-        setEditingSuggestionId(null)
-        await reloadSuggestions()
-        return
-      }
-      ruleId = createdRule?.id || null
-      if (createdRule?.status === 'merged' && createdRule.relation !== 'duplicate') mergedRuleId = createdRule.id
-      // A brand-new rule created here is ours to delete on undo (an updated/merged pre-existing rule is not).
-      if (createdRule?.status === 'created' && createdRule?.id) {
-        createdRuleIdToDelete = createdRule.id
-        acceptedCreatedRuleId = createdRule.id
-      } else {
-        acceptedCreatedRuleId = null
-      }
-    }
-
-    const previousSourceIds = (suggestion.source_row_ids || []).map(String)
-    let currentCandidateIds = []
-    try {
-      const matchResult = await loadSuggestionMatchesForContext(buildSuggestionMatchPayload(data))
-      currentCandidateIds = (matchResult?.transactions || []).map(row => String(row.id))
-    } catch {
-      currentCandidateIds = []
-    }
-    const candidateIds = [...new Set([...previousSourceIds, ...currentCandidateIds])]
-
-    // Editing an accepted rule redraws the accepted partition: newly matching import/manual rows join it,
-    // and previously accepted rows that no longer match are restored to their original import state so
-    // they can regenerate as pending suggestions instead of staying stranded as rule-sourced rows.
-    const applyResult = await applyRuleToSuggestionRows(ruleId, { ...suggestion, source_row_ids: candidateIds })
-    if (!applyResult) {
-      pushUndo([suggestion.id, ...coveredSuggestionIds], null, createdRuleIdToDelete ? [createdRuleIdToDelete] : null)
-      await updateSuggestionReviewForContext({
-        suggestion_id: suggestion.id,
-        status: 'accepted',
-        rule_id: ruleId,
-        created_rule_id: acceptedCreatedRuleId,
-        accepted_prior_rows: suggestion.accepted_prior_rows || [],
-        merchant_label: suggestion.merchant_label,
-        target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
-        target_category_id: data.category_id || null,
-        keyword: data.keyword,
-        owner_id: data.owner_id || null,
-        account_id: data.account_id || null,
-        amount_min: data.amount_min,
-        amount_max: data.amount_max,
-        clean_name_suggestion: data.clean_name || null,
-        match_source_text: !!data.match_source_text,
-      })
-      if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
-      setEditingSuggestionId(null)
-      await reloadSuggestions()
-      return
-    }
-    const acceptedSourceIds = (applyResult?.transaction_ids || []).map(String)
-    const acceptedSourceIdSet = new Set(acceptedSourceIds)
-    const releasedSourceIds = previousSourceIds.filter(id => !acceptedSourceIdSet.has(id))
-    const releasedUndoRows = releasedSourceIds.length ? await loadCategorizationSnapshots(releasedSourceIds) : []
-    const releasedPriorRows = (suggestion.accepted_prior_rows || [])
-      .filter(row => releasedSourceIds.includes(String(row.id)))
-    if (releasedPriorRows.length) {
-      await txnMutations.restoreCategorization(releasedPriorRows)
-    }
-    const acceptedPriorRows = mergeAcceptedPriorRows(
-      suggestion.accepted_prior_rows || [],
-      applyResult?.prior_rows || [],
-      acceptedSourceIds,
-    )
-    const acceptedMetadata = await loadSuggestionRowsMetadata(acceptedSourceIds)
-    pushUndo(
-      [suggestion.id, ...coveredSuggestionIds],
-      [...(applyResult?.prior_rows || []), ...releasedUndoRows],
-      createdRuleIdToDelete ? [createdRuleIdToDelete] : null,
-    )
-    await updateSuggestionReviewForContext({
-      suggestion_id: suggestion.id,
-      status: 'accepted',
-      rule_id: ruleId,
-      created_rule_id: acceptedCreatedRuleId,
-      accepted_prior_rows: acceptedPriorRows,
-      merchant_label: suggestion.merchant_label,
-      target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
-      target_category_id: data.category_id || null,
-      keyword: data.keyword,
-      owner_id: data.owner_id || null,
-      account_id: data.account_id || null,
-      amount_min: data.amount_min,
-      amount_max: data.amount_max,
-      clean_name_suggestion: data.clean_name || null,
-      match_source_text: !!data.match_source_text,
-      source_row_ids: acceptedMetadata.sourceRowIds,
-      txn_count: acceptedMetadata.txnCount,
-      latest_txn_date: acceptedMetadata.latestTxnDate,
-    })
-
-    if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
-    setEditingSuggestionId(null)
-    await reloadSuggestions()
-  }
-
-  async function saveSuggestionAsIs(suggestion) {
-    await saveSuggestion(suggestion, {
-      keyword: suggestion.keyword,
-      category_id: suggestion.target_category_id,
-      amount_min: suggestion.amount_min,
-      amount_max: suggestion.amount_max,
-      clean_name: suggestion.clean_name_suggestion || null,
-      owner_id: suggestion.owner_id || null,
-      account_id: suggestion.account_id || null,
-      tag_ids: suggestion.tag_ids || [],
-      match_source_text: !!suggestion.match_source_text,
-      applyToExisting: false,
-    })
-  }
-
-  // Resolve a whole conflict set in one action, driven entirely by each member's *target* category.
-  // `winnerId` null = no rule: every member is settled to its target as a manual decision. With a
-  // winner, that member becomes the rule, and each other member is classified by its target:
-  //   - target == the winner's category -> the rule owns those rows (reclaimed via preserve-manual);
-  //   - target is another category       -> kept as a manual exception at that target;
-  //   - target is empty (category removed)-> cleared to the rule-eligible `cleared` source.
-  // Everything lands in ONE combined undo entry — prior member statuses captured up front, the manual/
-  // clear row snapshots gathered as we go (rows the rule reclaims aren't snapshotted, matching the
-  // single-accept path, since undo replays the review status rather than the rule apply).
+  // Resolve a whole conflict set in one action, driven by each member's *target* category: `winnerId` null
+  // settles every member to its target with no rule; a winner's target becomes the rule, and the backend
+  // derives every other member's disposition by comparing its target to the winner's category.
   async function applyConflictSet(members, winnerId) {
     if (applyingConflict) return
-    const correlationId = newTraceCorrelation('apply-conflict-set')
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'apply-conflict-set',
-      phase: 'before',
-      suggestions: members,
-      details: { winner_id: winnerId || null },
-    })
     setApplyingConflict(true)
     setResolveSummary(null)
     setReconcileApplyNote(null)
-    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
-
-    const idSet = new Set(members.map(member => member.id))
-    const priorStatuses = {}
-    for (const s of ruleSuggestionState.suggestions) {
-      if (idSet.has(s.id)) {
-        priorStatuses[s.id] = {
-          review_status: s.review_status,
-          rule_id: s.rule_id ?? null,
-          created_rule_id: s.created_rule_id ?? null,
-          accepted_prior_rows: s.accepted_prior_rows || [],
-        }
-      }
-    }
-    const rowSnapshots = []
-    const ruleRowIds = []
-    const reviewActionsBySuggestionId = {}
-
     try {
-      const winner = winnerId ? members.find(member => member.id === winnerId) : null
-      const winnerCategoryId = winner ? winner.target_category_id : null
-      let createdRuleId = null
-      let winnerRuleWasCreated = false
-
-      if (winner) {
-        const ruleData = {
-          keyword: winner.keyword,
-          category_id: winner.target_category_id,
-          amount_min: winner.amount_min,
-          amount_max: winner.amount_max,
-          clean_name: winner.clean_name_suggestion || null,
-          owner_id: winner.owner_id || null,
-          account_id: winner.account_id || null,
-          tag_ids: winner.tag_ids || [],
-          match_source_text: !!winner.match_source_text,
-        }
-        const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
-        if (createdRule?.status === 'conflict') {
-          setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [buildConflictEntry(winner, ruleData, createdRule)] })
-          await reloadSuggestions()
-          return
-        }
-        createdRuleId = createdRule?.id || null
-        winnerRuleWasCreated = createdRule?.status === 'created'
-        await updateSuggestionReviewForContext({
-          suggestion_id: winner.id,
-          status: 'accepted',
-          rule_id: createdRuleId,
-          created_rule_id: winnerRuleWasCreated ? createdRuleId : null,
-          merchant_label: winner.merchant_label,
-          target_category_name: winner.target_category_name,
-          target_category_id: winner.target_category_id,
-          keyword: winner.keyword,
-          owner_id: winner.owner_id || null,
-          account_id: winner.account_id || null,
-          amount_min: winner.amount_min,
-          amount_max: winner.amount_max,
-          clean_name_suggestion: winner.clean_name_suggestion || null,
-          match_source_text: !!winner.match_source_text,
-        })
-        if (winner.source_row_ids?.length) ruleRowIds.push(...winner.source_row_ids)
-        if (createdRule?.status === 'merged' && createdRule.relation !== 'duplicate') {
-          recordReconciledRule(createdRule.id, 'merged')
-        }
-      }
-
-      for (const member of members) {
-        if (member.id === winnerId) continue
-        const targetId = member.target_category_id || null
-        const rowIds = member.source_row_ids || []
-        if (winner && String(targetId) === String(winnerCategoryId)) {
-          // The rule's category — let the rule reclaim these rows alongside the winner's own.
-          if (rowIds.length) ruleRowIds.push(...rowIds)
-        } else if (rowIds.length) {
-          // A different target keeps the rows as a manual exception there; an empty target clears them.
-          const mode = targetId ? 'keep' : 'clear'
-          try {
-            const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, mode, targetId)
-            if (result?.rows?.length) {
-              rowSnapshots.push(...result.rows)
-              const reviewAction = buildCategoryChangeReviewAction(
-                result.rows,
-                targetId,
-                targetId ? getCategoryName(targetId) : null,
-              )
-              if (reviewAction) reviewActionsBySuggestionId[member.id] = reviewAction
-            }
-          } catch {
-            // best-effort; still record the discard below
-          }
-        }
-        // Write the discard server-side WITHOUT a per-member local update: touching local state here
-        // drops the member from the pending view mid-loop, so the card would visibly shed rows one by
-        // one. The single reloadSuggestions() below swaps the whole card out in one render instead.
-        await updateSuggestionReviewForContext({
-          suggestion_id: member.id,
-          status: 'discarded',
-          merchant_label: member.merchant_label,
-          target_category_name: member.target_category_name,
-          target_category_id: member.target_category_id || null,
-          keyword: member.keyword,
-          review_action: reviewActionsBySuggestionId[member.id] || null,
-        })
-      }
-
-      // Apply the rule to every row it should own (winner's rows + non-winners retargeted to it),
-      // preserve-manual so trusted-import rows are reclaimed but deliberate manual edits are spared.
-      // Capture those rows' prior categorization too, so undo restores them as well as the disposed ones.
-      if (createdRuleId && ruleRowIds.length) {
-        try {
-          const applyResult = await txnMutations.applyRuleToTransactions(createdRuleId, ruleRowIds)
-          if (applyResult?.prior_rows?.length) {
-            rowSnapshots.push(...applyResult.prior_rows)
-            for (const member of members) {
-              const rowIds = new Set((member.source_row_ids || []).map(String))
-              const memberPriorRows = applyResult.prior_rows.filter(row => rowIds.has(String(row.id)))
-              const reviewAction = buildCategoryChangeReviewAction(
-                memberPriorRows,
-                winnerCategoryId,
-                winner?.target_category_name || getCategoryName(winnerCategoryId),
-              )
-              if (reviewAction) reviewActionsBySuggestionId[member.id] = reviewAction
-            }
-            if (winner) {
-              await updateSuggestionReviewForContext({
-                suggestion_id: winner.id,
-                status: 'accepted',
-                rule_id: createdRuleId,
-                created_rule_id: winnerRuleWasCreated ? createdRuleId : null,
-                accepted_prior_rows: applyResult.prior_rows,
-                merchant_label: winner.merchant_label,
-                target_category_name: winner.target_category_name,
-                target_category_id: winner.target_category_id,
-                keyword: winner.keyword,
-                owner_id: winner.owner_id || null,
-                account_id: winner.account_id || null,
-                amount_min: winner.amount_min,
-                amount_max: winner.amount_max,
-                clean_name_suggestion: winner.clean_name_suggestion || null,
-                match_source_text: !!winner.match_source_text,
-                review_action: reviewActionsBySuggestionId[winner.id] || null,
-              })
-            }
-            for (const member of members) {
-              if (member.id === winnerId || !reviewActionsBySuggestionId[member.id]) continue
-              await updateSuggestionReviewForContext({
-                suggestion_id: member.id,
-                status: 'discarded',
-                merchant_label: member.merchant_label,
-                target_category_name: member.target_category_name,
-                target_category_id: member.target_category_id || null,
-                keyword: member.keyword,
-                review_action: reviewActionsBySuggestionId[member.id],
-              })
-            }
-          }
-        } catch {
-          // The rule saved; failing to back-apply to its rows shouldn't fail the resolution.
-        }
-      }
-
-      const conflictUndoSnapshot = {
-        statuses: priorStatuses,
-        rows: rowSnapshots.length ? rowSnapshots : null,
-        ruleIds: winnerRuleWasCreated && createdRuleId ? [createdRuleId] : null,
-        suggestions: members.map(member => ({
-          id: member.id,
-          keyword: member.keyword,
-          source_row_ids: member.source_row_ids || [],
-        })),
-        trace: { correlationId, action: 'apply-conflict-set' },
-      }
-      setUndoStack(prev => [
-        ...prev.slice(-(MAX_UNDO - 1)),
-        conflictUndoSnapshot,
-      ])
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'apply-conflict-set',
-        phase: 'undo-entry-pushed',
-        suggestions: members,
-        ruleIds: conflictUndoSnapshot.ruleIds || [],
-        undoSnapshot: conflictUndoSnapshot,
-      })
+      const payload = members.map(member => ({
+        ...statusItem(member),
+        target_category_id: member.target_category_id || null,
+        owner_id: member.owner_id || null,
+        account_id: member.account_id || null,
+        amount_min: member.amount_min,
+        amount_max: member.amount_max,
+        clean_name_suggestion: member.clean_name_suggestion || null,
+        tag_ids: member.tag_ids || [],
+        match_source_text: !!member.match_source_text,
+      }))
+      const result = await runReviewAction(
+        () => txnMutations.resolveRuleSuggestionConflictSet(reviewScope, payload, winnerId || null),
+        { fallbackError: 'Unable to resolve this conflict set.' },
+      )
+      if (!result) return
       setEditingSuggestionId(null)
-      await reloadSuggestions()
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'apply-conflict-set',
-        phase: 'after',
-        suggestions: members,
-        ruleIds: [createdRuleId],
-        undoSnapshot: conflictUndoSnapshot,
-      })
+      const winner = members.find(member => member.id === winnerId)
+      showResolveSummary(result.summary, winner ? [acceptItem(winner, suggestionRule(winner))] : [])
     } finally {
       setApplyingConflict(false)
     }
   }
 
-  async function saveSuggestionsAsIsBulk(suggestions) {
-    const correlationId = newTraceCorrelation('bulk-save')
-    await traceRuleSuggestionAction({
-      correlationId,
-      event: 'bulk-save',
-      phase: 'before',
-      suggestions,
-      details: { selected_count: suggestions.length },
-    })
-    setEditingSuggestionId(null)
+  async function refineConflictMatch(payload) {
     setResolveSummary(null)
     setReconcileApplyNote(null)
     setRuleSuggestionState(prev => ({ ...prev, error: '' }))
-    const undoSnapshot = pushUndo(
-      suggestions.map(s => s.id),
-      null,
-      null,
-      { correlationId, action: 'bulk-save' },
-    )
     try {
-      let lastResult = null
-      const updatesById = {}
-      // Auto-resolve collisions without interrupting the batch: 'merge' folds mergeable saves into the
-      // existing rule and no-ops pure duplicates; conflicts are left pending and named in the summary.
-      const summary = { created: 0, merged: 0, skipped: 0, replaced: 0, conflicts: [], reconciledRuleIds: [] }
-      for (const suggestion of suggestions) {
-        const createdRule = await api.createRule({
-          keyword: suggestion.keyword,
-          category_id: suggestion.target_category_id,
-          amount_min: suggestion.amount_min,
-          amount_max: suggestion.amount_max,
-          clean_name: suggestion.clean_name_suggestion || null,
-          owner_id: suggestion.owner_id || null,
-          account_id: suggestion.account_id || null,
-          tag_ids: suggestion.tag_ids || [],
-          match_source_text: !!suggestion.match_source_text,
-        }, { onExisting: 'merge' })
-        await traceRuleSuggestionAction({
-          correlationId,
-          event: 'bulk-save',
-          phase: 'after-rule-create',
-          suggestions: [suggestion],
-          ruleIds: [createdRule?.id],
-          undoSnapshot,
-          details: {
-            rule_status: createdRule?.status || null,
-            rule_relation: createdRule?.relation || null,
-          },
-        })
-        if (createdRule?.status === 'conflict') {
-          summary.conflicts.push(buildConflictEntry(suggestion, {
-            keyword: suggestion.keyword,
-            category_id: suggestion.target_category_id,
-            clean_name: suggestion.clean_name_suggestion || null,
-          }, createdRule))
-          continue
-        }
-        if (createdRule?.status === 'merged') {
-          if (createdRule.relation === 'duplicate') {
-            summary.skipped += 1
-          } else {
-            summary.merged += 1
-            if (createdRule.id) summary.reconciledRuleIds.push(createdRule.id)
-          }
-        } else {
-          summary.created += 1
-        }
-        const applyResult = await applyRuleToSuggestionRows(createdRule?.id, suggestion, {
-          correlationId,
-          action: 'bulk-save',
-          phasePrefix: 'scoped-apply',
-        })
-        lastResult = await updateSuggestionReviewForContext({
-          suggestion_id: suggestion.id,
-          status: 'accepted',
-          rule_id: createdRule?.id || null,
-          created_rule_id: createdRule?.status === 'created' ? createdRule.id : null,
-          accepted_prior_rows: applyResult?.prior_rows || [],
-          merchant_label: suggestion.merchant_label,
-          target_category_name: suggestion.target_category_name,
-          keyword: suggestion.keyword,
-          match_source_text: !!suggestion.match_source_text,
-        })
-        await traceRuleSuggestionAction({
-          correlationId,
-          event: 'bulk-save',
-          phase: 'after-suggestion',
-          suggestions: [suggestion],
-          ruleIds: [createdRule?.id],
-          undoSnapshot,
-          details: {
-            prior_row_count: applyResult?.prior_rows?.length || 0,
-            undo_row_count: undoSnapshot.rows?.length || 0,
-            undo_rule_count: undoSnapshot.ruleIds?.length || 0,
-          },
-        })
-        updatesById[suggestion.id] = {
-          review_status: 'accepted',
-          rule_id: createdRule?.id || null,
-          created_rule_id: createdRule?.status === 'created' ? createdRule.id : null,
-          accepted_prior_rows: applyResult?.prior_rows || [],
-        }
-      }
-      applyLocalSuggestionUpdates(updatesById, {
-        review_summary: lastResult?.review_summary || undefined,
-        generated_at: lastResult?.generated_at || undefined,
-      })
-      if (summary.merged || summary.skipped || summary.conflicts.length || summary.reconciledRuleIds.length) {
-        setReconcileApplyNote(null)
-        setResolveSummary(summary)
-      }
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'bulk-save',
-        phase: 'after',
-        suggestions,
-        ruleIds: summary.reconciledRuleIds,
-        undoSnapshot,
-        details: summary,
-      })
+      await refineSuggestionMatchForContext(payload)
+      setEditingSuggestionId(null)
+      await reloadSuggestions()
     } catch (err) {
-      await traceRuleSuggestionAction({
-        correlationId,
-        event: 'bulk-save',
-        phase: 'error',
-        suggestions,
-        undoSnapshot,
-        details: { error: err.message || 'Unable to save selected rules.' },
-      })
-      setRuleSuggestionState(prev => ({
-        ...prev,
-        loading: false,
-        error: err.message || 'Unable to save selected rules.',
-      }))
+      setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to refine this match.' }))
+      throw err
     }
   }
 
@@ -1775,7 +702,7 @@ export default function ImportRuleSuggestions() {
                             {[
                               resolveSummary.replaced ? `${resolveSummary.replaced} existing rule${resolveSummary.replaced === 1 ? '' : 's'} replaced` : null,
                               resolveSummary.merged ? `${resolveSummary.merged} merged into an existing rule` : null,
-                              resolveSummary.skipped ? `${resolveSummary.skipped} already existed(skipped)` : null,
+                              resolveSummary.skipped ? `${resolveSummary.skipped} already existed (skipped)` : null,
                             ].filter(Boolean).join(' · ')}
                           </div>
                         ) : null}
@@ -1829,7 +756,7 @@ export default function ImportRuleSuggestions() {
                         {reconcileApplyNote != null ? (
                           <div style={{ marginTop: 8, fontSize: 12.5, color: reconcileApplyNote > 0 ? 'var(--success)' : 'var(--muted)' }}>
                             {reconcileApplyNote > 0
-                              ? `↻ ${reconcileApplyNote} transaction${reconcileApplyNote === 1 ? '' : 's'} re - categorized.`
+                              ? `↻ ${reconcileApplyNote} transaction${reconcileApplyNote === 1 ? '' : 's'} re-categorized.`
                               : '↻ No matching transactions needed re-categorization.'}
                           </div>
                         ) : resolveSummary.reconciledRuleIds?.length ? (
@@ -1870,72 +797,26 @@ export default function ImportRuleSuggestions() {
                     onEditSuggestion={setEditingSuggestionId}
                     onCancelEdit={() => setEditingSuggestionId(null)}
                     onSaveSuggestion={saveSuggestion}
-                    onSaveAcceptedSuggestion={saveAcceptedSuggestion}
+                    onSaveAcceptedSuggestion={saveSuggestion}
                     onSaveSuggestionAsIs={saveSuggestionAsIs}
                     onSetSuggestionStatusBulk={setSuggestionStatusBulk}
                     onSaveSuggestionsAsIsBulk={saveSuggestionsAsIsBulk}
                     onSetSuggestionStatus={setSuggestionStatus}
                     onRejectSuggestionDisposition={rejectSuggestionWithDisposition}
                     onBulkRejectDisposition={bulkRejectWithDisposition}
-                  onApplyConflictSet={applyConflictSet}
-                  applyingConflict={applyingConflict}
-                  editingSuggestionId={editingSuggestionId}
-                  onRefineConflictMatch={async payload => {
-                    const correlationId = newTraceCorrelation('refine-match')
-                    const sourceSuggestions = payload.source_suggestions || []
-                    await traceRuleSuggestionAction({
-                      correlationId,
-                      event: 'refine-match',
-                      phase: 'before',
-                      suggestions: sourceSuggestions,
-                      keywords: [payload.keyword],
-                      details: {
-                        owner_id: payload.owner_id || null,
-                        account_id: payload.account_id || null,
-                        amount_min: payload.amount_min ?? null,
-                        amount_max: payload.amount_max ?? null,
-                        match_source_text: !!payload.match_source_text,
-                      },
-                    })
-                    setResolveSummary(null)
-                    setReconcileApplyNote(null)
-                    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
-                    try {
-                      const result = await refineSuggestionMatchForContext(payload)
-                      setEditingSuggestionId(null)
-                      await reloadSuggestions()
-                      await traceRuleSuggestionAction({
-                        correlationId,
-                        event: 'refine-match',
-                        phase: 'after',
-                        suggestions: sourceSuggestions,
-                        keywords: [payload.keyword],
-                        details: {
-                          review_summary: result?.review_summary || null,
-                        },
-                      })
-                    } catch (err) {
-                      await traceRuleSuggestionAction({
-                        correlationId,
-                        event: 'refine-match',
-                        phase: 'error',
-                        suggestions: sourceSuggestions,
-                        keywords: [payload.keyword],
-                        details: { error: err.message || 'Unable to refine this match.' },
-                      })
-                      setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to refine this match.' }))
-                      throw err
-                    }
-                  }}
-                  categories={categories}
-                  owners={owners}
-                  accounts={accounts}
-                  tags={tags}
-                  onTagCreated={created => setTags(prev => (prev.some(tag => tag.id === created.id) ? prev : [...prev, created]))}
-                  onReloadTags={reloadTags}
-                  onCategoriesChanged={reloadCategories}
-                  onClearReviewedSuggestions={clearReviewedSuggestions}
-                  onRestoreTrashSet={restoreRuleSuggestionTrashSet}
+                    onApplyConflictSet={applyConflictSet}
+                    applyingConflict={applyingConflict}
+                    editingSuggestionId={editingSuggestionId}
+                    onRefineConflictMatch={refineConflictMatch}
+                    categories={categories}
+                    owners={owners}
+                    accounts={accounts}
+                    tags={tags}
+                    onTagCreated={created => setTags(prev => (prev.some(tag => tag.id === created.id) ? prev : [...prev, created]))}
+                    onReloadTags={reloadTags}
+                    onCategoriesChanged={reloadCategories}
+                    onClearReviewedSuggestions={clearReviewedSuggestions}
+                    onRestoreTrashSet={restoreRuleSuggestionTrashSet}
                   />
                 </>
               )}
