@@ -136,8 +136,8 @@ the [releases page](https://github.com/jeff162/luma/releases).
 | Platform | Download | Shape |
 | --- | --- | --- |
 | Windows | `luma-<version>-windows-x64.zip` | Portable |
-| Linux (x86-64) | `luma-<version>-linux-x64.zip` | Portable |
-| Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.zip` | Portable |
+| Linux (x86-64) | `luma-<version>-linux-x64.tar.gz` | Portable |
+| Linux ARM64 / Raspberry Pi | `luma-<version>-linux-arm64.tar.gz` | Portable |
 | macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
 | macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
 
@@ -149,11 +149,15 @@ macOS one in particular is not the gesture most people know.
 
 ### Windows and Linux — portable
 
-Unzip the download anywhere and run the executable inside. That folder *is* the installation: the
+Unpack the download anywhere and run the executable inside. That folder *is* the installation: the
 databases are created beside the executable, so moving the folder moves the data with it, and copying
 it to another machine carries everything across.
 
 On Windows, SmartScreen may object to an unsigned executable. Choose **More info**, then **Run anyway**.
+
+On Linux, unpack on the machine that will run it (`tar -xzf luma-<version>-linux-x64.tar.gz`, then
+`./luma/luma`): copying the files across from Windows loses the executable permission. The Linux builds
+need glibc 2.35 or newer — Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm, or later.
 
 ### macOS
 

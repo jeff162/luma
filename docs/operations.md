@@ -392,6 +392,6 @@ a destructive restore. See *Open*.
   → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
 - **The release workflow has never run on a real tag.** No `v*` has been cut.
   → [`pre-release.md`](pre-release.md)
-- **Windows and Linux installers** are out of scope; both platforms ship the portable zip. The Windows
+- **Windows and Linux installers** are out of scope; both platforms ship the portable kit. The Windows
   user-data directory is therefore unreachable in any released artifact — which stops being true the
   day an installer ships. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)

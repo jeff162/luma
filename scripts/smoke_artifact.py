@@ -15,7 +15,7 @@ load-bearing rather than accidental.
 The environment is made self-contained rather than inherited: a fake home (and `%LOCALAPPDATA%` on Windows)
 means the assertion is against a known path and the run leaves nothing behind on the machine.
 
-On macOS the artifact is a `.dmg` rather than a zip, and it is installed the way a person would — the
+On macOS the artifact is a `.dmg` rather than an archive, and it is installed the way a person would — the
 image is mounted, the bundle copied off it, and the image unmounted — before anything is launched. What
 is launched there is the *server* inside the bundle rather than the bundle itself: the native wrapper is
 a Dock application, and the half of it worth automating is the half that answers HTTP.
@@ -30,6 +30,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -60,13 +61,17 @@ FORMS = ("portable", "installed")
 # The form this platform ships, which is the one whose artifact carries no form in its name. Stated
 # here rather than imported for the same reason the expected directories are — see the module docstring.
 RELEASE_FORM = "installed" if sys.platform == "darwin" else "portable"
+# Every container a build can produce. `.tar.gz` is matched whole: `Path.stem` strips only `.gz`.
+ARTIFACT_SUFFIXES = (".tar.gz", ".zip", ".dmg")
 
 
 def _form_of(artifact: Path) -> str:
     """Which form an artifact holds, read from its name. Only a build that is *not* this platform's
     release form says so in the filename, so anything unmarked is the release form."""
+    base = next((artifact.name[:-len(suffix)] for suffix in ARTIFACT_SUFFIXES if artifact.name.endswith(suffix)),
+                artifact.stem)
     for form in FORMS:
-        if artifact.stem.endswith(f"-{form}"):
+        if base.endswith(f"-{form}"):
             return form
     return RELEASE_FORM
 
@@ -74,7 +79,7 @@ def _form_of(artifact: Path) -> str:
 def _archive_for(form: str) -> Path:
     """The one artifact of this form in `dist/`. Ambiguity is an error rather than a guess — picking the
     newest would silently smoke-test yesterday's build after today's failed."""
-    artifacts = sorted([*DIST_DIR.glob("luma-*.zip"), *DIST_DIR.glob("luma-*.dmg")])
+    artifacts = sorted(path for suffix in ARTIFACT_SUFFIXES for path in DIST_DIR.glob(f"luma-*{suffix}"))
     wanted = [path for path in artifacts if _form_of(path) == form]
     if not wanted:
         raise SystemExit(f"No {form} artifact in {DIST_DIR} — build one first.")
@@ -85,7 +90,31 @@ def _archive_for(form: str) -> Path:
 
 
 def _unpack(archive: Path, into: Path) -> Path:
-    return _unpack_disk_image(archive, into) if archive.suffix == ".dmg" else _unpack_zip(archive, into)
+    if archive.name.endswith(".dmg"):
+        return _unpack_disk_image(archive, into)
+    if archive.name.endswith(".tar.gz"):
+        return _unpack_tar(archive, into)
+    return _unpack_zip(archive, into)
+
+
+def _unpack_tar(archive: Path, into: Path) -> Path:
+    """Unpack, and do *not* reapply the executable bit afterwards. Carrying the mode through extraction is
+    the reason Linux ships a tar, so what is checked is that the binary can run exactly as it arrived."""
+    with tarfile.open(archive) as bundle:
+        files = [member for member in bundle.getmembers() if member.isfile()]
+        bundle.extractall(into, filter="data")
+
+    executables = [member for member in files if Path(member.name).name == "luma"]
+    if len(executables) != 1:
+        raise SystemExit(f"Expected exactly one executable in {archive.name}, found {len(executables)}.")
+
+    executable = into / executables[0].name
+    if not os.access(executable, os.X_OK):
+        raise SystemExit(
+            f"{executables[0].name} unpacked from {archive.name} is not executable; "
+            "it would need a chmod before it could run."
+        )
+    return executable
 
 
 def _unpack_disk_image(image: Path, into: Path) -> Path:

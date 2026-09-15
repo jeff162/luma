@@ -15,16 +15,14 @@
 #   the user allows them explicitly. The README inside the disk image says how; certificates are a
 #   recurring cost and a separate decision from being able to build.
 #
-# Linux builds both architectures too, and the ARM one is built on **`ubuntu-22.04-arm` rather than
-# 24.04** on purpose. PyInstaller does not bundle glibc — the artifact links against whatever the build
-# machine has — so the runner's glibc becomes the *floor* every target machine must meet. 24.04 carries
-# glibc 2.39, which Raspberry Pi OS bookworm (2.36) does not satisfy, and the failure is a link error at
-# launch rather than anything the build notices. 22.04's 2.35 clears bookworm and everything newer.
-# 64-bit only: a 32-bit Pi OS is a different architecture again and is not built.
-#
-# That makes the two Linux artifacts asymmetric — the x64 one is built on `ubuntu-latest` and therefore
-# carries the higher floor. Deliberately left alone here rather than changed as a side effect of adding
-# ARM; moving it is its own decision, with its own test.
+# Linux builds both architectures too, both on **Ubuntu 22.04 rather than 24.04**, on purpose.
+# PyInstaller does not bundle glibc — the artifact links against whatever the build machine has — so the
+# runner's glibc becomes the *floor* every target machine must meet. 24.04 carries glibc 2.39, and the
+# failure on anything older is a link error at launch rather than anything the build notices: the 0.3.0
+# x64 kit, built on `ubuntu-latest`, would not start on Ubuntu 22.04 under WSL. 22.04's 2.35 clears
+# Raspberry Pi OS bookworm (2.36), Debian 12 and everything newer. The labels are pinned rather than
+# `-latest` so the floor cannot rise with an image alias. 64-bit only: a 32-bit Pi OS is a different
+# architecture again and is not built.
 #
 # macOS builds both architectures. `macos-13`, the last Intel image under that name, was retired in
 # December 2025; `macos-15-intel` replaces it and is the last x86_64 image GitHub plans to offer, until
@@ -63,7 +61,7 @@ on:
         default: all
         options:
           - all
-          - ubuntu-latest
+          - ubuntu-22.04
           - ubuntu-22.04-arm
           - windows-latest
           - macos-latest
@@ -98,13 +96,13 @@ jobs:
           #
           # `slug` is what the upload is named, and it exists because the runner label is a poor name for
           # something a person downloads. The labels describe build infrastructure rather than targets:
-          # `ubuntu-latest` and `ubuntu-22.04-arm` say nothing about x64 versus arm64, `macos-latest` and
-          # `macos-15-intel` are an arm64 and an x64 build named by image vintage, and the "latest" in two
-          # of them reads as a version while meaning only that the image alias floats. The slugs are the
-          # `<system>-<arch>` vocabulary `build_desktop.py::_platform_tag` already stamps into the zip
-          # inside, so the wrapper and its contents finally agree.
+          # `ubuntu-22.04` does not say x64, `macos-latest` and `macos-15-intel` are an arm64 and an x64
+          # build named by image vintage, and the "latest" in two of them reads as a version while meaning
+          # only that the image alias floats. The slugs are the `<system>-<arch>` vocabulary
+          # `build_desktop.py::_platform_tag` already stamps into the archive inside, so the wrapper and
+          # its contents agree.
           targets = [
-              {"os": "ubuntu-latest", "slug": "linux-x64", "form": "portable"},
+              {"os": "ubuntu-22.04", "slug": "linux-x64", "form": "portable"},
               {"os": "ubuntu-22.04-arm", "slug": "linux-arm64", "form": "portable"},
               {"os": "windows-latest", "slug": "windows-x64", "form": "portable"},
               {"os": "macos-latest", "slug": "macos-arm64", "form": "installed"},
@@ -180,9 +178,10 @@ jobs:
       # only to prove the mechanism macOS will depend on entirely. The per-OS data directory and the
       # build-time signal that selects it are unit-tested by faking `sys.platform`, but only a real
       # artifact can show the declaration survived the build and the frozen binary read it back. Proving
-      # that on the cheapest runner means macOS is not the first place it is ever exercised.
+      # that on the cheapest runner means macOS is not the first place it is ever exercised. Keyed on the
+      # target rather than the runner label, so moving the build to another image cannot silently skip it.
       - name: Smoke test the installed form
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.slug == 'linux-x64'
         run: |
           python scripts/build_desktop.py --skip-frontend --form installed
           python scripts/smoke_artifact.py --form installed
@@ -192,7 +191,8 @@ jobs:
           name: luma-${{ matrix.slug }}
           path: |
             dist/*.zip
+            dist/*.tar.gz
             dist/*.dmg
             dist/*.sha256
-            !dist/*-installed.zip
+            !dist/*-installed.*
           if-no-files-found: error

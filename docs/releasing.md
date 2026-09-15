@@ -13,7 +13,7 @@ need a build?*: nothing there does, and nothing here is needed to run one.
 built frontend inside it. Two forms come out of the same code, and `--form` chooses:
 
 - **portable** — databases sit beside the executable. Moving the folder moves the data. This is what
-  the Windows and Linux zips ship.
+  the Windows zip and the Linux `.tar.gz` kits ship.
 - **installed** — databases go to the per-OS user-data directory, for an artifact an installer places
   somewhere the user does not own and an upgrade replaces wholesale. This is what macOS ships.
 
@@ -55,25 +55,32 @@ backend/venv/bin/python scripts/build_desktop.py    # --skip-frontend reuses an 
 
 On Windows substitute `backend\venv\Scripts\python` for `backend/venv/bin/python`, here and below.
 
-The result lands in `dist/` as `luma-<version>-<platform>-<arch>.zip`, with `-installed` appended for a
-build that is not the platform's usual form. It runs on a machine with neither Python nor Node
+The result lands in `dist/` as `luma-<version>-<platform>-<arch>` plus the platform's container —
+`.zip` on Windows, `.tar.gz` on Linux, `.dmg` on macOS — with `-installed` appended for a build that is
+not the platform's usual form. It runs on a machine with neither Python nor Node
 installed. Builds are unsigned, so Windows and macOS warn on first run.
 
 ### Linux specifics
 
-Linux produces two portable zips, `luma-<version>-linux-x64.zip` and `luma-<version>-linux-arm64.zip`,
-and like macOS's pair they are not interchangeable. The ARM one covers 64-bit Raspberry Pi OS and other
-aarch64 distributions; a 32-bit Pi OS is a third architecture and is not built.
+Linux produces two portable kits, `luma-<version>-linux-x64.tar.gz` and
+`luma-<version>-linux-arm64.tar.gz`, and like macOS's pair they are not interchangeable. The ARM one
+covers 64-bit Raspberry Pi OS and other aarch64 distributions; a 32-bit Pi OS is a third architecture and
+is not built.
+
+**A tar rather than a zip, because the executable bit has to survive unpacking.** A zip records the mode
+too, but most extractors ignore it — Python's `zipfile`, Windows Explorer, 7-Zip on Windows and many
+desktop archive tools — and the 0.3.0 Linux zips, correct in every header, still reached a Linux machine
+with a binary that would not run. A tar's mode is applied by every extractor. Windows keeps the zip,
+having no execute bit to lose. The smoke test unpacks the tar and does not reapply the bit, so a kit that
+would need a `chmod` fails there.
 
 **The runner's glibc is the artifact's floor.** PyInstaller bundles the Python runtime but not the C
 library, so the binary links against whatever the build machine has and refuses to start anywhere older.
-That is why the ARM job runs on `ubuntu-22.04-arm` rather than 24.04: 22.04 carries glibc 2.35, which
-Raspberry Pi OS bookworm (2.36) satisfies, where 24.04's 2.39 would not. The failure mode is a link
-error at launch that names a `GLIBC_` version, and nothing in the build notices it.
-
-The x64 job still runs on `ubuntu-latest` and therefore carries the higher floor. The asymmetry is
-deliberate rather than overlooked — lowering it is its own change with its own test, not a side effect
-of adding ARM.
+That is why both Linux jobs run on Ubuntu 22.04 (`ubuntu-22.04`, `ubuntu-22.04-arm`) rather than 24.04:
+22.04 carries glibc 2.35, which Ubuntu 22.04, Debian 12 and Raspberry Pi OS bookworm (2.36) satisfy,
+where 24.04's 2.39 would not. The failure mode is a link error at launch that names a `GLIBC_` version,
+and nothing in the build notices it — the 0.3.0 x64 kit, built on `ubuntu-latest`, would not start under
+WSL's Ubuntu 22.04. The labels are pinned rather than `-latest` so the floor cannot move with an alias.
 
 ### macOS specifics
 
@@ -134,7 +141,7 @@ what GitHub names the wrapper zip a download produces. That is the `slug` column
 rather than the runner label, because the labels name build infrastructure rather than targets:
 `macos-latest` and `macos-15-intel` are an arm64 and an x64 build named by image vintage, and the
 "latest" in a label reads as a version while meaning only that the image alias floats. The slugs match
-the `<system>-<arch>` tag already in the zip *inside* the wrapper, so the two agree.
+the `<system>-<arch>` tag already in the archive *inside* the wrapper, so the two agree.
 
 "Tests first" is `.github/workflows/ci.yml`, *called* by the release workflow rather than copied into
 it — the same backend, unit, lint and browser lanes that gate every push and pull request. A release

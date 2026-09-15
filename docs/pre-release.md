@@ -428,9 +428,11 @@ Two things it moved that matter to the steps below:
 
 ## Release mechanics
 
-- **Test the ARM64 / Raspberry Pi kit.** The Windows, Linux x64 and macOS kits have been exercised; the
-  ARM64 build was added afterwards and has never run anywhere. It is a portable zip, so the test is the
-  same one: unzip, run, confirm the databases land beside the executable and the app opens.
+- **Test both Linux kits.** The Windows and macOS kits have been exercised. The Linux kits now ship as
+  `.tar.gz` and the x64 one is built on Ubuntu 22.04, so neither Linux kit has run in its current form,
+  and the ARM64 build never has. The test: unpack with `tar` on the target machine, run `luma` without a
+  `chmod`, confirm the databases land beside the executable and the app opens — on x64, on a glibc 2.35
+  system such as WSL's Ubuntu 22.04.
 - **Screenshots.** The README has none, and it is a dashboard-driven visual application whose whole job
   is letting someone decide quickly. This will cost more prospective users than any missing document.
   **Deliberately last, after every feature lands** — a feature that adds a dashboard frame or changes

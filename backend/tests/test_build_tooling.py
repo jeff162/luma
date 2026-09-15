@@ -8,6 +8,8 @@ down by a test that can run anywhere.
 
 import importlib.util
 import os
+import sys
+import tarfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -18,16 +20,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def _load_build_desktop():
-    spec = importlib.util.spec_from_file_location(
-        "build_desktop_under_test", REPO_ROOT / "scripts" / "build_desktop.py"
-    )
+def _load_script(name):
+    spec = importlib.util.spec_from_file_location(f"{name}_under_test", REPO_ROOT / "scripts" / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-build_desktop = _load_build_desktop()
+build_desktop = _load_script("build_desktop")
+smoke_artifact = _load_script("smoke_artifact")
 
 
 def test_windows_prefers_the_batch_wrapper_over_the_shell_script():
@@ -140,3 +141,56 @@ def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
         assert (members[name].external_attr >> 16) & 0o777 == 0o644, name
     # One build, one date across every member — so a reader cannot tell them apart by age.
     assert {info.date_time for info in members.values()} == {(2026, 3, 4, 5, 6, 8)}
+
+
+@pytest.mark.parametrize("is_windows, extension", [(True, ".zip"), (False, ".tar.gz")])
+def test_windows_ships_a_zip_and_linux_a_tar(tmp_path, is_windows, extension):
+    executable = tmp_path / "luma"
+    executable.write_bytes(b"\0" * 100)
+
+    with mock.patch.object(build_desktop, "DIST_DIR", tmp_path / "dist"), \
+         mock.patch.object(build_desktop, "_is_macos", return_value=False), \
+         mock.patch.object(build_desktop, "_is_windows", return_value=is_windows):
+        archive = build_desktop._package(executable, build_desktop.DIST_FORM_PORTABLE)
+
+    assert archive.name.endswith(extension)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows files carry no POSIX mode to extract into")
+def test_the_linux_kit_unpacks_runnable_and_readable(tmp_path):
+    """Why Linux ships a tar: the 0.3.0 zips recorded 0o755 on the binary and still reached a Linux
+    machine unrunnable, because most extractors ignore a zip's mode. So this unpacks the archive and
+    asserts what a recipient finds on disk, rather than what the headers claim."""
+    executable = tmp_path / "luma"
+    executable.write_bytes(b"\x7fELF" + b"\0" * 1000)
+    built_at = datetime(2026, 3, 4, 5, 6, 8).timestamp()
+    os.utime(executable, (built_at, built_at))
+
+    with mock.patch.object(build_desktop, "DIST_DIR", tmp_path / "dist"):
+        archive = build_desktop._package_tar(executable, build_desktop.DIST_FORM_PORTABLE)
+
+    unpacked = tmp_path / "unpacked"
+    with tarfile.open(archive) as bundle:
+        members = {member.name: member for member in bundle.getmembers()}
+        bundle.extractall(unpacked, filter="data")
+
+    assert set(members) == {"luma", "luma/luma", "luma/README.txt", "luma/LICENSE", "luma/env_example.txt"}
+    assert (unpacked / "luma" / "luma").stat().st_mode & 0o777 == 0o755
+    for name in ("README.txt", "LICENSE", "env_example.txt"):
+        assert (unpacked / "luma" / name).stat().st_mode & 0o777 == 0o644, name
+    assert {member.mtime for member in members.values()} == {int(built_at)}
+    # The build machine's account stays out of the download.
+    assert {(member.uname, member.gname, member.uid, member.gid) for member in members.values()} == {("", "", 0, 0)}
+
+
+@pytest.mark.parametrize("filename, form", [
+    ("luma-0.3.0-linux-x64.tar.gz", smoke_artifact.RELEASE_FORM),
+    ("luma-0.3.0-linux-x64-installed.tar.gz", "installed"),
+    ("luma-0.3.0-windows-x64.zip", smoke_artifact.RELEASE_FORM),
+    ("luma-0.3.0-macos-arm64-portable.dmg", "portable"),
+])
+def test_the_smoke_test_reads_the_form_from_every_container_name(filename, form):
+    """`Path.stem` of a `.tar.gz` ends in `.tar`, so a check on the stem reads every Linux build as the
+    release form — and the installed build CI smoke-tests on Linux would be refused as a second portable
+    artifact."""
+    assert smoke_artifact._form_of(Path(filename)) == form

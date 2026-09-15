@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the standalone desktop artifact: one executable, plus the zip it ships in.
+"""Build the standalone desktop artifact: one executable, plus the archive it ships in.
 
 Two distribution forms come out of the same code, and which one is being built is a *decision*, not
 something the running app can work out for itself:
 
-- **portable** — a zip whose databases live beside the executable, which is what
+- **portable** — a kit whose databases live beside the executable, which is what
   `runtime_config.anchor_relative` arranges in a frozen build. It carries no configuration file at all
   because the stock `DATA_DIR = "."` default already means the right thing once frozen.
 - **installed** — databases in the per-OS user-data directory, for an artifact that an installer puts
@@ -14,9 +14,10 @@ something the running app can work out for itself:
 `.app` cannot hold its own writable data. The choice reaches the artifact through `LUMA_DIST_FORM`,
 which `scripts/luma.spec` bakes into the bundle.
 
-The container differs by platform as well. Windows and Linux get a zip holding one executable; macOS
-gets a `.app` bundle inside a `.dmg` laid out for drag-installing to Applications, which is what an
-unsigned application should be — nothing to script, and nothing that needs a certificate to run.
+The container differs by platform as well. Windows gets a zip holding one executable and Linux a
+`.tar.gz` holding the same, since only a tar's file modes survive every extractor; macOS gets a `.app`
+bundle inside a `.dmg` laid out for drag-installing to Applications, which is what an unsigned
+application should be — nothing to script, and nothing that needs a certificate to run.
 
 Nothing here signs anything. An unsigned artifact carries an OS warning on first run, and someone who
 downloads one is choosing that; paying for certificates is a separate decision from being able to build.
@@ -25,12 +26,14 @@ Run from anywhere: `python scripts/build_desktop.py [--form portable|installed] 
 """
 
 import argparse
+import io
 import os
 import platform
 import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import zipfile
 from pathlib import Path
@@ -172,7 +175,7 @@ def _is_macos() -> bool:
 
 def _default_form() -> str:
     """What this platform can support, which on macOS is one thing only — a `.app` cannot hold its own
-    writable data. Elsewhere the portable zip stays the default because it is the form that has actually
+    writable data. Elsewhere the portable kit stays the default because it is the form that has actually
     been shipped."""
     return DIST_FORM_INSTALLED if _is_macos() else DIST_FORM_PORTABLE
 
@@ -319,7 +322,9 @@ def _assemble_macos_app(server_tree: Path) -> Path:
 
 
 def _package(built: Path, form: str) -> Path:
-    return _package_disk_image(built, form) if _is_macos() else _package_zip(built, form)
+    if _is_macos():
+        return _package_disk_image(built, form)
+    return _package_zip(built, form) if _is_windows() else _package_tar(built, form)
 
 
 # The license file the distribution carries beside the program. Separate from the copy inside the
@@ -334,6 +339,51 @@ LICENSE_FILE = ROOT / "LICENSE"
 # the same in both places: Finder and most Linux file managers hide dot-files, so `.env_example` was
 # invisible in exactly the disk image meant to hand it over.
 ENV_EXAMPLE_FILE = ROOT / "env_example.txt"
+
+
+def _kit_members(executable: Path, form: str) -> list[tuple[str, bytes, int]]:
+    """What a kit holds, as `(name, content, mode)`, whichever container it ships in — so the Windows zip
+    and the Linux tar cannot come to carry different files."""
+    read_me = READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED
+    return [
+        (executable.name, executable.read_bytes(), 0o755),
+        ("README.txt", read_me.encode("utf-8"), 0o644),
+        ("LICENSE", LICENSE_FILE.read_text(encoding="utf-8").encode("utf-8"), 0o644),
+        (ENV_EXAMPLE_FILE.name, ENV_EXAMPLE_FILE.read_text(encoding="utf-8").encode("utf-8"), 0o644),
+    ]
+
+
+def _package_tar(executable: Path, form: str) -> Path:
+    """Linux's container. A tar's mode field is applied by every extractor; a zip's is a field most of them
+    ignore — Python's `zipfile`, Windows Explorer, 7-Zip on Windows and many desktop archive tools. The
+    0.3.0 Linux zips carried 0o755 on the binary and still reached a Linux machine unrunnable, which is
+    what moved Linux off the zip. Windows keeps it, having no execute bit to lose."""
+    archive = _artifact_name(form, ".tar.gz")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.unlink(missing_ok=True)
+
+    # One timestamp for the whole archive, as in the zip.
+    built_at = int(executable.stat().st_mtime)
+
+    def header(name: str, mode: int, kind: bytes, size: int = 0) -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        info.mode = mode
+        info.size = size
+        info.mtime = built_at
+        # Owned by nobody in particular, rather than recording the build machine's account (`runner`
+        # on CI) in every download.
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        return info
+
+    with tarfile.open(archive, "w:gz") as bundle:
+        # The folder itself, so it unpacks with a stated mode rather than one the extractor invents.
+        bundle.addfile(header("luma", 0o755, tarfile.DIRTYPE))
+        for name, content, mode in _kit_members(executable, form):
+            bundle.addfile(header(f"luma/{name}", mode, tarfile.REGTYPE, len(content)), io.BytesIO(content))
+
+    return archive
 
 
 def _package_zip(executable: Path, form: str) -> Path:
@@ -356,21 +406,16 @@ def _package_zip(executable: Path, form: str) -> Path:
         # went out dated 1980 and uncompressed, while the text files took 0o600 and extract unreadable
         # to anyone but the user who unpacked them. Stating all three here removes the asymmetry rather
         # than fixing each symptom.
-        def add(name: str, data: bytes | str, mode: int) -> None:
+        #
+        # Compressing the executable saves about 1% — PyInstaller has already compressed the archive
+        # inside it — so this is consistency rather than a size win; the win is that nothing here depends
+        # on which overload of `writestr` a future edit happens to use. The mode is recorded even though
+        # Windows has no use for it, so the entry says what it is to any tool that reads it.
+        for name, content, mode in _kit_members(executable, form):
             info = zipfile.ZipInfo(f"luma/{name}", date_time=built_at)
             info.compress_type = compression
             info.external_attr = mode << 16
-            bundle.writestr(info, data)
-
-        # The executable bit does not survive a plain `zipfile.write`, and a portable build whose binary
-        # arrives without it is one chmod away from working with no indication of why. Compressing it
-        # saves about 1% — PyInstaller has already compressed the archive inside it — so this is
-        # consistency rather than a size win; the win is that nothing here depends on which overload of
-        # `writestr` a future edit happens to use.
-        add(executable.name, executable.read_bytes(), 0o755)
-        add("README.txt", READ_ME_PORTABLE if form == DIST_FORM_PORTABLE else READ_ME_INSTALLED, 0o644)
-        add("LICENSE", LICENSE_FILE.read_text(encoding="utf-8"), 0o644)
-        add(ENV_EXAMPLE_FILE.name, ENV_EXAMPLE_FILE.read_text(encoding="utf-8"), 0o644)
+            bundle.writestr(info, content)
 
     return archive
 
@@ -436,7 +481,7 @@ def build(skip_frontend: bool = False, form: str | None = None) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the standalone Luma executable and its zip.")
+    parser = argparse.ArgumentParser(description="Build the standalone Luma executable and its archive.")
     parser.add_argument(
         "--skip-frontend",
         action="store_true",

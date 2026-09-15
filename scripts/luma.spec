@@ -127,7 +127,7 @@ else:
         [],
         name="luma",
         # Windows reads the icon out of the executable itself. Linux has no equivalent — a desktop entry
-        # would carry one, and the portable zip deliberately installs nothing.
+        # would carry one, and the portable kit deliberately installs nothing.
         icon=str(WINDOWS_ICON) if sys.platform == "win32" else None,
         **EXE_OPTIONS,
     )

@@ -48,7 +48,7 @@ it can be closed without a Mac in front of somebody:
   executable directly — deliberately, since that captures the output the redirect would otherwise
   divert. So the redirect has never actually run.
 
-**Windows and Linux installers are not in scope**; both platforms keep the portable zip. The
+**Windows and Linux installers are not in scope**; both platforms keep the portable kit. The
 consequence to remember is that the Windows user-data directory is unreachable in any released
 artifact, so no install has data under it — which stops being true the day an installer ships.
 

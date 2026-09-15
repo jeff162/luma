@@ -178,7 +178,7 @@ def test_an_unrecognized_declaration_is_not_trusted():
 
 
 def test_a_portable_build_needs_no_configuration_to_land_beside_itself():
-    """The portable zip ships no `.env`, so this default is the whole mechanism."""
+    """The portable kit ships no `.env`, so this default is the whole mechanism."""
     portable = runtime_config.DIST_FORM_PORTABLE
     with _two_roots() as (install, bundle), _frozen(install, bundle, form=portable), _env(**_NO_OVERRIDES):
         assert runtime_config.default_data_dir() == runtime_config.DEFAULT_DATA_DIR
