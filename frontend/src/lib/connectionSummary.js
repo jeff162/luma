@@ -100,6 +100,8 @@ export function lastSyncReportCards(connection) {
     id: card.id,
     filename: card.label,
     imported_at: card.imported_at,
+    // Every card a sync writes is a sync card; the report words itself by it when opened whole.
+    source_kind: 'connection_sync',
     ...(scoped ? { _syncScope: { connectionId: connection.id, label: 'the last sync' } } : {}),
   }))
 }

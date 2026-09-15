@@ -15,9 +15,9 @@ leaves the mode and restores the page.
 A mockup of the page inside its `page-*` hub topic, with each control linking to its topic, was the
 first form of the idea. Two ways to draw it, both turned down in favor of pointing at the real screen:
 
-- **A screenshot with hotspots** looks exact but goes stale whenever the page changes, needs a light and
+- **A screenshot with hot spots** looks exact but goes stale whenever the page changes, needs a light and
   a dark version, and nothing notices when it is out of date. The headless suite could regenerate the
-  images from demo data, but that adds a pipeline and binary files, and the hotspot coordinates still
+  images from demo data, but that adds a pipeline and binary files, and the hot spot coordinates still
   drift.
 - **A schematic drawn from labelled boxes** is cheap, follows the theme, and its links are checked by the
   existing help-registry test, but it is still a second copy of the layout that has to be kept in step.

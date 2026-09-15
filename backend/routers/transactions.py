@@ -20,6 +20,7 @@ import re
 import uuid
 from backend.db.database import get_db
 from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
+from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
@@ -1996,10 +1997,9 @@ def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
         cutoff = " AND julianday(trashed_at) <= julianday('now', ?)"
         params = (_TRASH_OLDER_THAN[older_than],)
     with get_db() as conn:
-        cursor = conn.execute(
-            f"DELETE FROM txn WHERE trashed_at IS NOT NULL AND {visible}{cutoff}", params
-        )
-        removed = cursor.rowcount or 0
+        # The shared delete, so each import card a purged row came from stops counting it — its account
+        # chip, row count and summary all move together (`services/import_batch_totals.py`).
+        removed = delete_transactions(conn, f"trashed_at IS NOT NULL AND {visible}{cutoff}", params)
     if removed:
         # Attached documents are what makes the purge the *irreversible* half of the trash: trashing a
         # transaction hides its documents with it and a restore brings them back, while this deletes

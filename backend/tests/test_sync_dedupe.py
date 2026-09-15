@@ -275,12 +275,16 @@ class SyncDedupeTests(unittest.TestCase):
         with self._db() as conn:
             row = conn.execute("SELECT * FROM import_batch_duplicate").fetchone()
             card = conn.execute(
-                "SELECT deduped_count FROM import_batch WHERE id = ?", (row["batch_id"],)
+                "SELECT row_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?", (row["batch_id"],)
             ).fetchone()
         payload = json.loads(row["txn_payload_json"])
         self.assertEqual(payload["external_transaction_id"], "p1")
         self.assertEqual(payload["amount"], -21.25)
         self.assertEqual(card["deduped_count"], 1, "the card's duplicate tally drives the report badge")
+        # A rejected row was still received: the card's row count includes it, as a file card's does, and
+        # agrees with the summary total the duplicates pill sits beside.
+        self.assertEqual(card["row_count"], 1)
+        self.assertEqual(json.loads(card["config_snapshot"])["import_summary"]["total_rows"], 1)
 
     # ---- capture + evidence on inserted rows ----------------------------
 

@@ -272,6 +272,31 @@ class TrashFilterCoverageTests(unittest.TestCase):
         self.assertTrue(self._txn_exists(auto))
         self.assertTrue(self._txn_exists(user_dup))
 
+    def test_empty_trash_takes_a_purged_row_off_its_single_account_file_card(self):
+        # A single-account file records no account label in its rows' evidence and keys its one account
+        # entry ''. The purge still has to find that entry, or the card's account chip keeps counting a row
+        # its own report no longer lists.
+        account, _, keep, purged = self._seed_two()
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, row_count, status) "
+                "VALUES ('file-1', 'harborline-april.csv', 2, 'completed')"
+            )
+            conn.execute(
+                "INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count, was_skipped) "
+                "VALUES ('file-1', '', ?, 2, 0)",
+                (account,),
+            )
+            conn.execute("UPDATE txn SET import_batch_id = 'file-1' WHERE id IN (?, ?)", (keep, purged))
+        with self._use_db_path():
+            trash_transaction(purged)
+            self.assertEqual(empty_transaction_trash()["removed"], 1)
+        with self._use_db_path(), get_db() as conn:
+            chip = conn.execute("SELECT row_count FROM import_batch_account WHERE batch_id = 'file-1'").fetchone()
+            card = conn.execute("SELECT row_count FROM import_batch WHERE id = 'file-1'").fetchone()
+        self.assertEqual(chip["row_count"], 1)
+        self.assertEqual(card["row_count"], 1)
+
     def test_trash_hides_a_documented_row_and_the_purge_reclaims_its_file(self):
         # Documents inherit the trash's own two stages rather than defining a second lifetime: trashing
         # is reversible and keeps the file, purging is not and takes it. The row goes with its

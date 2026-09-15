@@ -88,6 +88,7 @@ from backend.services.duplicate_detection import (
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
+from backend.services.import_batch_totals import IMPORT_SUMMARY_KEY, refresh_batch_totals
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
 from backend.services.source_capabilities import (
@@ -118,7 +119,6 @@ router = APIRouter()
 MAX_DISTINCT_VALUES_PER_COLUMN = 500
 RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
 RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
-IMPORT_SUMMARY_KEY = "import_summary"
 UNKNOWN_SOURCE_FALLBACK_KEY = "unknown_source_fallback"
 SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY = "system_rule_suggestion_review"
 SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY = "system_category_workspace_draft"
@@ -1977,75 +1977,6 @@ def save_batch_snapshot(conn, batch_id: str, snapshot: dict) -> None:
         "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
         (json.dumps(snapshot), batch_id),
     )
-
-
-def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
-    for batch_id in [str(value or "").strip() for value in (batch_ids or []) if str(value or "").strip()]:
-        conn.execute(
-            """
-            DELETE FROM import_batch_account
-            WHERE batch_id = ?
-              AND was_skipped = 0
-              AND account_id IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM account a
-                  WHERE a.id = import_batch_account.account_id
-              )
-            """,
-            (batch_id,),
-        )
-        conn.execute(
-            """
-            UPDATE import_batch_account
-            SET account_id = NULL
-            WHERE batch_id = ?
-              AND was_skipped = 1
-              AND account_id IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM account a
-                  WHERE a.id = import_batch_account.account_id
-              )
-            """,
-            (batch_id,),
-        )
-
-        batch = conn.execute(
-            "SELECT row_count, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            continue
-
-        imported_count = int(conn.execute(
-            "SELECT COUNT(*) FROM txn WHERE import_batch_id = ?",
-            (batch_id,),
-        ).fetchone()[0] or 0)
-        skipped_count = int(batch["skipped_count"] or 0)
-        deduped_count = int(batch["deduped_count"] or 0)
-        total_rows = imported_count + skipped_count + deduped_count
-
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        summary = snapshot.get(IMPORT_SUMMARY_KEY)
-        summary_changed = False
-        if isinstance(summary, dict):
-            if int(summary.get("imported_count") or 0) != imported_count:
-                summary["imported_count"] = imported_count
-                summary_changed = True
-            if int(summary.get("total_rows") or 0) != total_rows:
-                summary["total_rows"] = total_rows
-                summary_changed = True
-
-        row_count_changed = int(batch["row_count"] or 0) != total_rows
-        if row_count_changed:
-            conn.execute(
-                "UPDATE import_batch SET row_count = ? WHERE id = ?",
-                (total_rows, batch_id),
-            )
-        if summary_changed:
-            snapshot[IMPORT_SUMMARY_KEY] = summary
-            save_batch_snapshot(conn, batch_id, snapshot)
 
 
 def parse_amount(row: dict, convention: str, col_map: AmountColumnMap) -> Optional[float]:
@@ -4224,7 +4155,7 @@ def list_batches():
         # transient "database is locked" (another request mid-write) must not fail the whole listing — the
         # next call reconciles. See the manage-sources refetch-loop fix that made this contention possible.
         try:
-            _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
+            refresh_batch_totals(conn, [row["id"] for row in batch_rows])
         except sqlite3.OperationalError as exc:
             log_warning(f"[import] batch-history reconcile skipped (transient): {exc}")
         # Full completed history, unbounded. A prior global `LIMIT 50` here silently dropped older imports

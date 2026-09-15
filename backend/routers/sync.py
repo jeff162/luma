@@ -1741,22 +1741,26 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 })
             _record(became_complete=became_complete)
 
-        # Flush the card tallies (a card is reused across calls, so counts accumulate).
-        for card_id, n in card_added.items():
-            conn.execute("UPDATE import_batch SET row_count = row_count + ? WHERE id = ?", (n, card_id))
-        for card_id, n in card_dupes.items():
-            conn.execute("UPDATE import_batch SET deduped_count = deduped_count + ? WHERE id = ?", (n, card_id))
-        # `skipped_count` on the card itself, which a sync never wrote — so a sync card reported 0 skipped
-        # however much it had turned away, and every consumer that derives from the column (notably
-        # `summarizeImportOutcome`'s imported-count fallback) was working from a figure that was not true.
-        for card_id, counts in card_skipped.items():
-            conn.execute("UPDATE import_batch SET skipped_count = skipped_count + ? WHERE id = ?",
-                         (sum(counts.values()), card_id))
-        # The headline summary, in the CSV card's own vocabulary. Every card this pull touched is covered,
-        # including one that only turned rows away: `card_skipped` and `card_added` need not name the same
-        # cards, and a card that imported nothing is exactly the case a summary of zero would misreport.
+        # Flush the card tallies (a card is reused across calls, so counts accumulate). Every card this pull
+        # touched is covered, including one that only turned rows away: `card_skipped` and `card_added` need
+        # not name the same cards, and a card that imported nothing is exactly the case a total of zero
+        # would misreport.
+        #
+        # `row_count` is rows *received* — imported + skipped + deduped — which is what a file card's has
+        # always meant and what the history's own reconcile (`refresh_batch_totals`) re-derives. Counting
+        # only landed rows here made one column mean two things on one card, depending on whether the
+        # history had been loaded since: "83 rows" beside chips and a duplicates pill that summed to 67.
+        # `skipped_count` likewise: a sync once never wrote it, so a card reported 0 skipped however much it
+        # had turned away.
         for card_id in {*card_added, *card_dupes, *card_skipped}:
             counts = card_skipped.get(card_id) or Counter()
+            added_n, dupes_n, skipped_n = card_added.get(card_id, 0), card_dupes.get(card_id, 0), sum(counts.values())
+            conn.execute(
+                "UPDATE import_batch SET row_count = row_count + ?, deduped_count = deduped_count + ?, "
+                "skipped_count = skipped_count + ? WHERE id = ?",
+                (added_n + dupes_n + skipped_n, dupes_n, skipped_n, card_id),
+            )
+            # The headline summary, in the CSV card's own vocabulary.
             record_sync_card_totals(
                 conn, batch_id=card_id,
                 imported=card_added.get(card_id, 0), deduped=card_dupes.get(card_id, 0),

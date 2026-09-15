@@ -72,4 +72,15 @@ describe('ImportBatchDetail quick filter', () => {
     await waitFor(() => expect(askedForReviewOnly()).toBe(true))
     expect(await screen.findByText('Needs review: 12 of 240 imported transactions from this file')).toBeTruthy()
   })
+
+  it('calls a data connection card a card, not a file', async () => {
+    serve()
+    const user = userEvent.setup()
+    render(<ImportBatchDetail batch={{ ...BATCH, filename: 'Harborline · August 2026', source_kind: 'connection_sync' }} />)
+
+    expect(await screen.findByText('240 synced transactions on this card')).toBeTruthy()
+    await user.click(await screen.findByRole('button', { name: 'Needs review' }))
+    expect(await screen.findByText('Needs review: 12 of 240 synced transactions on this card')).toBeTruthy()
+    expect(screen.queryByText(/this file/)).toBeNull()
+  })
 })

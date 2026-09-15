@@ -79,6 +79,12 @@ export default function ImportBatchDetail({
   // sync summary and the server expands them, so this stays one short param on every page, sort and count
   // rather than several kilobytes of query string.
   const syncConnectionId = batch?._syncScope?.connectionId || null
+  // A data connection's card holds whatever its syncs delivered for a period, not a file, so its unscoped
+  // report names the card rather than calling it a file.
+  const isSyncCard = batch?.source_kind === 'connection_sync'
+  const unscopedNoun = count => (isSyncCard
+    ? `synced transaction${count === 1 ? '' : 's'} on this card`
+    : `imported transaction${count === 1 ? '' : 's'} from this file`)
 
   // Reviewing rows here (categorizing, bulk/row-menu "Mark reviewed", detail-panel edits) clears their
   // needs_review flag, which the parent import card surfaces as its "N to review" pill. Those clears
@@ -239,7 +245,7 @@ export default function ImportBatchDetail({
     : ''
   const scopeNoun = syncConnectionId
     ? `transaction${unfilteredCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}`
-    : `imported transaction${unfilteredCount === 1 ? '' : 's'} from this file`
+    : unscopedNoun(unfilteredCount)
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -268,7 +274,7 @@ export default function ImportBatchDetail({
             ? `${activeAttributeLabel || 'Filtered'}: ${totalCount} of ${unfilteredCount} ${scopeNoun}${dateFilterLabel}`
             : syncConnectionId
               ? `${totalCount} transaction${totalCount === 1 ? '' : 's'} from ${batch?._syncScope?.label || 'the last sync'}${dateFilterLabel}`
-              : `${totalCount} imported transaction${totalCount === 1 ? '' : 's'} from this file${dateFilterLabel}`}
+              : `${totalCount} ${unscopedNoun(totalCount)}${dateFilterLabel}`}
       </div>
     </>
   )
@@ -290,7 +296,7 @@ export default function ImportBatchDetail({
             value={filterInput}
             onChange={(e) => setFilterInput(e.target.value)}
             placeholder="Search names, imported text, amounts, or dates (2023, 03/15, -42.10)…"
-            aria-label="Search this file's transactions"
+            aria-label={isSyncCard ? "Search this card's transactions" : "Search this file's transactions"}
             title="Matches names, imported text, category, account, amount, or date. -42.10 is money paid out, +42.10 money received. Dates can be a year (2023), month-in-year (03/2023), or day (03/15/2023); a month (03) or month/day (03/15) matches every year. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or amount:-68."
             style={{
               flex: '0 1 360px',
@@ -311,7 +317,7 @@ export default function ImportBatchDetail({
             onChange={setAttributeFilter}
           />
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 220px' }}>
-            Imported transactions from this file. Category changes made here update the underlying transactions directly.
+            {isSyncCard ? 'Synced transactions on this card.' : 'Imported transactions from this file.'} Category changes made here update the underlying transactions directly.
           </div>
           <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           <Button variant="ghost" small onClick={bulk.toggle}>
@@ -380,7 +386,7 @@ export default function ImportBatchDetail({
             scrollRef={listRef}
             sortState={sortState}
             onSort={onSort}
-            emptyMessage="No imported transactions remain for this file."
+            emptyMessage={isSyncCard ? 'No synced transactions remain on this card.' : 'No imported transactions remain for this file.'}
           />
         )}
       </div>

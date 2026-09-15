@@ -27,9 +27,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
-from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
-from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
@@ -45,9 +43,9 @@ from backend.services.duplicate_detection import (
     restore_auto_merged_after_detach,
     scan_scope_for_cross_account_duplicates,
 )
+from backend.services.import_batch_totals import delete_transactions
 
 router = APIRouter()
-IMPORT_SUMMARY_KEY = "import_summary"
 
 
 class AccountCreate(BaseModel):
@@ -285,79 +283,11 @@ def _replace_account_reference_in_batch_snapshots(conn, source_account_id: str, 
             )
 
 
-def _batch_has_duplicates(conn, batch_id: str) -> bool:
-    """Whether the card still holds a duplicate report — asked of the rows rather than of
-    `deduped_count`, so a counter that has drifted low cannot take a real report down with the card."""
-    return conn.execute(
-        "SELECT 1 FROM import_batch_duplicate WHERE batch_id = ? LIMIT 1", (batch_id,)
-    ).fetchone() is not None
-
-
-def _refresh_import_batch_summaries(conn, batch_ids: set[str]):
-    for batch_id in sorted(batch_id for batch_id in batch_ids if batch_id):
-        batch = conn.execute(
-            "SELECT id, skipped_count, deduped_count, source_kind, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            continue
-
-        imported_count = int(conn.execute(
-            "SELECT COUNT(*) FROM txn WHERE import_batch_id = ?",
-            (batch_id,),
-        ).fetchone()[0] or 0)
-        skipped_count = int(batch["skipped_count"] or 0)
-        deduped_count = int(batch["deduped_count"] or 0)
-        total_rows = imported_count + skipped_count + deduped_count
-
-        # A data-source card that recomputes to nothing is deleted rather than left at zero rows, on the
-        # same reasoning `connections.remove_synced_transactions` deletes cards instead of leaving
-        # tombstones: a sync card records *rows*, so with its last row gone it records nothing, and the
-        # card resolvers key on (connection, backfill/period) without regard to status — a survivor would
-        # simply be reused by the next backfill. Deleting the accounts a connection synced into used to
-        # strand one of these, and disconnecting afterwards (`connection_id` is ON DELETE SET NULL) left
-        # it unreachable by every cleanup path that keys on the connection, showing up on Import/Export
-        # as an empty card labelled "Data connection" for a source that no longer exists.
-        #
-        # A CSV card is deliberately not treated this way: it records a file the user supplied, which
-        # remains true — and re-importable — after its rows are gone.
-        if total_rows == 0 and batch["source_kind"] == SYNC_SOURCE_KIND and not _batch_has_duplicates(conn, batch_id):
-            conn.execute("DELETE FROM import_batch WHERE id = ?", (batch_id,))
-            continue
-
-        conn.execute(
-            "UPDATE import_batch SET row_count = ? WHERE id = ?",
-            (total_rows, batch_id),
-        )
-
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        summary = snapshot.get(IMPORT_SUMMARY_KEY)
-        if isinstance(summary, dict):
-            summary["imported_count"] = imported_count
-            summary["total_rows"] = total_rows
-            snapshot[IMPORT_SUMMARY_KEY] = summary
-            conn.execute(
-                "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
-                (json.dumps(snapshot), batch_id),
-            )
-
-
 def _delete_account_and_import_history(conn, source_account_id: str):
-    affected_batch_ids = {
-        row["import_batch_id"]
-        for row in conn.execute(
-            """
-            SELECT DISTINCT import_batch_id
-            FROM txn
-            WHERE account_id = ?
-              AND import_batch_id IS NOT NULL
-            """,
-            (source_account_id,),
-        ).fetchall()
-        if row["import_batch_id"]
-    }
-
-    conn.execute("DELETE FROM txn WHERE account_id = ?", (source_account_id,))
+    # Through the shared delete so each card these rows came from is kept true: the rows come off the
+    # per-account entries that counted them (which may name another account, for a row moved since it
+    # arrived) and the cards' totals are re-derived, dropping a sync card left with nothing.
+    delete_transactions(conn, "account_id = ?", (source_account_id,))
     conn.execute("DELETE FROM category_rule WHERE account_id = ?", (source_account_id,))
     conn.execute("UPDATE csv_import_profile SET account_id = NULL WHERE account_id = ?", (source_account_id,))
     conn.execute(
@@ -370,7 +300,6 @@ def _delete_account_and_import_history(conn, source_account_id: str):
     )
     _replace_account_reference_in_profile_column_maps(conn, source_account_id, "")
     _replace_account_reference_in_batch_snapshots(conn, source_account_id, "")
-    _refresh_import_batch_summaries(conn, affected_batch_ids)
     conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
 
 

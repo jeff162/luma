@@ -22,6 +22,8 @@ from unittest import mock
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts as accounts_module
 from backend.routers import sync as sync_module
+from backend.routers import transactions as transactions_module
+from backend.routers.import_export import core as core_module
 from backend.routers import providers as providers_module
 
 from backend.tests._fake_adapter import DONE as _DONE, FakeCursorAdapter as _FakeAdapter
@@ -554,7 +556,7 @@ class SyncPeriodCardTests(unittest.TestCase):
             self.assertEqual(res["skipped"], 2)
         cards = self._cards()
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["row_count"], 1, "only landed rows count toward the card's own total")
+        self.assertEqual(cards[0]["row_count"], 3, "rows received — landed and dropped — as a file card counts")
         accounts = self._card_accounts()
         landed = accounts[(cards[0]["filename"], "Joint Checking ···1188")]
         self.assertEqual((landed["row_count"], landed["was_skipped"]), (1, 0))
@@ -580,7 +582,7 @@ class SyncPeriodCardTests(unittest.TestCase):
                                 self._txn_for("acct-ext-cd", txn_id="cd2")]):
             pass
         card = self._cards()[0]
-        self.assertEqual(card["row_count"], 1)
+        self.assertEqual(card["row_count"], 3, "the column and the summary's total are one figure")
         self.assertEqual(card["skipped_count"], 2, "the column a sync never wrote")
         summary = self._summary(card)
         self.assertEqual(summary["imported_count"], 1)
@@ -657,9 +659,77 @@ class SyncPeriodCardTests(unittest.TestCase):
             self.assertEqual(res["added"], 0)
         cards = self._cards()
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["row_count"], 0)
+        self.assertEqual(cards[0]["row_count"], 1, "the dropped row was received, so the card counts it")
         dropped = self._card_accounts()[(cards[0]["filename"], "Example CD ···2222")]
         self.assertEqual((dropped["row_count"], dropped["was_skipped"]), (1, 1))
+
+    # ---- counts that must still add up once rows leave the ledger --------
+
+    def _assert_card_adds_up(self, card, *, imported, deduped=0, skipped=0):
+        """The card's three statements of its size agree: the column, the summary's parts, its total."""
+        summary = self._summary(card)
+        self.assertEqual(
+            (summary["imported_count"], summary["deduped_count"], summary["skipped_count"]),
+            (imported, deduped, skipped),
+        )
+        self.assertEqual(summary["total_rows"], imported + deduped + skipped)
+        self.assertEqual(card["row_count"], summary["total_rows"], "the headline and the summary are one tally")
+
+    def _insert_second_account(self):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO account
+                  (id, external_account_id, connection_id, provider, name, display_name, type, subtype,
+                   mask, owner_id)
+                VALUES ('a2', NULL, NULL, 'manual', 'Household Spending', 'Household Spending', 'depository',
+                        'checking', NULL, ?)
+                """,
+                (SHARED_OWNER_ID,),
+            )
+
+    def test_emptying_the_trash_takes_a_purged_row_off_the_card_that_counted_it(self):
+        # The reported card: its account chips still counted a row the trash had purged, so they summed to
+        # one more than the card's own report listed.
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"), self._txn("t2", -20.0, "Lunch")]):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            purged = conn.execute("SELECT id FROM txn WHERE external_transaction_id = 't2'").fetchone()["id"]
+        with self._use_db_path():
+            transactions_module.trash_transaction(purged)
+            self.assertEqual(transactions_module.empty_transaction_trash()["removed"], 1)
+        card = self._cards()[0]
+        chip = self._card_accounts()[(card["filename"], "Joint Checking ···1188")]
+        self.assertEqual(chip["row_count"], 1, "the chip stops counting the purged row")
+        self._assert_card_adds_up(card, imported=1)
+
+    def test_deleting_the_account_a_row_moved_to_takes_it_off_the_chip_that_counted_it(self):
+        # A chip names the account a row arrived on. A row moved elsewhere since and deleted with that
+        # other account belongs to no chip the deletion would think to touch by account — it has to be
+        # found by the source label the row recorded.
+        self._insert_second_account()
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"), self._txn("t2", -20.0, "Lunch")]):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET account_id = 'a2' WHERE external_transaction_id = 't2'")
+        with self._use_db_path():
+            accounts_module.delete_account("a2")
+        card = self._cards()[0]
+        chip = self._card_accounts()[(card["filename"], "Joint Checking ···1188")]
+        self.assertEqual(chip["row_count"], 1)
+        self._assert_card_adds_up(card, imported=1)
+
+    def test_the_history_listing_rebuilds_a_summary_that_fell_behind_its_columns(self):
+        # The reported card's other half. Its duplicates were counted into `deduped_count` by syncs that ran
+        # before the summary kept a tally, and the listing's recount rewrote `total_rows` from the columns
+        # while leaving the summary's `deduped_count` alone — "83 rows" beside a pill reading 11 of 28.
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE import_batch SET deduped_count = deduped_count + 3")
+        with self._use_db_path():
+            core_module.list_batches()
+        self._assert_card_adds_up(self._cards()[0], imported=1, deduped=3)
 
     def test_an_undiscovered_account_is_named_by_the_only_name_there_is(self):
         # An account added on the provider's side is not in `connection_account` when its rows are

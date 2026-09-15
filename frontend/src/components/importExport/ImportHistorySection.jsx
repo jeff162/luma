@@ -173,6 +173,8 @@ export function ImportHistorySection({
                   // Rendered through this generic row (shared duplicate/review pills) with a fixed label and
                   // none of the profile affordances (rename/description/assign/undo don't apply to a sync).
                   const isConnection = row.kind === 'connection'
+                  // What a card's actions refer to: a sync card holds what a period's syncs delivered, not a file.
+                  const batchNoun = isConnection ? 'this card' : 'this file'
                   const isMarketplace = false
                   const isUnsaved = isManual || isUnknown
                   const rowExpanded = !!expandedSourceRows[row.key]
@@ -450,7 +452,7 @@ export function ImportHistorySection({
                                           <button
                                             type="button"
                                             onClick={() => openBatchDetail(b)}
-                                            title="View imported transactions from this file"
+                                            title={`View imported transactions from ${batchNoun}`}
                                             style={{
                                               background: 'none',
                                               border: 'none',
@@ -468,7 +470,9 @@ export function ImportHistorySection({
                                       </div>
                                     </div>
                                     <span style={{ fontSize: 12, color: 'var(--muted)' }}>{b.imported_at.slice(0, 16).replace('T', ' ')}</span>
-                                    <span style={{ textAlign: 'center' }}>{b.row_count} rows</span>
+                                    {/* From the same summary the duplicate and rejected pills read, so the headline
+                                        cannot be one tally while the pills beside it are another. */}
+                                    <span style={{ textAlign: 'center' }}>{summary.totalRows} rows</span>
                                   </div>
 
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', marginTop: 8 }}>
@@ -623,7 +627,7 @@ export function ImportHistorySection({
                                           source: b,
                                           title: b.filename,
                                         })}
-                                        title="View rejected rows from this file"
+                                        title={`View rejected rows from ${batchNoun}`}
                                         style={{
                                           display: 'inline-flex',
                                           alignItems: 'center',
@@ -659,7 +663,7 @@ export function ImportHistorySection({
                                             source: b,
                                             title: b.filename,
                                           })}
-                                          title="View duplicate rows from this file"
+                                          title={`View duplicate rows from ${batchNoun}`}
                                           style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -692,7 +696,7 @@ export function ImportHistorySection({
                                           type="button"
                                           // Opens on the rows the pill counts; the report's own quick filter turns it off.
                                           onClick={() => openBatchDetail({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
-                                          title="Review the transactions imported from this file"
+                                          title={`Review the transactions imported from ${batchNoun}`}
                                           style={{
                                             display: 'inline-flex', alignItems: 'center', gap: 4,
                                             fontSize: 11, padding: '2px 7px', borderRadius: 99,
@@ -708,7 +712,7 @@ export function ImportHistorySection({
                                         <button
                                           type="button"
                                           onClick={() => markBatchReviewed(b.id)}
-                                          title="Mark every transaction in this file reviewed"
+                                          title={`Mark every transaction in ${batchNoun} reviewed`}
                                           style={{
                                             display: 'inline-flex', alignItems: 'center', gap: 4,
                                             fontSize: 11, padding: '2px 7px', borderRadius: 99,
