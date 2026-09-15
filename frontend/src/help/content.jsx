@@ -236,9 +236,7 @@ export const HELP_TOPICS = [
     surfaces: ['Getting started'],
     summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each saying what it is for and handing off to its own topic.',
     body: () => (
-      <><p>*Needs review*</p>
-        <p>The major parts, roughly in the order data moves through them. Each one has a topic of its
-          own:</p>
+      <><p>The major sections roughly in the order data moves through them:</p>
         {/* A table rather than the prose tour this used to be: ten sections described at paragraph length
             restated their own topics, and what a reader wants here is which part owns which job. Each row
             earns its place by saying what the part is *for*, which a title cannot. */}
@@ -250,52 +248,51 @@ export const HELP_TOPICS = [
             <tbody>
               <tr>
                 <td><HelpLink to="/help/page-import-export">Import / Export</HelpLink></td>
-                <td>Where transactions come in and where the ledger goes out, with duplicate detection in
-                  between so overlapping files and sources are safe to import.</td>
+                <td>Load transactions, Generate Backups, Export data. Strong duplicate detection
+                  so overlapping files and sources are safe to import.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-accounts">Accounts &amp; owners</HelpLink></td>
-                <td>Where a transaction came from, and who it belongs to &mdash; the basis for filtering
-                  and reporting by person.</td>
+                <td>Transactions belong to an account and accounts belong to an owner. Useful
+                  for filtering and reporting.
+                </td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-transactions">Transactions</HelpLink></td>
-                <td>The ledger as a list: finding a row, reviewing what just arrived, and recording what a
-                  row cannot say on its own.</td>
+                <td>The ledger as a list.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-categories">Categories &amp; groups</HelpLink></td>
-                <td>What a transaction is filed under, and the grouping the dashboard reports on. Some
-                  groups also carry behavior, such as keeping money movement out of the totals.</td>
+                <td>Some groups carry behavior to keep money movement out of the totals. Otherwise
+                  groups and categories support reporting and identifying recurring patterns.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/tags">Tags</HelpLink></td>
-                <td>Cross-cutting labels for the reports categories cannot express, where the interesting
-                  transactions span categories and accounts.</td>
+                <td>User defined labels to identify transaction groups which cross the other categories
+                  or are otherwise interesting to identify.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-rules">Rules</HelpLink></td>
-                <td>How categorization is kept current without repeating the work on every import, along
-                  with merchant names, tags and recurring series.</td>
+                <td>Handle the the task of categorizing transactions as they are loaded.
+                </td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/recurring-transactions">Recurring transactions</HelpLink></td>
-                <td>Charges that repeat on a schedule, and an alert when one changes or does not
-                  arrive.</td>
+                <td>Detected patterns of charges repeating on a schedule. Alerts about missed payments
+                  and changes in the payment amount.
+                </td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-dashboard">Dashboard</HelpLink></td>
-                <td>Reports, and the quickest way to notice something filed in the wrong place.</td>
+                <td>Visual representation of the transactions.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-tasks">Tasks</HelpLink></td>
-                <td>A short list of things worth a look. Nothing there is an error, and nothing has to be
-                  dealt with in order.</td>
+                <td>Alerts which may be of interest. Dismiss them if they are not.</td>
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-settings">Settings</HelpLink></td>
-                <td>Appearance and currency, the tag manager, sign-in protection, the trash, and the
-                  configuration screen.</td>
+                <td>Various system configuration options and the Trash.</td>
               </tr>
             </tbody>
           </table>
@@ -375,24 +372,36 @@ export const HELP_TOPICS = [
     summary: 'A visual way to explore the ledger. Spending and income are shown as charts rather than lists, which suits both reporting and checking that transactions are filed where they belong.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          The dashboard answers two questions: where the money went, and how that compares with other
-          periods. Three controls decide what is on screen.
+          The dashboard is a visual representation of the transaction data. There are various reporting views
+          to investigate where money is going and surface spending patterns. The dashboard is also useful for
+          verifying that transactions are correctly categorized and for digging into details behind anomalous patterns.
+        </p>
+        <p>
+          Page controls:
         </p>
         <ul>
           <li>
-            <strong>The period and the filters</strong> decide which transactions are counted. The
-            filter bar narrows by account, owner, tag, category or any other facet, and every figure
-            on the page follows it.
+            <strong>Report types:</strong> <em>Expense, Income, Cash Flow</em> select the type of report.
+            Expense and Income are pie charts, Cash Flow is a
+            Sankey diagram (<HelpLink to="/help/dashboard-cash-flow">cash flow</HelpLink>).
           </li>
           <li>
-            <strong>Spending by</strong> decides how the total is divided: by group, by category, or
-            by a saved <HelpLink to="/help/dashboard-tag-reports">tag report</HelpLink>.
+            <strong>Report sub-types:</strong> <em>Single, Compare, Trends</em> toggle between examining
+            a period of time, comparing two periods and examining trends over time.
           </li>
           <li>
-            <strong>The frame</strong> chooses between a single period, trends across several periods,
-            and <HelpLink to="/help/dashboard-cash-flow">cash flow</HelpLink>.
+            The single period report has a selector to break the results down by group, by category or
+            by a set of tags (<HelpLink to="/help/dashboard-tag-reports">tag report</HelpLink>). Tags are
+            only available on the expense and income reports, not on the cash flow report.
+          </li>
+          <li>
+            The <strong>filter</strong> at the top of the page affects which transactions are included
+            for all of the reports.
+          </li>
+          <li>
+            The <strong>period</strong> selector at the top of the page selects the time frame for all of
+            the reports except for the <em>Trend</em> report which has it's own period selector.
           </li>
         </ul>
         <p>
@@ -401,9 +410,14 @@ export const HELP_TOPICS = [
           the dashboard to check the data is as much its purpose as reporting on it.
         </p>
         <p>
-          Not everything is counted. Categories in a group
-          marked <HelpLink to="/help/exclude-from-totals">Exclude from totals</HelpLink> are left out
-          of every figure here, which is how credit-card payments and transfers between accounts stay
+          The filter and period at the top of the page remain in effect when switching between the Dashboard
+          and Transaction pages so that is another way to view the transaction being displayed by the
+          Dashboard.
+        </p>
+        <p>
+          Not everything is counted. Categories
+          Categories <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not include
+          in any of the dashboard reports as this is how credit-card payments and transfers between accounts stay
           out of spending.
         </p>
       </>
@@ -511,35 +525,42 @@ export const HELP_TOPICS = [
     summary: 'The transaction ledger itself, as a list. Everything recorded about a transaction is reachable from its row, and the same list is where a set of them is worked through together.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Every transaction in the ledger is listed here. The search box above the table finds
-          transactions by name, amount, date and more &mdash; see{' '}
-          <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>. Beside it, the
-          quick filter narrows to one working set such as{' '}
-          <HelpLink to="/help/reviewing-transactions">Needs review</HelpLink> or uncategorized rows. The
-          button carries the name of its current choice: clicking it switches that filter on or off, and
-          its &#9662; picks a different one. The filter bar at the top of the page narrows by account,
-          owner, category, tag, date or amount. All three combine.
+          This is the transaction ledger. The search box searches by name, category, amount, date
+          and more &mdash; see{' '}
+          <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>.
+          The amount search can be used to create more complex filters than a single value. There are a
+          set of pre-defined quick filters for common tasks to display only transactions which <HelpLink to="/help/reviewing-transactions">need review</HelpLink> or
+          or categorization, as well as selecting by other properties. The &#9662; selector picks a filter, clicking turns it on and
+          off.  The filter bar and time period at the to of the page are also active. All of these combine
+          to select what is visible.
         </p>
         <p>
           <strong>Bulk Edit</strong> turns the list into a selectable set, for categorizing, tagging,
-          marking reviewed, trashing, or linking several payments into one purchase. A single
-          transaction is worked on from its right-click menu or from the detail panel, which opens
-          beside the list and holds everything recorded about the row.
+          marking reviewed, trashing. <em>Bulk Edit</em> is also how several payments get linked
+          together into a single purchase.
+        </p>
+        <p>
+          The individual transaction rows support a right-click menu and &#128393; at the
+          end of the row opens the transaction editor. The transaction editor also supports adding external documentation in the
+          form of attachments.
+        </p>
+        <p>
+          The <strong>Reimbursements</strong> button at the top of the page brings up a list of the
+          un-resolved reimbursable transactions so expenses and payments can be paired.
         </p>
         <h4>Markers on a row</h4>
         <p>
-          A small marker says something is recorded beyond the amount and the category. Each one opens
+          Various small markers are used to convey additional information. Clicking on a marker displays
           what it refers to.
         </p>
         <ul>
-          <li><strong>R</strong> &mdash; the transaction is new and <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>. Clicking it marks the transaction reviewed.</li>
+          <li><strong>R</strong> &mdash; the transaction is new and <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>. Clicking marks the transaction reviewed.</li>
           <li><strong>Split (N)</strong> &mdash; the amount is <HelpLink to="/help/transaction-splits">divided across categories</HelpLink>.</li>
           <li><strong>&#128279;</strong> &mdash; one of <HelpLink to="/help/multi-payment-purchases">several payments for one purchase</HelpLink>.</li>
           <li><strong>&#8617;</strong> &mdash; a <HelpLink to="/help/reimbursable-expenses">reimbursable expense</HelpLink> or its repayment.</li>
           <li><strong>&#8635;</strong> &mdash; part of a <HelpLink to="/help/recurring-transactions">recurring series</HelpLink>.</li>
-          <li>A paperclip &mdash; the transaction has <HelpLink to="/help/transaction-documents">documents attached</HelpLink>.</li>
+          <li><strong>&#128206;</strong> &mdash; the transaction has <HelpLink to="/help/transaction-documents">documents attached</HelpLink>.</li>
         </ul>
       </>
     ),
@@ -2173,7 +2194,7 @@ export const HELP_TOPICS = [
                 <td>The file drop area</td>
                 <td>Bringing in a CSV file. A mapping screen follows: which columns hold the date, the
                   amount and the description, <HelpLink to="/help/amount-conventions">how the file
-                  represents money in and out</HelpLink>, and which account the rows belong to. For a file
+                    represents money in and out</HelpLink>, and which account the rows belong to. For a file
                   that mixes currencies, mapping its currency column keeps rows in any other currency out
                   of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
               </tr>
@@ -2192,7 +2213,7 @@ export const HELP_TOPICS = [
                 <td><strong>Group imported categories</strong></td>
                 <td>Sorting the categories a file brought with it into groups, and removing the unwanted
                   ones &mdash; see <HelpLink to="/help/imported-category-cleanup">learning categories from
-                  imported transactions</HelpLink>.</td>
+                    imported transactions</HelpLink>.</td>
               </tr>
               <tr>
                 <td><strong>Generate rules</strong></td>
@@ -2218,15 +2239,15 @@ export const HELP_TOPICS = [
                 <td>The duplicate pills</td>
                 <td>Opening <HelpLink to="/help/duplicate-report">the duplicate-detection report</HelpLink>,
                   where <HelpLink to="/help/cross-account-duplicates">cross-account
-                  matches</HelpLink> and <HelpLink to="/help/covered-range-review">covered-range
-                  matches</HelpLink> are decided.</td>
+                    matches</HelpLink> and <HelpLink to="/help/covered-range-review">covered-range
+                      matches</HelpLink> are decided.</td>
               </tr>
               <tr>
                 <td>The &#8599; button</td>
                 <td>The transactions the file brought in, with a search box of its own
                   (see <HelpLink to="/help/searching-transactions">searching transactions</HelpLink>) and,
                   at the top, how many rows were <HelpLink to="/help/removed-as-duplicates">removed as
-                  duplicates</HelpLink>.</td>
+                    duplicates</HelpLink>.</td>
               </tr>
               <tr>
                 <td>The needs-review count and <strong>Mark all reviewed</strong></td>
@@ -2281,7 +2302,7 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="export-and-backup">Export and Backup / Restore</HelpHeading>
         <p>
           <strong>Export</strong> writes transactions out as a CSV file. <strong>Backup /
-          Restore</strong> makes and restores whole-database archives, optionally encrypted to a backup
+            Restore</strong> makes and restores whole-database archives, optionally encrypted to a backup
           key &mdash; see <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
         </p>
       </>
