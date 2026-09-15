@@ -596,11 +596,15 @@ function FilterChip({ sel, onRemove, onFlipMode }) {
   )
 }
 
-function FilterButton({ active, count, children, onClick, inert = false, title }) {
+// `inapplicable` is a filter the current view ignores (the date on the Dashboard's Trends tab). It must not
+// open: a change made there would do nothing here and then surface unannounced on the next view that reads
+// it. It is not `disabled`, though, because a disabled button shows no `title`, and the tooltip is the only
+// place the reason is given.
+function FilterButton({ active, count, children, onClick, inapplicable = false, title }) {
   return (
-    <button onClick={onClick} title={title} style={{
+    <button type="button" onClick={inapplicable ? undefined : onClick} aria-disabled={inapplicable || undefined} title={title} style={{
       display: 'flex', alignItems: 'center', gap: 6,
-      padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
+      padding: '6px 12px', borderRadius: 8, cursor: inapplicable ? 'default' : 'pointer', fontSize: 13,
       border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
       background: active
         ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
@@ -608,8 +612,8 @@ function FilterButton({ active, count, children, onClick, inert = false, title }
       color: active ? 'var(--accent2)' : 'var(--muted)',
       fontWeight: active ? 500 : 400,
       whiteSpace: 'nowrap',
-      opacity: inert ? 0.45 : 1,
-      filter: inert ? 'saturate(0.4)' : 'none',
+      opacity: inapplicable ? 0.45 : 1,
+      filter: inapplicable ? 'saturate(0.4)' : 'none',
     }}>
       {children}
       {count > 0 && (
@@ -628,6 +632,12 @@ export default function FilterBar() {
   const [showDate,   setShowDate]   = useState(false)
   const [showFilter, setShowFilter] = useState(false)
 
+  // A view that stops reading the date (the Dashboard's Trends tab) closes an open date picker as well, so
+  // it is not left standing under a button that no longer opens it.
+  useEffect(() => {
+    if (!dateApplies) setShowDate(false)
+  }, [dateApplies])
+
   const effectiveDate = getDate()
   const hasDate       = !!filters.date
   const hasSelections = filters.selections.length > 0
@@ -642,7 +652,7 @@ export default function FilterBar() {
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <FilterButton
           active={hasDate}
-          inert={!dateApplies}
+          inapplicable={!dateApplies}
           title={dateApplies ? undefined : 'The date filter does not apply to this view.'}
           onClick={() => { setShowDate(v => !v); setShowFilter(false) }}
         >

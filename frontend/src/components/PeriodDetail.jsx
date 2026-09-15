@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
+import { periodReportParams } from '../lib/periodReportScope.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -28,7 +29,9 @@ const PERIOD_DETAIL_TABLE_PREF_KEY = 'ui.periodDetail.transactions.columns'
  * inclusive ISO dates; `label` is the human range name shown in the header (the bar's own label, or
  * the FilterBar preset). `view` ('spending' | 'income') mirrors the chart's filter so the listed rows
  * exactly match the bar the user clicked, including refunds-in-expense-categories that pull a bar
- * negative. The list is infinite-scroll paginated with server-side sort (usePagedTransactions), so a
+ * negative. `scope` narrows it further to one slice of the breakdown it was opened from — a category row
+ * of the Trends averages table, or the drilled group behind a Trends month bar — and leads the title. The
+ * list is infinite-scroll paginated with server-side sort (usePagedTransactions), so a
  * whole-year range isn't truncated at a fetch cap and column sort reorders the entire result — not
  * just the loaded page. Multiple panels stack via stackIndex/forceFloating, matching TransactionDetail.
  *
@@ -46,6 +49,7 @@ export default function PeriodDetail({
   tagIds,
   ownerIds,
   filters = {},
+  scope = null,
   categories = [],
   onClose,
   forceFloating = false,
@@ -61,15 +65,10 @@ export default function PeriodDetail({
 
   // Filter that resolves the same rows the list shows, for the fetch and for "select all matching" bulk
   // edits. `date_start`/`date_end` scope the range; `view` mirrors the chart's spending/income filter.
-  const bulkFilterParams = useMemo(() => ({
-    date_start: start,
-    date_end: end,
-    ...(accountId ? { account_id: accountId } : {}),
-    ...(tagIds ? { tag_ids: tagIds } : {}),
-    ...(ownerIds ? { owner_ids: ownerIds } : {}),
-    ...filters,
-    ...(view ? { view } : {}),
-  }), [start, end, view, accountId, tagIds, ownerIds, filters])
+  const bulkFilterParams = useMemo(
+    () => periodReportParams({ start, end, view, accountId, tagIds, ownerIds, filters, scope }),
+    [start, end, view, accountId, tagIds, ownerIds, filters, scope],
+  )
 
   const activeKey = start && end ? JSON.stringify(bulkFilterParams) : null
   const loadPage = useCallback((offset, limit, sort) => (
@@ -108,7 +107,7 @@ export default function PeriodDetail({
   }
 
   const viewLabel = view === 'income' ? 'Income' : 'Spending'
-  const title = `${label} · ${viewLabel}`
+  const title = `${scope?.name ? `${scope.name} · ` : ''}${label} · ${viewLabel}`
   // Count and total come from the server aggregate over the whole range, not the loaded page, so they
   // stay correct as the user scrolls. Income sums are stored negative, so flip the sign to show a
   // positive magnitude.

@@ -1097,7 +1097,7 @@ When `LUMA_DEVELOPER_OPTIONS=true`, the Settings page exposes developer reset ac
 
 - **`Clear browser-local state`:** clears browser `localStorage` / `sessionStorage`
 
-- **`Clear saved preferences`:** clears preference values stored in the control database
+- **`Clear saved preferences`:** clears the current user's preference values (`ui_preference` rows for their scope) in the data database
 
 - **`Clear import memory`:** clears backend import-memory data stored in the main application database
 

@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.transactions import monthly_by_group, monthly_trend
+from backend.routers.transactions import list_transactions, monthly_by_group, monthly_trend
 from backend.services.transaction_facets import TransactionFacets
 
 
@@ -80,7 +80,7 @@ class MonthlyByGroupTests(unittest.TestCase):
                 conn.execute("INSERT INTO owner (id, name) VALUES (?, ?)", (owner_id, name))
         return owner_id
 
-    def _insert_transaction(self, *, account_id: str, category_id: str, amount: float, date: str, owner_id: str = SHARED_OWNER_ID, merchant: str = "Fixture Merchant") -> None:
+    def _insert_transaction(self, *, account_id: str, category_id: str | None, amount: float, date: str, owner_id: str = SHARED_OWNER_ID, merchant: str = "Fixture Merchant", is_pending: int = 0) -> None:
         txn_id = str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
@@ -88,10 +88,77 @@ class MonthlyByGroupTests(unittest.TestCase):
                     """
                     INSERT INTO txn
                       (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, category_overridden)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                     """,
-                    (txn_id, account_id, owner_id, category_id, amount, merchant, merchant, merchant, date),
+                    (txn_id, account_id, owner_id, category_id, amount, merchant, merchant, merchant, date, is_pending),
                 )
+
+    def _report_sum(self, *, view: str, date_start: str, date_end: str, facets: TransactionFacets) -> float:
+        # What the Trends drill-through (PeriodDetail) shows as its total. Called as a plain function, so
+        # every Query param is passed explicitly — an unset one would arrive as a FieldInfo.
+        result = list_transactions(
+            month=None, date_start=date_start, date_end=date_end, import_batch_id=None,
+            sort_by="date", sort_dir="desc", account_id=None, facets=facets, source_account_ids=None,
+            category_id=None, require_all_tag_ids=None, require_all_attribute_ids=None, direction=None,
+            view=view, search=None, quick_filter=None, ids=None, sync_connection_id=None,
+            recurring_series_id=None, recurring_only=False, recurring_excluded_series_id=None,
+            amount_min=None, amount_max=None, amount_min_op=">=", amount_max_op="<=", account_type=None,
+            import_evidence_type=None, needs_review=False, include_trashed=False, limit=0, offset=0,
+        )
+        return result["sum_amount"]
+
+    def test_trends_drill_through_lists_exactly_the_rows_behind_each_figure(self):
+        # The Trends tab's figures come from this endpoint; its drill-throughs open the transaction list
+        # scoped by the same window, frame and filters plus the row's category (a category row's ↗) or the
+        # drilled group (a "Total per month" bar). Each must total what the figure it came from said. The
+        # ledger carries every row a summary leaves out, so a list that kept any of them would disagree:
+        # a pending charge, an excluded-from-totals category, another owner's spend, a row outside the
+        # window, and a sibling category in the same group.
+        account_id = self._insert_account("Checking")
+        living = self._insert_category(name="LivingZ", parent_id=None, category_type="expense")
+        groceries = self._insert_category(name="GroceriesZ", parent_id=living, category_type="expense")
+        dining = self._insert_category(name="DiningZ", parent_id=living, category_type="expense")
+        transfers = self._insert_category(name="TransfersZ", parent_id=None, category_type="expense", exclude_from_totals=1)
+        card_payment = self._insert_category(name="Card PaymentZ", parent_id=transfers, category_type="expense")
+        alice = self._insert_owner("AliceZ")
+        bob = self._insert_owner("BobZ")
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=80.0, date="2026-03-04", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=-15.0, date="2026-03-09", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=55.0, date="2026-04-18", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=33.0, date="2026-04-20", owner_id=alice, is_pending=1)
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=21.0, date="2026-04-21", owner_id=bob)
+        self._insert_transaction(account_id=account_id, category_id=groceries, amount=64.0, date="2025-12-30", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=dining, amount=40.0, date="2026-04-02", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=card_payment, amount=500.0, date="2026-04-05", owner_id=alice)
+        # Uncategorized spend gets its own series and its own sentinel id, which the list must accept too.
+        self._insert_transaction(account_id=account_id, category_id=None, amount=12.0, date="2026-04-06", owner_id=alice)
+        self._insert_transaction(account_id=account_id, category_id=None, amount=9.0, date="2026-04-07", owner_id=alice, is_pending=1)
+
+        window = dict(date_start="2026-01-01", date_end="2026-12-31")
+        with self._use_db_path():
+            by_category = monthly_by_group(months=240, account_id=None, group_id=living, facets=TransactionFacets(owner_ids=alice))
+            by_group = monthly_by_group(months=240, account_id=None, group_id=None, facets=TransactionFacets(owner_ids=alice))
+
+            def figure(rows, series_id):
+                return sum(r["total"] for r in rows if r["series_id"] == series_id and r["month"].startswith("2026"))
+
+            groceries_report = self._report_sum(view="spending", facets=TransactionFacets(owner_ids=alice, category_ids=groceries), **window)
+            april_living_report = self._report_sum(
+                view="spending", date_start="2026-04-01", date_end="2026-04-30",
+                facets=TransactionFacets(owner_ids=alice, group_ids=living),
+            )
+            uncategorized_id = next(r["series_id"] for r in by_group if r["series_id"].startswith("__uncategorized"))
+            uncategorized_report = self._report_sum(
+                view="spending", facets=TransactionFacets(owner_ids=alice, category_ids=uncategorized_id), **window,
+            )
+
+        self.assertEqual(figure(by_category, groceries), 120.0)
+        self.assertEqual(groceries_report, 120.0)
+        april_living = sum(r["total"] for r in by_category if r["month"] == "2026-04")
+        self.assertEqual(april_living, 95.0)
+        self.assertEqual(april_living_report, 95.0)
+        self.assertEqual(figure(by_group, uncategorized_id), 12.0)
+        self.assertEqual(uncategorized_report, 12.0)
 
     def test_group_drilldown_uses_parent_group_join_for_filters(self):
         account_id = self._insert_account("Primary Checking")

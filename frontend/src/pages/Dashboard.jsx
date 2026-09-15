@@ -18,7 +18,8 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
-import { shiftMonth, isYearToDateRange, computeTrendBuckets, monthsInRange } from '../lib/trendBuckets.js'
+import { shiftMonth, isYearToDateRange, computeTrendBuckets, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey } from '../lib/trendBuckets.js'
+import { periodReportKey } from '../lib/periodReportScope.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_ITEM_STYLE,
@@ -269,12 +270,6 @@ function bucketLabel(b) {
     return b.start.slice(0, 4)
   }
   return `${monthLabel(b.start)} – ${monthLabel(b.end)}`
-}
-
-function lastDayOfMonthISO(ym) {
-  const [y, m] = ym.split('-').map(Number)
-  const last = new Date(y, m, 0).getDate()
-  return `${ym}-${String(last).padStart(2, '0')}`
 }
 
 // Persist/restore the trend-window anchor (a period {start,end,preset}) session-scoped, so the set of
@@ -551,7 +546,7 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
             <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 11 }} interval={0} />
             {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
                 view; with a left axis it scrolls off-screen until the user drags back to the start. */}
-            <YAxis orientation="right" tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+            <YAxis orientation="right" tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
             <Tooltip
               formatter={v => formatSignedMoneyAmount(v)}
               contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
@@ -1192,7 +1187,7 @@ function CashFlowTrendsPanel({ rows, selectedYear, onYearChange, loading, onOpen
   )
 }
 
-function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenSinglePeriod }) {
+function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
   const lastBarClickRef = useRef({ key: null, time: 0 })
   const lastAreaClickRef = useRef({ idx: -1, time: 0 })
   // Sort state for the "Monthly averages by group" report at the bottom. Defaults to total
@@ -1243,29 +1238,25 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
       setSortDir(key === 'name' ? 'asc' : 'desc')
     }
   }
-  if (loading) return <Spinner />
+  // Blank until the first series arrives: a spinner, or the empty states that charts with no rows would
+  // draw, would each flash for what is almost always a few milliseconds. A reload keeps the tab on screen
+  // instead (StaleWhileRefreshing below). Swapping it out for a loading state collapsed the page, which
+  // threw a drill started from the averages table at the bottom back up to the top.
+  if (rows == null || !trendWindow) return null
 
   const normalizedRows = rows.filter(r =>
     typeof r?.month === 'string' &&
     /^\d{4}-\d{2}$/.test(r.month)
   )
 
-  // 'last12' = the trailing 12 calendar months ending this month (the rolling default); otherwise a
-  // specific calendar year. The multi-year picture lives in the Annual totals chart, so there's no
-  // unbounded "all time" option here to compress the monthly bars.
-  const last12Start = shiftMonth(thisM, -11)
-  // Resolve the effective window: an explicit dropdown pick (`selectedYear`) always wins; with no pick
-  // (`null` = auto) default to last-12-months when that window actually has data, otherwise fall back
-  // to the most recent year present so stale/imported data doesn't render a blank trend.
-  const dataYears = [...new Set(normalizedRows.map(r => r.month.slice(0, 4)))].sort()
-  const last12HasData = normalizedRows.some(r => r.month >= last12Start && r.month <= thisM)
-  const effectiveYear = selectedYear
-    ?? (last12HasData || dataYears.length === 0 ? 'last12' : dataYears[dataYears.length - 1])
-  const filteredRows = effectiveYear === 'last12'
-    ? normalizedRows.filter(r => r.month >= last12Start && r.month <= thisM)
-    : normalizedRows.filter(r => r.month.startsWith(effectiveYear))
+  // The window — Last 12 months or a year, see resolveTrendsWindowKey — is resolved by the page, which
+  // also fetches the group picker's options for it. The multi-year picture lives in the Annual totals
+  // chart, so there is no unbounded "all time" option here to compress the monthly bars.
+  const effectiveYear = trendWindow.key
+  // Also the range a report opened from one of this window's figures lists, so the two cannot disagree.
+  const reportWindow = trendWindow
+  const filteredRows = normalizedRows.filter(r => r.month >= reportWindow.startMonth && r.month <= reportWindow.endMonth)
 
-  const allMonths = [...new Set(filteredRows.map(r => r.month))].sort()
 
   const seriesMap = {}
   for (const r of filteredRows) {
@@ -1285,6 +1276,12 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   )
   const viewSeriesIds = new Set(series.map(s => s.id))
   const viewRows = filteredRows.filter(r => viewSeriesIds.has(r.series_id))
+  const allViewRows = normalizedRows.filter(r => viewSeriesIds.has(r.series_id))
+  const dataStartMonth = allViewRows.reduce((min, r) => (min === null || r.month < min ? r.month : min), null)
+  // Every month the charts and averages run across, months with no rows included — a gap drawn as
+  // adjacent bars, and an average taken over only the months that had spending, both overstated how
+  // steady and how large it was. Floored at this view's first month of data, as the run rate is.
+  const allMonths = trendsWindowMonths(trendWindow, thisM, dataStartMonth)
 
   // Stacked bands are floored at zero: a group that net-refunded a month (negative net) would otherwise
   // stack below the axis and muddle the stack, so it renders as no-spend instead. The band's *true*
@@ -1314,7 +1311,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
 
   // Annual totals always cover every year in the dataset, independent of the Year dropdown
   // up top. Drilling into one year shouldn't collapse this chart down to a single bar.
-  const allViewRows = normalizedRows.filter(r => viewSeriesIds.has(r.series_id))
   const yearMap = {}
   for (const r of allViewRows) {
     const yr = r.month.slice(0, 4)
@@ -1331,7 +1327,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   // burn — so it reads as the spending trend rather than the lumpy month-to-month total.
   const fullMonthlyMap = {}
   for (const r of allViewRows) fullMonthlyMap[r.month] = (fullMonthlyMap[r.month] || 0) + r.total
-  const dataStartMonth = allViewRows.reduce((min, r) => (min === null || r.month < min ? r.month : min), null)
 
   const monthlyTotal = allMonths.map(m => {
     let runRate = null
@@ -1388,13 +1383,23 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     ...availableYears.map(y => ({ value: y, label: y })),
   ]
 
+  // The averages table's trailing column carries the group rows' drill chevron.
+  const averagesColumns = '1fr 100px 100px 100px 20px'
+
+  // The groups with transactions in the window, alphabetically. A drilled group with none there stays
+  // listed, so changing the year leaves the picker naming what the charts show rather than going blank.
+  const pickerGroups = drillGroup && !groups.some(g => g.group_id === drillGroup.series_id)
+    ? [...groups, { group_id: drillGroup.series_id, group_name: drillGroup.series_name }]
+    : groups
   const groupOptions = [
     { value: '', label: 'All groups' },
-    ...groups.map(g => ({ value: g.group_id, label: g.group_name })),
+    ...[...pickerGroups]
+      .sort((a, b) => String(a.group_name || '').localeCompare(String(b.group_name || '')))
+      .map(g => ({ value: g.group_id, label: g.group_name })),
   ]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <StaleWhileRefreshing refreshing={loading} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select
           value={effectiveYear}
@@ -1445,7 +1450,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
                 interval={Math.floor(allMonths.length / 8)} />
-              <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+              <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
               <Tooltip
                 formatter={(v, name, item) => {
                   const s = series.find(x => x.id === name)
@@ -1496,7 +1501,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
                   height={monthlyTotal.length > 8 ? 40 : 22}
                   tick={<StaggeredMonthTick />}
                 />
-                <YAxis tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
+                <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
                 <Tooltip
                   formatter={v => formatSignedMoneyAmount(v)}
                   allowEscapeViewBox={{ x: false, y: false }}
@@ -1558,9 +1563,14 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
           <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{effectiveYear === 'last12' ? 'last 12 months' : effectiveYear}</span>
+          {!drillGroup && (
+            <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>· click a group to see its categories</span>
+          )}
         </div>
+        {/* The group picker above is a long way up from here, so the drill offers its way back in place. */}
+        {drillGroup && <Breadcrumb items={['All groups', drillGroup.series_name]} onNavigate={onClearDrill} />}
         <div style={{
-          display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px',
+          display: 'grid', gridTemplateColumns: averagesColumns,
           padding: '4px 12px', fontSize: 11, fontWeight: 600,
           color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em',
           borderBottom: '1px solid var(--border)',
@@ -1573,6 +1583,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
             activeKey={sortKey} activeDir={sortDir} onSort={applySort} />
           <SortHeader label={viewIsIncome ? '% of income' : '% of spend'} sortKey="total" align="right"
             activeKey={sortKey} activeDir={sortDir} onSort={applySort} />
+          <span />
         </div>
         {(() => {
           const sign = sortDir === 'asc' ? 1 : -1
@@ -1584,25 +1595,56 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         })().map(s => {
           const grandTotal = avgBySeries.reduce((sum, x) => sum + x.total, 0)
           const pct = grandTotal > 0 ? (s.total / grandTotal * 100).toFixed(1) : 0
+          // A group row drills to its categories — the same drill as the group picker above — and a
+          // category row, the bottom of the hierarchy, opens the transactions behind its figure.
+          const drillsToCategories = !drillGroup
+          const drill = () => onDrillGroup({ series_id: s.id, series_name: s.name, series_color: s.color })
           return (
-            <div key={s.id} style={{
-              display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px',
-              padding: '5px 12px', alignItems: 'center',
-              borderBottom: '1px solid var(--border)', fontSize: 13,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div
+              key={s.id}
+              role={drillsToCategories ? 'button' : undefined}
+              tabIndex={drillsToCategories ? 0 : undefined}
+              aria-label={drillsToCategories ? `Show the categories in ${s.name}` : undefined}
+              onClick={drillsToCategories ? drill : undefined}
+              onKeyDown={drillsToCategories ? event => {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); drill() }
+              } : undefined}
+              style={{
+                display: 'grid', gridTemplateColumns: averagesColumns,
+                padding: '5px 12px', alignItems: 'center',
+                borderBottom: '1px solid var(--border)', fontSize: 13,
+                cursor: drillsToCategories ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.color, flexShrink: 0 }} />
                 <CategoryMarker kind={drillGroup ? 'category' : 'group'} />
                 <span>{s.name}</span>
+                {!drillsToCategories && onOpenReport && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenReport(
+                      { start: reportWindow.start, end: reportWindow.end, label: reportWindow.label },
+                      { kind: 'category', id: s.id, name: s.name },
+                    )}
+                    aria-label={`Open the transactions behind ${s.name}`}
+                    title="Open the transactions behind this total"
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--accent2)', cursor: 'pointer',
+                      fontSize: 11, padding: '3px 5px', borderRadius: 4, flexShrink: 0,
+                    }}
+                  >↗</button>
+                )}
               </div>
               <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatSignedMoneyAmount(s.avg)}</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{formatSignedMoneyAmount(s.total)}</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{pct}%</span>
+              <span style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 14 }}>{drillsToCategories ? '›' : null}</span>
             </div>
           )
         })}
       </Card>
-    </div>
+    </StaleWhileRefreshing>
   )
 }
 
@@ -2034,10 +2076,19 @@ export default function Dashboard() {
   // an empty trailing window. An explicit pick from the dropdown overrides it.
   const [trendYear, setTrendYear] = useState(null)
   const [trendGroup, setTrendGroup] = useState(null)
-  const [trendRows, setTrendRows] = useState([])
+  // null until the first series arrives, which TrendsPanel renders as nothing rather than as empty charts.
+  const [trendRows, setTrendRows] = useState(null)
   const [cashFlowTrendRows, setCashFlowTrendRows] = useState([])
   const [trendGroups, setTrendGroups] = useState([])
   const [trendLoading, setTrendLoading] = useState(false)
+  // The window the Trends tab shows, resolved here rather than inside TrendsPanel because the group picker's
+  // options are fetched for it. Null until the series first arrives, since the default depends on the data.
+  const trendWindow = useMemo(
+    () => (trendRows ? trendsWindowRange(resolveTrendsWindowKey(trendRows, trendYear, thisM), thisM) : null),
+    [trendRows, trendYear],
+  )
+  const trendWindowStart = trendWindow?.start
+  const trendWindowEnd = trendWindow?.end
 
   const [loading, setLoading] = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
@@ -2088,19 +2139,21 @@ export default function Dashboard() {
   // the existing one rather than spawning a duplicate, and each new panel goes on top.
   // Range-scoped transaction drawer for a trend bar (or the selected period, via the header link).
   // `start`/`end` are inclusive ISO dates, `label` the human range name shown in the panel header.
-  function openPeriodDetail({ start, end, label }, view) {
+  // `scope` narrows the report to one slice of the breakdown it was opened from ({ kind: 'category' |
+  // 'group', id, name }; see lib/periodReportScope.js), so the list is the rows behind that slice's figure.
+  function openPeriodDetail({ start, end, label }, view, scope = null) {
     if (!start || !end) return
-    const key = `${start}::${end}::${view || 'spending'}`
+    const key = periodReportKey({ start, end, view, scope })
     setDetailPeriods(prev => [
       ...prev.filter(item => item.key !== key),
-      { key, start, end, label, view: view || 'spending' },
+      { key, start, end, label, view: view || 'spending', scope },
     ])
   }
 
   // A single month bar (the Trends tab's monthly drill) is just a one-month range.
-  function openMonthDetail(month, view) {
+  function openMonthDetail(month, view, scope = null) {
     if (!month) return
-    openPeriodDetail({ start: `${month}-01`, end: lastDayOfMonthISO(month), label: monthLabel(month) }, view)
+    openPeriodDetail({ start: `${month}-01`, end: lastDayOfMonthISO(month), label: monthLabel(month) }, view, scope)
   }
 
   function closePeriodDetail(key) {
@@ -2263,11 +2316,15 @@ export default function Dashboard() {
     setCashFlowTrendRows(rows)
   }, [accountId, tagIds, ownerIds, summaryFilters])
 
+  // The picker offers the groups with transactions in the window on screen, under the same filters — the
+  // groups the averages table lists at "All groups". Keyed on the window's dates rather than the object,
+  // so a reload that resolves to the same window does not refetch.
   const loadTrendGroups = useCallback(async () => {
+    if (!trendWindowStart || !trendWindowEnd) return
     const wantIncome = activeFrame === DASHBOARD_VIEW_INCOME
-    const g = await api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, summaryFilters)
+    const g = await api.getGroupTotals(undefined, accountId || undefined, trendWindowStart, trendWindowEnd, ownerIds, undefined, tagIds, summaryFilters)
     setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
-  }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame])
+  }, [accountId, ownerIds, tagIds, summaryFilters, activeFrame, trendWindowStart, trendWindowEnd])
 
   useEffect(() => {
     if (mode !== 'single') return
@@ -2331,7 +2388,8 @@ export default function Dashboard() {
     if (mode !== 'trends') return
     setTrendLoading(true)
     const load = viewIsCashFlow ? loadCashFlowTrend : loadTrendSeries
-    load().catch(() => { }).then(() => setTrendLoading(false))
+    // A failed first load settles on empty — the panel's own "no data" state — instead of staying blank.
+    load().catch(() => { if (!viewIsCashFlow) setTrendRows(prev => prev ?? []) }).then(() => setTrendLoading(false))
   }, [mode, viewIsCashFlow, loadTrendSeries, loadCashFlowTrend])
 
   useEffect(() => {
@@ -3290,15 +3348,20 @@ export default function Dashboard() {
             {mode === 'trends' && !viewIsCashFlow && (
               <TrendsPanel
                 rows={trendRows}
+                trendWindow={trendWindow}
                 groups={trendGroups}
-                selectedYear={trendYear}
                 onYearChange={setTrendYear}
                 drillGroup={trendGroup}
                 onDrillGroup={g => setTrendGroup(g)}
                 onClearDrill={() => setTrendGroup(null)}
                 loading={trendLoading}
                 viewIsIncome={viewIsIncome}
-                onOpenMonth={month => openMonthDetail(month, activeFrame)}
+                // With a group drilled the month bars are that group's totals, so a month's report is
+                // scoped to the group as well.
+                onOpenMonth={month => openMonthDetail(month, activeFrame, trendGroup
+                  ? { kind: 'group', id: trendGroup.series_id, name: trendGroup.series_name }
+                  : null)}
+                onOpenReport={(range, scope) => openPeriodDetail(range, activeFrame, scope)}
                 onOpenSinglePeriod={openSinglePeriodForMonth}
               />
             )}
@@ -3404,6 +3467,7 @@ export default function Dashboard() {
           tagIds={tagIds}
           ownerIds={ownerIds}
           filters={summaryFilters}
+          scope={entry.scope}
           categories={categories}
           forceFloating={detailTxns.length + detailPeriods.length + detailTagSignatures.length > 1}
           stackIndex={detailTxns.length + index}

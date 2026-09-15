@@ -875,10 +875,12 @@ def _build_transaction_filter(
         # other bookkeeping moves don't pollute the listing of transactions backing a Dashboard total.
         # `cash_flow` takes no category-type clause above — it counts both directions — but it takes
         # this one, because a drill from a cash-flow node has to list exactly the rows that node's
-        # figure was computed from.
+        # figure was computed from. Pending rows go for the same reason: every summary endpoint leaves
+        # them out, so a drill that kept them would list rows its figure never counted.
         clauses.append(
             "COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) = 0"
         )
+        clauses.append("t.is_pending = 0")
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
@@ -947,6 +949,8 @@ def list_transactions(
     facets = coerce_facets(facets) or TransactionFacets()
     # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
     # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
+    # The exception is `view`, which asks for exactly the rows behind a Dashboard figure and so takes the
+    # summaries' exclusions (see _build_transaction_filter); the sign is still left to the caller.
     sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
     sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 

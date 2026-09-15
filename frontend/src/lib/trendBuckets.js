@@ -29,6 +29,68 @@ export function shiftMonth(ym, deltaMonths) {
   return `${newY}-${String(newM).padStart(2, '0')}`
 }
 
+export function lastDayOfMonthISO(ym) {
+  const [y, m] = ym.split('-').map(Number)
+  const last = new Date(y, m, 0).getDate()
+  return `${ym}-${String(last).padStart(2, '0')}`
+}
+
+// The window the Trends tab's monthly charts and averages cover: `'last12'` is the trailing twelve months
+// ending with `currentMonth`, anything else a calendar year ('YYYY'). Returned both as month codes, which
+// the charts slice their rows by, and as inclusive ISO dates, which a report opened from one of those
+// figures lists by — one definition, so a report can never cover different months than the figure did.
+export function trendsWindowRange(windowKey, currentMonth) {
+  if (windowKey === 'last12') {
+    const startMonth = shiftMonth(currentMonth, -11)
+    return {
+      key: 'last12',
+      startMonth,
+      endMonth: currentMonth,
+      start: `${startMonth}-01`,
+      end: lastDayOfMonthISO(currentMonth),
+      label: 'Last 12 months',
+    }
+  }
+  const year = String(windowKey)
+  return {
+    key: year,
+    startMonth: `${year}-01`,
+    endMonth: `${year}-12`,
+    start: `${year}-01-01`,
+    end: `${year}-12-31`,
+    label: year,
+  }
+}
+
+// The months a Trends window's charts and averages run across: every month of the window, so a month with
+// no rows is drawn (and averaged) as nothing rather than vanishing and leaving its neighbours looking
+// adjacent. Two ends are clamped, because a month outside them would read as a real zero: nothing after
+// `currentMonth` (a current-year window has not had its later months yet), and nothing before
+// `firstDataMonth` (a ledger that starts mid-window has no answer for the months before it). No data at all,
+// or data that starts after the window, gives no months.
+export function trendsWindowMonths(window, currentMonth, firstDataMonth) {
+  if (!firstDataMonth) return []
+  const start = firstDataMonth > window.startMonth ? firstDataMonth : window.startMonth
+  const end = currentMonth < window.endMonth ? currentMonth : window.endMonth
+  return start <= end ? monthsInRange(start, end) : []
+}
+
+// Which window the Trends tab shows. An explicit pick from its year picker always wins; with none
+// (`selectedYear` null) it is the trailing twelve months when they hold any data, otherwise the most
+// recent year that does, so a stale or imported ledger does not open on empty charts. `rows` are the
+// tab's monthly series rows (`{ month: 'YYYY-MM', … }`).
+export function resolveTrendsWindowKey(rows, selectedYear, currentMonth) {
+  if (selectedYear != null) return String(selectedYear)
+  const months = rows
+    .map(r => r?.month)
+    .filter(month => typeof month === 'string' && /^\d{4}-\d{2}$/.test(month))
+  const last12 = trendsWindowRange('last12', currentMonth)
+  if (months.length === 0 || months.some(month => month >= last12.startMonth && month <= last12.endMonth)) {
+    return 'last12'
+  }
+  return months.reduce((latest, month) => (month > latest ? month : latest)).slice(0, 4)
+}
+
 // A "year to date" selection: anchored to January 1 and ending before December of the same calendar
 // year (the "Year to date" preset, or a custom "Jan 1 → date this year" range). Such a slice compares
 // most meaningfully against the *same* Jan→month window in prior years, not against contiguous tiles of
