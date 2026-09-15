@@ -111,24 +111,24 @@ export default function AccountDetail({ account, categories = [], onClose, force
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
   const activeKey = anchorReady ? `acct:${account.id}|${sourceCsv || 'all'}|${rangeMode}|${rangeKey}` : null
+  // The window + account + any source-account narrowing: what the list fetches, what "select all matching"
+  // resolves, and what a download of the list exports.
+  const listParams = useMemo(() => ({
+    ...range.params,
+    account_ids: String(account.id),
+    ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
+  }), [account.id, sourceCsv, range])
   const loadPage = useCallback((offset, limit, sort) => (
-    api.getTransactions({
-      account_ids: String(account.id),
-      ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
-      ...range.params,
-      limit,
-      offset,
-      sort_by: sort.key,
-      sort_dir: sort.dir,
-    })
-  ), [account.id, sourceCsv, range])
+    api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [listParams])
   const {
     rows: monthTxns,
     loading: txnLoading,
     listRef,
     sortState,
     onSort,
-  } = usePagedTransactions({ activeKey, loadPage })
+    copy,
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
   // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
   // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
@@ -213,11 +213,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     rows: localMonthTxns,
     setRows: setLocalMonthTxns,
     total: range.count || localMonthTxns.length,
-    filterParams: {
-      ...range.params,
-      account_ids: String(account.id),
-      ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
-    },
+    filterParams: listParams,
     categories,
   })
 
@@ -323,7 +319,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} title={`${range.label} · ${displayName}`} bulk={bulk} />
+                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}

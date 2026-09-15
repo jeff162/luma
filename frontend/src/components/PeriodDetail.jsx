@@ -84,7 +84,8 @@ export default function PeriodDetail({
     sumAmount: txnSum,
     sortState,
     onSort,
-  } = usePagedTransactions({ activeKey, loadPage })
+    copy,
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: bulkFilterParams })
 
   // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
   // visibly growing as its content lands (see usePanelReveal).
@@ -144,7 +145,7 @@ export default function PeriodDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <TransactionListToolbar rows={transactions} title={title} bulk={bulk} />
+          <TransactionListToolbar rows={transactions} copy={copy} title={title} bulk={bulk} />
           <BulkEditChrome controller={bulk} />
           <TransactionListTable
             rows={transactions}

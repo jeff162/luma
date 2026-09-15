@@ -4,6 +4,10 @@
 // The shared "copy for sharing" trigger. Drop it onto any surface that shows a transaction (pass `txn`)
 // or a list of them (pass `rows`); it opens the app-wide TransactionShareDialog through
 // useTransactionShare. One button so the affordance looks and behaves the same on every surface.
+// A list whose surface has loaded only some of its rows passes `loadRows` (an async function returning
+// all of them, or the first `limit` when called with `{ limit }`) instead of `rows`; the dialog fetches
+// them once it is open. `total` (the list's full size) lets the dialog turn away a list past the copy limit
+// without fetching it, and `onDownload` offers that list as a file instead.
 
 import { Tooltip } from './ui.jsx'
 import { useTransactionShare } from '../contexts/TransactionShareContext.jsx'
@@ -17,14 +21,16 @@ function CopyGlyph({ size = 14 }) {
   )
 }
 
-export default function CopyTransactionsButton({ txn = null, rows = null, title = null, tooltip, style = null }) {
+export default function CopyTransactionsButton({
+  txn = null, rows = null, loadRows = null, total = null, onDownload = null, title = null, tooltip, style = null,
+}) {
   const { openTransaction, openTransactions } = useTransactionShare()
-  const isList = rows != null
+  const isList = rows != null || loadRows != null
   const label = tooltip || (isList ? 'Copy these transactions' : 'Copy this transaction')
 
   function handleClick(event) {
     event.stopPropagation()
-    if (isList) openTransactions(rows, { title })
+    if (isList) openTransactions(rows, { title, loadRows, total, onDownload })
     else openTransaction(txn, { title })
   }
 

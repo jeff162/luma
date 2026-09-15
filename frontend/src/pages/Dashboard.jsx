@@ -1992,6 +1992,7 @@ export default function Dashboard() {
   const groupTxnPaged = usePagedTransactions({
     activeKey: selectedGroup ? JSON.stringify(selectedGroupFilterParams) : null,
     loadPage: selectedGroupLoadPage,
+    exportParams: selectedGroupFilterParams,
   })
   const groupTxnData = groupTxnPaged.rows
   const setGroupTxnData = groupTxnPaged.setRows
@@ -2012,6 +2013,7 @@ export default function Dashboard() {
   const catTxnPaged = usePagedTransactions({
     activeKey: selectedCat ? JSON.stringify(selectedCatFilterParams) : null,
     loadPage: selectedCatLoadPage,
+    exportParams: selectedCatFilterParams,
   })
   const txnData = catTxnPaged.rows
   const setTxnData = catTxnPaged.setRows
@@ -3050,7 +3052,7 @@ export default function Dashboard() {
                             the paged fetch still in flight, not a real empty state — show the spinner. */}
                           {txnData.length === 0 ? <Spinner /> : (
                             <>
-                              <TransactionListToolbar rows={txnData} title={selectedCat.category_name} bulk={selectedCatBulk} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
+                              <TransactionListToolbar rows={txnData} copy={catTxnPaged.copy} title={selectedCat.category_name} bulk={selectedCatBulk} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
                               <div style={{ padding: '0 12px' }}>
                                 <BulkEditChrome controller={selectedCatBulk} />
                               </div>
@@ -3309,7 +3311,7 @@ export default function Dashboard() {
                         </span>
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-                        <CopyTransactionsButton rows={groupTxnData} title={selectedGroup.group_name} tooltip="Copy the transactions shown" />
+                        <CopyTransactionsButton rows={groupTxnData} {...groupTxnPaged.copy} title={selectedGroup.group_name} tooltip="Copy the transactions shown" />
                         <Button variant="ghost" small onClick={selectedGroupBulk.toggle}>
                           {selectedGroupBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                         </Button>

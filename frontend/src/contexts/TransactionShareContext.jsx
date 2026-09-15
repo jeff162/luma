@@ -29,8 +29,11 @@ export function TransactionShareProvider({ children }) {
   const openTransaction = useCallback((txn, { title } = {}) => {
     if (txn) setShare({ mode: 'single', txn, title })
   }, [])
-  const openTransactions = useCallback((rows, { title } = {}) => {
-    setShare({ mode: 'list', rows: rows || [], title })
+  const openTransactions = useCallback((rows, { title, loadRows, total, onDownload } = {}) => {
+    setShare({
+      mode: 'list', rows: rows || [], loadRows: loadRows || null, total: total ?? null,
+      onDownload: onDownload || null, title,
+    })
   }, [])
   const close = useCallback(() => setShare(null), [])
 
@@ -44,6 +47,9 @@ export function TransactionShareProvider({ children }) {
           mode={share.mode}
           txn={share.txn}
           rows={share.rows}
+          loadRows={share.loadRows}
+          total={share.total}
+          onDownload={share.onDownload}
           title={share.title}
           onClose={close}
         />

@@ -33,6 +33,7 @@ import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDispl
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 import { isEditableTarget } from '../lib/uiInteractions.js'
+import { downloadMatchingTransactions, walkTransactionPages } from '../lib/allMatchingTransactions.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -532,7 +533,7 @@ function detailInitialSortDir(key) {
 // header count/total that stays correct past the loaded page; consumers that derive those from a trend
 // (category/account) ignore them. Feed `sortState`/`onSort` straight into TransactionListTable's
 // controlled-sort props so its header clicks drive this.
-export function usePagedTransactions({ activeKey, loadPage }) {
+export function usePagedTransactions({ activeKey, loadPage, exportParams = null }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -611,6 +612,23 @@ export function usePagedTransactions({ activeKey, loadPage }) {
     return () => el.removeEventListener('scroll', onScroll)
   }, [activeKey, offset, hasMore, loading, loadingMore, loadPage, sortState])
 
+  // What the list's copy button takes (`CopyTransactionsButton`'s loadRows / total / onDownload), so a copy
+  // reaches past the pages scrolled to. Further rows come through the same `loadPage`, in the list's sort.
+  // The download needs the filter itself: `exportParams` is the object the host fetches with — the one it
+  // already hands bulk edit — and without it the copy dialog offers no download.
+  const loadRows = useCallback(({ limit } = {}) => {
+    const wanted = Math.min(limit ?? Infinity, total)
+    if (rows.length >= wanted) return Promise.resolve(rows.slice(0, wanted))
+    return walkTransactionPages((pageOffset, pageLimit) => loadPage(pageOffset, pageLimit, sortState), { maxRows: limit })
+  }, [rows, total, loadPage, sortState])
+  const copy = useMemo(() => ({
+    loadRows,
+    total,
+    onDownload: exportParams
+      ? () => downloadMatchingTransactions({ ...exportParams, sort_by: sortState.key, sort_dir: sortState.dir })
+      : null,
+  }), [loadRows, total, exportParams, sortState])
+
   return {
     rows,
     setRows,
@@ -622,6 +640,7 @@ export function usePagedTransactions({ activeKey, loadPage }) {
     sumAmount,
     sortState,
     onSort,
+    copy,
   }
 }
 

@@ -37,7 +37,8 @@ incremental cipher rather than sealing a finished blob. The CSV export follows t
 same reason. The one deliberate exception is `build_backup_data`, which materializes a payload for
 tests and for the JSON-body restore endpoint that older backups arrive through.
 
-Depends only on `core` (and shared services); `core` never imports this module.
+Depends only on `core`, the transactions router's list filter (which the CSV export shares), and shared
+services; `core` never imports this module.
 """
 
 import csv
@@ -96,7 +97,9 @@ from backend.services.restore_state import (
     require_no_pending_restore,
     set_restore_state,
 )
-from backend.services.transaction_facets import TransactionFacets, append_facets, coerce_facets
+from backend.routers.transactions import transaction_list_filters, transaction_list_scope
+from backend.services.transaction_facets import TransactionFacets
+from backend.services.txn_splits import txn_effective_sql
 
 router = APIRouter()
 
@@ -120,7 +123,7 @@ EXPORT_COLUMNS = {
     "amount":        ("t.amount",          "Amount"),
     "account":       ("COALESCE(a.display_name, a.name)", "Account"),
     "category":      ("c.name",            "Category"),
-    "group":         ("p.name",            "Group"),
+    "group":         ("pc.name",           "Group"),
     "owner":         ("o.name",            "Owner"),
     "notes":         ("t.notes",           "Notes"),
     "is_pending":    ("t.is_pending",      "Pending"),
@@ -427,13 +430,11 @@ def delete_backup_recipient(recipient_id: str):
 @router.get("/transactions.csv")
 def export_transactions_csv(
     columns:      str           = Query("date,merchant_name,amount,account,category"),
-    date_start:   Optional[str] = Query(None),
-    date_end:     Optional[str] = Query(None),
     facets:       TransactionFacets = Depends(),
-    search:       Optional[str] = Query(None),
+    filters:      dict          = Depends(transaction_list_filters),
+    sort_by:      Optional[str] = Query("date", description="date | merchant | category | account | amount"),
+    sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
 ):
-    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
-    facets = coerce_facets(facets) or TransactionFacets()
     col_keys = [c.strip() for c in columns.split(",") if c.strip() in EXPORT_COLUMNS]
     if not col_keys:
         col_keys = ["date", "merchant_name", "amount", "account", "category"]
@@ -441,27 +442,16 @@ def export_transactions_csv(
     select_exprs = [f"{EXPORT_COLUMNS[k][0]} AS {k}" for k in col_keys]
     headers      = [EXPORT_COLUMNS[k][1] for k in col_keys]
 
-    clauses, params = [], []
-    if date_start and date_end:
-        clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
-    elif date_start:
-        clauses.append("t.date >= ?"); params.append(date_start)
-    elif date_end:
-        clauses.append("t.date <= ?"); params.append(date_end)
-    # Facets go through the shared registry rather than being restated here. They were restated once,
-    # and the copy drifted: the hand-written category/group clauses compared the synthetic uncategorized
-    # bucket ids (`__uncategorized_expense__` and friends) as though they were real category rows, so
-    # selecting an Uncategorized chip and exporting produced an empty file while the ledger on screen
-    # showed rows. Going through the registry also *widened* this endpoint by one facet: it now accepts
-    # `payees`/`exclude_payees`, which it never did before. That is deliberate — the alternative is a
-    # per-endpoint facet subset, which is precisely the divergence the registry removes, and the export
-    # tab does not send it today so nothing changes for the shipped client.
-    append_facets(clauses, params, facets)
-    if search:
-        clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
-
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    # The filter, row source and order are the list feed's own rather than a reading of its parameters, so
+    # the ledger can hand over a set too large to copy as this file and the file holds exactly those rows.
+    # The export once restated its filters, and the copy drifted twice: it compared the synthetic
+    # uncategorized bucket ids as though they were real category rows (an Uncategorized chip exported an
+    # empty file), and it never learned the ledger's search, quick filter, amount filter or trash exclusion.
+    # A direct (non-HTTP) caller that omits `filters` gets the dependency sentinel, read as no filters.
+    where, params, expand_splits, order_by = transaction_list_scope(
+        facets=facets, sort_by=sort_by, sort_dir=sort_dir,
+        filters=filters if isinstance(filters, dict) else {},
+    )
 
     # The connection is opened *inside* the generator, not around it. A `with get_db()` block here would
     # close before the response body is consumed, which is why this used to fetchall() the entire filtered
@@ -484,14 +474,14 @@ def export_transactions_csv(
         with get_db(db_path) as conn:
             for row in conn.execute(f"""
                 SELECT {', '.join(select_exprs)}
-                FROM   txn t
+                FROM   {txn_effective_sql(conn, expand=expand_splits)} t
                 JOIN   account   a ON a.id  = t.account_id
-                LEFT JOIN account ap ON ap.id = a.parent_account_id
+                LEFT JOIN account  p ON p.id  = a.parent_account_id
                 LEFT JOIN category c ON c.id  = t.category_id
-                LEFT JOIN category p ON p.id  = c.parent_id
+                LEFT JOIN category pc ON pc.id = c.parent_id
                 LEFT JOIN owner    o ON o.id  = t.owner_id
                 {where}
-                ORDER  BY t.date DESC, t.id DESC
+                ORDER  BY {order_by}
             """, params):
                 w.writerow([row[k] for k in col_keys])
                 yield buf.getvalue(); buf.seek(0); buf.truncate()

@@ -171,9 +171,12 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
   const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}` : null
+  // The window + payee: what the list fetches, what "select all matching" resolves, and what a download of
+  // the list exports.
+  const listParams = useMemo(() => ({ ...range.params, payees: payee }), [range, payee])
   const loadPage = useCallback((offset, limit, sort) => (
-    api.getTransactions({ ...range.params, payees: payee, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
-  ), [range, payee])
+    api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [listParams])
   const {
     rows: monthTxns,
     setRows: setMonthTxns,
@@ -181,7 +184,8 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     listRef,
     sortState,
     onSort,
-  } = usePagedTransactions({ activeKey, loadPage })
+    copy,
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
 
   useEffect(() => {
     // When the caller already has the tag list (e.g. a host that loaded it), use it and skip the fetch
@@ -363,7 +367,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     rows: monthTxns,
     setRows: setMonthTxns,
     total: range.count || monthTxns.length,
-    filterParams: { ...range.params, payees: payee },
+    filterParams: listParams,
     categories: detailCategories,
   })
   const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
@@ -676,7 +680,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={monthTxns} title={`${range.label} · ${payee}`} bulk={bulk} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${payee}`} bulk={bulk} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}

@@ -90,7 +90,8 @@ export default function TagDetail({
     listRef,
     sortState,
     onSort,
-  } = usePagedTransactions({ activeKey, loadPage })
+    copy,
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: fetchParams })
 
   // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
   // visibly growing as its content lands (see usePanelReveal).
@@ -150,7 +151,7 @@ export default function TagDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <TransactionListToolbar rows={transactions} title={reportName || 'Tagged transactions'} bulk={bulk} />
+          <TransactionListToolbar rows={transactions} copy={copy} title={reportName || 'Tagged transactions'} bulk={bulk} />
           <BulkEditChrome controller={bulk} />
           <TransactionListTable
             rows={transactions}

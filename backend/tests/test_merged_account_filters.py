@@ -142,15 +142,14 @@ class MergedAccountFilterTests(unittest.TestCase):
 
     def _export_merchants(self, **query_kwargs) -> set:
         from backend.routers.import_export.backup import export_transactions_csv
-        params = dict(
-            columns="merchant_name", date_start=None, date_end=None,
-            search=None,
-        )
+        params = dict(date_start=None, date_end=None, search=None)
         params.update(query_kwargs)
         facets, rest = split_facets(params)
         token = set_current_db_path(str(self.db_path))
         try:
-            resp = export_transactions_csv(**rest, facets=facets)
+            resp = export_transactions_csv(
+                columns="merchant_name", facets=facets, filters=rest, sort_by="date", sort_dir="desc",
+            )
         finally:
             reset_current_db_path(token)
 

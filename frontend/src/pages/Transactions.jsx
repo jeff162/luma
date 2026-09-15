@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { downloadMatchingTransactions, fetchAllMatchingTransactions } from '../lib/allMatchingTransactions.js'
 import { selectionsToParams } from '../lib/filterParams.js'
 import { txnMutations, applyCategoryChange } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
@@ -697,6 +698,27 @@ export default function Transactions() {
     [selection, data.transactions],
   )
 
+  // Every row the list is showing, including the pages not scrolled to yet, in the list's own filter and
+  // sort — so a copy comes out in the order on screen. Once every page is loaded those rows are the answer.
+  // `limit` asks for only the first that many (the copy dialog's "Copy first 500").
+  const loadAllShownTransactions = useCallback(({ limit } = {}) => {
+    if (data.transactions.length >= (limit ? Math.min(limit, data.total) : data.total)) {
+      return Promise.resolve(limit ? data.transactions.slice(0, limit) : data.transactions)
+    }
+    return fetchAllMatchingTransactions(
+      { ...currentFilterParams, sort_by: sortState.key, sort_dir: sortState.dir },
+      { maxRows: limit },
+    )
+  }, [currentFilterParams, data.total, data.transactions, sortState])
+
+  // The same set as a CSV file, for a list past the copy limit. The export takes the list feed's own filter
+  // and sort, so the file holds exactly the rows a copy would have.
+  const downloadShownTransactions = useCallback(() => downloadMatchingTransactions({
+    ...currentFilterParams,
+    sort_by: sortState.key,
+    sort_dir: sortState.dir,
+  }), [currentFilterParams, sortState])
+
   const copySelectedTransactions = useCallback(async () => {
     setCopying(true)
     setCopyStatus('')
@@ -704,17 +726,7 @@ export default function Transactions() {
       // In all-matching mode the selection reaches past the loaded pages, so re-resolve it from the
       // server using the same filter *and sort* the list is showing — otherwise the CSV would come out
       // in a different order than what the user is looking at.
-      let candidates = data.transactions
-      if (selection.allMatching && data.transactions.length < data.total) {
-        const response = await api.getTransactions({
-          ...currentFilterParams,
-          sort_by: sortState.key,
-          sort_dir: sortState.dir,
-          limit: data.total,
-          offset: 0,
-        })
-        candidates = response.transactions || []
-      }
+      const candidates = selection.allMatching ? await loadAllShownTransactions() : data.transactions
 
       const selected = candidates.filter(txn => selection.isSelected(txn.id))
       const csvText = selected
@@ -735,7 +747,7 @@ export default function Transactions() {
     } finally {
       setCopying(false)
     }
-  }, [cols, currentFilterParams, data.total, data.transactions, selection, showSourceInCategorySlot, sortState])
+  }, [cols, data.transactions, loadAllShownTransactions, selection, showSourceInCategorySlot])
 
   // Clear the transient status so it doesn't linger next to a selection it no longer describes.
   useEffect(() => {
@@ -923,10 +935,10 @@ export default function Transactions() {
 
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
               live; it lists only what is still open, so it empties as things are completed. */}
-          <Button variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
+          <Button small variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
           {/* The ledger is where someone notices a transaction is missing, so this is where adding one
               belongs — beside the list it will appear in, not parked in Settings. */}
-          <Button variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
+          <Button small variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
         </PageHeader>
       </div>
 
@@ -970,8 +982,6 @@ export default function Transactions() {
               active={attributeFilter.active}
               onChange={next => { setAttributeFilter(next); isFirstLoad.current = true }}
             />
-            <FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />
-            <CopyTransactionsButton rows={data.transactions} title="Transactions" tooltip="Copy the transactions shown" />
             <button
               onClick={bulk.toggle}
               style={{
@@ -984,7 +994,14 @@ export default function Transactions() {
             >
               {bulkMode ? '✕ Done' : 'Bulk Edit'}
             </button>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, color: 'var(--muted)' }}>
+              <CopyTransactionsButton
+                loadRows={loadAllShownTransactions}
+                total={data.total}
+                onDownload={downloadShownTransactions}
+                title="Transactions"
+                tooltip="Copy the transactions shown"
+              />
               {data.total} transaction{data.total === 1 ? '' : 's'}
             </span>
           </div>

@@ -16,6 +16,11 @@ import { formatTransactionAmount } from './moneyDisplay.js'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import { getTxnOriginRows } from './importSourceFields.js'
 
+// The most rows a list copy carries. A copy is for pasting a handful of transactions into an email or notes,
+// and every row goes onto the clipboard twice (HTML and text); a surface holding a larger set offers it as
+// a file download instead.
+export const TRANSACTION_COPY_ROW_LIMIT = 500
+
 function accountLabel(txn) {
   return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
 }

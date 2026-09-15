@@ -912,6 +912,84 @@ def list_filter_attributes():
     return attribute_vocabulary()
 
 
+def transaction_list_filters(
+    month:        Optional[str] = Query(None, description="YYYY-MM"),
+    date_start:   Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_end:     Optional[str] = Query(None, description="YYYY-MM-DD"),
+    import_batch_id: Optional[str] = Query(None),
+    account_id:   Optional[str] = Query(None),
+    source_account_ids: Optional[str] = Query(None),
+    category_id:  Optional[str] = Query(None),
+    require_all_tag_ids: Optional[str] = Query(None),
+    require_all_attribute_ids: Optional[str] = Query(None),
+    direction:    Optional[str] = Query(None),
+    view:         Optional[str] = Query(None),
+    search:       Optional[str] = Query(None),
+    quick_filter: Optional[str] = Query(None),
+    ids:          Optional[str] = Query(None),
+    sync_connection_id: Optional[str] = Query(None),
+    recurring_series_id: Optional[str] = Query(None),
+    recurring_only: bool          = Query(False),
+    recurring_excluded_series_id: Optional[str] = Query(None),
+    amount_min:   Optional[float] = Query(None),
+    amount_max:   Optional[float] = Query(None),
+    amount_min_op: Optional[str]  = Query(">="),
+    amount_max_op: Optional[str]  = Query("<="),
+    account_type: Optional[str] = Query(None),
+    import_evidence_type: Optional[str] = Query(None),
+    needs_review: bool          = Query(False),
+    include_trashed: bool       = Query(False),
+) -> dict:
+    """The list feed's non-facet filters as a dependency, for an endpoint that must resolve the same rows.
+
+    Each parameter means exactly what it does on `GET /transactions`. `list_transactions` keeps its own
+    explicit signature, which its direct callers rely on, so this is a second declaration of that list —
+    `tests/test_export_matches_ledger.py` asserts the two name the same filters, because a filter missing
+    here does not error: the endpoint silently ignores it and answers with a wider set.
+    """
+    return dict(locals())
+
+
+def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple[str, list, bool, str]:
+    """The list feed's WHERE clause, row-source expansion and ORDER BY for one set of filters.
+
+    Shared by the feed and the CSV export, so a download of what the ledger shows is the same rows in the
+    same order — split parts under a category scope included — rather than a second reading of the
+    filters. Returns `(where, params, expand_splits, order_by)`; the caller selects
+    `FROM txn_effective_sql(conn, expand=expand_splits) t` with the builder's joins (a, p, c, pc).
+    """
+    facets = coerce_facets(facets) or TransactionFacets()
+    clauses, params = _build_transaction_filter(**filters, **facets.as_params())
+
+    # A category-shaped facet is what makes split expansion correct *here*. Scoped to a category, a
+    # split transaction belongs in the result as the part that matched, carrying the part's amount — so
+    # a drill-down's visible rows sum to the total its summary endpoint reported. Unscoped, the ledger
+    # must stay one row per purchase, so the plain table is the row source and a split renders once at
+    # its full amount (`is_split` / `split_part_count` drive the "Split (N)" affordance). `view` counts
+    # because every cross-cutting scope resolves through the category: spending/income through its type,
+    # and cash_flow through its exclude_from_totals guard, which a split's parts can straddle. See
+    # services/txn_splits.py.
+    expand_splits = bool(
+        filters.get("category_id") or facets.category_ids or facets.group_ids
+        or facets.exclude_category_ids or facets.exclude_group_ids
+        or filters.get("view") in ("spending", "income", "cash_flow")
+    )
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
+    sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+    order_by_parts = []
+    # Sorting stays server-backed so filtered transaction views remain stable even when the page incrementally loads
+    # additional rows. Text columns use explicit expressions here because the visible labels come from derived fields.
+    if sort_key == "category":
+        order_by_parts.append("CASE WHEN t.category_id IS NULL THEN 1 ELSE 0 END ASC")
+    order_by_parts.append(f"{TRANSACTION_SORT_SQL[sort_key]} {sort_direction}")
+    if sort_key != "date":
+        order_by_parts.append("t.date DESC")
+    order_by_parts.append("t.id DESC")
+    return where, params, expand_splits, ", ".join(order_by_parts)
+
+
 @router.get("")
 def list_transactions(
     month:        Optional[str] = Query(None, description="YYYY-MM"),
@@ -952,49 +1030,23 @@ def list_transactions(
     # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
     # The exception is `view`, which asks for exactly the rows behind a Dashboard figure and so takes the
     # summaries' exclusions (see _build_transaction_filter); the sign is still left to the caller.
-    sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
-    sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
-
-    clauses, params = _build_transaction_filter(
-        month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
-        account_id=account_id, source_account_ids=source_account_ids,
-        category_id=category_id, require_all_tag_ids=require_all_tag_ids,
-        require_all_attribute_ids=require_all_attribute_ids,
-        **facets.as_params(),
-        direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
-        sync_connection_id=sync_connection_id,
-        needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
-        recurring_only=recurring_only,
-        recurring_excluded_series_id=recurring_excluded_series_id,
-        account_type=account_type, import_evidence_type=import_evidence_type,
-        amount_min=amount_min, amount_max=amount_max,
-        amount_min_op=amount_min_op, amount_max_op=amount_max_op,
+    where, params, expand_splits, order_by = transaction_list_scope(
+        facets=facets, sort_by=sort_by, sort_dir=sort_dir,
+        filters=dict(
+            month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
+            account_id=account_id, source_account_ids=source_account_ids,
+            category_id=category_id, require_all_tag_ids=require_all_tag_ids,
+            require_all_attribute_ids=require_all_attribute_ids,
+            direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
+            sync_connection_id=sync_connection_id,
+            needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
+            recurring_only=recurring_only,
+            recurring_excluded_series_id=recurring_excluded_series_id,
+            account_type=account_type, import_evidence_type=import_evidence_type,
+            amount_min=amount_min, amount_max=amount_max,
+            amount_min_op=amount_min_op, amount_max_op=amount_max_op,
+        ),
     )
-
-    # A category-shaped facet is what makes split expansion correct *here*. Scoped to a category, a
-    # split transaction belongs in the result as the part that matched, carrying the part's amount — so
-    # a drill-down's visible rows sum to the total its summary endpoint reported. Unscoped, the ledger
-    # must stay one row per purchase, so the plain table is the row source and a split renders once at
-    # its full amount (`is_split` / `split_part_count` drive the "Split (N)" affordance). `view` counts
-    # because every cross-cutting scope resolves through the category: spending/income through its type,
-    # and cash_flow through its exclude_from_totals guard, which a split's parts can straddle. See
-    # services/txn_splits.py.
-    expand_splits = bool(
-        category_id or facets.category_ids or facets.group_ids
-        or facets.exclude_category_ids or facets.exclude_group_ids
-        or view in ("spending", "income", "cash_flow")
-    )
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    order_by_parts = []
-    # Sorting stays server-backed so filtered transaction views remain stable even when the page incrementally loads
-    # additional rows. Text columns use explicit expressions here because the visible labels come from derived fields.
-    if sort_key == "category":
-        order_by_parts.append("CASE WHEN t.category_id IS NULL THEN 1 ELSE 0 END ASC")
-    order_by_parts.append(f"{TRANSACTION_SORT_SQL[sort_key]} {sort_direction}")
-    if sort_key != "date":
-        order_by_parts.append("t.date DESC")
-    order_by_parts.append("t.id DESC")
-    order_by = ", ".join(order_by_parts)
 
     # Why a row came back, for the rows whose reason is invisible. Each is projected only when the filter
     # actually has that component, so the ordinary listing pays nothing for it.

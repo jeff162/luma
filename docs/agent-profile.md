@@ -596,6 +596,12 @@ for what the *user* can act on.
   fixture so the original scenario still exists over rewriting assertions down to the weaker reality —
   the assertions are the record of what was meant to be true.
 
+- **A vitest run that hangs with no output is usually a render loop from a mock, not the code.** Mock
+  `useUserPreference` with a value that is stable per key, as the real hook's is; returning the default
+  afresh each render makes any consumer that reacts to it re-render forever. And `MatchReport` windows its
+  rows, so under jsdom it renders none — stand it in when asserting which entries a dialog passes it. Run a
+  suspect file under `timeout` so a hang ends.
+
 - Backend tests run from `backend/venv`, and direct calls into FastAPI router functions must pass
   every `Query(...)` parameter explicitly because omitted values stay as `FieldInfo` objects outside
   the HTTP layer.

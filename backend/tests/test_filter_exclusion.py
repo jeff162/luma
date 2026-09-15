@@ -296,16 +296,14 @@ class FilterExclusionTests(unittest.TestCase):
     def _export_merchants(self, **query_kwargs) -> set[str]:
         import asyncio
         from backend.routers.import_export.backup import export_transactions_csv
-        # Calling the endpoint directly leaves unset params as their Query() default, which the export
-        # inlines without an isinstance guard — so pass explicit Nones for every filter it reads.
-        params = dict(
-            columns="merchant_name", date_start=None, date_end=None,
-            search=None,
-        )
+        # Called directly, so the dependencies and sort that FastAPI would supply are passed explicitly.
+        params = dict(date_start=None, date_end=None, search=None)
         params.update(query_kwargs)
         facets, rest = split_facets(params)
         with self._use_db_path():
-            resp = export_transactions_csv(**rest, facets=facets)
+            resp = export_transactions_csv(
+                columns="merchant_name", facets=facets, filters=rest, sort_by="date", sort_dir="desc",
+            )
 
         async def _drain():
             parts = []

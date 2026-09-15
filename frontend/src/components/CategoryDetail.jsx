@@ -60,16 +60,20 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   // Folding it into the paging key is the reload: `usePagedTransactions` refetches when the key changes.
   const [reloadNonce, setReloadNonce] = useState(0)
   const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}|${reloadNonce}` : null
+  // The window + category: what the list fetches, what "select all matching" resolves, and what a download
+  // of the list exports.
+  const listParams = useMemo(() => ({ ...range.params, category_ids: String(category.id) }), [range, category.id])
   const loadPage = useCallback((offset, limit, sort) => (
-    api.getTransactions({ ...range.params, category_ids: String(category.id), limit, offset, sort_by: sort.key, sort_dir: sort.dir })
-  ), [range, category.id])
+    api.getTransactions({ ...listParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [listParams])
   const {
     rows: monthTxns,
     loading: txnLoading,
     listRef,
     sortState,
     onSort,
-  } = usePagedTransactions({ activeKey, loadPage })
+    copy,
+  } = usePagedTransactions({ activeKey, loadPage, exportParams: listParams })
 
   useEffect(() => {
     let cancelled = false
@@ -111,7 +115,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     rows: localMonthTxns,
     setRows: setLocalMonthTxns,
     total: range.count || localMonthTxns.length,
-    filterParams: { ...range.params, category_ids: String(category.id) },
+    filterParams: listParams,
     categories,
   })
 
@@ -185,7 +189,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} title={`${range.label} · ${category.name}`} bulk={bulk} />
+                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${category.name}`} bulk={bulk} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}

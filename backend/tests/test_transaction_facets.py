@@ -160,8 +160,8 @@ class FacetSemanticsTests(unittest.TestCase):
     def _export_merchants(self, **facet_kwargs) -> set[str]:
         with self._use_db_path():
             resp = export_transactions_csv(
-                columns="merchant_name", date_start=None, date_end=None, search=None,
-                facets=TransactionFacets(**facet_kwargs),
+                columns="merchant_name", facets=TransactionFacets(**facet_kwargs),
+                filters={}, sort_by="date", sort_dir="desc",
             )
 
         async def _drain():

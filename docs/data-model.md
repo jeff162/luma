@@ -376,6 +376,12 @@ from `FACET_PARAM_NAMES` instead of restating it — a facet missing there does 
 asserts every faceted endpoint accepts every facet (`tests/test_transaction_facets.py`), so an omission
 is a red test rather than a report nobody checks.
 
+The CSV export goes further than sharing the facets: it takes the list feed's **whole** filter, row source
+and order (`transaction_list_filters` and `transaction_list_scope` in `routers/transactions.py`), because
+the Transactions ledger hands over a list too large to copy as that file, which must hold exactly the rows
+on screen. A guard asserts the dependency names every filter the list feed accepts
+(`tests/test_export_matches_ledger.py`).
+
 ### Attributes — filtering by what a row is
 
 The facets above ask what a transaction is *filed under*. The attribute facet
