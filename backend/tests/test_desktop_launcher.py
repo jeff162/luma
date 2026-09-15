@@ -5,6 +5,7 @@ is not: opening a browser under WSL or a Linux desktop, a lockfile left behind b
 configured port that something else already holds, and a macOS bundle with no terminal to print to.
 """
 
+import asyncio
 import os
 import signal
 import socket
@@ -13,8 +14,11 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 from backend.tests._api_client import api_client
 
@@ -165,22 +169,41 @@ def test_the_browser_port_is_the_frontend_port_not_the_backend_port():
         assert desktop._choose_port() == frontend
 
 
-def test_ctrl_c_exits_cleanly_and_releases_the_lock():
-    """uvicorn re-raises SIGINT into the caller after its own graceful shutdown, so the advertised way
-    to stop the app arrives as an exception. Letting it escape reports a normal exit as a crash."""
+def test_a_stop_releases_the_lock_and_bounds_its_wait():
+    """The lockfile records a running instance, so one left behind sends the next launch probing a server
+    that is gone. And with no force quit on a second Ctrl+C, the graceful-shutdown cap is the only thing
+    that keeps a stuck request from holding a stop open."""
     with tempfile.TemporaryDirectory() as tmp:
         lock = Path(tmp) / "luma-desktop.lock"
-        interrupted = mock.Mock()
-        interrupted.run.side_effect = KeyboardInterrupt
+        stopped = mock.Mock()
+        stopped.run.return_value = None
 
         with mock.patch.object(desktop, "spa_mounted", True), \
              mock.patch.object(desktop, "_lock_path", return_value=lock), \
              mock.patch.object(desktop, "_running_instance_port", return_value=None), \
              mock.patch.object(desktop, "_choose_port", return_value=8123), \
-             mock.patch.object(desktop.uvicorn, "Server", return_value=interrupted):
+             mock.patch.object(desktop, "_install_stop_signal_handlers"), \
+             mock.patch.object(desktop, "_GracefulServer", return_value=stopped) as server_class:
             assert desktop.main(["--no-browser"]) == 0
 
         assert not lock.exists()
+    assert server_class.call_args.args[0].timeout_graceful_shutdown == desktop.GRACEFUL_SHUTDOWN_SECONDS
+
+
+_STOP_SIGNALS = [signum for signum in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)) if signum]
+
+
+@contextmanager
+def _stop_handlers_installed(server):
+    """The launcher's handlers, for the length of a test — restoring every one replaced, so the test
+    process keeps its own Ctrl+C."""
+    previous = {signum: signal.getsignal(signum) for signum in _STOP_SIGNALS}
+    try:
+        desktop._install_stop_signal_handlers(server)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def _stop_signal_reaches_the_server(signum: int) -> bool:
@@ -189,13 +212,9 @@ def _stop_signal_reaches_the_server(signum: int) -> bool:
     for both of these signals terminates the process outright, so a test that merely fails would instead
     take the whole run down with it."""
     server = mock.Mock(should_exit=False)
-    previous = signal.getsignal(signum)
-    try:
-        desktop._install_stop_signal_handlers(server)
+    with _stop_handlers_installed(server):
         signal.raise_signal(signum)
         return server.should_exit is True
-    finally:
-        signal.signal(signum, previous)
 
 
 def test_sigterm_stops_the_server_instead_of_killing_the_process():
@@ -216,18 +235,40 @@ def test_a_closed_terminal_stops_the_server_rather_than_killing_it():
     assert _stop_signal_reaches_the_server(signal.SIGHUP)
 
 
-def test_ctrl_c_is_left_to_python():
-    """Deliberately not taken over. Its default handler raises `KeyboardInterrupt`, which `main` already
-    catches, so the re-raise is survived without help — while a handler of ours would silently swallow a
-    Ctrl+C arriving *before* uvicorn installs its own, which is strictly worse than the status quo."""
+def test_ctrl_c_stops_the_server():
+    assert _stop_signal_reaches_the_server(signal.SIGINT)
+
+
+def test_ctrl_c_delivered_twice_is_not_an_interrupt():
+    """The traceback a plain Ctrl+C printed on a Raspberry Pi. The packaged build's bootloader forwards the
+    terminal's SIGINT to this process, which receives it directly too, so one keypress can arrive twice;
+    uvicorn catches both and re-raises both as it stands down. With Python's default handler in place,
+    `asyncio.run` installs its own, which cancels on the first interrupt and raises `KeyboardInterrupt` on
+    the second — from inside the event loop, after the server has already stopped. This replays that
+    re-raise inside `asyncio.run`, where uvicorn performs it."""
     server = mock.Mock(should_exit=False)
-    before = signal.getsignal(signal.SIGINT)
-    previous_term = signal.getsignal(signal.SIGTERM)
-    try:
-        desktop._install_stop_signal_handlers(server)
-        assert signal.getsignal(signal.SIGINT) is before
-    finally:
-        signal.signal(signal.SIGTERM, previous_term)
+
+    async def uvicorn_standing_down():
+        signal.raise_signal(signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
+        await asyncio.sleep(0)
+
+    with _stop_handlers_installed(server):
+        try:
+            asyncio.run(uvicorn_standing_down())
+        except KeyboardInterrupt:
+            pytest.fail("a Ctrl+C delivered twice escaped as KeyboardInterrupt")
+    assert server.should_exit is True
+
+
+def test_a_second_ctrl_c_does_not_force_quit():
+    """uvicorn reads a SIGINT during a stop as a force quit, which skips the application's shutdown and logs
+    its cancelled task as an error. A duplicate delivery must not be read that way."""
+    server = desktop._GracefulServer(desktop.uvicorn.Config(desktop.app))
+    server.handle_exit(signal.SIGINT, None)
+    server.handle_exit(signal.SIGINT, None)
+    assert server.should_exit is True
+    assert server.force_exit is False
 
 
 def _startup_line(has_console: bool) -> str:
@@ -241,7 +282,7 @@ def _startup_line(has_console: bool) -> str:
              mock.patch.object(desktop, "_lock_path", return_value=Path(tmp) / "luma-desktop.lock"), \
              mock.patch.object(desktop, "_running_instance_port", return_value=None), \
              mock.patch.object(desktop, "_choose_port", return_value=8123), \
-             mock.patch.object(desktop.uvicorn, "Server", return_value=stopped), \
+             mock.patch.object(desktop, "_GracefulServer", return_value=stopped), \
              mock.patch("builtins.print") as printed:
             assert desktop.main(["--no-browser"]) == 0
     return next(

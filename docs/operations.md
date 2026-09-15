@@ -76,8 +76,10 @@ uvicorn's graceful path, so in-flight requests finish and the lockfile is releas
 special-cased: a system shutdown reaches the process as an ordinary SIGTERM, and a closing terminal as
 SIGHUP. Neither is graceful by default — SIGTERM would be delivered a second time to `SIG_DFL` after
 uvicorn's own handler stands down, and SIGHUP is not in uvicorn's handled set at all — so the launcher
-installs handlers for both (`_install_stop_signal_handlers`). **Windows is the exception**: it has no
-SIGHUP, so closing a console window there is not a graceful stop.
+installs handlers for both (`_install_stop_signal_handlers`), and for SIGINT. **Windows is the exception**:
+it has no SIGHUP, so closing a console window there is not a graceful stop. A second Ctrl+C does not
+force a quit — one keypress can reach a packaged build twice — so a stop waits at most five seconds for
+in-flight requests and then closes them.
 
 The grace is bounded from outside and unbounded from inside: the server waits on in-flight requests
 indefinitely, while the macOS wrapper allows 20 seconds after SIGTERM before SIGKILL, and a supervisor

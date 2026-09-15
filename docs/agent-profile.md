@@ -602,6 +602,13 @@ for what the *user* can act on.
   rows, so under jsdom it renders none — stand it in when asserting which entries a dialog passes it. Run a
   suspect file under `timeout` so a hang ends.
 
+- **Brace a one-line `beforeEach`/`afterEach` that calls a mock.** `beforeEach(() => api.get.mockClear())`
+  returns the mock, and Vitest runs a function returned from `beforeEach` as that test's cleanup — so the
+  mock is called once more, with no arguments, after the test body. The failure points at the wrong place:
+  a destructuring error inside the mock's implementation, reported against whichever test is running (both
+  tests in a file at once, once the implementation outlives a reset), with no caller in the stack. It cost
+  several probe runs to trace. `beforeEach(() => { api.get.mockClear() })` returns nothing.
+
 - Backend tests run from `backend/venv`, and direct calls into FastAPI router functions must pass
   every `Query(...)` parameter explicitly because omitted values stay as `FieldInfo` objects outside
   the HTTP layer.

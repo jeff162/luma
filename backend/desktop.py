@@ -79,6 +79,9 @@ STARTUP_TIMEOUT_SECONDS = 60.0
 # Appended to across runs, so a failure that happened yesterday is still readable, but not without
 # limit: uvicorn can be noisy when something is persistently wrong, and nothing here ever prunes.
 LOG_MAX_BYTES = 1024 * 1024
+# How long a stop waits for in-flight requests before closing them anyway. Ctrl+C never escalates to a
+# force quit here (see `_GracefulServer`), so this is what keeps one stuck request from holding a stop open.
+GRACEFUL_SHUTDOWN_SECONDS = 5
 
 
 def _lock_path() -> Path:
@@ -167,6 +170,23 @@ def _redirect_output_to_log() -> Path | None:
     return log
 
 
+class _GracefulServer(uvicorn.Server):
+    """uvicorn's server without its second-Ctrl+C force quit.
+
+    uvicorn reads a SIGINT arriving while a stop is already under way as "force quit": it stops waiting
+    for connections and skips the application's shutdown, whose cancelled task it then logs as an error,
+    traceback and all. A second SIGINT is not necessarily a second keypress, though. A terminal delivers
+    Ctrl+C to its whole foreground process group, and the packaged Linux build is a PyInstaller onefile
+    bootloader with this process as its child — the bootloader receives the Ctrl+C as well and forwards
+    it, so one keypress can arrive twice. When the two land close together the kernel merges them; when
+    they do not, which on a Raspberry Pi they did not, a plain Ctrl+C printed a crash. So every stop is
+    graceful, and `GRACEFUL_SHUTDOWN_SECONDS` bounds it where a second keypress used to."""
+
+    def handle_exit(self, sig, frame):
+        super().handle_exit(sig, frame)
+        self.force_exit = False
+
+
 def _install_stop_signal_handlers(server: uvicorn.Server) -> None:
     """Make the signals that mean "stop" end in the same graceful path everything else uses.
 
@@ -184,9 +204,12 @@ def _install_stop_signal_handlers(server: uvicorn.Server) -> None:
     it outright — the same silent death, by a different route. Windows has no such signal, hence the
     guard.
 
-    **SIGINT is deliberately absent.** Its default handler raises `KeyboardInterrupt`, which `main()`
-    already catches, so the re-raise is survived without help. Taking it over would only make Ctrl+C
-    *before* uvicorn installs its own handlers do nothing at all, which is strictly worse.
+    **SIGINT** gets one for the reason SIGTERM does. uvicorn re-raises it on the way out as well, and with
+    Python's default handler in place `asyncio.run` installs one of its own — which cancels on the first
+    interrupt and raises `KeyboardInterrupt` on the second. A Ctrl+C delivered twice (see
+    `_GracefulServer`) is re-raised twice, so it ended in a traceback from inside the event loop after the
+    server had already stopped. With a handler here asyncio leaves SIGINT alone, and every re-raise lands
+    harmlessly.
 
     Requesting the stop rather than ignoring the signal is what covers the window before uvicorn's
     handlers exist: a quit arriving during a slow startup is honoured at the first check instead of being
@@ -197,6 +220,7 @@ def _install_stop_signal_handlers(server: uvicorn.Server) -> None:
         server.should_exit = True
 
     signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, request_stop)
 
@@ -373,7 +397,9 @@ def main(argv: list[str] | None = None) -> int:
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text(str(port))
 
-    server = uvicorn.Server(uvicorn.Config(app, host=BIND_HOST, port=port, log_level="warning"))
+    server = _GracefulServer(uvicorn.Config(
+        app, host=BIND_HOST, port=port, log_level="warning", timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+    ))
     # Four different pieces of news, one way to act on them. The in-app control, a stop signal, and the
     # parent wrapper's death all set `server.should_exit`, which is uvicorn's graceful shutdown — the same
     # one Ctrl+C takes — so in-flight requests finish, the `finally` below clears the lockfile, and a
@@ -397,14 +423,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Luma is running at {url}")
     try:
         # Blocking, and in the main thread on purpose: uvicorn installs the signal handlers that make
-        # Ctrl+C a clean shutdown rather than an abandoned server thread.
+        # Ctrl+C a clean shutdown rather than an abandoned server thread. Nothing is caught: every stop
+        # signal has a handler, so Ctrl+C ends `run()` normally instead of arriving as `KeyboardInterrupt`.
         server.run()
-    except KeyboardInterrupt:
-        # Not an error path. `Server.capture_signals` restores the previous SIGINT handler and then
-        # re-raises the signal into it, so a graceful shutdown that has already finished still arrives
-        # here as a KeyboardInterrupt. Ctrl+C is an advertised way to stop — printing a stack trace for
-        # it would report a clean exit as a crash.
-        pass
     finally:
         lock.unlink(missing_ok=True)
 
@@ -413,4 +434,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    status = main()
+    # Once `main` has returned there is nothing left to stop, and interpreter shutdown puts the default
+    # handlers back — so a duplicate stop signal arriving this late (see `_GracefulServer`) would kill the
+    # process by signal after a clean stop. Here rather than in `main`, which tests call in-process.
+    for stop_signal in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if stop_signal is not None:
+            signal.signal(stop_signal, signal.SIG_IGN)
+    raise SystemExit(status)
