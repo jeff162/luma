@@ -4174,6 +4174,10 @@ def list_batches():
                    -- The card's own provider stands in once the connection is removed.
                    COALESCE(conn.provider, b.provider) AS connection_provider,
                    conn.institution AS connection_institution,
+                   -- When the connection last synced: its history row's recency. A card's own
+                   -- imported_at is when the card was created, which a monthly card stops tracking
+                   -- after its first sync of the month.
+                   conn.last_synced_at AS connection_last_synced_at,
                    EXISTS(
                        SELECT 1
                        FROM   txn t

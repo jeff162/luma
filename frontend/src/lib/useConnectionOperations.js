@@ -43,6 +43,10 @@ export function useConnectionOperations({ onChanged } = {}) {
   const [removeSyncTarget, setRemoveSyncTarget] = useState(null)
   const [removingSync, setRemovingSync] = useState(false)
 
+  // Tells the host something changed that no sync run reports. The actions that end in a run (a sync, more
+  // history, rebuilt accounts) deliberately do not call it: every run's end already reaches the hosts —
+  // Accounts through `runsFinished`, the Import / Export panel through the providers listing re-read at the
+  // same moment — and settling here as well reloaded the Accounts page twice per sync, once for each.
   const settle = useCallback(async () => { await onChanged?.() }, [onChanged])
 
   // A 423 is the gate arriving late rather than a failure to report: the server drops the key on restart
@@ -80,16 +84,14 @@ export function useConnectionOperations({ onChanged } = {}) {
       // history the initial pull already fetched; a provider with no cursor reads it as "top up", and
       // its own look-back bounds the fetch.
       await syncUntilComplete(provider, { days: 0, connectionId })
-      await settle()
     } catch (e) {
+      // A failed run ends too, so the hosts still reload and the badge reporting the failure (recorded
+      // server-side) appears without waiting for an unrelated reload.
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
-      // Settle on failure too: the failure was recorded server-side, and the badge reporting it is
-      // least useful if it only appears after an unrelated reload.
-      await settle()
       if (await retriedAfterUnlock(e, () => sync(provider, { connectionId }))) return
       setNotice({ title: 'Sync failed', description: e.message })
     }
-  }, [ensureVault, retriedAfterUnlock, settle, setSyncState, syncState, syncUntilComplete])
+  }, [ensureVault, retriedAfterUnlock, setSyncState, syncState, syncUntilComplete])
 
   // Every provider that has something to sync, as one run. This is what a page-level or app-level
   // control means by "sync" — bring in everything new — as against the per-connection check the Accounts
@@ -102,7 +104,6 @@ export function useConnectionOperations({ onChanged } = {}) {
     if (!list.length) return
     if (!(await ensureVault())) return
     const { failures } = await runSyncAll(list, { days: 0 })
-    await settle()
     if (failures.length) {
       setNotice({
         title: failures.length === 1 ? 'A data provider could not be synced' : 'Some data providers could not be synced',
@@ -113,7 +114,7 @@ export function useConnectionOperations({ onChanged } = {}) {
           .join('\n'),
       })
     }
-  }, [ensureVault, runSyncAll, settle])
+  }, [ensureVault, runSyncAll])
 
   // Deepen one connection's history. `fullHistory` is what separates this from a routine top-up, which
   // sends the same `days`: for a cursor provider it raises `days_requested` and the provider backfills
@@ -129,11 +130,10 @@ export function useConnectionOperations({ onChanged } = {}) {
         connectionId: connection.id, days: 0,
         failureTitle: 'Could not fetch more history',
       })
-      await settle()
     } finally {
       setFetchingHistoryConnId(null)
     }
-  }, [ensureVault, fetchingHistoryConnId, pullConnectionHistory, refreshingConnId, settle])
+  }, [ensureVault, fetchingHistoryConnId, pullConnectionHistory, refreshingConnId])
 
   // Rebuild a connection's account rows from its still-valid credential (no re-link), then sync its
   // history. The one-click recovery after a restore rolled the ledger back but kept the connection.
@@ -148,7 +148,6 @@ export function useConnectionOperations({ onChanged } = {}) {
       // restore-recovery should pull back as much as the provider will give, not the shallower default
       // a fresh connect might use.
       await syncUntilComplete(provider, { days: 0, connectionId: res.connection_id, fullHistory: true })
-      await settle()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       if (await retriedAfterUnlock(e, () => refreshAccounts(provider, connection))) return
@@ -156,7 +155,7 @@ export function useConnectionOperations({ onChanged } = {}) {
     } finally {
       setRefreshingConnId(null)
     }
-  }, [ensureVault, refreshingConnId, retriedAfterUnlock, settle, setSyncState, syncUntilComplete])
+  }, [ensureVault, refreshingConnId, retriedAfterUnlock, setSyncState, syncUntilComplete])
 
   // Opens on the preflight rather than on cached card counts, since the numbers the dialog states are
   // what actually gets deleted.

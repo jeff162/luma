@@ -806,7 +806,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // away mid-backfill left its poll loop running in a detached closure writing to an unmounted component —
   // the work carried on invisibly and its results landed nowhere. The cards below still read the same
   // shape, they just no longer own it.
-  const { syncState } = useSyncStatus()
+  const { syncState, runsFinished } = useSyncStatus()
   const [configTarget, setConfigTarget] = useState(null)
   const [connectTarget, setConnectTarget] = useState(null)  // provider whose token-connect dialog is open
   // Every action needing an open vault goes through this gate: it prompts and the action then continues
@@ -986,6 +986,21 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   }, [adoptVaultState, currentUser])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Reload when a sync run ends, wherever it was started — this card's own ↻ Sync, the navigation pane,
+  // another tab. The duplicate badge and last-sync breakdown are this page's copy of what the run wrote, and
+  // a run started elsewhere used to leave them stale until the page reloaded. The one reload per run: the
+  // shared operations no longer settle after a run as well. Keyed to the count seen at mount, so arriving
+  // on the page after earlier runs does not repeat the load the mount just did.
+  const handledRunsRef = useRef(runsFinished)
+  useEffect(() => {
+    if (runsFinished === handledRunsRef.current) return
+    handledRunsRef.current = runsFinished
+    ;(async () => {
+      await onAccountsChanged?.()
+      await refresh()
+    })()
+  }, [runsFinished, onAccountsChanged, refresh])
 
   // Accounts link a connection by account.connection_id == connection.id (6b-3). CSV/manual accounts and
   // disconnected ones have a NULL connection_id, so they naturally fall out of every connection group. The

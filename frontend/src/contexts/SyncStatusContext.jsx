@@ -196,10 +196,20 @@ export function SyncStatusProvider({ children }) {
   // last tick therefore saw the run mid-flight. `last_synced_at` moves exactly once per sync — at the end —
   // so without this the freshness a consumer shows would stay at the value it had *before* the sync that
   // just refreshed it, which is the one moment it is most obviously wrong.
+  //
+  // `runsFinished` counts those endings, for the consumers whose data a sync changes but who hold their own
+  // copy of it — Import/Export's history cards above all, whose row counts, account chips and review pills
+  // otherwise stayed at whatever the page last loaded, mid-sync or before it, until something unrelated
+  // reloaded them. A counter rather than a callback so a page can simply watch it while mounted, however
+  // the run was started (its own panel, the navigation pane, another tab). 0 means no run has ended.
   const wasBusyRef = useRef(false)
+  const [runsFinished, setRunsFinished] = useState(0)
   useEffect(() => {
     const busy = anyDriving || watching
-    if (wasBusyRef.current && !busy) readConnections().catch(() => {})
+    if (wasBusyRef.current && !busy) {
+      readConnections().catch(() => {})
+      setRunsFinished(n => n + 1)
+    }
     wasBusyRef.current = busy
   }, [anyDriving, watching, readConnections])
 
@@ -318,9 +328,9 @@ export function SyncStatusProvider({ children }) {
   }, [beginRun, driveProvider])
 
   const value = useMemo(
-    () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching,
+    () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching, runsFinished,
               runSync, runSyncAll, viewer, open, close, minimize, restore }),
-    [providers, syncState, runProviders, runConnections, watching, runSync, runSyncAll,
+    [providers, syncState, runProviders, runConnections, watching, runsFinished, runSync, runSyncAll,
       viewer, open, close, minimize, restore],
   )
   return <SyncStatusContext.Provider value={value}>{children}</SyncStatusContext.Provider>

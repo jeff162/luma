@@ -175,6 +175,7 @@ export function ImportHistorySection({
                   const isConnection = row.kind === 'connection'
                   // What a card's actions refer to: a sync card holds what a period's syncs delivered, not a file.
                   const batchNoun = isConnection ? 'this card' : 'this file'
+                  const rowScopeNoun = isConnection ? "this connection's cards" : 'imports in this data source'
                   const isMarketplace = false
                   const isUnsaved = isManual || isUnknown
                   const rowExpanded = !!expandedSourceRows[row.key]
@@ -329,12 +330,23 @@ export function ImportHistorySection({
                               )}
                               {!rowExpanded ? (
                                 <>
-                                  <span>{importedFileCountLabel}</span>
-                                  {row.latestBatch ? (
-                                    <span style={{ marginLeft: 12 }}>
-                                      Last used {row.latestBatch.imported_at.slice(0, 16).replace('T', ' ')}
-                                    </span>
-                                  ) : null}
+                                  {/* A connection's cards are per month, not per file, and how many there are
+                                      says nothing worth reading; its recency is the last sync, since the newest
+                                      card's creation time stops moving after the month's first sync. */}
+                                  {isConnection ? (
+                                    row.lastSyncedAt ? (
+                                      <span>Last synced {row.lastSyncedAt.slice(0, 16).replace('T', ' ')}</span>
+                                    ) : null
+                                  ) : (
+                                    <>
+                                      <span>{importedFileCountLabel}</span>
+                                      {row.latestBatch ? (
+                                        <span style={{ marginLeft: 12 }}>
+                                          Last used {row.latestBatch.imported_at.slice(0, 16).replace('T', ' ')}
+                                        </span>
+                                      ) : null}
+                                    </>
+                                  )}
                                   {unresolvedDuplicateCount > 0 ? (
                                     <button
                                       type="button"
@@ -342,7 +354,7 @@ export function ImportHistorySection({
                                         const nextState = prev && typeof prev === 'object' ? prev : {}
                                         return { ...nextState, [row.key]: true }
                                       })}
-                                      title={`${unresolvedDuplicateCount} flagged duplicate${unresolvedDuplicateCount === 1 ? '' : 's'} across imports in this data source — expand to open the per-file report`}
+                                      title={`${unresolvedDuplicateCount} flagged duplicate${unresolvedDuplicateCount === 1 ? '' : 's'} across ${rowScopeNoun} — expand to open the per-${isConnection ? 'card' : 'file'} report`}
                                       style={{
                                         display: 'inline-flex',
                                         alignItems: 'center',
@@ -369,7 +381,7 @@ export function ImportHistorySection({
                                         const nextState = prev && typeof prev === 'object' ? prev : {}
                                         return { ...nextState, [row.key]: true }
                                       })}
-                                      title={`${needsReviewCount} transaction${needsReviewCount === 1 ? '' : 's'} across imports in this data source still need review — expand to review or mark them reviewed`}
+                                      title={`${needsReviewCount} transaction${needsReviewCount === 1 ? '' : 's'} across ${rowScopeNoun} still need review — expand to review or mark them reviewed`}
                                       style={{
                                         display: 'inline-flex',
                                         alignItems: 'center',

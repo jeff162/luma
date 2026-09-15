@@ -59,6 +59,7 @@ import { ConnectionSyncLogDialog } from '../components/connections/ConnectionSyn
 import { DataConnectionsPanel } from '../components/connections/DataConnectionsPanel.jsx'
 import { MarketplaceImportHistory } from '../components/importExport/MarketplaceImportHistory.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
+import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { useAmazonReconciliationViewer } from '../contexts/AmazonReconciliationViewerContext.jsx'
 import {
   getBlankImportSnapshot,
@@ -468,6 +469,18 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     api.listBatches().then(setBatches).catch(() => { })
   }, [amazonReconVersion])
 
+  // And when a sync run ends, wherever it was started: a sync writes onto this page's connection cards and
+  // moves their "Last synced", and a history loaded before it finished would otherwise go on showing the
+  // counts from that moment — rows already landed beside chips and totals that had not been written yet.
+  // Keyed to the count seen at mount, so arriving here after earlier runs does not repeat the initial load.
+  const { runsFinished } = useSyncStatus()
+  const handledRunsRef = useRef(runsFinished)
+  useEffect(() => {
+    if (runsFinished === handledRunsRef.current) return
+    handledRunsRef.current = runsFinished
+    api.listBatches().then(setBatches).catch(() => { })
+  }, [runsFinished])
+
   // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
   // screen back to the drop zone with that source applied.
   function selectUploadSource(nextSourceId) {
@@ -820,6 +833,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         hasImportedCategories: false,
         batches: byImport,
         latestBatch: byImport[0],
+        // The connection's own last sync, which is what "recent" means for it. The newest card's imported_at
+        // is only when that card was created — a monthly card keeps receiving rows for weeks afterwards.
+        // Null once disconnected, when the connection's record is gone.
+        lastSyncedAt: byImport[0]?.connection_last_synced_at || null,
         manualDraftRecord: null,
       })
     }
@@ -862,11 +879,15 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         manualDraftRecord: null,
       })
     }
+    // A connection is as recent as its last sync; everything else as its newest import. The two timestamps are
+    // written in different shapes (`2026-09-12T13:23:40Z` against `2026-09-12 13:23:40`, both UTC), so the
+    // separator is normalized before comparing, or every same-day sync would sort after every same-day import.
+    const recency = row => String((row.kind === 'connection' && row.lastSyncedAt) || row.latestBatch?.imported_at || '').replace('T', ' ')
     return savedSourceRows.sort((a, b) => {
       const priority = row => row.kind === 'manual' ? 0 : 1
       const priorityDiff = priority(a) - priority(b)
       if (priorityDiff !== 0) return priorityDiff
-      return String(b.latestBatch?.imported_at || '').localeCompare(String(a.latestBatch?.imported_at || ''))
+      return recency(b).localeCompare(recency(a))
     })
   }, [profiles, batches, manualDraftRecord])
 

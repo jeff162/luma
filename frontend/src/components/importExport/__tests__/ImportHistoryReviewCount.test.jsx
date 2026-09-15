@@ -14,8 +14,9 @@ vi.mock('../../../help/ContextualExplainer.jsx', () => ({ default: () => null })
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
-function connectionRow(batches) {
+function connectionRow(batches, lastSyncedAt = null) {
   return {
+    lastSyncedAt,
     key: 'connection:c1',
     kind: 'connection',
     connectionId: 'c1',
@@ -62,5 +63,23 @@ describe('a collapsed data-source row', () => {
   it('shows nothing when every card has been reviewed', () => {
     renderSection([connectionRow([card('August 2026', 0)])])
     expect(screen.queryByRole('button', { name: /to review/ })).toBeNull()
+  })
+
+  it('says when the connection last synced, not how many cards it has or when the newest was created', () => {
+    renderSection([connectionRow([card('September 2026', 0), card('August 2026', 0)], '2026-09-12T13:23:40.025846Z')])
+    expect(screen.getByText('Last synced 2026-09-12 13:23')).toBeTruthy()
+    expect(screen.queryByText(/imported file/)).toBeNull()
+    expect(screen.queryByText(/Last used/)).toBeNull()
+  })
+
+  it('says nothing about recency once disconnected, since the sync record went with the connection', () => {
+    renderSection([{ ...connectionRow([card('August 2026', 0)]), connectionId: null, disconnected: true }])
+    expect(screen.queryByText(/Last synced|Last used|imported file/)).toBeNull()
+  })
+
+  it('points its review count at the connection\'s cards rather than at imported files', () => {
+    renderSection([connectionRow([card('August 2026', 2)])])
+    expect(screen.getByRole('button', { name: '2 to review' }).getAttribute('title'))
+      .toBe("2 transactions across this connection's cards still need review — expand to review or mark them reviewed")
   })
 })
