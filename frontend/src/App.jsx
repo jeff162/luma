@@ -1604,13 +1604,18 @@ export default function App() {
   // Demo-data status follows the active tenant/profile; it drives the global demo strip and is the
   // signal that imports/connections are paused. Errors (e.g. auth mode, where the endpoint 400s) just
   // mean "no demo".
+  //
+  // This and the currency lookup below wait for a session subject: both endpoints need one, and a request
+  // sent before the identity bootstrap finishes answers 401, which the shell reads as a lost session and
+  // restarts that same bootstrap.
   useEffect(() => {
+    if (!preferenceSubjectId) return
     let cancelled = false
     api.getDemoDataStatus()
       .then(result => { if (!cancelled) setDemoLoaded(!!result?.loaded) })
       .catch(() => { if (!cancelled) setDemoLoaded(false) })
     return () => { cancelled = true }
-  }, [dbInstanceId, activeLocalProfile?.id])
+  }, [dbInstanceId, preferenceSubjectId])
 
   // The ledger's currency symbol, applied to the shared money formatters. Keyed on the database identity
   // because it is tenant state: switching profile or restoring a backup can bring a differently
@@ -1619,6 +1624,7 @@ export default function App() {
   // Failure is deliberately silent and leaves the default in place — a currency lookup is not a reason to
   // block the app, and every amount still renders, just with the symbol it has always had.
   useEffect(() => {
+    if (!preferenceSubjectId) return
     let cancelled = false
     api.getLedgerCurrency()
       .then(result => {
@@ -1629,7 +1635,7 @@ export default function App() {
       })
       .catch(() => { })
     return () => { cancelled = true }
-  }, [dbInstanceId, activeLocalProfile?.id])
+  }, [dbInstanceId, preferenceSubjectId])
 
   async function confirmClearDemoData() {
     setClearingDemo(true)
