@@ -120,12 +120,15 @@ export function buildCashFlowGraph(rows, {
   const outflowTotal = sides[OUTFLOW].total
   const net = inflowTotal - outflowTotal
 
+  // Each side reads top to bottom in this order: the period's result first, where it is found at a glance,
+  // then the buckets largest first, then `Other`, which wraps up the smallest of them. CashFlowSankey keeps
+  // the order as given — recharts would otherwise re-sort each column by its own relaxed layout.
   const inflowNodes = sides[INFLOW].nodes.slice()
   const outflowNodes = sides[OUTFLOW].nodes.slice()
   if (net > FLAT) {
-    outflowNodes.push(balanceNode(CASH_FLOW_SAVED_ID, 'Net saved', net, OUTFLOW))
+    outflowNodes.unshift(balanceNode(CASH_FLOW_SAVED_ID, 'Net saved', net, OUTFLOW))
   } else if (net < -FLAT) {
-    inflowNodes.push(balanceNode(CASH_FLOW_DRAWDOWN_ID, 'Net drawdown', -net, INFLOW))
+    inflowNodes.unshift(balanceNode(CASH_FLOW_DRAWDOWN_ID, 'Net drawdown', -net, INFLOW))
   }
 
   const hub = {

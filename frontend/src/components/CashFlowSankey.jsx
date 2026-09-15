@@ -159,8 +159,14 @@ export default function CashFlowSankey({ graph, depths = {}, onNodeClick, onBack
           margin={{ top: 24, right: LABEL_MARGIN, bottom: 8, left: LABEL_MARGIN }}
           link={props => <CashFlowLink {...props} />}
           node={props => <CashFlowNode {...props} onNodeClick={onNodeClick} />}
+          // Keep each column in the order the graph gives (result, buckets largest first, Other). Recharts'
+          // layout passes still run, which is what centres the hub, but by default it re-sorts each column
+          // by where those passes left the nodes — so Other could land anywhere.
+          sort={false}
         >
-          <Tooltip content={<CashFlowTooltip />} />
+          {/* Not animated: recharts slides its tooltip between positions, and this one starts in the top-left
+              corner, so every first hover watched a label glide across the diagram to the pointer. */}
+          <Tooltip content={<CashFlowTooltip />} isAnimationActive={false} />
         </Sankey>
       </ResponsiveContainer>
       <div style={{

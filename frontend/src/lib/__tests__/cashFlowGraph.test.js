@@ -103,6 +103,37 @@ describe('buildCashFlowGraph sides', () => {
   })
 })
 
+describe('buildCashFlowGraph column order', () => {
+  const keysOn = (graph, side) => graph.nodes.filter(n => n.side === side).map(n => n.key)
+
+  it('reads result first, then buckets largest first, then Other last', () => {
+    const smalls = Array.from({ length: 12 }, (_, i) => row(`s${i}`, `Small ${i}`, 'expense', 1))
+    const graph = build([
+      row('pay', 'Salary', 'income', 10000),
+      row('food', 'Groceries', 'expense', 1500),
+      ...smalls,
+      row('rent', 'Rent', 'expense', 3000),
+    ])
+
+    const outflow = graph.nodes.filter(n => n.side === OUTFLOW)
+    expect(outflow[0].key).toBe(CASH_FLOW_SAVED_ID)
+    expect(outflow[outflow.length - 1].isOther).toBe(true)
+    const buckets = outflow.slice(1, -1)
+    expect(buckets.slice(0, 2).map(n => n.key)).toEqual(['rent', 'food'])
+    expect(buckets.every((n, i) => i === 0 || buckets[i - 1].total >= n.total)).toBe(true)
+  })
+
+  it('puts a drawdown at the top of the inflow side', () => {
+    const graph = build([
+      row('pay', 'Salary', 'income', 1000),
+      row('gear', 'Equipment', 'expense', -50),
+      row('rent', 'Rent', 'expense', 1800),
+    ])
+
+    expect(keysOn(graph, INFLOW)).toEqual([CASH_FLOW_DRAWDOWN_ID, 'pay', 'gear'])
+  })
+})
+
 describe('buildCashFlowGraph balancing', () => {
   it('flows a surplus into a Net saved terminal so the two sides agree', () => {
     const graph = build([
