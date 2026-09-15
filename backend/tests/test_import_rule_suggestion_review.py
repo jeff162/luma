@@ -61,7 +61,12 @@ from backend.routers.import_export import (
     undo_profile_rule_suggestion_action,
     undo_system_rule_suggestion_action,
 )
-from backend.routers.import_export.core import _open_batch_review_scope, _open_profile_review_scope, _open_system_review_scope
+from backend.routers.import_export.core import (
+    _assign_rule_suggestion_review_groups,
+    _open_batch_review_scope,
+    _open_profile_review_scope,
+    _open_system_review_scope,
+)
 from backend.routers.rules import (
     ApplyToTransactionsBody,
     RuleCreate,
@@ -938,6 +943,10 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(refined[0]["owner_id"], owner_a)
         self.assertEqual(refined[0]["txn_count"], 3)
         self.assertEqual(followups[0]["txn_count"], 2)
+        # The two chunks carry different sampled labels ("Walgreens" / "WALGREENS #13081"); the split root
+        # still holds them in one working set.
+        self.assertNotEqual(refined[0]["merchant_label"].lower(), followups[0]["merchant_label"].lower())
+        self.assertEqual(refined[0]["review_group_id"], followups[0]["review_group_id"])
 
         with self._use_db_path(), get_db() as conn:
             conn.executemany(
@@ -972,6 +981,46 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertIn(":followup:", pending[0]["id"])
         self.assertEqual(pending[0]["txn_count"], 2)
+        self.assertEqual(accepted[0]["review_group_id"], pending[0]["review_group_id"])
+
+    def test_review_group_precedence_is_split_root_then_conflict_keyword_then_label_then_keyword(self):
+        suggestions = [
+            {"id": "walgreens:__global__:pharmacy", "merchant_label": "Walgreens", "keyword": "walgreens"},
+            {
+                "id": "walgreens:__global__:pharmacy:followup:walgreens:__global__:seed",
+                "merchant_label": "WALGREENS #13081",
+                "keyword": "walgreens",
+            },
+            # A conflict set whose sampled labels differ, beside a broad sibling of the same merchant.
+            {"id": "7-eleven:owner-a:fuel", "merchant_label": "7-Eleven Store 402", "keyword": "7-eleven",
+             "conflict_group_id": "7-eleven:owner-a"},
+            {"id": "7-eleven:owner-a:food", "merchant_label": "Quick Stop", "keyword": "7-eleven",
+             "conflict_group_id": "7-eleven:owner-a"},
+            {"id": "7-eleven:__global__:general", "merchant_label": "  7-ELEVEN ", "keyword": "7-eleven"},
+            # A refined conflict group names a suggestion id, not a keyword, so its members group by label.
+            {"id": "riverstone:__global__:dues", "merchant_label": "Riverstone", "keyword": "riverstone renewal",
+             "conflict_group_id": "riverstone:__global__:seed:refined"},
+            {"id": "riverstone:__global__:card", "merchant_label": "Riverstone", "keyword": "riverstone"},
+            {"id": "no-label", "merchant_label": None, "keyword": "  Stop   & Shop  "},
+            {"id": "nothing", "merchant_label": "", "keyword": ""},
+        ]
+        _assign_rule_suggestion_review_groups(suggestions)
+        groups = {s["id"]: s["review_group_id"] for s in suggestions}
+
+        self.assertEqual(groups["walgreens:__global__:pharmacy"], "split:walgreens:__global__:pharmacy")
+        self.assertEqual(groups["walgreens:__global__:pharmacy:followup:walgreens:__global__:seed"], "split:walgreens:__global__:pharmacy")
+        self.assertEqual(groups["7-eleven:owner-a:fuel"], "merchant:7-eleven")
+        self.assertEqual(groups["7-eleven:owner-a:food"], "merchant:7-eleven")
+        self.assertEqual(groups["7-eleven:__global__:general"], "merchant:7-eleven")
+        self.assertEqual(groups["riverstone:__global__:dues"], "merchant:riverstone")
+        self.assertEqual(groups["riverstone:__global__:card"], "merchant:riverstone")
+        self.assertEqual(groups["no-label"], "keyword:stop & shop")
+        self.assertEqual(groups["nothing"], "suggestion:nothing")
+
+        # Without its follow-up in the list, a card is not a split and groups by label again.
+        alone = [{"id": "walgreens:__global__:pharmacy", "merchant_label": "Walgreens", "keyword": "walgreens"}]
+        _assign_rule_suggestion_review_groups(alone)
+        self.assertEqual(alone[0]["review_group_id"], "merchant:walgreens")
 
     def test_broadening_refined_match_rejoins_canonical_conflict_generation(self):
         owner_a = str(uuid.uuid4())

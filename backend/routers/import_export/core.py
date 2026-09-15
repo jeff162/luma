@@ -118,6 +118,9 @@ router = APIRouter()
 MAX_DISTINCT_VALUES_PER_COLUMN = 500
 RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
 RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
+# Id formats a review's partitions are minted with, and read back only by _assign_rule_suggestion_review_groups.
+RULE_SUGGESTION_FOLLOWUP_ID_MARKER = ":followup:"
+RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX = ":refined"
 UNKNOWN_SOURCE_FALLBACK_KEY = "unknown_source_fallback"
 SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY = "system_rule_suggestion_review"
 SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY = "system_category_workspace_draft"
@@ -1635,7 +1638,7 @@ def _build_synthetic_rule_suggestion_entries(
                 "synthetic": True,
                 "derived_from_suggestion_id": suggestion_id,
             }),
-            "id": f"{suggestion['id']}:followup:{suggestion_id}",
+            "id": f"{suggestion['id']}{RULE_SUGGESTION_FOLLOWUP_ID_MARKER}{suggestion_id}",
         })
     return synthetic_entries
 
@@ -1702,6 +1705,61 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
         item.get("target_category_name") or "",
     ))
     return merged
+
+
+def _normalize_review_group_text(value) -> str:
+    return " ".join(str(value or "").split()).lower()
+
+
+def _rule_suggestion_split_root_id(suggestion_id: str) -> Optional[str]:
+    marker_index = suggestion_id.find(RULE_SUGGESTION_FOLLOWUP_ID_MARKER)
+    return suggestion_id[:marker_index] if marker_index >= 0 else None
+
+
+def _assign_rule_suggestion_review_groups(suggestions: list[dict]) -> None:
+    """Stamp each suggestion with `review_group_id`, the working set the review renders it in.
+
+    The review's merchant containers, their ordering, and the look-back lens all treat one group as a
+    unit (`docs/data-model.md` → *Look-back lens*). Precedence, strongest first:
+
+    - **split root** — a follow-up (`<remainder id>:followup:<seed>`) and the card whose id is its
+      remainder id, so label cleanup differences cannot separate the chunks of one split;
+    - **canonical conflict keyword** — an unresolved conflict set's `<keyword>:<scope>` group, so members
+      with differing sampled labels stay together (a `:refined` group names a suggestion id, not a
+      keyword, and falls through);
+    - **normalized merchant label**, then **normalized keyword**.
+
+    Computed over the whole list being returned, because a split key exists only while its follow-up is in
+    that list. This reads the id formats the generator and `_refine_pending_conflict_group` mint; it is the
+    last reader of those suffixes.
+    """
+    split_root_ids = {
+        root_id
+        for suggestion in suggestions
+        if (root_id := _rule_suggestion_split_root_id(str(suggestion.get("id") or "")))
+    }
+    for suggestion in suggestions:
+        suggestion_id = str(suggestion.get("id") or "")
+        split_root_id = _rule_suggestion_split_root_id(suggestion_id) or suggestion_id
+        conflict_group_id = str(suggestion.get("conflict_group_id") or "")
+        conflict_keyword = (
+            _normalize_review_group_text(conflict_group_id.rpartition(":")[0])
+            if conflict_group_id and not conflict_group_id.endswith(RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX)
+            else ""
+        )
+        merchant_label = _normalize_review_group_text(suggestion.get("merchant_label"))
+        keyword = _normalize_review_group_text(suggestion.get("keyword"))
+        if split_root_id and split_root_id in split_root_ids:
+            review_group_id = f"split:{split_root_id}"
+        elif conflict_keyword:
+            review_group_id = f"merchant:{conflict_keyword}"
+        elif merchant_label:
+            review_group_id = f"merchant:{merchant_label}"
+        elif keyword:
+            review_group_id = f"keyword:{keyword}"
+        else:
+            review_group_id = f"suggestion:{suggestion_id}"
+        suggestion["review_group_id"] = review_group_id
 
 
 def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_owner_ids: list[str]) -> dict:
@@ -1777,6 +1835,7 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         review_summary = summarize_rule_suggestion_review(review_state)
 
     suggestions = _merge_review_state_suggestions(suggestions, review_state, selected_owner_ids)
+    _assign_rule_suggestion_review_groups(suggestions)
 
     return {
         "requires_owner_resolution": False,
@@ -1889,7 +1948,7 @@ def _refine_pending_conflict_group(
             None,
         )
     refined_conflict_group_id = (
-        f"{source_suggestions[0].id}:refined"
+        f"{source_suggestions[0].id}{RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX}"
         if len(matched_suggestions) > 1
         else None
     )
@@ -1947,7 +2006,7 @@ def _refine_pending_conflict_group(
     for suggestion in remaining_suggestions:
         if suggestion["id"] not in matched_suggestion_ids:
             continue
-        suggestions[f"{suggestion['id']}:followup:{seed_suggestion_id}"] = _build_rule_suggestion_review_entry({
+        suggestions[f"{suggestion['id']}{RULE_SUGGESTION_FOLLOWUP_ID_MARKER}{seed_suggestion_id}"] = _build_rule_suggestion_review_entry({
             **suggestion,
             "synthetic": True,
             "derived_from_suggestion_id": seed_suggestion_id,

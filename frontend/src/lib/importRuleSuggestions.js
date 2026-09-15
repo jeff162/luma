@@ -28,42 +28,6 @@ export function normalizeImportRuleSortOrder(value) {
   return value === 'alpha' || value === 'row_count' ? value : null
 }
 
-export function getRuleSuggestionSplitRootId(suggestion) {
-  const id = String(suggestion?.id || '')
-  const followupIndex = id.indexOf(':followup:')
-  return followupIndex >= 0 ? id.slice(0, followupIndex) : id
-}
-
-export function getRuleSuggestionSplitRootIds(suggestions) {
-  const roots = new Set()
-  for (const suggestion of suggestions || []) {
-    const id = String(suggestion?.id || '')
-    if (!id.includes(':followup:')) continue
-    const root = getRuleSuggestionSplitRootId(suggestion)
-    if (root) roots.add(root)
-  }
-  return roots
-}
-
-export function getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds = null) {
-  const normalizeGroupText = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
-  const splitRootId = getRuleSuggestionSplitRootId(suggestion)
-  if (splitRootId && splitRootIds?.has?.(splitRootId)) {
-    return `split:${splitRootId}`
-  }
-  const conflictGroupId = String(suggestion?.conflict_group_id || '')
-  if (conflictGroupId && !conflictGroupId.endsWith(':refined')) {
-    const scopeSeparator = conflictGroupId.lastIndexOf(':')
-    const conflictKeyword = normalizeGroupText(scopeSeparator > 0 ? conflictGroupId.slice(0, scopeSeparator) : '')
-    if (conflictKeyword) return `merchant:${conflictKeyword}`
-  }
-  const merchantLabel = normalizeGroupText(suggestion?.merchant_label)
-  if (merchantLabel) return `merchant:${merchantLabel}`
-  const keyword = normalizeGroupText(suggestion?.keyword)
-  if (keyword) return `keyword:${keyword}`
-  return `suggestion:${suggestion?.id || ''}`
-}
-
 export function getRuleSuggestionMerchantGroupLabel(suggestion) {
   return suggestion?.merchant_label || suggestion?.keyword || ''
 }
@@ -100,23 +64,21 @@ export function suggestionSelectionChanged(suggestion, data) {
     || current.match_source_text !== next.match_source_text
 }
 
-// A merchant/split working set stays active when any visible member is recent. Settling one chunk
-// should not immediately strand the user's remaining chunk in Older while they are still resolving the
-// same merchant-level review work.
+// A working set (the backend's `review_group_id`) stays active when any visible member is recent.
+// Settling one chunk should not immediately strand the user's remaining chunk in Older while they are
+// still resolving the same merchant-level review work.
 export function getInWindowPendingSuggestionGroups(suggestions, lookbackCutoff) {
   const groups = new Set()
   if (!lookbackCutoff) return groups
-  const splitRootIds = getRuleSuggestionSplitRootIds(suggestions)
-  const pendingGroupKeys = new Set()
+  const pendingGroupIds = new Set()
   for (const suggestion of suggestions || []) {
     if (suggestion?.review_status !== 'pending') continue
-    pendingGroupKeys.add(getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds))
+    pendingGroupIds.add(suggestion.review_group_id)
   }
   for (const suggestion of suggestions || []) {
     if (suggestion.latest_txn_date && suggestion.latest_txn_date < lookbackCutoff) continue
-    const groupKey = getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds)
-    if (!pendingGroupKeys.has(groupKey)) continue
-    groups.add(groupKey)
+    if (!pendingGroupIds.has(suggestion.review_group_id)) continue
+    groups.add(suggestion.review_group_id)
   }
   return groups
 }

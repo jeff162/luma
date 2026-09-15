@@ -1,15 +1,14 @@
 # Import rule-suggestion review — making the review model explicit
 
-> **Status: in progress.** Stages 1 and 2 are done; stages 3–4 remain, in order. Stage 2 left two
-> questions open and stage 4 still owes a decision (below). Supersedes
+> **Status: in progress.** Stages 1–3 are done; stage 4 remains. Stage 2 left two questions open and
+> stage 4 still owes a decision (below). Supersedes
 > [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) as the next
 > work on this surface — stage 2 removed most of the page code that item would have split up.
 
 The Generate Rules review behaves correctly and its behavior is the thing to preserve. What is wrong is
 the shape: the model of *which rows are being worked together, and what owns them* is implicit, so
 several places rediscover it independently — `pending_override` and `synthetic` flags in the stored
-review state, `:followup:` / `:refined` suffixes parsed back out of ids by the frontend, merchant labels
-as grouping keys — and every user action is orchestrated from the browser as a sequence of independent
+review state, `:followup:` / `:refined` suffixes parsed back out of ids, merchant labels as grouping keys — and every user action is orchestrated from the browser as a sequence of independent
 requests with no atomicity.
 
 Read first: `docs/data-model.md` → the rule-suggestion sections (*Conflict-set matcher refinement*,
@@ -91,20 +90,19 @@ module beside `core` whose endpoints each take a scope opener, and each commits 
   `/transactions/rejected-suggestion-disposition` and `/transactions/restore-categorization` remain as thin
   wrappers over the cores, with their tests. Keep them as API, or remove them.
 
-## Stage 3 — the backend sends the grouping
+## Where stage 3 left things
 
-The frontend reconstructs "same working set" by parsing ids: `getRuleSuggestionSplitRootId`,
-`getRuleSuggestionSplitRootIds` and `getRuleSuggestionMerchantGroupKey` in
-`frontend/src/lib/importRuleSuggestions.js` look for `:followup:`, split `conflict_group_id` at its last
-`:`, and special-case a `:refined` suffix. The look-back lens (`getInWindowPendingSuggestionGroups`, used
-by `ImportRuleSuggestionReview.jsx`) and merchant-container ordering key on the result.
+Every suggestion in the review response carries `review_group_id`, stamped over the final list by
+`core._assign_rule_suggestion_review_groups` at the end of `_build_rule_suggestion_response`, with the
+precedence the page used (split root, canonical conflict keyword, normalized merchant label, keyword). The
+merchant containers, their `# rows` ordering and the look-back lens read it; the page parses no ids. The
+page never edits the suggestion list in place — every action reloads — so a server-computed group cannot
+go stale on screen.
 
-Send a `review_group_id` (and whatever partition identity the UI needs) on each suggestion from
-`_build_rule_suggestion_response` / `_merge_review_state_suggestions`, computed with today's precedence —
-split root, then canonical conflict keyword, then normalized merchant label, then keyword — so grouping is
-unchanged. Move the lens and the container ordering onto it and delete the id parsing. Additive: no stored
-state changes. The lens stays a view filter (a documented decision in `data-model.md` → *Look-back
-lens*); only its grouping source moves.
+That function is now the only reader of the `:followup:` / `:refined` id formats, which are minted with
+`RULE_SUGGESTION_FOLLOWUP_ID_MARKER` / `RULE_SUGGESTION_REFINED_CONFLICT_GROUP_SUFFIX`. Its split root is
+the follow-up's *remainder* id, not `derived_from_suggestion_id`: for a refinement's collision follow-up
+the remainder id is the refined card's id, which the seed id need not be.
 
 ## Stage 4 — explicit partition records
 
@@ -112,10 +110,13 @@ Replace the `pending_override` and `synthetic` flags with explicit partition rec
 special-cased in five places today — the entry builder (`_build_rule_suggestion_review_entry`),
 `_prune_phantom_rule_suggestion_entry`, `refresh_rule_suggestion_review`, `_merge_review_state_suggestions`,
 and the row exclusion in `_build_rule_suggestion_response` — plus `_refine_pending_conflict_group` and
-`_build_synthetic_rule_suggestion_entries`, which create them.
+`_build_synthetic_rule_suggestion_entries`, which create them. A partition record gives
+`_assign_rule_suggestion_review_groups` a real split root in place of the parsed id — which matters for a
+partial accept, where the follow-up's remainder id equals the accepted card's id only if the leftover rows
+regenerate under the same keyword, scope and target. Where they do not (say they come back owner-scoped),
+the follow-up presumably renders in a container of its own, apart from its merchant; not yet reproduced.
 
 **Owed decision:** the stored review state lives in batch `config_snapshot`, profile `column_map` and the
 system workflow state, and older backups carry the flag shape. Choose between normalizing on read (in
 `get_rule_suggestion_review_state`, which already normalizes older snapshots "without migrations") and a
-migration — a restore of an older backup has to keep working either way. Design this once stages 2–3 have
-landed.
+migration — a restore of an older backup has to keep working either way.

@@ -31,9 +31,7 @@ import {
   buildCategoryDisplayLabel,
   findNearestScrollParent,
   getInWindowPendingSuggestionGroups,
-  getRuleSuggestionMerchantGroupKey,
   getRuleSuggestionMerchantGroupLabel,
-  getRuleSuggestionSplitRootIds,
   getSuggestionFilterPills,
   normalizeImportRuleLookback,
   normalizeImportRuleSortOrder,
@@ -262,21 +260,17 @@ export default function ImportRuleSuggestionReview({
     () => getInWindowPendingSuggestionGroups(suggestions, lookbackCutoff),
     [suggestions, lookbackCutoff],
   )
-  const suggestionSplitRootIds = useMemo(
-    () => getRuleSuggestionSplitRootIds(suggestions),
-    [suggestions],
-  )
   // Pure recency test (no review-status / view logic). Undatable rows count as in-window — we can't call
   // them stale. With no window, everything is in-window. Pending suggestions inherit the group result so
   // a newly split older remainder does not vanish from the active merchant cluster.
   const inLookbackWindow = useCallback(suggestion => {
     if (!hasLens) return true
     if (suggestion.review_status === 'pending') {
-      return inWindowPendingSuggestionGroups.has(getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds))
+      return inWindowPendingSuggestionGroups.has(suggestion.review_group_id)
     }
     if (!suggestion.latest_txn_date) return true
     return suggestion.latest_txn_date >= lookbackCutoff
-  }, [hasLens, lookbackCutoff, inWindowPendingSuggestionGroups, suggestionSplitRootIds])
+  }, [hasLens, lookbackCutoff, inWindowPendingSuggestionGroups])
   // Recency slice for the active view: pending/conflicts show in-window, `older` shows the stale
   // complement, every other view is unaffected.
   const passesLensForView = useCallback(suggestion => {
@@ -335,7 +329,7 @@ export default function ImportRuleSuggestionReview({
       // criteria) stay beside the broader suggestion they came from.
       const grouped = new Map()
       for (const suggestion of next) {
-        const groupKey = getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds)
+        const groupKey = suggestion.review_group_id
         const entry = grouped.get(groupKey) || {
           suggestions: [],
           totalRows: 0,
@@ -363,7 +357,7 @@ export default function ImportRuleSuggestionReview({
 
     next.sort((a, b) => String(a.merchant_label || '').localeCompare(String(b.merchant_label || ''), undefined, { sensitivity: 'base' }))
     return next
-  }, [sortOrder, suggestionSplitRootIds])
+  }, [sortOrder])
 
   function getConflictContext(orderedSuggestions) {
     const byGroup = new Map()
@@ -2802,17 +2796,17 @@ export default function ImportRuleSuggestionReview({
             if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))
 
             // Otherwise group same-merchant suggestions into one bordered container so the whole pattern
-            // reads together. The group identity is the displayed merchant, not the exact keyword: a
-            // refined selection such as "merchant contains X renewal" is still part of merchant X's
-            // neighborhood. In pending/conflicts/older views, a conflict subset still resolves as a unit
-            // (ConflictSetCard); other filters show individual status cards. Establish group order from
+            // reads together. The group identity is the backend's `review_group_id` — the displayed
+            // merchant, not the exact keyword: a refined selection such as "merchant contains X renewal"
+            // is still part of merchant X's neighborhood. In pending/conflicts/older views, a conflict
+            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards. Establish group order from
             // the visible row counts, then keep that order stable while the same merchant set remains on
             // screen so resolving one card doesn't shove its siblings away.
             const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
             const groups = []
             const groupByMerchant = new Map()
             for (const suggestion of visibleSuggestions) {
-              const key = getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds)
+              const key = suggestion.review_group_id
               let group = groupByMerchant.get(key)
               if (!group) {
                 group = { key, members: [] }

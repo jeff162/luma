@@ -93,10 +93,9 @@ scale — rather than by feature.
   the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
   per-detail-panel Refresh seam.
 - [import-rule-suggestion-review-model.md](import-rule-suggestion-review-model.md) — **in progress;
-  stages 1–2 of 4 done.** Make the Generate Rules review model explicit while preserving its behavior: a
-  backend-sent grouping id in place of frontend id parsing (stage 3), and explicit partition records in
-  place of the `pending_override` / `synthetic` flags (stage 4, one decision owed). Stage 2 left two
-  questions open.
+  stages 1–3 of 4 done.** Make the Generate Rules review model explicit while preserving its behavior:
+  what remains is explicit partition records in place of the `pending_override` / `synthetic` flags
+  (stage 4, one decision owed). Stage 2 left two questions open.
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams. Waits on the review-model item above.
