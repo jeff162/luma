@@ -2954,23 +2954,35 @@ export const HELP_TOPICS = [
     summary: 'Appearance and currency, the tag manager, sign-in protection, the trash, and the configuration screen. Almost none of it has to be touched to use the app.',
     body: () => (
       <>
-        <p>*needs review*</p>
-        <p>Settings is one page of collapsible sections. The ones worth knowing about:</p>
+        <p>Settings is a collection of both controls that affect the {APP_NAME}'s behavior
+          and various utility type functions.</p>
+        <p>The configuration related settings are:</p>
         <ul>
           <li>
-            <strong>Appearance</strong> sets the theme, and <strong>Currency</strong> what every amount is
-            taken to mean &mdash; one choice for the whole ledger,
-            see <HelpLink to="/help/single-currency">single-currency support</HelpLink>.
+            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
+          </li>
+          <li>
+            <strong>Currency</strong> defines the meaning of the values in the
+            ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
           </li>
           <li>
             <strong>Transaction tags</strong> is the tag manager, where tags are renamed and removed.
             See <HelpLink to="/help/tags">how tags work</HelpLink>.
           </li>
           <li>
-            <strong>Sign-in protection</strong> and <strong>User management</strong> control who can
-            reach the app over the network.
-            See <HelpLink to="/help/account-security">account security</HelpLink>.
+            <strong>Sign-in protection</strong> controls whether passwords are required and if so
+            what the requirements are. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
+          <li>
+            <strong>Configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
+            it shows how various settings are derived and when a default value has been
+            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
+            <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
+            This is only visible to users who are administrators.
+          </li>
+        </ul>
+        <p>The following fall under utility type settings:</p>
+        <ul>
           <li>
             <strong>Intended usage</strong> covers where the data lives and what protects it.
             See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
@@ -2979,15 +2991,31 @@ export const HELP_TOPICS = [
             <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
             sections that empty separately.
           </li>
+
           <li>
-            <strong>Configuration</strong> shows where each setting's value comes from and what an
-            override would change.
-            See <HelpLink to="/help/configuration">configuration settings</HelpLink>.
+            <strong>Error log</strong> lists the errors recorded in the "console log" file.
+            This is only visible to users who are administrators.
           </li>
           <li>
-            <strong>Error log</strong> lists the errors the server recorded, newest first, with the detail
-            behind each. It is the place to look when something did not work and the screen did not say
-            why. Like Configuration, it is hidden from users who are not administrators.
+            <strong>Dismissed duplicate pairs</strong> Lists the pairs of transactions that have
+            been marked as not duplicates. These are stored so a subsequent pass does not
+            suggest them as duplicates again. Mistakes can be corrected by reopening a dismissed
+            pair and then returning to the duplicate detection report to resolve it.
+          </li>
+          <li>
+            <strong>Distinct Account Pairs</strong> lists the pairs of accounts that have been
+            identified as distinct because a cross-account duplicate was surfaced and the action
+            was to accept both transactions. Cross-account duplicates exist because different sources
+            may identify the same account differently so what appears to be a cross-account duplicate
+            may in fact be the same transaction in the same account with two different names. This
+            table is about tracking the pairs which are not the same. Mistakes can be removed with
+            the <em>Forget</em> button.
+          </li>
+          <li>
+            <strong>About</strong> lists the current version, license,
+            a pointer to the github repository, and the instance identifier. The instance identifier is
+            stored in backups so that a restore can warn before a backup is restored to a system
+            other than the one which it came from.
           </li>
         </ul>
       </>
