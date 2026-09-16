@@ -1077,6 +1077,10 @@ def list_transactions(
                 COALESCE(p.mask, a.mask)         AS account_mask,
                 a.name                            AS source_account_raw_name,
                 t.import_batch_id,
+                -- Whether the row came from a provider, which with `import_batch_id` is how a
+                -- hand-entered row is told apart (see `data-model.md` → *Transactions*). The detail
+                -- panel's amount editor is offered on those rows only.
+                t.external_transaction_id,
                 t.import_evidence_json,
                 t.imported_category,
                 t.category_id,
@@ -1219,6 +1223,26 @@ def _resolved_tags_response(conn, txn_id: str) -> dict:
     }
 
 
+# A row's `content_hash` is `make_hash(date, amount, description)`, so any edit to its date or amount
+# stales it unless it is recomputed — and it is the exact-match rung of duplicate detection
+# (`services/duplicate_detection.py`), the mechanism by which a later import or sync of the same charge
+# recognizes a row already held. The description it was hashed with is the row's own `raw_name`, falling
+# back to `merchant_name`: CSV import hashes the file's raw description and stores it verbatim as
+# `raw_name`, a hand entry hashes the payee it writes to all three name fields, and sync hashes this
+# exact expression. `display_name` is deliberately not in it, which is what lets a rename leave a hash
+# alone.
+#
+# **A marketplace row is the exception, and its hash must be left as it is.** That importer digests the
+# *order id* rather than a description (`import_export/amazon.py`), so recomputing one from a name would
+# write a digest matching nothing — strictly worse than a stale one, since a stale hash at least still
+# matches the source that produced it.
+_MARKETPLACE_SOURCE_KIND_PREFIX = "marketplace:"
+
+
+def _hashed_description(row) -> str:
+    return row["raw_name"] or row["merchant_name"] or ""
+
+
 # --- Manual entry ------------------------------------------------------------------------------
 # Cash, a cheque, a charge on an account nothing syncs. The data model has always allowed for it —
 # `external_transaction_id` and `needs_review` both name hand-entered rows in their own definitions, and
@@ -1330,6 +1354,95 @@ def create_transaction(body: TransactionCreate):
             (txn_id,),
         ).fetchone()
     return dict(row)
+
+
+# --- Correcting a hand-entered amount -------------------------------------------------------------
+# The figure typed wrongly and noticed a moment later. Offered on hand-entered rows only and refused on
+# two of those; `frontend/src/lib/amountEdit.js` carries the reasoning in full, and the client derives
+# its own affordance from the same three conditions while this refuses independently — which is what
+# holds for every caller rather than only for the shipped client.
+
+
+class AmountUpdate(BaseModel):
+    # Signed, in the ledger's convention (`amount > 0` is money out), like every other amount the API
+    # carries. A magnitude and its direction are separate controls on screen and are combined before the
+    # request is made, the same boundary the manual-entry form draws (`lib/manualTransaction.js`).
+    amount: float
+
+
+def _amount_edit_refusal(conn, row) -> Optional[str]:
+    """Why this row's amount may not be changed in place, or None where it may.
+
+    Phrased as sentences for the user because they are what the panel shows: the invariants live on this
+    side, and a second phrasing of them in the client is the thing that drifts. The order is deliberate —
+    a row can fail more than one of these, and the first is the one worth saying (`ui-patterns.md` → the
+    disabled-control rule).
+
+    The two refusals are the expensive cases, and both fail *silently*: a split's parts are checked
+    against the transaction's amount only when the split is saved, and a reimbursement's claims against
+    what the row has receivable only when the claim is made. Nothing re-checks either afterwards, so an
+    amount moved out from under one leaves a split that no longer sums and an outstanding report whose
+    headline has quietly stopped being true.
+    """
+    if row["import_batch_id"] or row["external_transaction_id"]:
+        return "The amount can only be edited for a manually entered transaction."
+    if row["is_split"]:
+        return ("Cannot edit the amount of a split transaction.")
+    if reimbursements_for_txn(conn, row["id"]):
+        return "Cannot edit the amount of a transaction that is part of a reimbursement."
+    return None
+
+
+@router.patch("/{txn_id}/amount")
+def update_amount(txn_id: str, body: AmountUpdate):
+    """Correct the amount of a hand-entered transaction.
+
+    **The content hash is restamped with it**, for the reason `_hashed_description` above gives: it
+    digests the amount, and left alone it would go on describing a figure the row no longer has. For a
+    hand-entered row the restamp is strictly an improvement — the corrected figure is the one a future
+    source describing the same charge will carry.
+
+    **The rules are re-run.** An amount is a rule condition (a range scoped to debits or credits), so a
+    corrected figure can genuinely belong to a different rule than the typo did. `recategorize_all`
+    leaves a category set by hand alone, so this re-derives only what a rule owned in the first place —
+    and the answer carries the category back because it may have moved.
+    """
+    from backend.routers.import_export.core import make_hash
+
+    amount = round(float(body.amount), 2)
+    if amount == 0:
+        raise HTTPException(status_code=400, detail="A transaction needs an amount")
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, date, amount, raw_name, merchant_name, is_split,
+                      import_batch_id, external_transaction_id
+               FROM   txn WHERE id = ?""",
+            (txn_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        refusal = _amount_edit_refusal(conn, row)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
+
+        conn.execute(
+            "UPDATE txn SET amount = ?, content_hash = ? WHERE id = ?",
+            (amount, make_hash(row["date"], amount, _hashed_description(row)), txn_id),
+        )
+        recategorize_all(conn, txn_ids=[txn_id])
+        # Membership, the expected-amount band, and which charge on a crowded date represents a series
+        # are all read off the amount, and only a scan rewrites them — the same reason the manual insert
+        # calls this.
+        rescan_edited_transactions(conn, [txn_id])
+        updated = conn.execute(
+            """SELECT t.id, t.date, t.amount, t.display_name, t.category_id, t.notes,
+                      COALESCE(c.name, '') AS category_name
+               FROM   txn t LEFT JOIN category c ON c.id = t.category_id
+               WHERE  t.id = ?""",
+            (txn_id,),
+        ).fetchone()
+    return dict(updated)
 
 
 @router.patch("/{txn_id}/category")
@@ -1817,6 +1930,43 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
     raise HTTPException(status_code=400, detail="selection.mode must be 'ids' or 'filter'")
 
 
+def _apply_set_date(conn, ids: list[str], date: str) -> None:
+    """Move rows to `date`, keeping each one's `content_hash` true to it.
+
+    The hash digests the date, so moving a row without restamping leaves it describing a date it no
+    longer has — and because that hash is what duplicate detection matches an incoming row against
+    exactly, the row quietly stops being recognizable to a later import of the same charge. The rows
+    whose hash cannot be recomputed from their own fields are left with the one they have; see
+    `_MARKETPLACE_SOURCE_KIND_PREFIX` for which those are and why a wrong digest is worse than a stale
+    one. A row carrying no hash at all keeps not having one.
+    """
+    from backend.routers.import_export.core import make_hash
+
+    for chunk in _chunk(ids):
+        placeholders = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            f"""SELECT t.id, t.amount, t.raw_name, t.merchant_name, t.content_hash,
+                       COALESCE(b.source_kind, '') AS source_kind
+                FROM   txn t
+                LEFT   JOIN import_batch b ON b.id = t.import_batch_id
+                WHERE  t.id IN ({placeholders})""",
+            chunk,
+        ).fetchall()
+        restamped, left_alone = [], []
+        for row in rows:
+            if row["content_hash"] and not row["source_kind"].startswith(_MARKETPLACE_SOURCE_KIND_PREFIX):
+                restamped.append(
+                    (date, make_hash(date, row["amount"], _hashed_description(row)), row["id"])
+                )
+            else:
+                left_alone.append(row["id"])
+        if left_alone:
+            ph = ",".join("?" * len(left_alone))
+            conn.execute(f"UPDATE txn SET date = ? WHERE id IN ({ph})", [date, *left_alone])
+        if restamped:
+            conn.executemany("UPDATE txn SET date = ?, content_hash = ? WHERE id = ?", restamped)
+
+
 def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
     """Apply one bulk action to a set of rows. Returns how many rows it declined because they are
     split — always 0 except for `set_category`, whose whole effect is the thing a split owns."""
@@ -1863,10 +2013,7 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction) -> int:
                 [name, *chunk],
             )
     elif kind == "set_date":
-        date = _require_calendar_date(action.date)
-        for chunk in _chunk(ids):
-            placeholders = ",".join("?" * len(chunk))
-            conn.execute(f"UPDATE txn SET date = ? WHERE id IN ({placeholders})", [date, *chunk])
+        _apply_set_date(conn, ids, _require_calendar_date(action.date))
     elif kind == "mark_reviewed":
         # Explicit "looked, it's fine as-is" — the catch-all clear for rows a manual category edit
         # didn't already clear. Powers both the single-row action and "clear the whole filtered pool".

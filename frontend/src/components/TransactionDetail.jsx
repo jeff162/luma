@@ -14,6 +14,7 @@ import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
+import TransactionAmountEditor from './TransactionAmountEditor.jsx'
 import DocumentsPanel from './DocumentsPanel.jsx'
 import PurchasePanel from './PurchasePanel.jsx'
 import ReimbursementPanel from './ReimbursementPanel.jsx'
@@ -352,6 +353,19 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     patchDetailTxn({ notes: nextNotes })
   }
 
+  // Persistence for the amount editor, in the same write-through-then-patch shape as the note. What
+  // travels back is more than the figure: an amount is a rule condition, so the server re-runs the rules
+  // and may hand back a different category — patching only the amount would leave the category badge
+  // beside it stating the old one until something refetched.
+  async function handleSaveAmount(nextAmount) {
+    const updated = await api.updateAmount(detailTxn.id, nextAmount)
+    patchDetailTxn({
+      amount: updated.amount,
+      category_id: updated.category_id,
+      category_name: updated.category_name,
+    })
+  }
+
   async function handleToggleTag(tag, present) {
     const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
     patchDetailTxn({ tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
@@ -505,7 +519,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
                   Transaction
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{formatCurrency(detailTxn.amount)}</div>
+                <TransactionAmountEditor txn={detailTxn} onSave={handleSaveAmount} />
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{detailTxn.date}</div>
               </div>
               <div>

@@ -520,6 +520,13 @@ export const api = {
     request(`/connections/${connectionId}/synced-transactions${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   updateMerchant:      (id, name)   => request(`/transactions/${id}/merchant`, { method: 'PATCH', body: JSON.stringify({ merchant_name: name }) }),
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
+  // Correcting the amount of a hand-entered transaction — offered only on a row entered by hand that is
+  // neither split nor part of a reimbursement (`lib/amountEdit.js` says why, and the backend refuses the
+  // rest independently with a 400 whose detail is written for the user; show that rather than composing
+  // your own). `amount` is signed in the ledger's convention like every other amount the API carries, so
+  // the caller derives it from a direction the user picked. The answer carries the row back including its
+  // category, which the rules may have moved — an amount is a rule condition.
+  updateAmount:        (id, amount) => request(`/transactions/${id}/amount`,   { method: 'PATCH', body: JSON.stringify({ amount }) }),
   updateTransactionTag: (id, tag_id, present) =>
     request(`/transactions/${id}/tags`, { method: 'PATCH', body: JSON.stringify({ tag_id, present }) }),
   clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),

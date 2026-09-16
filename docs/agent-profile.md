@@ -496,6 +496,10 @@ for what the *user* can act on.
 - Test by value, not by reflex. Invest in recurrence-prone bugs, invariants, contracts, and
   cross-component behavior; do not assume every local fix needs a dedicated test.
 
+- **Assert the behavior, not the copy.** A refusal is tested by its status and by the row being left
+  alone; a hint by whether one is shown; an echoed figure by the figure. Matching the sentence around any
+  of these tests nothing the behavior depends on, and turns every wording edit into a red run.
+
 - Derive a feature's test list from intent and the domain model, not only from the code as written —
   code-only tests ratify the implementation and stay blind to a behavior that was never coded. Use
   both sources: intent/spec for behavior completeness, code structure for the contracts a refactor

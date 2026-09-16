@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.import_export.core import make_hash
 from backend.routers.transactions import (
     BulkAction,
     BulkSelection,
@@ -78,17 +79,27 @@ class BulkUpdateTransactionTests(unittest.TestCase):
             conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, '#fff', 0)", (tag_id, name))
         return tag_id
 
-    def _insert_txn(self, *, merchant="Store", amount=5.0, date="2026-01-02", category_id=None, needs_review=0):
+    def _insert_txn(self, *, merchant="Store", amount=5.0, date="2026-01-02", category_id=None,
+                    needs_review=0, content_hash=None, import_batch_id=None):
         txn_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """
-                INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, needs_review)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, needs_review, content_hash, import_batch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                 """,
-                (txn_id, self.account_id, SHARED_OWNER_ID, category_id, amount, merchant, merchant, merchant, date, needs_review),
+                (txn_id, self.account_id, SHARED_OWNER_ID, category_id, amount, merchant, merchant, merchant, date, needs_review, content_hash, import_batch_id),
             )
         return txn_id
+
+    def _insert_batch(self, source_kind=None):
+        batch_id = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, source_kind) VALUES (?, ?, ?)",
+                (batch_id, "statement.csv", source_kind),
+            )
+        return batch_id
 
     def _row(self, txn_id):
         with self._use_db_path(), get_db() as conn:
@@ -160,6 +171,44 @@ class BulkUpdateTransactionTests(unittest.TestCase):
         self.assertEqual(self._row(a)["date"], "2026-01-02")
         self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2028-02-29")])
         self.assertEqual(self._row(a)["date"], "2028-02-29")
+
+    def test_set_date_restamps_the_content_hash(self):
+        # The hash digests the date, and it is the exact-match rung of duplicate detection. Left stale it
+        # goes on describing a date the row no longer has, and the row quietly stops being recognizable
+        # to a later import of the same charge. Recomputed here rather than compared against a literal,
+        # so the assertion states the rule instead of a value copied out of the implementation.
+        a = self._insert_txn(
+            merchant="Corner Cafe", amount=12.5, date="2026-01-02",
+            content_hash=make_hash("2026-01-02", 12.5, "Corner Cafe"),
+        )
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2026-03-15")])
+        row = self._row(a)
+        self.assertEqual(row["date"], "2026-03-15")
+        self.assertEqual(row["content_hash"], make_hash("2026-03-15", 12.5, "Corner Cafe"))
+
+    def test_set_date_leaves_a_marketplace_rows_hash_alone(self):
+        # A marketplace importer digests the *order id*, not a description, so recomputing this row's
+        # hash from its name would write a digest matching nothing — strictly worse than a stale one,
+        # which at least still matches the file that produced it.
+        batch = self._insert_batch(source_kind="marketplace:amazon")
+        original = make_hash("2026-01-02", 12.5, "111-2223334-5556667")
+        a = self._insert_txn(
+            merchant="Amazon order", amount=12.5, date="2026-01-02",
+            content_hash=original, import_batch_id=batch,
+        )
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2026-03-15")])
+        row = self._row(a)
+        self.assertEqual(row["date"], "2026-03-15")
+        self.assertEqual(row["content_hash"], original)
+
+    def test_set_date_leaves_a_row_that_never_had_a_hash_without_one(self):
+        # Nothing to keep true, and inventing one here would hand dedupe a match key for a row whose
+        # origin never produced it.
+        a = self._insert_txn(date="2026-01-02")
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2026-03-15")])
+        row = self._row(a)
+        self.assertEqual(row["date"], "2026-03-15")
+        self.assertIsNone(row["content_hash"])
 
     def test_set_review_status_both_directions(self):
         a = self._insert_txn()

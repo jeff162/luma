@@ -40,6 +40,28 @@ import { alignOnAxis, besideOnAxis } from '../lib/floatingPlacement.js'
 // number.
 export const ROW_HOVER_OPEN_DELAY_MS = 300
 
+// The border-box width that fits a wrapped hint to its widest line, or null where nothing would shrink.
+// CSS cannot do this on its own: a `max-content` box whose text overflows `maxWidth` grows to exactly
+// `maxWidth`, and wrapping then leaves the unused remainder of the longest line as a blank strip down
+// the right-hand side. The rendered lines are read back through a Range, which reports one rect per line
+// for any inline content (strings and rich JSX alike); a block child reports its full width, so it simply
+// yields no shrink. Null where the environment has no layout to measure (jsdom).
+function fittedTooltipWidth(el) {
+  if (typeof document.createRange !== 'function') return null
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  if (typeof range.getClientRects !== 'function') return null
+  const lines = Array.from(range.getClientRects()).filter(rect => rect.width > 0)
+  if (lines.length < 2) return null
+  const style = getComputedStyle(el)
+  const inset = ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+    .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0)
+  const used = Math.max(...lines.map(rect => rect.right)) - Math.min(...lines.map(rect => rect.left))
+  // Rounded up with a pixel spare, so sub-pixel text never finds itself a hair too wide and re-wraps.
+  const fitted = Math.ceil(used + inset) + 1
+  return fitted < el.getBoundingClientRect().width - 1 ? fitted : null
+}
+
 export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0 }) {
   const triggerRef = useRef(null)
   const tipRef = useRef(null)
@@ -48,6 +70,9 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   // Tracked in state rather than a ref so the scroll effect below can observe it and arm itself.
   const [pending, setPending] = useState(false)
   const [pos, setPos] = useState(null)
+  // `{ content, width }` — the fitted width, keyed to the content it was measured for so a hint whose
+  // text changes while open is measured again rather than squeezed into the old one's width.
+  const [fit, setFit] = useState(null)
   const closeTimer = useRef(null)
   const openTimer = useRef(null)
   useEffect(() => () => { clearTimeout(closeTimer.current); clearTimeout(openTimer.current) }, [])
@@ -84,8 +109,16 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
   // fully inside the viewport: clamp horizontally to keep it on-screen, and flip above the trigger
   // when placing it below would run off the bottom edge.
+  //
+  // Before positioning, a wrapped hint is narrowed to its widest line (see `fittedTooltipWidth`). That
+  // takes a render of its own, so the first pass only measures and the tooltip stays hidden until the
+  // second has placed it at its final width.
   useLayoutEffect(() => {
-    if (!open) { setPos(null); return }
+    if (!open) { setPos(null); setFit(null); return }
+    if (!bare && fit?.content !== content) {
+      setFit({ content, width: tipRef.current ? fittedTooltipWidth(tipRef.current) : null })
+      return
+    }
     const trigger = triggerRef.current?.getBoundingClientRect()
     const tip = tipRef.current?.getBoundingClientRect()
     if (!trigger || !tip) return
@@ -96,7 +129,7 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     })
     const top = besideOnAxis({ before: trigger.top, after: trigger.bottom, size: tip.height, lo: 0, hi: vh })
     setPos({ top, left })
-  }, [open, content, align])
+  }, [open, content, align, bare, fit])
   if (!content) return children
   function show() {
     clearTimeout(closeTimer.current)
@@ -137,9 +170,15 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
     padding: '6px 10px',
     fontSize: 12,
     color: 'var(--text)',
-    // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget.
-    width: 'max-content',
+    // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget; once
+    // measured, a wrapped hint takes its widest line instead (`fittedTooltipWidth`).
+    ...(fit?.content === content && fit.width
+      ? { width: fit.width, boxSizing: 'border-box' }
+      : { width: 'max-content' }),
     maxWidth,
+    // Balanced lines, so a hint that wraps does not leave one word alone on its last line; the fitted
+    // width then follows the balanced lines, which is also the narrower box.
+    textWrap: 'balance',
     whiteSpace: 'normal',
     wordBreak: 'break-word',
     boxShadow: '0 8px 24px rgba(0,0,0,0.28)',

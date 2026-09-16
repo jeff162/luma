@@ -598,6 +598,16 @@ The one deliberate exception is the payee rename in the transaction detail panel
 (`TransactionDetail.jsx`), which keeps explicit Save/Cancel buttons; commit-on-blur there would
 make Cancel dead, so it stays button-driven even though it edits the same field as the row.
 
+The **amount editor** in the same panel (`TransactionAmountEditor.jsx`) is the second kind rather than
+the first, despite looking like a single field: a magnitude and a direction control together decide one
+value, so a click-away would save a figure whose direction the user had not finished choosing. It
+therefore carries its own Save/Cancel, and Enter is gated on the same expression that disables Save so
+the key can never accept what the button refuses. It is offered on **hand-entered rows only**, and on
+one that is split or part of a reimbursement it renders the marker greyed with the reason on a
+`Tooltip` — an imported row gets no marker and no hint at all. That three-way answer comes from one
+expression (`lib/amountEdit.js`) so the hover and the greying cannot drift apart, and the backend
+refuses the same three cases independently. See [`data-model.md`](data-model.md) → *Transactions*.
+
 #### Escape cancels the local edit — and only that
 
 Across the app, `Esc` follows one rule: it **cancels the current local edit, restores the pre-edit
@@ -706,7 +716,7 @@ detail panel invisible until its geometry settles.
 
 Editing a transaction must never make it vanish from under the user's cursor. When a filtered or scoped list shows a row and an edit changes the row so it no longer matches that scope — categorizing while the ledger is filtered to Uncategorized, recategorizing a row out of the category the Categories panel is scoped to, etc. — the row is **patched in place and left visible**, restyled to show the new value, not removed. The reason is correction ergonomics: a mis-tap stays correctable, and the user can keep working the same row (add a tag, a note) before moving on. The list is reconciled to its filter only when the user asks, via the **Refresh** affordance the surface carries (`↻ Refresh`), which re-queries and drops the rows that no longer match.
 
-This is the single principle behind several specific behaviors documented below and elsewhere: the bulk-edit in-place reconcile, the rule-apply reconcile (`reconcileRowsAfterRuleApply`), the per-row inline category edit, and clicking a row's needs-review marker all keep edited rows on screen and defer pruning to Refresh. A surface that lets the user edit rows inside a scope that the edit can fall out of should follow the same model — linger plus an explicit Refresh — rather than auto-pruning. (The one deliberate non-linger case is trashing a row, which drops immediately, and applying a *rule* to existing rows, which sweeps immediately because undoing it is heavier.)
+This is the single principle behind several specific behaviors documented below and elsewhere: the bulk-edit in-place reconcile, the rule-apply reconcile (`reconcileRowsAfterRuleApply`), the per-row inline category edit, and clicking a row's needs-review marker all keep edited rows on screen and defer pruning to Refresh. A surface that lets the user edit rows inside a scope that the edit can fall out of should follow the same model — linger plus an explicit Refresh — rather than auto-pruning. (The one deliberate non-linger case is trashing a row, which drops immediately, and applying a *rule* to existing rows, which sweeps immediately because undoing it is heavier — everywhere but the Generate Rules review, where that apply is an undoable review action (`data-model.md` → the review's actions).)
 
 **An in-place patch may only assert what the client actually knows.** A category edit is the cautionary case: the patch could set the category from the picker, but a row's **tags** are inherited from that category and its group, and which tags those are is resolved server-side (account scope and per-row blocks are in it too). Patching the category while leaving the tags alone left the row showing the *previous* category's inherited tag, and nothing on the page refetches to correct it — the staleness was only visible if the user opened the tag picker, whose own write does answer with the resolved set. So the category write answers with the tags too, and `applyCategoryChange` (`lib/txnMutations.js`) is the seam every surface goes through: it applies the optimistic patch, then re-applies it with the server's tags when the write lands. Both patches carry the category, so a caller that merges only one still shows the right one. **Bulk is the exception that proves the shape** — one response cannot carry per-row tags, so a bulk `set_category` refetches the loaded rows it touched by id instead (and only that action: the others patch exactly, and a refetch would cost a request for nothing).
 

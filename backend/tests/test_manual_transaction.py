@@ -10,6 +10,10 @@ behave like every other row afterwards. Two of those are invisible in the result
 - an **uncategorized** entry runs through the rules, so a hand-entered row does not land in the
   uncategorized pile for no reason other than which door it came through.
 
+Correcting such a row's amount afterwards lives here too, being the other half of the same story: it is
+offered on hand-entered rows alone, and its two interesting refusals guard invariants that are checked
+only when they are written, so a correction let through would corrupt them quietly rather than fail.
+
 Driven through the full stack, because a create endpoint is exactly where request-body parsing and
 routing are the thing under test.
 """
@@ -22,6 +26,7 @@ import uuid
 
 from backend.db.database import SHARED_OWNER_ID
 from backend.routers.import_export.core import make_hash
+from backend.services.excluded_categories import find_reimbursable_group_id
 from backend.tests._api_client import api_client
 
 
@@ -190,3 +195,121 @@ class ManualTransactionTests(unittest.TestCase):
                 refused = client.post("/api/transactions", json={**base, "category_id": seeded["group"]})
                 self.assertEqual(refused.status_code, 400)
                 self.assertIn("not a group", refused.json()["detail"])
+
+    # --- Correcting the amount ----------------------------------------------------------------------
+
+    def _hand_entered(self, client, seeded, **overrides):
+        body = {"account_id": seeded["account"], "date": "2026-08-14", "amount": 12.5, "payee": "Corner Cafe"}
+        body.update(overrides)
+        created = client.post("/api/transactions", json=body)
+        self.assertEqual(created.status_code, 200, created.text)
+        return created.json()["id"]
+
+    def _reimbursable_leaf(self, path, name="Concert tickets"):
+        # Resolved through the service rather than by querying for the marker column, so the fixture
+        # cannot quietly stop finding the group if that identity is ever stored differently.
+        conn = _connect(path)
+        group = find_reimbursable_group_id(conn)
+        self.assertIsNotNone(group, "the reimbursable holding group is seeded for every ledger")
+        leaf = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO category (id, parent_id, name, category_type, sort_order) VALUES (?,?,?,?,0)",
+            (leaf, group, name, "expense"),
+        )
+        conn.commit()
+        conn.close()
+        return leaf
+
+    def _imported_row(self, path, seeded):
+        conn = _connect(path)
+        batch, txn_id = str(uuid.uuid4()), str(uuid.uuid4())
+        conn.execute("INSERT INTO import_batch (id, filename) VALUES (?, 'statement.csv')", (batch,))
+        conn.execute(
+            "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,"
+            " date, is_pending, content_hash, import_batch_id) VALUES (?,?,?,?,?,?,?,?,0,?,?)",
+            (txn_id, seeded["account"], SHARED_OWNER_ID, 12.5, "Corner Cafe", "Corner Cafe",
+             "Corner Cafe", "2026-08-14", make_hash("2026-08-14", 12.5, "Corner Cafe"), batch),
+        )
+        conn.commit()
+        conn.close()
+        return txn_id
+
+    def test_a_correction_restamps_the_content_hash(self):
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._hand_entered(client, seeded)
+            answer = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": 21.5})
+            self.assertEqual(answer.status_code, 200, answer.text)
+            self.assertEqual(answer.json()["amount"], 21.5)
+            row = self._row(path, txn_id)
+        self.assertEqual(row["amount"], 21.5)
+        # The hash digests the amount and is duplicate detection's exact-match key, so left stale it
+        # would go on describing the typo — and a later import of the real charge would not recognize
+        # this row as the one already held, which is the whole reason the insert computes one at all.
+        self.assertEqual(row["content_hash"], make_hash("2026-08-14", 21.5, "Corner Cafe"))
+
+    def test_a_correction_carries_the_ledgers_sign_convention(self):
+        # The same boundary the create path draws: the API takes the signed figure, the direction having
+        # been chosen at the UI. A correction that flipped it would invert the row while looking entirely
+        # plausible on the way in.
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._hand_entered(client, seeded)
+            answer = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": -40.0})
+            self.assertEqual(answer.status_code, 200, answer.text)
+            row = self._row(path, txn_id)
+        self.assertEqual(row["amount"], -40.0)
+
+    def test_a_split_row_is_refused_and_left_alone(self):
+        # A split's parts are checked against the transaction's amount only when the split is saved, so a
+        # correction let through here would leave allocations that no longer sum and nothing to notice.
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._hand_entered(client, seeded)
+            split = client.put(f"/api/transactions/{txn_id}/split", json={"parts": [
+                {"category_id": seeded["leaf"], "amount": 10.0},
+                {"category_id": seeded["leaf"], "amount": 2.5},
+            ]})
+            self.assertEqual(split.status_code, 200, split.text)
+            refused = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": 21.5})
+            row = self._row(path, txn_id)
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(row["amount"], 12.5)
+
+    def test_a_reimbursed_row_is_refused_and_left_alone(self):
+        # A reimbursement's claims are checked against the row's receivable only when the claim is made,
+        # so moving the amount afterwards leaves the outstanding report's headline quietly untrue.
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._hand_entered(client, seeded, category_id=self._reimbursable_leaf(path))
+            created = client.post("/api/reimbursements", json={"claims": [{"txn_id": txn_id}]})
+            self.assertEqual(created.status_code, 200, created.text)
+            refused = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": 21.5})
+            row = self._row(path, txn_id)
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(row["amount"], 12.5)
+
+    def test_a_row_from_a_source_is_refused(self):
+        # Not squeamishness: an imported row records what its source reported, and its hash is the digest
+        # that source reproduces — restamping would stop the row matching its own file on the exact rung.
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._imported_row(path, seeded)
+            refused = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": 21.5})
+            row = self._row(path, txn_id)
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(row["amount"], 12.5)
+
+    def test_a_correction_to_zero_or_to_a_missing_row_is_refused(self):
+        with api_client() as (client, path):
+            seeded = self._seed(path)
+            txn_id = self._hand_entered(client, seeded)
+
+            with self.subTest("zero is not an amount"):
+                refused = client.patch(f"/api/transactions/{txn_id}/amount", json={"amount": 0})
+                self.assertEqual(refused.status_code, 400)
+                self.assertEqual(self._row(path, txn_id)["amount"], 12.5)
+
+            with self.subTest("the transaction has to exist"):
+                missing = client.patch("/api/transactions/nope/amount", json={"amount": 21.5})
+                self.assertEqual(missing.status_code, 404)
