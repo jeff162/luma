@@ -1051,10 +1051,11 @@ export const HELP_TOPICS = [
     id: 'transaction-documents',
     section: 'transactions',
     title: 'Attaching receipts and invoices',
-    surfaces: ['Transactions (row marker)', 'Transaction detail (Documents)'],
-    summary: 'Receipts and invoices can be attached to a transaction. Parsable text is searchable from the Transactions search box.',
+    surfaces: ['Transactions (row marker)', 'Transactions (Stored documents)', 'Transaction detail (Documents)'],
+    summary: 'Receipts and invoices can be attached to a transaction, or stored until the transaction arrives. Parsable text is searchable from the Transactions search box.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           For some transactions it can be useful to attach supporting documents. This could be to
           provide additional detail for a large expense or it could be just to store the receipt where it
@@ -1072,28 +1073,66 @@ export const HELP_TOPICS = [
 
         <h4>Attaching a document</h4>
         <p>
-          The Documents section has two controls to attach files and text.
-          One control is a file browser/file drop target and the other is for pasting the contents of the
-          clipboard. Either control accepts the same kinds of document; which one to use depends on where
-          the document is coming from.
+          The Documents section has one box for adding documents, and it accepts them several ways:
         </p>
         <ul>
           <li>
-            <strong>Paste an image</strong> -- a screenshot in a file, or a photo already on the clipboard.
+            <strong>Drop a file</strong> onto the box, or pick one with <strong>Browse&hellip;</strong>.
+          </li>
+          <li>
+            <strong>Paste an image</strong> -- a screenshot or a photo already on the clipboard. It is
+            attached straight away.
           </li>
           <li>
             <strong>Paste text</strong> from the clipboard. For emailed receipts it may be easier to
-            use copy/paste rather than saving the email as a file.
+            use copy/paste rather than saving the email as a file. Pasted text waits in the box to be
+            trimmed, then <strong>Attach</strong> adds it.
           </li>
           <li>
-            <strong>Attach a file</strong> -- the file-system browser and file drop zone add files already
-            on disk.
+            <strong>Stored documents (N)</strong> attaches a document that was stored before the
+            transaction arrived. The button only appears when there are stored documents.
           </li>
         </ul>
+        <p>
+          A pasted document is named <code>documentation</code> with an extension for its kind, such
+          as <code>documentation.png</code>. A file keeps its own name.
+        </p>
         <p>
           Using copy/paste with an email usually brings its HTML formatting along, so an itemized table keeps
           each price beside its item. What the preview shows is what gets attached. A careful text selection
           keeps anything extraneous out of the attachment.
+        </p>
+
+        <h4>Stored documents</h4>
+        <p>
+          An invoice or receipt often arrives before its transaction has been imported. Instead of
+          finding it again later, it can be stored with <strong>Stored documents</strong> on the
+          Transactions page, which accepts documents the same ways the Documents section does. A document
+          added on its own opens its name for editing, since the name is what identifies it when it is
+          attached later. The button shows how many documents are waiting.
+        </p>
+        <p>
+          Once the transaction arrives, open it and use <strong>Stored documents (N)</strong> in its
+          Documents section to pick the document and attach it. A stored document's text is not
+          searchable from the Transactions page until it is attached.
+        </p>
+
+        <h4>Renaming and removing documents</h4>
+        <p>
+          The pencil beside a document renames it, and <strong>Edit</strong> changes the text of a plain-text
+          document. There are two ways to take a document off a transaction:
+        </p>
+        <ul>
+          <li>
+            <strong>&times;</strong> moves it to the stored documents. Use this for a document attached to
+            the wrong transaction; it can be attached to the right one from there.
+          </li>
+          <li>
+            The <strong>trash can</strong> deletes the document permanently, after a confirmation.
+          </li>
+        </ul>
+        <p>
+          Stored documents are deleted the same way, from the Stored documents dialog.
         </p>
 
         <h4>What is accepted, and scaling</h4>
@@ -1106,7 +1145,8 @@ export const HELP_TOPICS = [
           a pathological scan, not to ration space.
         </p>
         <p>
-          Attaching the same file to the same transaction twice is reported rather than stored twice.
+          Attaching the same file to the same transaction twice is reported rather than stored twice, and
+          so is storing a file that is already stored.
         </p>
 
         <h4>Searchable attachments</h4>
@@ -1136,7 +1176,8 @@ export const HELP_TOPICS = [
         <p>
           Documents follow their transaction into the trash and come
           back intact if the transaction is restored from the trash. When the trash is emptied, any associated
-          documents are destroyed (deleted off disk).
+          documents are destroyed (deleted off disk). Stored documents are not in any transaction, so they
+          stay until they are attached or deleted.
         </p>
         <p>
           Attached files are stored as individual files in a directory next to the database file rather

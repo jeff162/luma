@@ -139,6 +139,21 @@ function ruleSuggestionScopePath({ batchId, profileId } = {}) {
   return '/import-export/rule-suggestions'
 }
 
+// One multipart document upload. Not through `request()`, which sends JSON; signals the mutation itself for
+// the same reason the other multipart helpers do.
+function uploadDocument(path, file) {
+  const fd = new FormData()
+  fd.append('file', file)
+  return trackedFetch(path, { method: 'POST', body: fd }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw buildResponseError(err, res.status)
+    }
+    signalDataMutated()
+    return res.json()
+  })
+}
+
 export const api = {
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
@@ -771,26 +786,23 @@ export const api = {
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),
   updateOwner: (id, data) => request(`/owners/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOwner: (id) => request(`/owners/${id}`, { method: 'DELETE' }),
-  // Attached documents (receipts/invoices). The file itself is never carried through JSON — it is
-  // uploaded as multipart and fetched back from its own URL, which is what `documentFileUrl` is for.
+  // Attached documents (receipts/invoices), and stored ones waiting for their transaction. The file itself
+  // is never carried through JSON — it is uploaded as multipart and fetched back from its own URL, which is
+  // what `documentFileUrl` is for. An upload is named by the File it sends: a paste names its file before
+  // it gets here, so no second name travels beside it.
   getTransactionDocuments: (txnId) => request(`/documents/transaction/${txnId}`),
-  attachTransactionDocument: (txnId, file, filename) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    // A pasted image arrives as a File with no useful name of its own; naming it here is what keeps
-    // every paste from landing as "blob".
-    if (filename) fd.append('filename', filename)
-    return trackedFetch(`/api/documents/transaction/${txnId}`, { method: 'POST', body: fd }).then(async res => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }))
-        throw buildResponseError(err, res.status)
-      }
-      signalDataMutated()
-      return res.json()
-    })
-  },
+  attachTransactionDocument: (txnId, file) => uploadDocument(`/api/documents/transaction/${txnId}`, file),
+  getStoredDocuments: () => request('/documents/stored'),
+  storeDocument: (file) => uploadDocument('/api/documents/stored', file),
+  attachStoredDocument: (documentId, txnId) =>
+    request(`/documents/${documentId}/attach`, { method: 'POST', body: JSON.stringify({ txn_id: txnId }) }),
+  // Off the transaction and back among the stored documents — the undoable removal.
   detachDocument: (documentId) =>
+    request(`/documents/${documentId}/detach`, { method: 'POST' }),
+  deleteDocument: (documentId) =>
     request(`/documents/${documentId}`, { method: 'DELETE' }),
+  renameDocument: (documentId, filename) =>
+    request(`/documents/${documentId}`, { method: 'PATCH', body: JSON.stringify({ filename }) }),
   // Editing replaces the document, so the response carries a new id that callers must swap in.
   editDocumentText: (documentId, text) =>
     request(`/documents/${documentId}/text`, { method: 'PUT', body: JSON.stringify({ text }) }),

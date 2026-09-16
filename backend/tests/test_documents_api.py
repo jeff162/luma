@@ -1,4 +1,4 @@
-"""Attaching, serving, detaching and searching documents.
+"""Attaching, storing, serving, moving, deleting and searching documents.
 
 The store's own invariants live in `test_documents_store.py`; this covers the API over it and the one
 thing that only exists once both halves are wired together — that text pulled out of a PDF at ingest is
@@ -22,12 +22,19 @@ from fastapi import HTTPException, UploadFile
 
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.documents import (
+    DocumentName,
+    DocumentTarget,
     DocumentText,
+    attach_stored_document,
     attach_transaction_document,
+    delete_document_permanently,
     detach_document,
     edit_document_text,
     get_document_file,
+    list_stored,
     list_transaction_documents,
+    rename,
+    store_document,
 )
 from backend.routers.transactions import list_transactions
 from backend.services.documents import document_file_path
@@ -65,10 +72,11 @@ class DocumentsApiTestCase(unittest.TestCase):
                     (txn_id, amount, date, payee, payee, payee),
                 )
 
-    def attach(self, txn_id, content, filename, content_type, form_filename=None):
-        return asyncio.run(attach_transaction_document(
-            txn_id, file=_upload(content, filename, content_type), filename=form_filename,
-        ))
+    def attach(self, txn_id, content, filename, content_type):
+        return asyncio.run(attach_transaction_document(txn_id, file=_upload(content, filename, content_type)))
+
+    def store(self, content, filename, content_type):
+        return asyncio.run(store_document(file=_upload(content, filename, content_type)))
 
     def list_rows(self, value):
         return self._list(value)["transactions"]
@@ -161,14 +169,6 @@ class AttachAndServeTests(DocumentsApiTestCase):
 
         self.assertFalse(other["already_attached"])
         self.assertNotEqual(other["document"]["id"], first["document"]["id"])
-
-    def test_a_pasted_image_can_be_named_by_the_client(self):
-        # A clipboard paste has no filename of its own; without this every paste lands as "blob".
-        result = self.attach(
-            "txn-coffee", make_image_bytes(200, 200), "blob", "image/jpeg",
-            form_filename="Pasted receipt.jpg",
-        )
-        self.assertEqual(result["document"]["filename"], "Pasted receipt.jpg")
 
     def test_an_unsupported_file_is_refused_with_a_reason(self):
         with self.assertRaises(HTTPException) as ctx:
@@ -280,8 +280,7 @@ class ServeAndDetachTests(DocumentsApiTestCase):
         # The name is echoed into Content-Disposition, so a quote in it would end the quoted string and
         # let the rest be read as header syntax.
         document = self.attach(
-            "txn-coffee", make_image_bytes(200, 200), 'evil".jpg', "image/jpeg",
-            form_filename='ev"il\r\nX-Injected: yes.jpg',
+            "txn-coffee", make_image_bytes(200, 200), 'ev"il\r\nX-Injected: yes.jpg', "image/jpeg",
         )["document"]
         disposition = get_document_file(document["id"]).headers["content-disposition"]
         self.assertNotIn('"', disposition.split("filename=", 1)[1][1:-1])
@@ -300,18 +299,18 @@ class ServeAndDetachTests(DocumentsApiTestCase):
         self.assertEqual(ctx.exception.status_code, 404)
         self.assertIn("missing from the store", ctx.exception.detail)
 
-    def test_detaching_removes_the_row_and_the_file(self):
+    def test_deleting_removes_the_row_and_the_file(self):
         document = self.attach(
             "txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf"
         )["document"]
         path = document_file_path(document["id"])
 
-        self.assertEqual(detach_document(document["id"]), {"ok": True})
+        self.assertEqual(delete_document_permanently(document["id"]), {"ok": True})
 
         self.assertFalse(path.exists())
         self.assertEqual(list_transaction_documents("txn-repair")["documents"], [])
         with self.assertRaises(HTTPException) as ctx:
-            detach_document(document["id"])
+            delete_document_permanently(document["id"])
         self.assertEqual(ctx.exception.status_code, 404)
 
 
@@ -460,7 +459,14 @@ class DocumentSearchTests(DocumentsApiTestCase):
         # Never the extracted text: it can run to hundreds of kilobytes and no list surface renders it.
         self.assertNotIn("text", attached)
 
-    def test_detaching_a_document_takes_it_out_of_the_index(self):
+    def test_deleting_a_document_takes_it_out_of_the_index(self):
+        document = list_transaction_documents("txn-repair")["documents"][0]
+        delete_document_permanently(document["id"])
+        self.assertEqual(self.quick_filter("doc:brake"), [])
+
+    def test_a_detached_document_no_longer_finds_its_former_transaction(self):
+        # The index follows the row's text, and a stored document's text belongs to no transaction — so the
+        # ledger search must stop returning the row it was taken off.
         document = list_transaction_documents("txn-repair")["documents"][0]
         detach_document(document["id"])
         self.assertEqual(self.quick_filter("doc:brake"), [])
@@ -471,6 +477,145 @@ class DocumentSearchTests(DocumentsApiTestCase):
         with get_db() as conn:
             conn.execute("DELETE FROM txn WHERE id = 'txn-repair'")
         self.assertEqual(self.quick_filter("doc:brake"), [])
+
+
+class StoredDocumentTests(DocumentsApiTestCase):
+    """Documents kept before their transaction exists, and moved on and off one."""
+
+    def stored_ids(self):
+        return [d["id"] for d in list_stored()["documents"]]
+
+    def test_a_stored_document_belongs_to_no_transaction_and_is_served_like_any_other(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        document = self.store(pdf, "invoice.pdf", "application/pdf")["document"]
+
+        self.assertIsNone(document["txn_id"])
+        self.assertEqual(self.stored_ids(), [document["id"]])
+        self.assertEqual(Path(get_document_file(document["id"]).path), document_file_path(document["id"]))
+        # Not on any ledger row, so it must not make one match a search either.
+        self.assertEqual(self.quick_filter("doc:brake"), [])
+
+    def test_storing_the_same_file_twice_is_reported_rather_than_stored_twice(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        first = self.store(pdf, "invoice.pdf", "application/pdf")
+        again = self.store(pdf, "invoice (1).pdf", "application/pdf")
+
+        self.assertTrue(again["already_stored"])
+        self.assertEqual(again["document"]["id"], first["document"]["id"])
+        self.assertEqual(len(self.stored_ids()), 1)
+
+    def test_attaching_a_stored_document_moves_it_without_touching_the_file(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        document = self.store(pdf, "invoice.pdf", "application/pdf")["document"]
+
+        result = attach_stored_document(document["id"], DocumentTarget(txn_id="txn-repair"))
+
+        self.assertFalse(result["already_attached"])
+        self.assertEqual(result["document"]["id"], document["id"])
+        self.assertEqual(result["document"]["txn_id"], "txn-repair")
+        self.assertEqual(self.stored_ids(), [])
+        self.assertEqual([d["id"] for d in list_transaction_documents("txn-repair")["documents"]], [document["id"]])
+        self.assertEqual(document_file_path(document["id"]).read_bytes(), pdf)
+        # Search follows the move: the text now explains a ledger row.
+        self.assertEqual(self.quick_filter("doc:brake"), ["txn-repair"])
+
+    def test_detaching_returns_a_document_to_the_store_intact(self):
+        # The undoable way off a transaction, for a receipt attached to the wrong row.
+        document = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+
+        result = detach_document(document["id"])
+
+        self.assertEqual(result, {"document": {**document, "txn_id": None}, "already_stored": False})
+        self.assertEqual(list_transaction_documents("txn-repair")["documents"], [])
+        self.assertEqual(self.stored_ids(), [document["id"]])
+        attach_stored_document(document["id"], DocumentTarget(txn_id="txn-coffee"))
+        self.assertEqual([d["id"] for d in list_transaction_documents("txn-coffee")["documents"]], [document["id"]])
+
+    def test_a_move_onto_an_identical_file_folds_the_moved_copy_into_it(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        attached = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")["document"]
+        stored = self.store(pdf, "invoice-from-email.pdf", "application/pdf")["document"]
+
+        result = attach_stored_document(stored["id"], DocumentTarget(txn_id="txn-repair"))
+
+        # The copy already on the transaction stays, under its own name; the stored one is gone, file too.
+        self.assertTrue(result["already_attached"])
+        self.assertEqual(result["document"]["id"], attached["id"])
+        self.assertEqual([d["id"] for d in list_transaction_documents("txn-repair")["documents"]], [attached["id"]])
+        self.assertEqual(self.stored_ids(), [])
+        self.assertFalse(document_file_path(stored["id"]).exists())
+        self.assertTrue(document_file_path(attached["id"]).exists())
+
+    def test_detaching_onto_an_identical_stored_file_folds_it_the_same_way(self):
+        pdf = make_text_pdf(INVOICE_LINES)
+        stored = self.store(pdf, "invoice.pdf", "application/pdf")["document"]
+        attached = self.attach("txn-repair", pdf, "invoice.pdf", "application/pdf")["document"]
+
+        result = detach_document(attached["id"])
+
+        self.assertTrue(result["already_stored"])
+        self.assertEqual(self.stored_ids(), [stored["id"]])
+        self.assertFalse(document_file_path(attached["id"]).exists())
+
+    def test_a_document_on_another_transaction_cannot_be_taken_by_attaching(self):
+        # No surface moves a receipt straight between transactions; a request that tries must not quietly
+        # take it off the row it is on.
+        document = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+
+        with self.assertRaises(HTTPException) as ctx:
+            attach_stored_document(document["id"], DocumentTarget(txn_id="txn-coffee"))
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual([d["id"] for d in list_transaction_documents("txn-repair")["documents"]], [document["id"]])
+
+    def test_attaching_needs_a_real_document_and_a_real_transaction(self):
+        document = self.store(make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+        for document_id, txn_id in ((document["id"], "no-such-txn"), ("no-such-document", "txn-repair")):
+            with self.assertRaises(HTTPException) as ctx:
+                attach_stored_document(document_id, DocumentTarget(txn_id=txn_id))
+            self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(self.stored_ids(), [document["id"]])
+
+    def test_a_stored_text_document_can_be_edited_and_stays_stored(self):
+        document = self.store(b"Brake pads 249.50", "documentation.txt", "text/plain")["document"]
+
+        replacement = edit_document_text(document["id"], DocumentText(text="Brake pads 249.50 (final)"))["document"]
+
+        self.assertIsNone(replacement["txn_id"])
+        self.assertEqual(self.stored_ids(), [replacement["id"]])
+
+    def test_deleting_a_stored_document_removes_it_and_its_file(self):
+        document = self.store(make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+        delete_document_permanently(document["id"])
+        self.assertEqual(self.stored_ids(), [])
+        self.assertFalse(document_file_path(document["id"]).exists())
+
+
+class RenameTests(DocumentsApiTestCase):
+    def test_a_document_can_be_renamed_attached_or_stored(self):
+        attached = self.attach("txn-repair", make_text_pdf(INVOICE_LINES), "invoice.pdf", "application/pdf")["document"]
+        stored = self.store(b"Brake pads 249.50", "documentation.txt", "text/plain")["document"]
+
+        self.assertEqual(rename(attached["id"], DocumentName(filename="Brake job.pdf"))["document"]["filename"], "Brake job.pdf")
+        self.assertEqual(rename(stored["id"], DocumentName(filename="  Garage quote.txt "))["document"]["filename"],
+                         "Garage quote.txt")
+        # The download offers the new name, which is the one thing a name is used for besides display.
+        self.assertIn('filename="Brake job.pdf"', get_document_file(attached["id"], download=True).headers["content-disposition"])
+
+    def test_a_name_is_reduced_like_an_uploads_and_cannot_be_emptied(self):
+        document = self.store(b"Brake pads 249.50", "documentation.txt", "text/plain")["document"]
+
+        self.assertEqual(rename(document["id"], DocumentName(filename="../../etc/quote.txt"))["document"]["filename"], "quote.txt")
+        for blank in ("", "   "):
+            with self.assertRaises(HTTPException) as ctx:
+                rename(document["id"], DocumentName(filename=blank))
+            self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(list_stored()["documents"][0]["filename"], "quote.txt")
+
+    def test_renaming_an_unknown_document_is_a_404(self):
+        with self.assertRaises(HTTPException) as ctx:
+            rename("no-such-document", DocumentName(filename="x.pdf"))
+        self.assertEqual(ctx.exception.status_code, 404)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
 import { AppDialog, Button } from './ui.jsx'
@@ -26,13 +26,22 @@ import { AppDialog, Button } from './ui.jsx'
  * `onDocumentReplaced(previousId, replacement)` is how a host learns it. A host must swap the id in
  * whatever copy it opens documents from — the ledger row keeps its own — or its next open reaches for a
  * document that no longer exists. A host that does not pass the callback gets a viewer with no Edit.
+ * `openInEdit` opens straight into the editor, for a host whose own control already said "edit".
  */
-export default function DocumentViewerDialog({ document: doc, onClose, onDocumentReplaced }) {
+export default function DocumentViewerDialog({ document: doc, onClose, onDocumentReplaced, openInEdit = false }) {
   // null while viewing; while editing, the text as loaded and as it now stands.
   const [editing, setEditing] = useState(null)
   const [error, setError] = useState(null)
   // A ref rather than state, because a same-tick double press sees the state from before the first one.
   const busy = useRef(false)
+
+  const canEdit = doc?.mime_type === 'text/plain' && !!onDocumentReplaced
+
+  useEffect(() => {
+    if (openInEdit && canEdit) startEditing()
+    // Only on opening: an edit that is saved or cancelled must not reopen the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!doc) return null
 
@@ -40,7 +49,6 @@ export default function DocumentViewerDialog({ document: doc, onClose, onDocumen
   // PDFs and text both go to an iframe: it is how the browser's own viewer is reached for one,
   // and how the other is rendered as text without the bytes passing through JavaScript.
   const isImage = (doc.mime_type || '').startsWith('image/')
-  const canEdit = doc.mime_type === 'text/plain' && !!onDocumentReplaced
 
   async function startEditing() {
     if (busy.current) return

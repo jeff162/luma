@@ -43,3 +43,50 @@ test('every kind of readable attachment reaches the same search', async ({ page 
   // Tier 3: a paste that was already text.
   await expectOnlyMatch(page, 'doc:transferable', 'Riverstone Amphitheater')
 })
+
+// A document kept before its transaction arrives, then attached to it — the whole round trip, because its
+// risk is in where things are mounted rather than in any one component: a picker and a confirm opened from
+// inside the detail panel, a count on the page header fed by a signal from another surface, and a move that
+// changes two lists at once.
+//
+// Leaves the ledger as it found it: the document ends deleted, and nothing else is touched.
+test('a stored document is named, attached from its transaction, moved back, and deleted', async ({ page }) => {
+  await page.goto('/transactions')
+
+  // Store it. A document added on its own opens its name for editing.
+  await page.getByRole('button', { name: /^Stored documents/ }).click()
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'documentation.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('Tire rotation and balance, quoted 89.00'),
+  })
+  const name = page.getByLabel('Document name')
+  await expect(name).toBeVisible()
+  await name.fill('Tire quote.txt')
+  await name.press('Enter')
+  await expect(page.getByRole('button', { name: 'Tire quote.txt', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stored documents (1)' })).toBeVisible()
+
+  // Attach it from a transaction.
+  await page.getByPlaceholder('Search…', { exact: true }).fill('Lakeside Taverna')
+  await page.getByText('Lakeside Taverna', { exact: true }).first().click({ button: 'right' })
+  await page.getByText('✎ Edit transaction…').click()
+  const attachArea = page.getByLabel('Drop or paste a document').locator('..')
+  await attachArea.getByRole('button', { name: 'Stored documents (1)' }).click()
+  await page.getByRole('button', { name: 'Attach Tire quote.txt' }).click()
+  await expect(page.getByLabel('Move Tire quote.txt to stored documents')).toBeVisible()
+  await expect(attachArea.getByRole('button', { name: /^Stored documents/ })).toHaveCount(0)
+
+  // × is the undoable way off: straight back to the store, nothing asked.
+  await page.getByLabel('Move Tire quote.txt to stored documents').click()
+  await expect(page.getByLabel('Move Tire quote.txt to stored documents')).toHaveCount(0)
+  await attachArea.getByRole('button', { name: 'Stored documents (1)' }).click()
+  await page.getByRole('button', { name: 'Attach Tire quote.txt' }).click()
+
+  // The bin is the permanent one, and asks first.
+  await page.getByLabel('Delete Tire quote.txt').click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(page.getByLabel('Delete Tire quote.txt')).toHaveCount(0)
+  await expect(attachArea.getByRole('button', { name: /^Stored documents/ })).toHaveCount(0)
+})

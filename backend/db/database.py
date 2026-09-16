@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 57
+CURRENT_VERSION = 58
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1607,6 +1607,42 @@ def _rule_suggestion_review_partitions_become_records(conn):
                 )
 
 
+@migration(58)
+def _documents_may_wait_for_their_transaction(conn):
+    # A document with no transaction is a *stored* one — an invoice kept before its charge arrives. SQLite
+    # cannot drop NOT NULL in place, hence the rebuild. Rowids are carried across because `document_fts`
+    # addresses documents by rowid; the index is dropped anyway and rebuilt by init_db's deferred block
+    # (with its triggers, which went with the old table), so it can never describe the old table's rows.
+    # Guarded like v56: the isolated per-migration tests hand-build minimal schemas and run the whole chain.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "document" not in tables:
+        return
+    columns = conn.execute("PRAGMA table_info(document)").fetchall()
+    if not any(c["name"] == "txn_id" and c["notnull"] for c in columns):
+        return  # already rebuilt, or a fresh database created in this shape
+    conn.execute("DROP TABLE IF EXISTS document_v58")
+    conn.execute(
+        """
+        CREATE TABLE document_v58 (
+            id          TEXT PRIMARY KEY,
+            txn_id      TEXT REFERENCES txn(id) ON DELETE CASCADE,
+            filename    TEXT NOT NULL,
+            mime_type   TEXT NOT NULL,
+            byte_size   INTEGER NOT NULL,
+            sha256      TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            text        TEXT,
+            text_source TEXT
+        )
+        """
+    )
+    names = ", ".join(c["name"] for c in columns)
+    conn.execute(f"INSERT INTO document_v58 (rowid, {names}) SELECT rowid, {names} FROM document")
+    conn.execute("DROP TABLE document")
+    conn.execute("DROP TABLE IF EXISTS document_fts")
+    conn.execute("ALTER TABLE document_v58 RENAME TO document")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2203,7 +2239,10 @@ def init_db(db_path: str | None = None):
             -- final invoice, a scan as two images), so there is deliberately no unique index on txn_id.
             CREATE TABLE IF NOT EXISTS document (
                 id          TEXT PRIMARY KEY,
-                txn_id      TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                -- NULL for a *stored* document: kept before the transaction it belongs to has arrived (an
+                -- invoice that precedes its charge), and attached later by setting this. Nothing cascades
+                -- one away, so every wipe of the ledger has to name this table.
+                txn_id      TEXT REFERENCES txn(id) ON DELETE CASCADE,
                 -- The upload's own name, kept for display and for the download filename. Never used to
                 -- locate the file: the store is keyed by id precisely so a user-supplied name is not
                 -- filesystem input.

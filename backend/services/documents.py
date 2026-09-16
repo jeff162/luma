@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-The document store — receipts and invoices attached to a transaction.
+The document store — receipts and invoices attached to a transaction, or stored until theirs arrives.
 
 A transaction records that money moved and where it went; it does not record *what was bought*. A
 document is the missing half for the rows where that matters (a repair bill, a service invoice, a
 warranty-relevant purchase), and this module owns the bytes: where they live, how an upload is
 normalized before it lands, and how a file is written so a torn write can never be mistaken for a
 complete one.
+
+**A document may be waiting for its transaction.** An invoice often arrives before the charge it
+describes has been imported, so a document with `txn_id` NULL is *stored*: kept, viewable and backed up,
+and attached later by setting `txn_id`. Nothing about the bytes differs between the two states, which is
+why storing is a column value rather than a second store — attaching never moves a file.
 
 **Files on disk, not blobs in the database.** The backup payload is JSON, so a blob would have to be
 base64'd into it — a third larger, and a receipt that has to be held whole in memory to be encoded.
@@ -737,6 +742,23 @@ def list_documents(conn: sqlite3.Connection, txn_id: str) -> list[dict]:
     ]
 
 
+def list_stored_documents(conn: sqlite3.Connection) -> list[dict]:
+    """The documents waiting for a transaction, newest first — the order someone looking for the invoice
+    that just arrived wants, where a transaction's own list reads in the order things were attached."""
+    return [
+        _document_row(row)
+        for row in conn.execute(
+            f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE txn_id IS NULL "
+            "ORDER BY created_at DESC, rowid DESC"
+        )
+    ]
+
+
+def get_document(conn: sqlite3.Connection, document_id: str) -> Optional[dict]:
+    row = conn.execute(f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE id = ?", (document_id,)).fetchone()
+    return _document_row(row) if row else None
+
+
 # What the ledger needs to know about a document, as against what the detail panel does. Enough to name
 # it, pick a viewer for it, and open it — and deliberately not `text`, which can run to hundreds of
 # kilobytes that no list surface renders.
@@ -766,24 +788,79 @@ def documents_map_for(conn: sqlite3.Connection, txn_ids) -> dict[str, list[dict]
     return grouped
 
 
-def find_duplicate_attachment(conn: sqlite3.Connection, txn_id: str, sha256: str) -> Optional[dict]:
-    """An identical file already attached to this transaction, if there is one.
+def find_duplicate_attachment(
+    conn: sqlite3.Connection, txn_id: Optional[str], sha256: str, exclude_id: Optional[str] = None,
+) -> Optional[dict]:
+    """An identical file already on this transaction — or already stored, for `txn_id` None — if there is one.
 
     The digest earns its keep here: attaching the same receipt twice is a real thing people do — the
     file gets dropped, nothing visibly happens fast enough, and it gets dropped again — and the result
     is two identical entries that the user then has to tell apart by nothing. Reported to the caller as
     the existing document rather than rejected outright, so the answer can be "this is already
     attached" instead of an error about a file that is, after all, exactly right.
+
+    `IS` rather than `=`, so the stored set (NULL) is one more place a document can already be. `exclude_id`
+    is the document being moved, which must not find itself.
     """
     row = conn.execute(
-        f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE txn_id = ? AND sha256 = ? LIMIT 1",
-        (txn_id, sha256),
+        f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE txn_id IS ? AND sha256 = ? AND id IS NOT ? LIMIT 1",
+        (txn_id, sha256, exclude_id),
     ).fetchone()
     return _document_row(row) if row else None
 
 
-def attach_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDocument) -> dict:
-    """Store a prepared upload and record it against a transaction, returning the new document row.
+@dataclass(frozen=True)
+class DocumentMove:
+    """Where a moved document ended up. `document` is what now stands at the destination; `merged_id`, when
+    set, is the moved document's own id, whose row was dropped because an identical file was already there
+    — its file is the caller's to remove once the transaction commits."""
+
+    document: dict
+    merged_id: Optional[str] = None
+
+
+def move_document(conn: sqlite3.Connection, document_id: str, txn_id: Optional[str]) -> Optional[DocumentMove]:
+    """Put a document on a transaction, or back among the stored ones for `txn_id` None. None when there is
+    no such document.
+
+    Only the row changes: the file is keyed by id, so attaching and detaching never touch the bytes.
+
+    **Arriving where an identical file already is folds the two together** rather than making a second
+    entry, for the reason the duplicate check on upload gives — two copies of one receipt are two entries
+    to tell apart by nothing. The copy already there is kept, so its name wins; the moved one is removed.
+    """
+    current = get_document(conn, document_id)
+    if current is None:
+        return None
+    if current["txn_id"] == txn_id:
+        return DocumentMove(current)
+    existing = find_duplicate_attachment(conn, txn_id, current["sha256"], exclude_id=document_id)
+    if existing:
+        delete_document(conn, document_id)
+        return DocumentMove(existing, merged_id=document_id)
+    conn.execute("UPDATE document SET txn_id = ? WHERE id = ?", (txn_id, document_id))
+    return DocumentMove(get_document(conn, document_id))
+
+
+def rename_document(conn: sqlite3.Connection, document_id: str, filename: str) -> Optional[dict]:
+    """Give a document a new name, returning it (None when there is no such document).
+
+    The name is display and download text only — the file is keyed by id — so it goes through the same
+    reduction an upload's name does and nothing else. An empty name is refused rather than defaulted: the
+    list would show "document" for something the user just deliberately cleared.
+    """
+    cleaned = _safe_filename(filename) if (filename or "").strip() else ""
+    if not cleaned:
+        raise DocumentRejected("A document needs a name.")
+    cursor = conn.execute("UPDATE document SET filename = ? WHERE id = ?", (cleaned, document_id))
+    if not cursor.rowcount:
+        return None
+    return get_document(conn, document_id)
+
+
+def attach_document(conn: sqlite3.Connection, txn_id: Optional[str], prepared: PreparedDocument) -> dict:
+    """Store a prepared upload and record it against a transaction — or as stored, for `txn_id` None —
+    returning the new document row.
 
     **File first, then the row**, which is the invariant this whole module is arranged around: a crash
     between the two leaves inert litter a sweep reclaims, never a row pointing at nothing. The caller
@@ -843,7 +920,9 @@ def replace_document_text(conn: sqlite3.Connection, document_id: str, text: str)
     return _store_document(conn, row["txn_id"], prepared, row["created_at"])
 
 
-def _store_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDocument, created_at: str) -> dict:
+def _store_document(
+    conn: sqlite3.Connection, txn_id: Optional[str], prepared: PreparedDocument, created_at: str,
+) -> dict:
     """Write the file, then insert the row — the order both attaching and replacing depend on."""
     document_id = new_document_id()
     text, text_source = extract_text(prepared.data, prepared.mime_type)
@@ -854,10 +933,7 @@ def _store_document(conn: sqlite3.Connection, txn_id: str, prepared: PreparedDoc
         (document_id, txn_id, prepared.filename, prepared.mime_type, prepared.byte_size,
          prepared.sha256, created_at, text, text_source),
     )
-    row = conn.execute(
-        f"SELECT {DOCUMENT_ROW_COLUMNS} FROM document WHERE id = ?", (document_id,)
-    ).fetchone()
-    return _document_row(row)
+    return get_document(conn, document_id)
 
 
 def delete_document(conn: sqlite3.Connection, document_id: str) -> bool:

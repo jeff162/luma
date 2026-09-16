@@ -31,6 +31,8 @@ import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
 import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
+import StoredDocumentsDialog from '../components/StoredDocumentsDialog.jsx'
+import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 
@@ -221,6 +223,8 @@ export default function Transactions() {
   const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [addingTransaction, setAddingTransaction] = useState(false)
+  const [storedDocumentsOpen, setStoredDocumentsOpen] = useState(false)
+  const storedDocuments = useStoredDocuments()
   // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
   // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
   // rather than being applied here: the report owns what its filters mean.
@@ -936,6 +940,11 @@ export default function Transactions() {
           {/* The review surface for money owed back. Beside the ledger because that is where the rows
               live; it lists only what is still open, so it empties as things are completed. */}
           <Button small variant="ghost" onClick={() => setReimbursementsOpen(true)}>Reimbursements</Button>
+          {/* Paperwork that arrived before its transaction. Here because this is where transactions arrive;
+              the count is what keeps a kept invoice from being forgotten once its charge does. */}
+          <Button small variant="ghost" onClick={() => setStoredDocumentsOpen(true)}>
+            {storedDocuments.documents?.length ? `Stored documents (${storedDocuments.documents.length})` : 'Stored documents'}
+          </Button>
           {/* The ledger is where someone notices a transaction is missing, so this is where adding one
               belongs — beside the list it will appear in, not parked in Settings. */}
           <Button small variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
@@ -1279,6 +1288,14 @@ export default function Transactions() {
             // and filter, which only the query knows — and the server may have categorized it by rule
             // on the way in, so what comes back is not what was sent.
             onCreated={() => { isFirstLoad.current = true; load() }}
+          />
+        )}
+
+        {storedDocumentsOpen && (
+          <StoredDocumentsDialog
+            documents={storedDocuments.documents}
+            reload={storedDocuments.reload}
+            onClose={() => setStoredDocumentsOpen(false)}
           />
         )}
 

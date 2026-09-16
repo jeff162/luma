@@ -1121,6 +1121,9 @@ def _wipe_user_data_tables(conn):
     # to txn, so they must be deleted explicitly or they'd survive the wipe as orphans.
     conn.execute("DELETE FROM txn_link_member")
     conn.execute("DELETE FROM txn_link")
+    # Attached documents go with their transactions by cascade, but a *stored* one has no transaction to
+    # take it, so the table is named. Only rows: the files are swept after the caller commits.
+    conn.execute("DELETE FROM document")
     conn.execute("DELETE FROM txn")
     # After txn (which references recurring_series via recurring_series_id), before category/account
     # (which recurring_series references).

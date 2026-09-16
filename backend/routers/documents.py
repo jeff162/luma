@@ -4,8 +4,10 @@
 """
 Attached documents — the API over the receipt/invoice store.
 
-Four operations over one noun: list what a transaction carries, attach a file, fetch the bytes back,
-and detach one. The store itself (`services/documents.py`) owns every decision about bytes — where a
+Operations over one noun: list what a transaction carries, attach a file, fetch the bytes back, rename,
+move a document between a transaction and the stored set, and delete one. **Stored** documents — those
+with no transaction yet — are the same rows with `txn_id` NULL, so everything but listing and attaching
+treats the two alike. The store itself (`services/documents.py`) owns every decision about bytes — where a
 file lives, how an upload is normalized, the write order that makes a crash survivable — so this
 module is deliberately thin: it turns HTTP into those calls and back.
 
@@ -23,13 +25,14 @@ as active content by the browser. See `_document_response`.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.db.database import get_db
 from backend.services.documents import (
     MAX_DOCUMENT_BYTES,
+    DocumentMove,
     DocumentRejected,
     attach_document,
     delete_document,
@@ -37,7 +40,10 @@ from backend.services.documents import (
     document_file_path,
     find_duplicate_attachment,
     list_documents,
+    list_stored_documents,
+    move_document,
     prepare_document,
+    rename_document,
     replace_document_text,
 )
 
@@ -46,6 +52,14 @@ router = APIRouter()
 
 class DocumentText(BaseModel):
     text: str
+
+
+class DocumentName(BaseModel):
+    filename: str
+
+
+class DocumentTarget(BaseModel):
+    txn_id: str
 
 
 def _require_transaction(conn, txn_id: str) -> None:
@@ -66,14 +80,37 @@ def list_transaction_documents(txn_id: str):
         return {"documents": list_documents(conn, txn_id)}
 
 
+@router.get("/stored")
+def list_stored():
+    """The documents waiting for a transaction — an invoice kept before its charge has been imported."""
+    with get_db() as conn:
+        return {"documents": list_stored_documents(conn)}
+
+
+@router.post("/stored")
+async def store_document(file: UploadFile = File(...)):
+    """Keep a document that has no transaction yet. The same ingest as attaching, including the duplicate
+    check, which here asks whether the file is already among the stored ones."""
+    prepared = await _prepare_upload(file)
+    with get_db() as conn:
+        existing = find_duplicate_attachment(conn, None, prepared.sha256)
+        if existing:
+            return {"document": existing, "already_stored": True}
+        return {"document": attach_document(conn, None, prepared), "already_stored": False}
+
+
+async def _prepare_upload(file: UploadFile):
+    """Read and normalize an upload. The name is the file's own: a client with a better one (a paste, which
+    arrives as "image.png" or "blob") names the file it sends rather than passing a second field."""
+    payload = await file.read(MAX_DOCUMENT_BYTES + 1)
+    try:
+        return prepare_document(payload, file.filename, file.content_type)
+    except DocumentRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/transaction/{txn_id}")
-async def attach_transaction_document(
-    txn_id: str,
-    file: UploadFile = File(...),
-    # A pasted image arrives with no filename of its own; the client names it something meaningful
-    # rather than letting every paste land as "blob".
-    filename: str | None = Form(None),
-):
+async def attach_transaction_document(txn_id: str, file: UploadFile = File(...)):
     """Attach one file to a transaction.
 
     The upload is read whole rather than spooled, which is the one place this feature deliberately does
@@ -87,12 +124,7 @@ async def attach_transaction_document(
     entries a person then has to tell apart by nothing at all. The response says which document it
     already is, so the UI can say so rather than raise an error about a file that is entirely correct.
     """
-    payload = await file.read(MAX_DOCUMENT_BYTES + 1)
-    try:
-        prepared = prepare_document(payload, filename or file.filename, file.content_type)
-    except DocumentRejected as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
+    prepared = await _prepare_upload(file)
     with get_db() as conn:
         _require_transaction(conn, txn_id)
         existing = find_duplicate_attachment(conn, txn_id, prepared.sha256)
@@ -175,9 +207,61 @@ def edit_document_text(document_id: str, body: DocumentText):
     return {"document": document}
 
 
-@router.delete("/{document_id}")
+@router.patch("/{document_id}")
+def rename(document_id: str, body: DocumentName):
+    with get_db() as conn:
+        try:
+            document = rename_document(conn, document_id, body.filename)
+        except DocumentRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    if document is None:
+        raise HTTPException(status_code=404, detail="No such document")
+    return {"document": document}
+
+
+@router.post("/{document_id}/attach")
+def attach_stored_document(document_id: str, body: DocumentTarget):
+    """Attach a stored document to a transaction.
+
+    Only a *stored* document can be attached this way: moving one straight from one transaction to another
+    is not something any surface offers, and refusing it keeps a mistaken request from quietly taking a
+    receipt off the row it belongs to. The response says `already_attached` when the transaction already
+    carried an identical file, in which case the stored copy is folded into it (see `move_document`).
+    """
+    with get_db() as conn:
+        _require_transaction(conn, body.txn_id)
+        current = conn.execute("SELECT txn_id FROM document WHERE id = ?", (document_id,)).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="No such document")
+        if current["txn_id"] is not None and current["txn_id"] != body.txn_id:
+            raise HTTPException(status_code=409, detail="That document is attached to another transaction.")
+        move = move_document(conn, document_id, body.txn_id)
+    return _move_response(move, "already_attached")
+
+
+@router.post("/{document_id}/detach")
 def detach_document(document_id: str):
-    """Detach a document: remove the row, then the file.
+    """Take a document off its transaction and keep it among the stored ones — the undoable way to remove
+    one, for a receipt attached to the wrong row. `already_stored` when an identical file was already
+    stored, which the detached copy is folded into."""
+    with get_db() as conn:
+        move = move_document(conn, document_id, None)
+    if move is None:
+        raise HTTPException(status_code=404, detail="No such document")
+    return _move_response(move, "already_stored")
+
+
+def _move_response(move: DocumentMove, merged_key: str) -> dict:
+    # The folded copy's row went with the transaction; its file goes only now that it has committed, for
+    # the reason `delete_document_permanently` gives.
+    if move.merged_id:
+        delete_document_file(move.merged_id)
+    return {"document": move.document, merged_key: bool(move.merged_id)}
+
+
+@router.delete("/{document_id}")
+def delete_document_permanently(document_id: str):
+    """Delete a document, attached or stored: remove the row, then the file.
 
     Deliberately the reverse of ingest's order. Whichever half sits outside the transaction should be
     the one whose failure leaves *litter* rather than a dangling reference — on the way in that means

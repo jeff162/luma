@@ -379,6 +379,17 @@ class BackupFixtureTestCase(unittest.TestCase):
                     "VALUES (?, ?, 'lost-receipt.jpg', 'image/jpeg', 12, 'deadbeef', '2026-04-16T10:05:00Z')",
                     (self.absent_document, charge),
                 )
+                # And a *stored* one, waiting for a transaction: no parent row, so nothing in the restore's
+                # referential sweeps may read its NULL `txn_id` as a transaction that did not survive.
+                self.stored_document_bytes = b"%PDF-1.4\nfixture quote\n%%EOF\n"
+                self.stored_document = str(uuid.uuid4())
+                write_document_file(self.stored_document, self.stored_document_bytes)
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at) "
+                    "VALUES (?, NULL, 'garage-quote.pdf', 'application/pdf', ?, ?, '2026-04-17T09:00:00Z')",
+                    (self.stored_document, len(self.stored_document_bytes),
+                     hashlib.sha256(self.stored_document_bytes).hexdigest()),
+                )
 
     def _user_data_tables(self) -> set[str]:
         with self._use_db_path():
@@ -966,16 +977,36 @@ class BackupArchiveTests(BackupFixtureTestCase):
             document_file_path(self.present_document).unlink()
             orphan = str(uuid.uuid4())
             write_document_file(orphan, b"%PDF-1.4\nnot in the ledger\n%%EOF\n")
+            # A document stored here after the backup was taken. Attached ones leave with their transactions
+            # by cascade; this one has none, so only the wipe naming the table removes it.
+            local_stored = str(uuid.uuid4())
+            local_bytes = b"%PDF-1.4\nstored after the backup\n%%EOF\n"
+            write_document_file(local_stored, local_bytes)
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO document (id, txn_id, filename, mime_type, byte_size, sha256, created_at) "
+                    "VALUES (?, NULL, 'later.pdf', 'application/pdf', ?, ?, '2026-05-01T09:00:00Z')",
+                    (local_stored, len(local_bytes), hashlib.sha256(local_bytes).hexdigest()),
+                )
 
         result = self._restore_archive(archive)
 
         with self._use_db_path():
             self.assertEqual(document_file_path(self.present_document).read_bytes(), self.document_bytes)
+            self.assertEqual(document_file_path(self.stored_document).read_bytes(), self.stored_document_bytes)
+            with get_db() as conn:
+                stored = conn.execute("SELECT txn_id FROM document WHERE id = ?", (self.stored_document,)).fetchone()
+            self.assertIsNotNone(stored)
+            self.assertIsNone(stored["txn_id"])
             # Swept last rather than cleared up front, so an interrupted restore leaves inert litter
             # instead of originals it can no longer recover.
             self.assertFalse(document_file_path(orphan).exists())
-        self.assertEqual(result["documents"]["restored"], 1)
-        self.assertEqual(result["documents"]["swept"], 1)
+            self.assertFalse(document_file_path(local_stored).exists())
+            with get_db() as conn:
+                self.assertIsNone(conn.execute("SELECT 1 FROM document WHERE id = ?", (local_stored,)).fetchone())
+        # The attached document and the stored one.
+        self.assertEqual(result["documents"]["restored"], 2)
+        self.assertEqual(result["documents"]["swept"], 2)
         # The row whose file never made it into the archive is reported, not silently forgotten.
         self.assertEqual(result["documents"]["missing"], 1)
 

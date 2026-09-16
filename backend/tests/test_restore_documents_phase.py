@@ -151,7 +151,8 @@ class RestoreDocumentsPhaseTests(BackupFixtureTestCase):
 
             result = resume_restore_documents()
 
-            self.assertEqual(result["documents"]["restored"], 1)
+            # The attached document and the stored one.
+            self.assertEqual(result["documents"]["restored"], 2)
             self.assertEqual(document_file_path(self.present_document).read_bytes(), self.document_bytes)
         self.assertIsNone(self._state())
         # The staged artifact is released only once the phase it existed for is over.

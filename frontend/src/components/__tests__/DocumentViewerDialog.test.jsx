@@ -4,6 +4,7 @@
 // replacement (a new id) to the host rather than assuming the old one still stands, and that a failed save
 // leaves what was typed on screen.
 
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -42,6 +43,20 @@ describe('DocumentViewerDialog editing', () => {
       rerender(<DocumentViewerDialog document={{ ...NOTE, mime_type }} onClose={vi.fn()} onDocumentReplaced={onDocumentReplaced} />)
       expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
     }
+  })
+
+  it('opens straight into the editor when asked, once, under StrictMode', async () => {
+    // A document list's Edit opens the viewer already editing. StrictMode mounts the effect twice, which is
+    // what the app runs under; the editor must still open, with one fetch of the text.
+    render(
+      <StrictMode>
+        <DocumentViewerDialog document={NOTE} openInEdit onClose={vi.fn()} onDocumentReplaced={vi.fn()} />
+      </StrictMode>,
+    )
+
+    const box = await screen.findByLabelText('Document text')
+    expect(box.value).toBe('Brake pads 249.50\n-- signature')
+    expect(api.getDocumentText).toHaveBeenCalledTimes(1)
   })
 
   it('saves an edit and reports the document that replaced it', async () => {
