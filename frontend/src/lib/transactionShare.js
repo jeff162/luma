@@ -15,6 +15,7 @@ import { formatDate } from './utils.js'
 import { formatTransactionAmount } from './moneyDisplay.js'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import { getTxnOriginRows } from './importSourceFields.js'
+import { splitCategoryNames } from './splitRows.js'
 
 // The most rows a list copy carries. A copy is for pasting a handful of transactions into an email or notes,
 // and every row goes onto the clipboard twice (HTML and text); a surface holding a larger set offers it as
@@ -42,7 +43,7 @@ export function getTransactionShareFields(txn) {
   push('Amount', formatTransactionAmount(txn.amount))
   push('Merchant', getTxnMerchantLabel(txn))
   push('Account', accountLabel(txn))
-  push('Category', txn.category_name || 'Uncategorized')
+  push('Category', splitCategoryNames(txn) || txn.category_name || 'Uncategorized')
   if (Array.isArray(txn.tags) && txn.tags.length) {
     push('Tags', txn.tags.map(tag => tag?.name).filter(Boolean).join(', '))
   }
@@ -70,7 +71,7 @@ export function getTransactionShareFields(txn) {
 export const TRANSACTION_SHARE_COLUMNS = [
   { key: 'date', label: 'Date', get: txn => formatDate(txn.date) },
   { key: 'merchant', label: 'Merchant', get: txn => getTxnMerchantLabel(txn) },
-  { key: 'category', label: 'Category', get: txn => txn.category_name || 'Uncategorized' },
+  { key: 'category', label: 'Category', get: txn => splitCategoryNames(txn) || txn.category_name || 'Uncategorized' },
   { key: 'account', label: 'Account', get: accountLabel },
   { key: 'amount', label: 'Amount', get: txn => formatTransactionAmount(txn.amount), align: 'right' },
 ]

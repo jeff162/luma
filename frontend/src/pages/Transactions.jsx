@@ -18,7 +18,7 @@ import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { MerchantCell, CategoryCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
-import { isSplitPartRow, transactionRowKey } from '../lib/splitRows.js'
+import { splitCategoryNames, transactionRowKey } from '../lib/splitRows.js'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
@@ -188,10 +188,9 @@ function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = f
       return getTxnMerchantLabel(txn)
     case 'category':
       if (showSourceInCategorySlot) return getTxnImportSourceLabel(txn)
-      // A whole split has no one category, and its `category_name` is the pre-split one kept for un-splitting —
-      // blank, as the CSV export writes it. A part row carries its own category.
-      if (txn.is_split && !isSplitPartRow(txn)) return ''
-      return txn.category_name || 'Uncategorized'
+      // A whole split names every category it touched: its own `category_name` is the pre-split one kept
+      // for un-splitting, which the transaction is no longer in. A part row carries its own category.
+      return splitCategoryNames(txn) || txn.category_name || 'Uncategorized'
     case 'account':
       return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
     case 'tags':

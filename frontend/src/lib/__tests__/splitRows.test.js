@@ -4,7 +4,7 @@
 // are asserted here rather than left to the surfaces that consume them.
 
 import { describe, it, expect } from 'vitest'
-import { isSplitPartRow, transactionRowKey, splitPartLabel, splitPartSummary, wholeTransactionRow } from '../splitRows.js'
+import { isSplitPartRow, transactionRowKey, splitCategoryNames, splitPartLabel, splitPartSummary, wholeTransactionRow } from '../splitRows.js'
 
 describe('isSplitPartRow', () => {
   it('is false for an ordinary transaction', () => {
@@ -52,6 +52,44 @@ describe('splitPartLabel', () => {
 
   it('is empty for a part left unlabelled', () => {
     expect(splitPartLabel({ id: 't1', is_split: true, split_part_id: 'p1', split_parts: [{ id: 'p1', label: null }] })).toBe('')
+  })
+})
+
+describe('splitCategoryNames', () => {
+  const split = parts => ({ id: 't1', is_split: true, split_part_id: null, split_parts: parts })
+
+  it('names every category the purchase touched', () => {
+    expect(splitCategoryNames(split([
+      { category_name: 'Groceries' }, { category_name: 'Hardware' },
+    ]))).toBe('Groceries / Hardware')
+  })
+
+  it('says a category once, however many items are in it', () => {
+    // Two items in one category is an ordinary split, not something to state twice.
+    expect(splitCategoryNames(split([
+      { category_name: 'Groceries' }, { category_name: 'Groceries' },
+    ]))).toBe('Groceries')
+  })
+
+  it('quotes a name that contains the separator, so the list still reads as a list', () => {
+    expect(splitCategoryNames(split([
+      { category_name: 'Health/Dental' }, { category_name: 'Groceries' },
+    ]))).toBe('"Health/Dental" / Groceries')
+  })
+
+  it('names an uncategorized item rather than leaving a gap', () => {
+    expect(splitCategoryNames(split([
+      { category_name: 'Groceries' }, { category_name: null },
+    ]))).toBe('Groceries / Uncategorized')
+  })
+
+  it('is empty for anything that is not a whole split', () => {
+    // A part row carries its own category, and an ordinary row its own — the caller uses those.
+    expect(splitCategoryNames({ id: 't1', is_split: false, category_name: 'Groceries' })).toBe('')
+    expect(splitCategoryNames({
+      id: 't1', is_split: true, split_part_id: 'p1', split_parts: [{ category_name: 'Groceries' }],
+    })).toBe('')
+    expect(splitCategoryNames({ id: 't1', is_split: true, split_part_id: null, split_parts: [] })).toBe('')
   })
 })
 

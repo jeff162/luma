@@ -405,8 +405,9 @@ class SplitLabelSearchTests(SplitFixtureMixin, unittest.TestCase):
 
 
 class SplitExportTests(SplitFixtureMixin, unittest.TestCase):
-    """A CSV row cannot hold a split. The whole purchase exports with Category and Group blank rather than the
-    pre-split category kept for un-splitting; a category-scoped export carries each part's own category."""
+    """A CSV row cannot hold a split. The whole purchase exports with Category and Group marked `--split--`
+    rather than carrying the pre-split category kept for un-splitting — and rather than blank, which would
+    read as uncategorized; a category-scoped export carries each part's own category."""
 
     def _export(self, client, **params):
         text = client.get("/api/import-export/transactions.csv", params={
@@ -414,7 +415,7 @@ class SplitExportTests(SplitFixtureMixin, unittest.TestCase):
         }).text
         return [line.split(",") for line in text.splitlines()[1:] if line.strip()]
 
-    def test_a_whole_split_exports_with_no_category(self):
+    def test_a_whole_split_exports_marked_rather_than_categorized(self):
         with api_client() as (client, path):
             account, _, leaves = self._seed(path)
             txn = self._add_txn(path, account=account, amount=100.0, category=leaves["Salary Fixture"])
@@ -422,7 +423,7 @@ class SplitExportTests(SplitFixtureMixin, unittest.TestCase):
                 {"category_id": leaves["Groceries Fixture"], "amount": 60.0},
                 {"category_id": leaves["Hardware Fixture"], "amount": 40.0},
             ]})
-            self.assertEqual(self._export(client), [["100.0", "", ""]])
+            self.assertEqual(self._export(client), [["100.0", "--split--", "--split--"]])
 
     def test_a_category_scoped_export_carries_the_parts_own_category(self):
         with api_client() as (client, path):

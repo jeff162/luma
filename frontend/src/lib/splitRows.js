@@ -69,3 +69,26 @@ export function wholeTransactionRow(txn) {
   const { total } = splitPartSummary(txn)
   return total == null ? txn : { ...txn, amount: total, split_part_id: null }
 }
+
+/** The categories a whole split touches, as one cell: `Groceries / Hardware`.
+ *
+ * For a copied or shared list, which is read by a person: a split row's own `category_name` is the
+ * category it carried *before* it was split (kept only so un-splitting can restore it), so printing that
+ * names a category the transaction is no longer in. Naming all of them says what actually happened.
+ *
+ * Repeats collapse, because two items in one category is an ordinary split rather than something the
+ * reader needs told twice, and a name containing the separator is quoted so the list stays readable as
+ * a list. Order is the items' own, matching the split editor and the row's hover.
+ *
+ * Empty when the row is not a whole split, or arrived without its allocations — the caller then says
+ * whatever it says for an ordinary row.
+ */
+export function splitCategoryNames(txn) {
+  if (!txn?.is_split || isSplitPartRow(txn)) return ''
+  const names = []
+  for (const part of txn.split_parts || []) {
+    const name = part?.category_name || 'Uncategorized'
+    if (!names.includes(name)) names.push(name)
+  }
+  return names.map(name => (name.includes('/') ? `"${name}"` : name)).join(' / ')
+}

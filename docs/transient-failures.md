@@ -64,6 +64,49 @@ say so directly: an inverted pair with ascending rowids is that, and nothing els
 
 ---
 
+## 2. A row marked reviewed comes back still needing review
+
+**Status: seen once (2026-09-17), instrumented, waiting on a recurrence.**
+
+### Symptom
+
+`frontend/tests/ui/needs-review-marker.spec.js` fails on its first assertion after the click: the marker
+count is unchanged (23 where 22 was expected) for the full 20-second budget. The failure screenshot shows
+the clicked row — the first in the list — still carrying its **R** marker.
+
+**Once in four full runs of the gate that day**, and the failing run was slow: 25.7s against the ~7s the
+passing runs take, which is the only other thing that distinguished it.
+
+### Why it is strange
+
+The click's own confirmation had already been asserted, so the sequence got as far as a successful write:
+`markReviewed` awaits the bulk update, *then* patches the row and raises the toast
+(`lib/useTransactionRowActions.jsx`). The toast was on screen and the patch was not — or was, and was
+then undone. Nothing on this page subscribes to the mutation events that could re-query it
+(`luma:transactions-changed` has no listener here, and `luma:data-mutated` refreshes the Tasks badge),
+which is what makes the surviving explanation a *stale response* rather than a deliberate reload.
+
+Two candidates remain, and they are opposites:
+
+- **The write never landed** — the bulk update answered but the row is still flagged on the server. That
+  would make the toast a lie and point at the endpoint, not the page.
+- **The patch was overwritten** — a list response already in flight when the click happened arrived
+  afterwards carrying the pre-click rows, restoring the marker the patch had cleared. Under a slow run
+  that window is exactly the one that widens.
+
+### What the next occurrence will say
+
+The spec now reports, on that assertion only:
+
+- **the clicked row's state on the server**, read back through the API by the payee the app's own
+  confirmation named. `needs_review: 0` is the overwrite; `1` is a write that did not land.
+- **every `/api/transactions*` request the page made**, in order, split at the click — so a list response
+  arriving after the write is visible as itself rather than inferred.
+
+Those two together decide it without needing the failure to be reproducible.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

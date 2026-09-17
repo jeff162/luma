@@ -118,6 +118,10 @@ def _dated_backup_filename(stem: str, suffix: str) -> str:
     return f"{stem}-{date.today().isoformat()}{suffix}"
 
 
+# What a split transaction's Category and Group say in an exported CSV. Visible rather than silent, so a
+# file opened in a spreadsheet says why those cells are not category names.
+SPLIT_EXPORT_MARKER = "--split--"
+
 EXPORT_COLUMNS = {
     "date":          ("t.date",            "Date"),
     "merchant_name": ("COALESCE(t.display_name, t.merchant_name, t.raw_name)",   "Merchant"),
@@ -454,15 +458,17 @@ def export_transactions_csv(
         filters=filters if isinstance(filters, dict) else {},
     )
 
-    # A split row that is the whole purchase has no one category a CSV row can carry, so its Category and
-    # Group are left blank. Its `category_id` is only the pre-split category kept for un-splitting, which
-    # the file would otherwise present as current. An expanded part row carries its own category.
+    # A split row that is the whole purchase has no one category a CSV row can carry — a file of one row
+    # per transaction cannot hold several. Its `category_id` is only the pre-split category kept for
+    # un-splitting, which the file would otherwise present as current, so Category and Group carry a
+    # marker saying what happened: an empty cell would read as uncategorized, which is a different and
+    # equally wrong claim. An expanded part row carries its own category.
     whole_split = "t.is_split = 1 AND t.split_part_id IS NULL" if expand_splits else "t.is_split = 1"
 
     def select_expr(key):
         expr = EXPORT_COLUMNS[key][0]
         if key in ("category", "group"):
-            expr = f"CASE WHEN {whole_split} THEN NULL ELSE {expr} END"
+            expr = f"CASE WHEN {whole_split} THEN '{SPLIT_EXPORT_MARKER}' ELSE {expr} END"
         # Quoted, because `group` is an SQL keyword: unquoted, choosing the Group column failed the export.
         return f'{expr} AS "{key}"'
 

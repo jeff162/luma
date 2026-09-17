@@ -812,7 +812,8 @@ export const HELP_TOPICS = [
           Item descriptions are matched by the{' '}
           <HelpLink to="/help/searching-transactions">transaction search</HelpLink>. A{' '}
           <HelpLink to="/help/csv-export">CSV export</HelpLink> lists a split transaction once, at its full
-          amount, with its category left blank.
+          amount, with <code>--split--</code> in place of a category. Copying transactions to the clipboard
+          names every category the split touched instead, since that text is read rather than re-imported.
         </p>
         <p>
           Tags behave the way they read. A tag put on the transaction applies to the whole thing and to
@@ -2447,7 +2448,8 @@ export const HELP_TOPICS = [
           A row holds one category, and a{' '}
           <HelpLink to="/help/transaction-splits">split transaction</HelpLink> has several. An export
           therefore lists a split once, at its full amount, with <strong>Category</strong> and{' '}
-          <strong>Group</strong> left blank. Item descriptions are not exported.
+          <strong>Group</strong> reading <code>--split--</code>. An empty cell would say the transaction
+          is uncategorized, which it is not. Item descriptions are not exported.
         </p>
         <p>
           Filtered to a category, the export lists the items in that category instead, each at its own
