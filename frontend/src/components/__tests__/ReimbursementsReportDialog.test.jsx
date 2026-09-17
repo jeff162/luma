@@ -21,6 +21,10 @@ vi.mock('../../lib/api.js', () => ({
     getTransactions: vi.fn(),
     addReimbursementClaims: vi.fn(),
     createReimbursement: vi.fn(),
+    removeReimbursementTransaction: vi.fn(),
+    deleteReimbursement: vi.fn(),
+    completeReimbursement: vi.fn(),
+    reopenReimbursement: vi.fn(),
   },
 }))
 
@@ -224,6 +228,94 @@ describe('dragging a payment onto what it repays', () => {
     drag('From Sam', 'Ticket friends')
     expect(await screen.findByText(/already covers part of this transaction/)).toBeTruthy()
     expect(api.addReimbursementClaims).not.toHaveBeenCalled()
+  })
+})
+
+/*
+ * Taking a pairing back.
+ *
+ * A drop lands on whatever the cursor was over, so pairing the wrong two rows is the mistake this
+ * screen invites — and everything here saves as it happens, so there is no Cancel for it to fall under.
+ * The reversal is exact in both directions because pairing changes nothing about the transactions
+ * themselves: a record built around two loose rows is deleted, and a transaction added to an existing
+ * record is taken off it again.
+ */
+describe('undoing a pairing', () => {
+  const RECORD = {
+    id: 'link-1', counterparty: 'Ticket friends', completed: false, residual: 25,
+    members: [{ txn_id: 'e1', date: '2026-02-14', payee: 'Concert Tix', claim: 375, trashed: false }],
+  }
+  const PAYMENT = { txn_id: 'r9', date: '2026-09-01', payee: 'From Sam', unclaimed: -166, parts: [] }
+  const EXPENSE = { txn_id: 'e9', date: '2026-09-02', payee: 'Grocery store', unclaimed: 130, parts: [] }
+
+  function drag(sourceName, targetName) {
+    const source = screen.getByRole('button', { name: new RegExp(sourceName) })
+    fireEvent.dragStart(source)
+    const target = screen.getByRole('button', { name: new RegExp(targetName) }).parentElement
+    fireEvent.dragOver(target)
+    fireEvent.drop(target)
+  }
+
+  it('offers an undo for a drop onto an existing record, and takes the transaction back off', async () => {
+    api.addReimbursementClaims.mockResolvedValue(RECORD)
+    open({ total: 25, reimbursements: [RECORD], loose: [PAYMENT] })
+    await screen.findByText('Ticket friends')
+    drag('From Sam', 'Ticket friends')
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.removeReimbursementTransaction).toHaveBeenCalledWith('link-1', 'r9'))
+  })
+
+  it('undoes a pairing of two loose rows by deleting the record it created', async () => {
+    api.createReimbursement.mockResolvedValue({ id: 'link-2' })
+    open({ total: 130, reimbursements: [], loose: [EXPENSE, PAYMENT] })
+    await screen.findByText('Grocery store')
+    drag('From Sam', 'Grocery store')
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.deleteReimbursement).toHaveBeenCalledWith('link-2'))
+  })
+
+  it('says what was paired, so the toast can be read without retracing the drag', async () => {
+    api.addReimbursementClaims.mockResolvedValue(RECORD)
+    open({ total: 25, reimbursements: [RECORD], loose: [PAYMENT] })
+    await screen.findByText('Ticket friends')
+    drag('From Sam', 'Ticket friends')
+    expect(await screen.findByText(/From Sam now counts toward Ticket friends/)).toBeTruthy()
+  })
+})
+
+/*
+ * Finishing a reimbursement that has nothing left to decide, from the board.
+ *
+ * Only this ending is offered here: the two sides balance, so completing moves no money and asks for no
+ * category. Everything else — a shortfall, a surplus, a write-off — needs the editor, where the residual
+ * and its destination are.
+ */
+describe('completing from the board', () => {
+  const SQUARE = {
+    id: 'link-9', counterparty: 'Lunch', completed: false, owed: 72, repaid: -72, residual: 0,
+    members: [
+      { txn_id: 'e1', date: '2026-08-22', payee: 'Taverna', claim: 72, role: 'expense', trashed: false },
+      { txn_id: 'r1', date: '2026-08-22', payee: 'Sam', claim: -72, role: 'repayment', trashed: false },
+    ],
+  }
+  const SHORT = { ...SQUARE, id: 'link-8', counterparty: 'Tickets', repaid: -50, residual: 22 }
+
+  it('completes a fully repaid record in one click, and offers it back', async () => {
+    api.completeReimbursement.mockResolvedValue({})
+    open({ total: 0, reimbursements: [SQUARE], loose: [] })
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
+    await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith('link-9', {}))
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(api.reopenReimbursement).toHaveBeenCalledWith('link-9'))
+  })
+
+  it('leaves a record with a residual to the editor, where its destination is chosen', async () => {
+    open({ total: 22, reimbursements: [SHORT], loose: [] })
+    await screen.findByText('Tickets')
+    expect(screen.queryByRole('button', { name: 'Mark complete' })).toBeNull()
   })
 })
 

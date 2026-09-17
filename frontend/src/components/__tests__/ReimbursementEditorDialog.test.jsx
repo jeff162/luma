@@ -88,13 +88,13 @@ afterEach(cleanup)
 describe('completing', () => {
   it('warns that settling a shortfall changes the month the expense is in', async () => {
     open(record())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByText(/updates the month the expense is in/)).toBeTruthy()
   })
 
   it('says a surplus leaves the original expense alone', async () => {
     open(record({ residual: -25, repaid: -400 }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByText(/the original expense is left alone/)).toBeTruthy()
   })
 
@@ -102,7 +102,7 @@ describe('completing', () => {
     // The sign decides the role on the server. Offering it here would be a second decision able to
     // disagree with the ledger, and the user has no way to answer it correctly.
     open(record())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.queryByText(/expense or repayment/i)).toBeNull()
     // Named specifically: the dialog also carries the reminder control, which is a combobox too.
     expect(screen.queryByLabelText(/Which expense fell short/)).toBeNull()
@@ -111,7 +111,7 @@ describe('completing', () => {
 
   it('asks which transaction only when the role has more than one candidate', async () => {
     open(record({ members: [EXPENSE, SECOND_EXPENSE, REPAYMENT], owed: 495, residual: 145 }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByLabelText(/Which expense fell short/)).toBeTruthy()
     expect(screen.getByText(/Which expense fell short/)).toBeTruthy()
   })
@@ -120,24 +120,24 @@ describe('completing', () => {
     // Asserted by clicking and checking the request never went out, rather than by reading the
     // attribute: what matters is that the gate holds, not how the button expresses being unavailable.
     open(record())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Mark complete' }))
     expect(api.completeReimbursement).not.toHaveBeenCalled()
   })
 
   it('offers the reversal, and no settle action, once it is settled', async () => {
     open(record({ completed: true, residual: 0, completion: { txn_id: 't1', residual: 25, category_id: 'movies' } }))
     expect(await screen.findByRole('button', { name: /Reopen/ })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Complete' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Mark complete' })).toBeNull()
     // A settled reimbursement cannot be unlinked either: the record is the only thing that can reverse
     // the move, so discarding it would strand the money in a category nothing explains.
-    expect(screen.queryByRole('button', { name: /Stop tracking this/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Stop tracking this reimbursement/ })).toBeNull()
   })
 
   it('surfaces a refusal from the server rather than closing as if it worked', async () => {
     api.completeReimbursement.mockRejectedValue(new Error('That transaction does not have enough left in the Reimbursable group'))
     open(record())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: /Choose category|Movies/ }))
     await userEvent.click(await screen.findByText('Movies & Events'))
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
@@ -166,7 +166,7 @@ describe('completing one that was repaid in full', () => {
     // exists to ask where a residual goes.
     api.completeReimbursement.mockResolvedValue({ ...square(), completed: true })
     open(square())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await waitFor(() => expect(api.completeReimbursement).toHaveBeenCalledWith(
       'link-1', { category_id: null, target_txn_id: null },
     ))
@@ -269,7 +269,7 @@ describe('which button is the main verb', () => {
 
   it('accents Complete only when the two sides balance', async () => {
     open(record({ owed: 375, repaid: -375, residual: 0 }))
-    expect(accent(await screen.findByRole('button', { name: 'Complete' }))).toBe(true)
+    expect(accent(await screen.findByRole('button', { name: 'Mark complete' }))).toBe(true)
     expect(accent(screen.getByRole('button', { name: 'Save' }))).toBe(false)
   })
 
@@ -278,14 +278,14 @@ describe('which button is the main verb', () => {
     // the loud button must not be the one that does it.
     open(record())
     expect(accent(await screen.findByRole('button', { name: 'Save' }))).toBe(true)
-    expect(accent(screen.getByRole('button', { name: 'Complete' }))).toBe(false)
+    expect(accent(screen.getByRole('button', { name: 'Mark complete' }))).toBe(false)
   })
 
   it('leaves Complete reachable but unaccented when nothing has come back', async () => {
     // Sometimes nobody pays you back, and that write-off is a real outcome. What keeps it from being an
     // accidental click is the emphasis and the category question, not a block.
     open(record({ members: [EXPENSE], owed: 375, repaid: 0, residual: 375 }))
-    const complete = await screen.findByRole('button', { name: 'Complete' })
+    const complete = await screen.findByRole('button', { name: 'Mark complete' })
     expect(accent(complete)).toBe(false)
     expect(complete.getAttribute('title')).toMatch(/Record the whole amount as spending/)
   })
@@ -297,14 +297,14 @@ describe('writing one off when nobody paid', () => {
   it('says it is recording the whole amount, not "the rest"', async () => {
     // "The rest was a real cost" understates a click that is booking the entire expense as spending.
     open(unpaid())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(screen.getByText(/Nothing has been received against this/)).toBeTruthy()
     expect(screen.getByText(/whole -\$375\.00 as spending/)).toBeTruthy()
   })
 
   it('will not write it off without a category to put it in', async () => {
     open(unpaid())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Move and complete' }))
     expect(api.completeReimbursement).not.toHaveBeenCalled()
   })
@@ -312,7 +312,7 @@ describe('writing one off when nobody paid', () => {
   it('books the whole residual against the expense once a category is chosen', async () => {
     api.completeReimbursement.mockResolvedValue({ ...unpaid(), completed: true })
     open(unpaid())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: /Choose category|Movies/ }))
     await userEvent.click(await screen.findByText('Movies & Events'))
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
@@ -406,11 +406,22 @@ describe('the footer of a completed reimbursement', () => {
   })
 
   it('leaves an open record with its full action row', async () => {
-    // Save belongs there permanently: Complete is a decision that may be about to be made.
+    // Save belongs there permanently: completing is a decision that may be about to be made, and Save
+    // is what the dialog's accent falls on until it is. With nothing typed the left button is Close —
+    // linking, removing and completing have all already acted, so Cancel would promise an undo of
+    // something it cannot undo.
     open(record())
-    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Complete' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Mark complete' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+  })
+
+  it('offers Cancel on an open record once a field is edited', async () => {
+    open(record())
+    await userEvent.type(await screen.findByLabelText('Name'), '!')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
   })
 })
 
@@ -438,7 +449,7 @@ describe('completing from a host with no category list', () => {
     api.completeReimbursement.mockResolvedValue({ ...record(), completed: true })
     openWithoutCategories(record())
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     await userEvent.click(screen.getByRole('button', { name: /Choose category/ }))
     await userEvent.click(await screen.findByText('Movies & Events'))
     await userEvent.click(screen.getByRole('button', { name: 'Move and complete' }))
@@ -451,7 +462,7 @@ describe('completing from a host with no category list', () => {
 
   it('does not fetch when the host already passed the list', async () => {
     open(record())
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }))
     expect(await screen.findByRole('button', { name: /Choose category/ })).toBeTruthy()
     expect(api.getCategories).not.toHaveBeenCalled()
   })

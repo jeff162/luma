@@ -169,9 +169,11 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
   // reachable rather than blocked. What keeps it from being an accidental click is that it is never the
   // accented button and it cannot happen without choosing a category for the money first.
   const nothingRepaid = !!reimbursement && !hasRepayment(reimbursement)
-  // A completed record whose typed fields still match what is stored: nothing is pending, so the footer
-  // is a single Close. Comparing against the record rather than tracking a dirty flag means typing and
-  // then undoing it settles back to Close, which is the honest reading of "nothing to save".
+  // Whether the typed fields still match what is stored. Nothing else in this dialog waits for Save —
+  // linking, removing and completing all act at once — so with nothing typed there is nothing to
+  // discard, and the left button says Close rather than promising an undo it does not have. Comparing
+  // against the record rather than tracking a dirty flag means typing and then undoing it settles back
+  // to Close, which is the honest reading of "nothing to save".
   const fieldsEdited = !!reimbursement && !!form
     && (form.counterparty !== (reimbursement.counterparty || '')
       || form.reminderMode !== reminderMode(reimbursement)
@@ -320,16 +322,30 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
       }
       onClose={onClose}
       width="min(620px, 100%)"
+      footerAlign="between"
       actions={
         <>
-          {/* A finished record with nothing typed has no pending decision, and Cancel and Save would do
-              the same thing as each other — so it offers one Close until a field is actually edited.
-              Its fields stay editable on purpose: naming is documentation rather than an accounting
-              fact, and the server allows it after completion for exactly that reason. An *open* record
-              keeps Cancel · Complete · Save throughout, because Complete is a decision that may be
-              about to be made. */}
+          {/* Unpairing sits with the other actions rather than loose in the body, and apart from them:
+              it undoes the record itself, where everything to its right acts on what the record holds. */}
+          <div>
+            {reimbursement && status !== 'completed' ? (
+              <Button
+                variant="ghost"
+                onClick={() => setUnlinking(true)}
+                disabled={saving}
+                title="Keep every transaction exactly as it is, but stop tracking them as one reimbursement"
+              >Stop tracking this reimbursement</Button>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {/* Cancel only once there is something it would discard. A finished record's fields stay
+              editable on purpose — naming is documentation rather than an accounting fact, and the
+              server allows it after completion for exactly that reason — so the same rule serves both:
+              Close until a field is edited, Cancel after. Save appears with it, and an *open* record
+              keeps Mark complete throughout, because completing is a decision that may be about to be
+              made. */}
           <Button variant="ghost" onClick={onClose} disabled={saving}>
-            {reimbursement && !settledAndUnedited ? 'Cancel' : 'Close'}
+            {fieldsEdited ? 'Cancel' : 'Close'}
           </Button>
           {reimbursement && status !== 'completed' ? (
             <Button
@@ -342,7 +358,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
               }}
               disabled={saving || !completeAvailable || completeOpen}
               title={completeTitle}
-            >Complete</Button>
+            >Mark complete</Button>
           ) : null}
           {reimbursement && !settledAndUnedited ? (
             <Button
@@ -351,6 +367,7 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
               disabled={saving}
             >{saving ? 'Saving…' : 'Save'}</Button>
           ) : null}
+          </div>
         </>
       }
     >
@@ -477,17 +494,6 @@ export default function ReimbursementEditorDialog({ linkId, txnId, categories, o
               </div>
             </div>
           ) : null}
-
-          {status === 'completed' ? null : (
-            <div>
-              <Button
-                variant="ghost"
-                small
-                onClick={() => setUnlinking(true)}
-                title="Keep every transaction exactly as it is, but stop tracking them as one reimbursement"
-              >Stop tracking this</Button>
-            </div>
-          )}
 
           {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
         </div>

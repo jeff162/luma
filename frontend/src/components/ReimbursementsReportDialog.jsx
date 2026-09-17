@@ -10,6 +10,7 @@ import {
   claimablePortions,
   dropRefusal,
   isDue,
+  primaryAction,
   reimbursementBoard,
   reimbursementListLabel,
   residualSummary,
@@ -17,6 +18,7 @@ import {
 import ClaimPortionPicker from './ClaimPortionPicker.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
+import { UndoToast } from './CategoryTreePrimitives.jsx'
 import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
 
 /*
@@ -68,6 +70,10 @@ export default function ReimbursementsReportDialog({
   const [dropTarget, setDropTarget] = useState(null)
   const [pendingDrop, setPendingDrop] = useState(null)
   const [busy, setBusy] = useState(false)
+  // The last action, and how to put it back. A drag lands on whatever the cursor was over, so a pairing
+  // is the one action here that is routinely made by accident — and the dialog saves as it goes, which
+  // leaves nothing for a Cancel to discard. See `commitDrop` for what each reversal restores.
+  const [undo, setUndo] = useState(null)
   // The narrowing starts as the caller asked for it and is then the reader's to drop, which is why it is
   // state rather than a prop read straight through.
   const [owner, setOwner] = useState(ownerId)
@@ -185,22 +191,72 @@ export default function ReimbursementsReportDialog({
     setBusy(true)
     setError('')
     try {
+      let reverse
       if (entry.kind === 'record') {
         await api.addReimbursementClaims(entry.id, [
           { txn_id: row.txn_id, amount: portion.amount, label: portion.label },
         ])
+        // The drop adds this transaction to the record, so taking it off is the whole reversal: a row
+        // the record *already* claims is refused as a drop (`dropRefusal`), which is what keeps this
+        // from having to restore a claim it replaced.
+        reverse = () => api.removeReimbursementTransaction(entry.id, row.txn_id)
       } else {
-        await api.createReimbursement({
+        const created = await api.createReimbursement({
           claims: [
             { txn_id: entry.row.txn_id, amount: entry.row.unclaimed, label: null },
             { txn_id: row.txn_id, amount: portion.amount, label: portion.label },
           ],
         })
+        // Deleting the record unpairs both rows and leaves the transactions untouched, which is exactly
+        // the state before the drop — the record did not exist.
+        reverse = () => api.deleteReimbursement(created.id)
       }
       setPendingDrop(null)
+      setUndo({
+        title: 'Paired',
+        description: `${row.payee} now counts toward ${entryLabel(entry)}.`,
+        reverse,
+      })
       afterChange()
     } catch (err) {
       setError(err?.message || 'These could not be matched.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* Completing from the board, for the one ending that needs no decision: the two sides balance, so
+   * there is nothing to move and no category to choose (the editor completes such a record on one click
+   * too). Reopening restores it, so this is offered with the same undo a pairing gets. */
+  async function completeEntry(entry) {
+    setBusy(true)
+    setError('')
+    try {
+      await api.completeReimbursement(entry.id, {})
+      setUndo({
+        title: 'Completed',
+        description: `${entryLabel(entry)} is finished and has left this list.`,
+        reverse: () => api.reopenReimbursement(entry.id),
+      })
+      afterChange()
+    } catch (err) {
+      setError(err?.message || 'That reimbursement could not be completed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function runUndo() {
+    const action = undo
+    setUndo(null)
+    if (!action) return
+    setBusy(true)
+    setError('')
+    try {
+      await action.reverse()
+      afterChange()
+    } catch (err) {
+      setError(err?.message || 'That could not be undone.')
     } finally {
       setBusy(false)
     }
@@ -290,7 +346,9 @@ export default function ReimbursementsReportDialog({
                     entry={entry}
                     showOwner={showOwners}
                     dropTarget={dropTarget === entry.id}
+                    busy={busy}
                     onOpen={() => openEntry(entry)}
+                    onComplete={() => completeEntry(entry)}
                     onDragOver={event => allowDrop(event, entry)}
                     onDragLeave={() => setDropTarget(null)}
                     onDrop={event => handleDrop(event, entry)}
@@ -381,6 +439,18 @@ export default function ReimbursementsReportDialog({
         </div>
       ) : null}
 
+      {undo ? (
+        // Above the dialog that raised it: the shared toast's default sits below an AppDialog, where it
+        // would be hidden behind this surface.
+        <UndoToast
+          title={undo.title}
+          description={undo.description}
+          zIndex={1300}
+          onUndo={runUndo}
+          onDismiss={() => setUndo(null)}
+        />
+      ) : null}
+
       {editing?.linkId ? (
         <ReimbursementEditorDialog
           linkId={editing.linkId}
@@ -422,10 +492,15 @@ const looseRowStyle = {
  * across two reimbursements appears under both, and stating its full value in each would double it on
  * screen.
  */
-function BoardEntry({ entry, showOwner, dropTarget, onOpen, onDragOver, onDragLeave, onDrop }) {
+function BoardEntry({ entry, showOwner, dropTarget, busy, onOpen, onComplete, onDragOver, onDragLeave, onDrop }) {
+  const [hovered, setHovered] = useState(false)
   const tracked = entry.kind === 'record'
   const amount = tracked ? entry.reimbursement.residual : entry.row.unclaimed
   const due = isDue(entry.dueOn)
+  // The ending that needs no decision — the two sides balance, so completing moves nothing. Offered on
+  // the row because this is where the reader already is; everything else stays in the editor, where the
+  // residual and the category question are.
+  const readyToComplete = tracked && primaryAction(entry.reimbursement) === 'complete'
   // Whose it is, where that is not the same answer for everything on screen. A record whose expenses
   // span two people names both — the debt genuinely concerns both, and picking one would hide it from
   // the other.
@@ -435,6 +510,8 @@ function BoardEntry({ entry, showOwner, dropTarget, onOpen, onDragOver, onDragLe
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         borderRadius: 6,
         border: `1px solid ${dropTarget ? 'var(--accent)' : 'var(--border)'}`,
@@ -443,13 +520,16 @@ function BoardEntry({ entry, showOwner, dropTarget, onOpen, onDragOver, onDragLe
           : 'var(--surface2)',
       }}
     >
-      <button type="button" onClick={onOpen} style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
+      {/* The row opens its record (or its transaction), which nothing about a list row says on its own —
+          the ledger's ↗ on hover is how the rest of the app makes that readable. */}
+      <button type="button" onClick={onOpen} title="Open" style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
         <span style={{ fontWeight: tracked ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {/* Ahead of the name rather than after it: it is the reason the row is being looked at, and a
               marker at the end of a truncating label is the first thing to disappear. */}
           {due ? <span title={`Due since ${entry.dueOn}`} style={{ color: 'var(--danger)' }}>● </span> : null}
           {tracked ? reimbursementListLabel(entry.reimbursement) : entry.row.payee}
           {owners ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}> · {owners}</span> : null}
+          <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: hovered ? 1 : 0 }}> ↗</span>
         </span>
         <span style={{ textAlign: 'right', color: getTransactionAmountColor(amount) }}>
           {formatTransactionAmount(amount)}
@@ -457,8 +537,13 @@ function BoardEntry({ entry, showOwner, dropTarget, onOpen, onDragOver, onDragLe
       </button>
       {tracked ? (
         <div style={{ display: 'grid', gap: 2, padding: '0 8px 6px 20px' }}>
-          <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            {residualSummary(entry.reimbursement)}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+              {residualSummary(entry.reimbursement)}
+            </span>
+            {readyToComplete ? (
+              <Button small variant="ghost" disabled={busy} onClick={onComplete}>Mark complete</Button>
+            ) : null}
           </div>
           {entry.members.map(member => (
             <div key={member.txn_id} style={{

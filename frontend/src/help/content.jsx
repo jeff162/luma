@@ -415,8 +415,8 @@ export const HELP_TOPICS = [
           Dashboard.
         </p>
         <p>
-          Not everything is counted. Categories
-          Categories <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not include
+          Not everything is counted. Categories{' '}
+          <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> are not included
           in any of the dashboard reports as this is how credit-card payments and transfers between accounts stay
           out of spending.
         </p>
@@ -978,8 +978,24 @@ export const HELP_TOPICS = [
           both columns is the balance of the group.
         </p>
         <p>
+          Clicking a row opens it: a paired one opens its record, an unpaired one opens its transaction.
+          A drop that landed on the wrong row is taken back from the <strong>Undo</strong> on the
+          notice that follows it &mdash; pairing changes nothing about the transactions, so undoing it
+          leaves them exactly as they were.
+        </p>
+        <p>
           In the transaction list a <strong>&#8617;</strong> marker on a row opens its reimbursement
           directly, dimmed once that reimbursement is finished.
+        </p>
+
+        <h4>Changing what is paired</h4>
+        <p>
+          Both ways to undo a pairing are in the record itself. <strong>&times;</strong> beside a
+          transaction removes that one; <strong>Stop tracking this reimbursement</strong> dissolves the
+          record entirely. Neither recategorizes anything or moves money &mdash; the transactions stay
+          as they are and the money owed back goes back to being untracked. Pairing them again is the
+          undo. Removing the last transaction dissolves the record too, since it would then describe
+          nothing.
         </p>
 
         <h4>Being reminded about one</h4>
@@ -1013,8 +1029,14 @@ export const HELP_TOPICS = [
 
         <h4>Finishing one</h4>
         <p>
-          <strong>Complete</strong> closes the record. What it does depends on whether the two sides
-          balance, and the button is emphasized only in the case where nothing has to be decided.
+          <strong>Mark complete</strong> closes the record. What it does depends on whether the two
+          sides balance, and the button is emphasized only in the case where nothing has to be decided.
+        </p>
+        <p>
+          A record that is fully repaid offers <strong>Mark complete</strong> on its row in the
+          <strong> Reimbursements</strong> list as well, since that ending asks nothing: it moves no
+          money and needs no category. Anything with money left over is completed in the record, where
+          that money is given its destination.
         </p>
         <ul>
           <li>

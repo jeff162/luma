@@ -242,9 +242,11 @@ export function EditableName({
   )
 }
 
-// Bottom-right undo toast shared by the tree's bulk actions (move, delete). The caller supplies
-// the title/description for the action; the toast owns the 6s auto-dismiss and Undo/Dismiss chrome.
-export function UndoToast({ title, description, onUndo, onDismiss }) {
+// Bottom-right undo toast shared by the tree's bulk actions (move, delete) and the reimbursements
+// board's pairings. The caller supplies the title/description for the action; the toast owns the 6s
+// auto-dismiss and Undo/Dismiss chrome. `zIndex` is raised by a caller inside a dialog — the default
+// sits below `AppDialog`, where the toast would be hidden behind the surface that raised it.
+export function UndoToast({ title, description, onUndo, onDismiss, zIndex = 850 }) {
   const timerRef = useRef(null)
   const intervalRef = useRef(null)
   const startRef = useRef(Date.now())
@@ -268,7 +270,7 @@ export function UndoToast({ title, description, onUndo, onDismiss }) {
       position: 'fixed',
       right: 24,
       bottom: 24,
-      zIndex: 850,
+      zIndex,
       width: 320,
       background: 'var(--surface)',
       border: '1px solid var(--border)',
