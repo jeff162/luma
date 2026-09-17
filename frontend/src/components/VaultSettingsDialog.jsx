@@ -400,7 +400,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
 
         <Section
           title="Replace the vault key"
-          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. Everyone who still has access keeps it, and no connection needs reconnecting."
+          description="Generates a new key and re-encrypts every stored credential under it, so a copy of the old key stops working. Do this after removing someone's access above. If a passphrase or passkey was exposed, change it under Unlock methods as well — the two retire different things, and replacing the key alone leaves an exposed passphrase still able to open the vault. This also locks the vault in every other running session."
         >
           <div>
             <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
@@ -436,9 +436,9 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
       {confirmingRotate ? (
         <AppConfirmDialog
           title="Replace the vault key?"
-          // Not styled danger: nothing is lost and every current member keeps working. What it *is* is
-          // slow to undo — the old key is gone — so it takes a confirmation rather than a single click.
-          description="Every stored data provider credential is re-encrypted under a new key. Anyone whose access you removed can no longer decrypt them, even with a copy of the database. Everyone who still has access is unaffected and no connection needs reconnecting."
+          // Not styled danger: nothing is lost and every current member keeps access, though other running
+          // sessions are locked. What it *is* is slow to undo — the old key is gone — so it takes a confirmation rather than a single click.
+          description="Every stored data provider credential is re-encrypted under a new key. Anyone whose access you removed can no longer decrypt them, even with a copy of the database. This also locks the vault in every other running session."
           confirmLabel={busy === 'rotate' ? 'Replacing…' : 'Replace key'}
           confirmDisabled={busy === 'rotate'}
           cancelDisabled={busy === 'rotate'}
