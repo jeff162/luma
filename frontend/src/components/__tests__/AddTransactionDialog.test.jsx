@@ -16,7 +16,15 @@ import AddTransactionDialog from '../AddTransactionDialog.jsx'
 import { api } from '../../lib/api.js'
 
 vi.mock('../../lib/api.js', () => ({
-  api: { getAccounts: vi.fn(), createTransaction: vi.fn() },
+  api: {
+    getAccounts: vi.fn(),
+    createTransaction: vi.fn(),
+    saveSplit: vi.fn(),
+    // The split editor opened from here is handed a draft, so it reads nothing — these exist only so a
+    // stray call would fail loudly rather than being swallowed as an undefined function.
+    getSplit: vi.fn(),
+    getSplitSuggestion: vi.fn(),
+  },
 }))
 
 const CATEGORIES = [
@@ -40,6 +48,17 @@ function open(accounts = [{ id: 'a1', name: 'Wallet', display_name: 'Wallet' }])
 async function fillBasics() {
   await userEvent.type(screen.getByLabelText('Payee or description'), 'Corner Cafe')
   await userEvent.type(screen.getByLabelText('Amount'), '12.50')
+}
+
+// The split editor's rows are categorized through the shared picker, by the visible name.
+async function pickCategoryForEachRow() {
+  for (const trigger of screen.getAllByText('Choose category')) {
+    await userEvent.click(trigger)
+    // The chosen name stays on screen as the row's badge, so the option is the last match rather than
+    // the only one.
+    const options = await screen.findAllByText('Coffee & Drinks')
+    await userEvent.click(options[options.length - 1])
+  }
 }
 
 beforeEach(() => { vi.clearAllMocks() })
@@ -96,6 +115,68 @@ describe('AddTransactionDialog', () => {
     await fillBasics()
     await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
     expect(await screen.findByText(/date must be YYYY-MM-DD/)).toBeTruthy()
+  })
+
+  it('will not offer a split before there is an amount to divide', async () => {
+    open()
+    await screen.findByLabelText('Amount')
+    await userEvent.click(screen.getByRole('button', { name: 'Split…' }))
+    expect(screen.queryByText('Split across categories')).toBeNull()
+  })
+
+  it('divides a transaction as it is entered, creating it and its items together', async () => {
+    // The split editor is opened on a draft, so nothing is saved until this form's own button: the
+    // transaction is created first, then its items, because the items need its id.
+    api.createTransaction.mockResolvedValue({ id: 't1' })
+    api.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
+    open()
+    await screen.findByLabelText('Amount')
+    await fillBasics()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Split…' }))
+    const fields = await screen.findAllByLabelText('Amount')
+    // The dialog's own amount box is first; the editor's rows follow it. Both rows take the one leaf
+    // this fixture has — two items may share a category, which is a split's normal case rather than a
+    // mistake.
+    await pickCategoryForEachRow()
+    await userEvent.type(fields[1], '8')
+    await userEvent.type(fields[2], '4.50')
+    await userEvent.click(screen.getByText('Save split'))
+
+    // The picker is replaced by the ledger's own marker for a split.
+    expect(await screen.findByRole('button', { name: 'Split (2)' })).toBeTruthy()
+    expect(api.saveSplit).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
+    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledWith('t1', [
+      { category_id: 'coffee', amount: 8, label: '' },
+      { category_id: 'coffee', amount: 4.5, label: '' },
+    ]))
+  })
+
+  it('does not enter the transaction twice when only its items failed to save', async () => {
+    // The row is already in the ledger at that point, so pressing the button again finishes the job
+    // rather than starting it over.
+    api.createTransaction.mockResolvedValue({ id: 't1' })
+    api.saveSplit.mockRejectedValueOnce(new Error('every item needs a category'))
+    open()
+    await screen.findByLabelText('Amount')
+    await fillBasics()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Split…' }))
+    const fields = await screen.findAllByLabelText('Amount')
+    await pickCategoryForEachRow()
+    await userEvent.type(fields[1], '8')
+    await userEvent.type(fields[2], '4.50')
+    await userEvent.click(screen.getByText('Save split'))
+    await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
+
+    expect(await screen.findByText(/transaction was entered, but its items could not be saved/)).toBeTruthy()
+
+    api.saveSplit.mockResolvedValue({ parts: [{ id: 'p1' }, { id: 'p2' }] })
+    await userEvent.click(screen.getByRole('button', { name: 'Add transaction' }))
+    await waitFor(() => expect(api.saveSplit).toHaveBeenCalledTimes(2))
+    expect(api.createTransaction).toHaveBeenCalledTimes(1)
   })
 
   it('leaves the category empty by default, so the rules get first refusal', async () => {

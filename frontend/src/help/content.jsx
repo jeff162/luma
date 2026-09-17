@@ -740,11 +740,19 @@ export const HELP_TOPICS = [
 
         <h4>Adding the split transaction details</h4>
         <p>
-          The editor opens three ways -- from the row's right-click menu
+          The editor opens four ways -- from the row's right-click menu
           (<strong>Split&hellip;</strong>, or <strong>Edit split&hellip;</strong> on one already split),
-          from the <strong>Split (N)</strong> marker that a split row shows in its category column, or
+          from the <strong>Split (N)</strong> marker that a split row shows in its category column,
           from the <strong>Split&hellip;</strong> button beside the category in the transaction detail
-          panel. All three land in the same dialog.
+          panel, or from the same button on the <strong>+New</strong> panel while a transaction is being
+          entered by hand. All four land in the same dialog.
+        </p>
+        <p>
+          On <strong>+New</strong> the amount comes first &mdash; a split divides it, so the button waits
+          until one is entered. The items are held with the form rather than saved: the transaction and
+          its items are recorded together when <strong>Add transaction</strong> is pressed, and the
+          category box is replaced by a <strong>Split (N)</strong> marker that reopens the editor
+          meanwhile. <strong>Remove split</strong> there returns the form to a single category.
         </p>
         <p>
           The split transaction editor reads as a small ledger &mdash; <em>Description</em>, <em>Category</em>, <em>Amount</em>,

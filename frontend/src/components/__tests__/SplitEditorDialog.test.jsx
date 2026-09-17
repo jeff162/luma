@@ -64,6 +64,81 @@ beforeEach(() => {
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
+/*
+ * A transaction that does not exist yet — the manual-entry form's draft. Nothing is read and nothing is
+ * saved: the items go back to the caller, which creates the transaction and its split together.
+ */
+describe('splitting a draft transaction', () => {
+  const DRAFT = { amount: 100, display_name: 'New transaction', category_id: null, is_split: false, parts: [] }
+
+  it('opens without reading anything, since there is nothing stored to read', async () => {
+    renderEditor({ txn: DRAFT })
+    await amountFields()
+    expect(api.getSplit).not.toHaveBeenCalled()
+    expect(api.getSplitSuggestion).not.toHaveBeenCalled()
+  })
+
+  it('hands its items back instead of saving them', async () => {
+    const user = userEvent.setup()
+    const onSaved = vi.fn()
+    renderEditor({ txn: DRAFT, onSaved })
+    const fields = await amountFields()
+
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Groceries'))
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Hardware'))
+    await user.type(fields[0], '60')
+    await user.type(fields[1], '40')
+    await user.click(screen.getByText('Save split'))
+
+    expect(api.saveSplit).not.toHaveBeenCalled()
+    expect(onSaved).toHaveBeenCalledWith({
+      is_split: true,
+      parts: [
+        { category_id: 'groceries', amount: 60, label: '' },
+        { category_id: 'hardware', amount: 40, label: '' },
+      ],
+    })
+  })
+
+  it('reopens on the items it was given', async () => {
+    renderEditor({
+      txn: {
+        ...DRAFT,
+        is_split: true,
+        parts: [
+          { category_id: 'groceries', amount: 60, label: 'Pantry' },
+          { category_id: 'hardware', amount: 40, label: '' },
+        ],
+      },
+    })
+    const fields = await amountFields()
+    expect(fields.map(field => field.value)).toEqual(['60', '40'])
+    expect(screen.getByText('Fully allocated')).toBeTruthy()
+  })
+
+  it('clears a draft split without asking the server to delete anything', async () => {
+    const user = userEvent.setup()
+    const onSaved = vi.fn()
+    renderEditor({
+      txn: {
+        ...DRAFT,
+        is_split: true,
+        parts: [
+          { category_id: 'groceries', amount: 60, label: '' },
+          { category_id: 'hardware', amount: 40, label: '' },
+        ],
+      },
+      onSaved,
+    })
+    await user.click(await screen.findByText('Remove split'))
+
+    expect(api.deleteSplit).not.toHaveBeenCalled()
+    expect(onSaved).toHaveBeenCalledWith({ is_split: false, parts: [] })
+  })
+})
+
 describe('split editor remainder gate', () => {
   it('reports what is still unallocated as the parts are filled in', async () => {
     const user = userEvent.setup()

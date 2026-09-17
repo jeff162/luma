@@ -21,10 +21,18 @@
 //
 // It is a dialog rather than an inline expansion so a single implementation serves the detail panel
 // and the row menu, and so it can float over the panel that opened it.
+//
+// **A transaction being entered by hand has no id yet, and is split here all the same.** Handed a `txn`
+// without one — a draft carrying the typed amount and whatever items it already holds — nothing is
+// fetched and nothing is saved: the items go back to the caller through `onSaved`, which holds them
+// until the transaction is created. That keeps the manual-entry form's promise that nothing is written
+// until its own button is pressed, and keeps the arithmetic, the labels and the refusals in one place
+// rather than growing a second split form inside that dialog.
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
+import { round2 } from '../lib/manualTransaction.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { AppDialog, Button, COMPACT_ACTION_BTN_STYLE, Input, Tooltip } from './ui.jsx'
@@ -107,7 +115,20 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   // is the trade StrictMode exists to make. Keyed on the transaction id alone — the category is read
   // only to seed the first row, and re-running on it would discard edits already in progress.
   useEffect(() => {
-    if (!txn?.id) return
+    // A draft has nothing stored to read: it opens on the items it already carries, or on blank rows
+    // seeded with whatever single category the form had chosen.
+    if (txn && !txn.id) {
+      setRows((txn.parts || []).length
+        ? txn.parts.map((p, i) => ({
+          key: `row-${i}`, category_id: p.category_id, amount: String(round2(p.amount * dir)), label: p.label || '',
+        }))
+        : Array.from({ length: MIN_ROWS }, blankRow).map((row, i) => (
+          i === 0 ? { ...row, category_id: txn.category_id ?? null } : row
+        )))
+      setLoading(false)
+      return undefined
+    }
+    if (!txn?.id) return undefined
     let cancelled = false
     setLoading(true)
     Promise.all([api.getSplit(txn.id), api.getSplitSuggestion(txn.id).catch(() => null)])
@@ -194,12 +215,19 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   }
 
   async function save() {
+    const parts = rows.map(r => ({
+      category_id: r.category_id, amount: round2(toAmount(r.amount) * dir), label: r.label,
+    }))
+    // A draft is not saved here — the caller holds these until it creates the transaction they belong to.
+    if (!txn?.id) {
+      onSaved?.({ is_split: true, parts })
+      onClose()
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      const saved = await api.saveSplit(txn.id, rows.map(r => ({
-        category_id: r.category_id, amount: toAmount(r.amount) * dir, label: r.label,
-      })))
+      const saved = await api.saveSplit(txn.id, parts)
       onSaved?.({ is_split: true, parts: saved.parts })
       onClose()
     } catch (err) {
@@ -210,6 +238,11 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   }
 
   async function removeSplit() {
+    if (!txn?.id) {
+      onSaved?.({ is_split: false, parts: [] })
+      onClose()
+      return
+    }
     setSaving(true)
     setError(null)
     try {
