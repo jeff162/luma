@@ -74,6 +74,13 @@ scale — rather than by feature.
   funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
   ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
   from stored raw values, and the deferred column-centric mapping-screen rework.
+- [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
+  (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
+  it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers
+  the purchase-record store, the matching (tax band + unique assignment, measured on one real download),
+  a marketplace review shell that Amazon moves onto in the same change, the enriched `eBay: <item>` name
+  with a rule pass for uncategorized charges, and the Amazon tab becoming *Marketplaces*. No product
+  decisions owed.
 - [import-source-field-registry.md](import-source-field-registry.md) — **shipped; deferred remainder
   only.** The registry, the origin surfacing built on it, and opt-in source-text rule matching all landed
   and are folded into `data-model.md` / `ui-patterns.md`. What remains: selectable report columns drawn

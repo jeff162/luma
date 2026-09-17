@@ -1463,7 +1463,8 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <h4>As transactions arrive</h4>
-        <p>*needs review*
+        <p>*needs review*</p>
+        <p>
           Most categorization happens automatically as transactions arrive. Each imported or synced
           transaction runs through the categorization rules -- the same process triggered by
           the <strong>Categorize</strong> button on the Rules page. For CSV import this only happens
@@ -1852,117 +1853,145 @@ export const HELP_TOPICS = [
     section: 'accounts',
     title: 'Data providers and connections',
     surfaces: ['Accounts (Connections)', 'Import / Export (Data connections)'],
-    summary: `A data provider is an online service that retrieves transactions directly from banks and card issuers. A connection is one link to a provider, and the accounts it offers are mapped to accounts in ${APP_NAME} the same way an imported file's are.`,
+    summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          A <strong>data provider</strong> is an online service that retrieves transactions from banks
-          and card issuers, so they arrive in {APP_NAME} without exporting and importing a file. The
-          supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>.
-          A <strong>connection</strong> is one link to a provider, usually to one bank, and it brings
-          that bank's accounts with it.
+          A <strong>data provider</strong> is an online service that retrieves transactions from various sources
+          so they arrive in {APP_NAME} without exporting and importing a file. The
+          supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>. There are
+          no credentials supplied in {APP_NAME}. SimpleFIN Bridge is a subscription model and provides access to most
+          financial institutions. Plaid offers a developer license which allows
+          a limited number of connections to be built.
         </p>
         <p>
-          A data provider is not the same thing as a
-          saved <HelpLink to="/help/unknown-data-source">data source</HelpLink>, which is a template for
-          importing CSV files. Transactions from either one land in the same ledger and go through the
-          same rules and duplicate detection.
+          The <strong>data provider</strong> defines the model. With SimpleFIN Bridge, the accounts are
+          connected on the SimpleFIN Bridge webpage and the <strong>connection</strong> provides the transaction data from
+          all of the connected accounts. For Plaid, the Plaid webpage has the secrets and after they are
+          entered, <strong>Institutions</strong> are connected in {APP_NAME} and that process defines
+          the accounts which will provide data.
         </p>
-
-        <h4>Before connecting</h4>
         <p>
-          The credentials that give a provider access to a bank are stored encrypted in
-          a <strong>vault</strong>. A vault passphrase has to be set before the first connection, and
-          the vault is unlocked once per browser session to connect or sync. Other users request access
-          to the vault, and someone who can already open it approves the request. Nothing else is
-          encrypted by the vault; see <HelpLink to="/help/data-and-backups">data on disk, and
-            backups</HelpLink>.
+          Transactions from <em>data providers</em> go through the the same duplicate
+          detection process as file imports and the transaction record lives on the
+          Import/Export page organized by Month rather than file.
+        </p>
+        <p>
+          Syncing is a manual process; there is no facility for a scheduled or automatic sync
+          as the vault which holds the secrets can only be unlocked manually.
+        </p>
+        <p>
+          Data connections are established and managed on the <em>Connections</em> tab on
+          the <em>Accounts</em> page. Connection settings and Disconnect connection are on
+          the per-connection menu.
+        </p>
+        <h4>Secrets Vault</h4>
+        <p>
+          The vault is used to encrypt the data connection credentials stored on disk. The passphrase
+          protects the encryption key which allows for multiple ways to protect the same key. This is both
+          to support multiple users and so a single user can have multiple authentication methods such as a
+          passphrase and a passkey. This also allows for a recovery key which can be stored in a secure
+          location separate from the passphrase (as there is no point in storing them in the same location as
+          then they will both get lost together).
+        </p>
+        <p>
+          To get started with data connections set a Vault Passphrase. The Set Vault Passphrase button
+          gets replaced with Vault Settings and there there is a Lock button. The Vault automatically locks
+          after a period of time (8 hours?) unless locked earlier with the Locked button.
+        </p>
+        <h4>Connecting</h4>
+        <p>
+          Perform the needed setup and configuration on the data provider end.
         </p>
         <ul>
           <li>
             <strong>Plaid</strong> &mdash; needs app credentials from a Plaid account, entered once
-            with <strong>Configure</strong> by an administrator.
+            with <strong>Configure</strong> by an administrator. Once it is configured, use the <strong>+Connect Institution</strong> button
+            to connect accounts.
           </li>
           <li>
-            <strong>SimpleFIN Bridge</strong> &mdash; needs a setup token generated at SimpleFIN Bridge.
-            A token works only once, so a failed attempt needs a new one. One SimpleFIN connection can
-            cover several banks.
+            <strong>SimpleFIN Bridge</strong> &mdash; needs a one-time setup token generated at SimpleFIN Bridge.
+            Institutions and accounts are configured on the SimpleFIN Bridge side.
           </li>
         </ul>
-        <p>
-          When {APP_NAME} is reached over a network rather than on the same computer, HTTPS has to be set
-          up before connecting, since the credentials would otherwise cross the network unprotected. Demo
-          data has to be cleared first as well.
-        </p>
 
         <h4>Connecting and mapping accounts</h4>
         <p>
-          Connecting asks how much history to fetch on the first sync, then lists each account the
-          provider offers. Each one is mapped to an existing account, mapped to a new account, or
-          skipped. Nothing is pulled until every account has a destination.
+          Part of the connection process is mapping the accounts from the provider to accounts in
+          the application. Provider accounts can be skipped if they are not of interest. The
+          correct mapping is what allows duplicate detection to work properly across different
+          import methods. It is fine to import CSV files when there are data connections, as long
+          as the transactions all map to the same account from both sources.
         </p>
         <p>
-          Mapping onto an account that already holds transactions imported from a file is what lets
-          duplicate detection recognize the ones that arrive again from the provider.
-          See <HelpLink to="/help/duplicate-report">the duplicate-detection report</HelpLink>.
-        </p>
-        <p>
-          An account opened at the bank later shows up on the connection's card as <strong>to
-            map</strong>, and its transactions are skipped until it is mapped. The mapping, and which
-          extra details each sync captures, can be changed at any time
+          An account added to a data connection after the initial mapping
+          shows up on the connection's card as <strong>to
+            map</strong> and on the <strong>Tasks</strong> page. Its transactions are skipped until it is mapped.
+          The mapping, and the set of extra details to capture can be changed
           from <strong>Connection settings&hellip;</strong> in the card's menu.
         </p>
 
         <h4>Syncing</h4>
         <p>
-          New transactions are pulled on request, from the sync control in the navigation pane or
+          New transactions are pulled on request using the sync control in the navigation pane or
           from <strong>Sync now</strong> on the <strong>Data connections</strong> card of the Import /
-          Export page. Each sync records what arrived as cards in the import history, the same as an
-          imported file: one <strong>Initial import</strong> card for the first history, then one card
-          per month. Possible duplicates are flagged on those cards for review.
+          Export page. Per-connection Import cards on the Import/Export page records
+          what arrived, similar to an imported file. Importing a file generates a single card, the
+          data connections create a card for the <strong>Initial import</strong> and then one
+          per month.
         </p>
         <p>
-          The connection's menu on that card holds the less routine actions:
+          Each connection carries a menu with the following actions:
         </p>
         <ul>
           <li>
-            <strong>Fetch more history</strong> &mdash; pulls transactions older than the ones already
-            here, as far back as the bank and provider allow.
+            <strong>Fetch more history</strong> &mdash; pulls older transactions as far back as the bank and provider allow.
           </li>
           <li>
             <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
-            stored credential, for example after restoring a backup.
+            stored credential. Needed after restoring a backup.
           </li>
           <li>
             <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
-            synced so the next sync imports it again. Sync cards have no Undo, so this is how a
-            connection is started over.
+            synced so the next sync imports it again. This is the equivalent of Undo on a
+            file card.
           </li>
         </ul>
         <p>
-          Some providers limit how many requests can be made in a period. A sync that stops at that
-          limit reports <strong>more history to fetch</strong> and carries on with a later sync.
+          If a provider limits the time window for each request and limits the number
+          of requests per day, retrieving the initial
+          transaction history may take more than one day. The sync
+          reports <strong>more history to fetch</strong> and more will be fetched when the
+          limit refreshes. The initial sync stops before exhausting the provider's limit to
+          allow for subsequent fetches of the most recent data while waiting for the limits to
+          refresh.
         </p>
 
         <h4>When a connection needs attention</h4>
         <p>
-          A connection with something to act on says so on its card. <strong>Reconnect needed</strong> means
-          the provider no longer accepts the stored credential, usually because access was revoked or
-          expired at the provider. Syncing stays stopped until it is connected again, and the Tasks page
-          lists it too.
-          A <strong>provider notice</strong> is a problem the provider reported that did not stop the
-          sync, such as one bank on a multi-bank connection needing attention. An account the provider
-          reports in another currency is skipped; see <HelpLink to="/help/single-currency">single-currency
-            support</HelpLink>.
+          A connection with an action required indicates this on its card and on the Tasks
+          page.
         </p>
+        <ul>
+          <li>
+            <strong>Reconnect needed</strong> means
+            the provider no longer accepts the stored credential, usually because access was revoked or
+            expired at the provider. Syncing stays stopped until it is connected again.
+          </li>
+          <li>
+            A <strong>provider notice</strong> is a problem the provider reported that did not stop the
+            sync, such as one bank on a multi-bank connection needing attention.
+          </li>
+        </ul>
 
         <h4>Disconnecting</h4>
         <p>
-          Disconnecting keeps the accounts and every transaction already synced. Whether it also revokes
-          the provider's access depends on the provider, and the confirmation says which. SimpleFIN
-          Bridge has no way to revoke access from here, so access there is revoked at SimpleFIN Bridge
-          itself.
+          Disconnecting retains the accounts and their transactions. If disconnecting the
+          account revokes the provider's access the confirmation page will indicate this.
+          Even if it indicates that the provider's access was revoked, the connection
+          secret on the provider side should be rotated or revoked as it could be used to
+          reconnect the accounts.
+
         </p>
       </>
     ),
@@ -2953,36 +2982,27 @@ export const HELP_TOPICS = [
     section: 'tasks',
     title: 'Tasks',
     surfaces: ['Tasks'],
-    summary: 'A short list of things worth a look: transactions with no category, duplicates awaiting a decision, reimbursements outstanding too long, recurring charges that did not arrive. Nothing here is an error, and nothing has to be done in order.',
+    summary: 'Various alerts about things which may need attention.',
     body: () => (
       <>
-        <p>*needs review*</p>
         <p>
-          Tasks collects what the rest of the app noticed and did not want to interrupt for. The count
-          beside <strong>Tasks</strong> in the navigation is how many are open. Each entry says what
-          was found and links to the page where it is dealt with.
+          Tasks is where notifications are posted when there is something that needs attention.
         </p>
         <p>
-          What appears is deliberately narrow. An item tied to a feature stays hidden until that
-          feature is in use, so an installation that does not track owners is never asked to assign
-          one, and a new installation is not met with warnings about things that were never set up.
+          Some of the things which generate notifications are:
         </p>
+        <ul>
+          <li> transactions which need categorization</li>
+          <li>a newly detected recurring series</li>
+          <li>a change in the amount for a suspected member of an existing recurring series</li>
+          <li>a problem fetching transactions from a data connection</li>
+          <li>an error recorded in the log file</li>
+        </ul>
+        <p>Anything which might require attention will appear here.</p>
         <p>
-          A task is a reminder, and the <strong>Dismiss</strong> tab in its lower corner puts the
-          reminder away until there is more of it. The work itself stays on the page the task links
-          to. What is remembered is the count the task was dismissed at, and that mark falls again as
-          the list shrinks, so clearing part of a backlog does not bury the next new item underneath
-          the old number. A count that changes often, such as uncategorized transactions, brings its
-          task back often too.
-        </p>
-        <p>
-          The one task that cannot be dismissed is a requirement: HTTPS for an installation with a
-          data connection stays until it is set up.
-        </p>
-        <p>
-          A <HelpLink to="/help/recurring-transactions">missing or changed charge</HelpLink> can also
-          be dismissed on its own on the Recurring page, which answers that finding rather than only
-          hiding the reminder.
+          <strong>Dismiss</strong> hides the notification until
+          something changes. For instance, if the note about uncategorized
+          transactions is dismissed, the task reappears when new ones are added to the list.
         </p>
       </>
     ),
@@ -3177,31 +3197,37 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          Almost everything is stored in a local SQLite database (attachments are stored in a documents directory next
-          to the database file, and a log of errors sits beside it). Accounts, transactions, categories, tags are all stored in{' '}
-          <strong>plain text</strong>. Protection comes from the computer's security (disk encryption,
+          There are two SQLite databases which store almost all of the data for {APP_NAME}.
+          Attachments are stored outside the databases in a documents directory next
+          to the data file. The console log sits beside it.
+        </p>
+        <p>
+          Accounts, transactions, categories, tags are all stored in{' '}
+          <strong>plain text</strong> in the data.db file. Application settings, user
+          profiles, and other non-transaction related data is stored in the control.db file.
+          Secrets and credentials for accessing <HelpLink to="/help/data-providers">data
+            providers</HelpLink>{' '} are encrypted and are spread across both files.
+        </p><p>
+          Protection for the transaction data comes from the computer's security (disk encryption,
           OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
         <p>
-          If the contents of the database are considered sensitive, {APP_NAME} can generate key pairs to build
-          strongly encrypted backup files. Secrets and credentials for
-          accessing <HelpLink to="/help/data-providers">data providers</HelpLink>{' '}
-          are already encrypted in the control database, secured by the vault passphrase. All backups
-          of the credentials database contain encrypted data.
+          If the transaction data is considered sensitive, {APP_NAME} can generate key pairs to build
+          strongly encrypted backup files. The credentials backup does not require encrypting
+          as the data inside is already encrypted. Restoring a credential backup does require
+          the vault passphrase of the user who created the backup.
         </p>
         <p>
           If the database files are exposed and there are data connections, even though the credentials
           are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
-          and issue new ones. Some providers support revoking the credentials via their API in which case
-          disconnecting the account(s) from within {APP_NAME} revokes the lost credentials. For other providers
-          it is necessary to remove the existing credential on the provider side and issue a new one. Even with
-          providers which support revocation via the API, there is a secret worth rotating on the
-          provider side which was used to authorize the connections in the first place.
+          and issue new ones. Disconnecting the accounts from within {APP_NAME} revokes the per-account (per-connection)
+          credentials for certain providers but for all providers it is necessary to revoke or
+          rotate the secret on the provider webpage.
         </p>
         <p>
-          Once the provider stops accepting the stored credential, the connection card
-          reports <strong>reconnect needed</strong> rather than counting failed syncs.
+          If the provider stops accepting the stored credential, the connection card
+          reports <strong>reconnect needed</strong>.
         </p>
       </>
     ),
