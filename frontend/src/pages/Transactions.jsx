@@ -541,9 +541,9 @@ export default function Transactions() {
       return
     }
     const cat = catObj || categories.find(c => c.id === catId)
-    if (catObj && !categories.find(c => c.id === catObj.id)) {
-      setCategories(prev => [...prev, catObj])
-    }
+    // Checked inside the updater, not against `categories`: a picker that just created the category has
+    // already queued its own add, which this render's list does not show yet.
+    if (catObj) addCategory(catObj)
     applyCategoryChange(txnId, cat, patch => reconcileCategorizedRow(txnId, patch))
   }
 

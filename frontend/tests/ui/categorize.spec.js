@@ -30,3 +30,41 @@ test('changing a transaction category via the inline picker persists', async ({ 
   await page.locator('[data-picker-row-active]').filter({ hasText: 'Interest Income' }).first().click()
   await expect(page.locator('[title="Click to change category"]')).toContainText('Interest Income')
 })
+
+// Creating a category from a row's picker once listed it twice in the page's category list (the picker's
+// add and the row save each appended it), so the next search showed the same category several times.
+test('a category created from the inline picker is listed once afterwards', async ({ page, request }) => {
+  const name = `Picker Created ${Date.now()}`
+  await page.goto('/transactions')
+  await page.getByPlaceholder('Search…', { exact: true }).fill('Interest Payment')
+  const categoryCell = page.locator('[title="Click to change category"]')
+  await expect(categoryCell).toHaveCount(1)
+
+  await categoryCell.click()
+  await page.getByPlaceholder('Interest Income').fill(name)
+  await page.keyboard.press('Enter')
+  await page.getByLabel('Choose category group').selectOption({ index: 1 })
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await expect(categoryCell).toContainText(name)
+
+  try {
+    await categoryCell.click()
+    await page.getByPlaceholder(name).fill(name)
+    await expect(page.locator('[data-picker-row-active]').filter({ hasText: name })).toHaveCount(1)
+    await page.locator('[data-picker-row-active]').filter({ hasText: name }).first().click()
+  } finally {
+    // Restore the row's category and remove the created one, so the shared demo baseline is unchanged.
+    await page.goto('/transactions')
+    await page.getByPlaceholder('Search…', { exact: true }).fill('Interest Payment')
+    await categoryCell.click()
+    await page.getByPlaceholder(name).fill('Interest Income')
+    await page.locator('[data-picker-row-active]').filter({ hasText: 'Interest Income' }).first().click()
+    await expect(categoryCell).toContainText('Interest Income')
+    const categories = await (await request.get('/api/categories')).json()
+    const created = categories.find(category => category.name === name)
+    if (created) {
+      await request.delete(`/api/categories/${created.id}`)
+      await request.delete(`/api/categories/${created.id}/forever`)
+    }
+  }
+})

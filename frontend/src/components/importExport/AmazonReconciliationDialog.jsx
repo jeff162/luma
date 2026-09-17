@@ -870,7 +870,9 @@ export function AmazonReconciliationDialog({
       <SplitEditorDialog
         txn={splitTarget}
         categories={splitCategories}
-        onAddCategory={cat => setSplitCategories(prev => [...(prev || []), cat])}
+        onAddCategory={cat => setSplitCategories(prev => (
+          prev?.some(existing => existing.id === cat.id) ? prev : [...(prev || []), cat]
+        ))}
         onClose={() => setSplitTarget(null)}
         // Reloads the report, as every other row action here does. The rows are rebuilt from the
         // reconciliation payload rather than held locally, so patching the open row would leave the
