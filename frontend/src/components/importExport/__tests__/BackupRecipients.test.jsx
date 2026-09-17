@@ -33,6 +33,7 @@ vi.mock('../../../lib/api.js', () => ({
 }))
 
 const { BackupRecipients } = await import('../BackupRecipients.jsx')
+const { BACKUP_KEY_PASSWORD_MANAGER_USERNAME } = await import('../../../lib/sensitiveFields.js')
 
 afterEach(() => {
   cleanup()
@@ -159,5 +160,16 @@ describe('BackupRecipients without authority to change the keys', () => {
     expect(screen.getByRole('checkbox').disabled).toBe(true)
     await userEvent.click(screen.getByText('Export'))
     expect(saveBlob).toHaveBeenCalled()
+  })
+})
+
+describe('the key file passphrase', () => {
+  it('is named ahead of the secret field, so a manager does not file it as the vault passphrase', async () => {
+    const user = userEvent.setup()
+    await openGenerateDialog(user)
+    const username = document.querySelector('input[autocomplete="username"]')
+    expect(username.value).toBe(BACKUP_KEY_PASSWORD_MANAGER_USERNAME)
+    const secret = screen.getByLabelText('Passphrase for the generated key file')
+    expect(username.compareDocumentPosition(secret) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

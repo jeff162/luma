@@ -7,7 +7,7 @@ import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
-import { PasswordInput } from './ui.jsx'
+import { PasswordInput, PasswordManagerUsername } from './ui.jsx'
 
 const s = {
   page: {
@@ -200,6 +200,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
           )}
           {awaitingPasswordChange ? (
             <>
+              {/* The username field is gone by this step, so name the account the new password is for —
+                  otherwise a manager saves it with no username, beside the one it should replace. */}
+              <PasswordManagerUsername value={username} />
               <PasswordInput
                 as={TransientTextInput}
                 value={newPassword}

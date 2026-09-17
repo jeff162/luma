@@ -23,11 +23,11 @@ import { useState, useEffect, useRef, useId } from 'react'
 import { api, saveBlob } from '../../lib/api.js'
 import {
   Card, Button, COMPACT_ACTION_BTN_STYLE, Spinner, Input, PasswordInput, AppDialog, AppConfirmDialog,
-  Tooltip, getFormControlStyle,
+  PasswordManagerUsername, Tooltip, getFormControlStyle,
 } from '../ui.jsx'
 import { useTransientTextEdit } from '../../lib/uiInteractions.js'
 import TransientTextInput from '../TransientTextInput.jsx'
-import { NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
+import { BACKUP_KEY_PASSWORD_MANAGER_USERNAME, NEW_SECRET_PROPS } from '../../lib/sensitiveFields.js'
 import { APP_NAME } from '../../lib/appConfig.js'
 
 /** Whether a typed name collides with one already saved. Mirrors the server's comparison exactly —
@@ -485,6 +485,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
         ) : null}
         {!generated ? (
           <>
+            <PasswordManagerUsername value={BACKUP_KEY_PASSWORD_MANAGER_USERNAME} />
             <PasswordInput
               value={passphrase}
               onChange={setPassphrase}

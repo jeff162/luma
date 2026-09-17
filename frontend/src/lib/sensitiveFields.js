@@ -78,6 +78,11 @@ export const EXISTING_SECRET_PROPS = {
 // entry rather than one a manager could take for the sign-in password of the same site.
 export const VAULT_PASSWORD_MANAGER_USERNAME = 'Vault passphrase'
 
+// The same, for a backup key file's passphrase: saved when the key is generated, filled when a backup is
+// restored with it. One name for every key rather than one per key, because the restore side knows only
+// the file chosen, not the name the key was given.
+export const BACKUP_KEY_PASSWORD_MANAGER_USERNAME = 'Backup key passphrase'
+
 // Authenticator codes. Deliberately **not** a secret set: `one-time-code` is the standard annotation for
 // exactly this field, and it does both halves of the job at once — the browser does not file the value in
 // form history (a six-digit code that will never be valid again is pure noise in a dropdown, and mild

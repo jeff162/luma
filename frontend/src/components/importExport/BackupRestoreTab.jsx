@@ -23,7 +23,9 @@ import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
 import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
-import { EXISTING_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../../lib/sensitiveFields.js'
+import {
+  BACKUP_KEY_PASSWORD_MANAGER_USERNAME, EXISTING_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME,
+} from '../../lib/sensitiveFields.js'
 
 // Human-readable explanation for the restore compatibility guard's 409 detail.
 function describeRestoreIncompatibility(detail) {
@@ -472,6 +474,7 @@ export function BackupRestoreTab() {
                     onChange={e => setPrivateKeyFile(e.target.files[0])}
                     style={{ fontSize: 13 }}
                   />
+                  <PasswordManagerUsername value={BACKUP_KEY_PASSWORD_MANAGER_USERNAME} />
                   <PasswordInput
                     aria-label="Private key passphrase"
                     value={privateKeyPassphrase}

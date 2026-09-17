@@ -957,7 +957,9 @@ holds rather than trying to keep managers away:
   and can fill in, a freshly generated value for a field whose only correct content already exists.
 - **A surface with no username field names the credential** with a hidden `username` field
   (`PasswordManagerUsername`), because managers file saved secrets by site and username. Without it a vault
-  passphrase has nothing to tell it apart from the sign-in password for the same site.
+  passphrase has nothing to tell it apart from the sign-in password for the same site — or a backup key's
+  passphrase from the vault passphrase, which is how a key passphrase came to be offered at unlock. A
+  distinct name labels the entry; it does not stop a manager listing it on another password field.
 
 ### Import history outlives the connection that produced it
 
