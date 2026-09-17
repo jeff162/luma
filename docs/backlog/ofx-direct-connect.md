@@ -105,10 +105,10 @@ neutral contract in `backend/services/providers/base.py`. Notes, not a spec:
 - **`external_account_id` should be a hash** of `BANKID` + `ACCTID`. It joins `account.external_account_id`,
   which is stored in the clear, and the raw `ACCTID` is a real account number — the last four already
   live in `mask`.
-- `is_pending` is always false (OFX statements are posted-only) and **`authorized_date` is always
-  absent** — OFX has no authorized/posted split. `base.py` calls that field "the single most valuable one
-  for duplicate detection," so deduping an OFX connection against a CSV covering the same account would
-  fall back to the date heuristics alone, and should be expected to produce more soft flags than Plaid.
+- `is_pending` is always false (OFX statements are posted-only) and there is **no second date** — OFX has
+  no transaction/posted split, so `date` is the posting and `posted_date` adds nothing. `base.py` calls
+  that field "the single most valuable one for duplicate detection," so deduping an OFX connection against
+  a CSV covering the same account would fall back to the date heuristics alone, and should be expected to produce more soft flags than Plaid.
 - `remove()` is a documented no-op, per the threat-model section above.
 - **MFA is an open unknown.** Some institutions return an `MFACHALLENGE` on signon, which needs a
   challenge/response round trip rather than a single form post. Whether that matters depends entirely on

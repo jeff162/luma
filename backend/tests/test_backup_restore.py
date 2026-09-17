@@ -232,7 +232,7 @@ class BackupFixtureTestCase(unittest.TestCase):
                 # backup that restored confirmed duplicates as live transactions went unnoticed.
                 conn.execute(
                     "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, "
-                    "display_name_source, raw_name, date, authorized_date, is_pending, category_overridden, "
+                    "display_name_source, raw_name, date, posted_date, is_pending, category_overridden, "
                     "category_source, needs_review, trashed_at, rejection_reason, dedupe_resolved_by, "
                     "suspect_duplicate_of, suspect_duplicate_reason, suspect_resolved_at) "
                     "VALUES (?, ?, ?, ?, 10.0, 'M', 'Renamed M', 'user', 'M', '2026-04-15', '2026-04-14', 0, 1, "
@@ -560,6 +560,46 @@ class BackupRestoreTests(BackupFixtureTestCase):
                 )}
         self.assertEqual(rows["t1"]["external_transaction_id"], "prov-1")
         self.assertIsNone(rows["t2"]["external_transaction_id"])
+
+    def test_restore_before_v59_dates_synced_rows_by_when_the_charge_was_made(self):
+        # A pre-v59 backup dates a synced row by its posting and carries the transaction date as
+        # `authorized_date`, a column the table no longer has — so the row is re-dated on the way in, the
+        # same as an in-place upgrade, rather than losing its transaction date to the insert.
+        from backend.routers.import_export.core import make_hash
+        with self._use_db_path():
+            payload = {
+                "version": 8,
+                "schema_version": 58,
+                "owners": [{"id": "o1", "name": "Me", "color": "#111111"}],
+                "accounts": [
+                    {"id": "a1", "external_account_id": "acct-9", "name": "Bank", "display_name": "Bank",
+                     "type": "credit", "owner_id": "o1", "parent_account_id": None},
+                ],
+                "import_batches": [{"id": "b1", "filename": "sync", "status": "completed"}],
+                "transactions": [
+                    {"id": "synced", "external_transaction_id": "prov-1", "account_id": "a1", "owner_id": "o1",
+                     "amount": -5.0, "date": "2026-08-03", "authorized_date": "2026-07-31",
+                     "raw_name": "SHOP", "content_hash": make_hash("2026-08-03", -5.0, "SHOP")},
+                    {"id": "csv", "account_id": "a1", "owner_id": "o1", "amount": -6.0, "date": "2026-08-02",
+                     "authorized_date": None, "raw_name": "CAFE"},
+                ],
+                "import_batch_duplicates": [
+                    {"batch_id": "b1", "row_number": 1, "reason": "covered",
+                     "values_json": json.dumps({"Date": "2026-08-03", "Transaction date": "2026-07-31"}),
+                     "txn_payload_json": json.dumps({"date": "2026-08-03", "authorized_date": "2026-07-31",
+                                                     "amount": -5.0, "raw_name": "SHOP"})},
+                ],
+            }
+            restore_backup(RestoreRequest(data=payload, force=True))
+            with get_db() as conn:
+                rows = {r["id"]: r for r in conn.execute("SELECT id, date, posted_date, content_hash FROM txn")}
+                held = conn.execute("SELECT values_json, txn_payload_json FROM import_batch_duplicate").fetchone()
+        self.assertEqual((rows["synced"]["date"], rows["synced"]["posted_date"]), ("2026-07-31", "2026-08-03"))
+        self.assertEqual(rows["synced"]["content_hash"], make_hash("2026-07-31", -5.0, "SHOP"))
+        self.assertEqual((rows["csv"]["date"], rows["csv"]["posted_date"]), ("2026-08-02", None))
+        self.assertEqual(json.loads(held["values_json"]), {"Date": "2026-07-31", "Posted date": "2026-08-03"})
+        held_payload = json.loads(held["txn_payload_json"])
+        self.assertEqual((held_payload["date"], held_payload["posted_date"]), ("2026-07-31", "2026-08-03"))
 
     def test_restore_rejects_unsupported_version(self):
         with self._use_db_path():

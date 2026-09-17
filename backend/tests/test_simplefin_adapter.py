@@ -225,42 +225,35 @@ class SimpleFinNormalizationTests(unittest.TestCase):
         self.assertEqual(rows[_ext_id("t1")]["amount"], 33.87)
         self.assertEqual(rows[_ext_id("t2")]["amount"], -1200.00)
 
-    def test_transacted_at_becomes_authorized_date(self):
+    def test_the_ledger_date_is_when_the_charge_was_made(self):
+        # The day a charge is looked for on a statement and the month it counts in. The posted date is
+        # kept beside it for duplicate detection.
         server = _Server(payload=_payload([
             _txn("t1", "2026-08-03", "-10.00", "SHOP", transacted_at=_epoch("2026-08-01")),
         ]))
         row = self._sync(server)["added"][0]
-        self.assertEqual(row["date"], "2026-08-03")
-        self.assertEqual(row["authorized_date"], "2026-08-01")
+        self.assertEqual(row["date"], "2026-08-01")
+        self.assertEqual(row["posted_date"], "2026-08-03")
 
-    def test_missing_transacted_at_leaves_authorized_date_absent(self):
+    def test_missing_transacted_at_falls_back_to_the_posted_date(self):
         server = _Server(payload=_payload([_txn("t1", "2026-08-03", "-10.00", "SHOP")]))
-        self.assertIsNone(self._sync(server)["added"][0]["authorized_date"])
+        row = self._sync(server)["added"][0]
+        self.assertEqual(row["date"], "2026-08-03")
+        self.assertEqual(row["posted_date"], "2026-08-03")
 
     def test_a_pending_rows_zero_posted_is_read_as_undated_not_as_1970(self):
         # `posted` is required by the protocol, so a charge that has not posted carries 0 rather than
-        # omitting the field. Taken literally that is a valid epoch, and the row enters the ledger dated
-        # 1970-01-01 — before every other transaction, outside every report period, and (since sync cards
-        # are keyed on the transaction's own month) filed on a card labelled "January 1970". The
-        # transaction date is the date such a row actually has, and is what it must be filed under.
+        # omitting the field. Taken literally that is a valid epoch, and the row would record a posting on
+        # 1970-01-01 — or, with no transaction date, enter the ledger dated then, before every other
+        # transaction and filed on a card labelled "January 1970".
         server = _Server(payload=_payload([{
             "id": "p1", "posted": 0, "transacted_at": _epoch("2026-08-11"),
             "amount": "-28.89", "description": "COCONUT NEWTON", "pending": True,
         }]))
         row = self._sync(server)["added"][0]
         self.assertEqual(row["date"], "2026-08-11")
-        self.assertEqual(row["authorized_date"], "2026-08-11")
+        self.assertIsNone(row["posted_date"])
         self.assertTrue(row["is_pending"])
-
-    def test_a_posted_date_still_wins_over_the_transaction_date(self):
-        # The fallback above is exactly that — a fallback. Preferring `transacted_at` whenever it is present
-        # would re-date every settled row in the ledger to when it was authorized, which is a different fact
-        # and not the one totals are reported on.
-        server = _Server(payload=_payload([
-            _txn("t1", "2026-08-13", "-10.00", "SHOP", transacted_at=_epoch("2026-08-09")),
-        ]))
-        row = self._sync(server)["added"][0]
-        self.assertEqual(row["date"], "2026-08-13")
 
     def test_a_row_with_no_date_at_all_is_dropped_rather_than_dated_from_nothing(self):
         # Neither field usable: there is no honest date to file it under, and inventing one (today, the

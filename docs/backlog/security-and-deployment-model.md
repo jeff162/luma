@@ -241,7 +241,7 @@ discussion now in `../security-model.md`:
 
    **The SimpleFIN adapter itself** (`services/providers/simplefin.py`, stdlib only) is where the protocol
    facts live: the claim/access-URL handshake, the date-range window cap, the sign inversion, `transacted_at`
-   → `authorized_date`, and the two things with no Plaid analog — a **backward walk** that must *discover*
+   → `date` with `posted` → `posted_date`, and the two things with no Plaid analog — a **backward walk** that must *discover*
    where history ends (the protocol reports no coverage start, so it takes two consecutive empty windows to
    conclude it, since one is indistinguishable from a quiet quarter) and a **request budget** whose penalty
    for being exceeded is token disablement (so the walk meters itself and pauses rather than pushing on).

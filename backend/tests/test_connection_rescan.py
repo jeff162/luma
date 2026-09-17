@@ -160,7 +160,7 @@ class ConnectionRescanTests(unittest.TestCase):
         finally:
             reset_current_db_path(token)
 
-    def _synced(self, txn_id, day, amount, merchant, raw, authorized_date=None):
+    def _synced(self, txn_id, day, amount, merchant, raw, posted_date=None):
         return {
             "external_transaction_id": txn_id,
             "external_account_id": self.EXTERNAL,
@@ -168,7 +168,7 @@ class ConnectionRescanTests(unittest.TestCase):
             "merchant_name": merchant,
             "raw_name": raw,
             "date": day,
-            "authorized_date": authorized_date,
+            "posted_date": posted_date,
             "is_pending": False,
         }
 

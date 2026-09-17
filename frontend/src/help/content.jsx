@@ -434,7 +434,7 @@ export const HELP_TOPICS = [
         <p>
           <strong>Cash flow</strong> combines spending and income into one graph. It is
           based on transaction dates as opposed to actual money movement. This means that a
-          credit card transaction is treated as being paid for on the date it posted rather than the
+          credit card transaction is treated as being paid for on the date of the purchase rather than the
           date on which the credit card payment was made so the time frame of how income and expenses
           offset is not 100% accurate.
         </p>

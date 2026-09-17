@@ -63,14 +63,14 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
 
     # ---- fixtures ------------------------------------------------------
 
-    def _existing(self, txn_id, day, amount, name, *, batch="b-covering", account=None, authorized=None):
+    def _existing(self, txn_id, day, amount, name, *, batch="b-covering", account=None, posted=None):
         with self._db() as conn:
             conn.execute(
                 "INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name,"
-                " raw_name, date, authorized_date, is_pending, content_hash, import_batch_id)"
+                " raw_name, date, posted_date, is_pending, content_hash, import_batch_id)"
                 " VALUES (?,?,?,?,?,?,?,?,?,0,?,?)",
                 (txn_id, account or self.ACCOUNT, SHARED_OWNER_ID, amount, name, name, name, day,
-                 authorized, f"hash-{txn_id}", batch),
+                 posted, f"hash-{txn_id}", batch),
             )
 
     def _rejected(self, row_number, day, amount, *, reason=COVERED_REASON, candidates=None,
@@ -219,9 +219,9 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
     # ---- dual dates ----------------------------------------------------
 
     def test_the_twin_is_found_under_either_of_its_own_dates(self):
-        # A stored row is indexed under both its posted and authorized dates, for the same reason the
+        # A stored row is indexed under both its transaction and posted dates, for the same reason the
         # ingestion path does it: the two sources may have filed it under different ones.
-        self._existing("covering-1", "2023-08-25", -4.28, "Corner Doughnuts", authorized="2023-08-18")
+        self._existing("covering-1", "2023-08-18", -4.28, "Corner Doughnuts", posted="2023-08-25")
         self._rejected(1, "2023-08-17", -4.28)
 
         self.assertEqual(self._refresh(), 1)

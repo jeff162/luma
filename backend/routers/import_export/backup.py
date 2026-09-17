@@ -72,6 +72,8 @@ from backend.db.database import (
     get_db,
     get_db_instance_id,
     get_db_version,
+    redate_held_sync_duplicate,
+    redate_txn_row_to_transaction_date,
     run_post_restore_data_init,
 )
 from backend.db.demo_data import is_demo_data_loaded
@@ -583,7 +585,7 @@ BACKUP_SECTIONS = (
     ("transactions", "txn",
      "SELECT id, external_transaction_id, account_id, owner_id, "
      "category_id, amount, merchant_name, display_name, display_name_source, raw_name, date, "
-     "authorized_date, is_pending, category_overridden, category_source, imported_category, notes, "
+     "posted_date, is_pending, category_overridden, category_source, imported_category, notes, "
      "content_hash, import_evidence_json, needs_review, recurring_series_id, is_split, import_batch_id, "
      "trashed_at, rejection_reason, dedupe_resolved_by, "
      "suspect_duplicate_of, suspect_duplicate_reason, suspect_resolved_at FROM txn ORDER BY date DESC"),
@@ -1541,6 +1543,38 @@ def _legacy_transaction_transform(backup_version):
     return translate
 
 
+def _transaction_transform(backup_version):
+    """Every per-row translation a restored transaction may need, in the order its format changed.
+
+    Re-dating (v59) cannot wait for the post-restore data-init that other migrations use: the insert drops
+    `authorized_date`, which the current table no longer has, so it has to be read before the row lands.
+    """
+    legacy = _legacy_transaction_transform(backup_version)
+
+    def translate(row):
+        if legacy is not None:
+            row = legacy(row)
+        return redate_txn_row_to_transaction_date(row)
+
+    return translate
+
+
+def _redate_held_duplicate(row):
+    """A held synced row in a pre-v59 backup, moved to the transaction date like the ledger's own rows."""
+    if '"authorized_date"' not in (row.get("txn_payload_json") or ""):
+        return row
+    try:
+        values = json.loads(row["values_json"]) if row.get("values_json") else None
+        payload = json.loads(row["txn_payload_json"])
+    except (TypeError, ValueError):
+        return row
+    values, payload = redate_held_sync_duplicate(values, payload)
+    if values is not None:
+        row["values_json"] = json.dumps(values)
+    row["txn_payload_json"] = json.dumps(payload)
+    return row
+
+
 def _restore_preflight(header: dict, force: bool) -> None:
     """Everything that can refuse a restore, run before a single row is touched."""
     # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
@@ -1636,8 +1670,9 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
 
     reconciled = {"owners", "connections", "accounts", "connection_accounts"}
     transforms = {
-        "transactions": _legacy_transaction_transform(backup_version),
+        "transactions": _transaction_transform(backup_version),
         "import_batches": _local_connection,
+        "import_batch_duplicates": _redate_held_duplicate,
     }
     for section, table, _query in BACKUP_SECTIONS:
         if section in reconciled:

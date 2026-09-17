@@ -332,13 +332,14 @@ and filed on a sync card labelled "January 1970".
 
 So an adapter must decide, per date field, **which values mean "absent"** — not only a missing key. Then:
 
-* Prefer the field the ledger actually reports on (`posted`), and **fall back** to the other date the
-  source publishes (`transacted_at`) rather than to nothing. A pending row is ledger content, and the date
-  it *does* have is when the charge was made.
+* Date the row by when the charge was made (`transacted_at`) and **fall back** to the other date the
+  source publishes (`posted`) rather than to nothing; carry the posting as `posted_date`, absent while the
+  charge is pending. See `docs/data-model.md` → `date` for why the transaction date is the ledger's.
 * Never synthesize a date from the import time or a window bound. A fabricated date is indistinguishable
   from a real one; a dropped row is at least honest, and a row with no usable date anywhere is dropped.
-* Where the settled version of a row can arrive later, the sync must **re-stamp** the date, not merely
-  clear the pending flag — see `_refresh_provider_fields` in `routers/sync.py`. A field written from a
+* Where the settled version of a row can arrive later, the sync must **re-stamp** the provider-owned
+  fields, `posted_date` among them, not merely clear the pending flag — see `_refresh_provider_fields` in
+  `routers/sync.py`. A field written from a
   provisional version of a row is provisional until the row is superseded.
 
 The corresponding trap on the fixture side is that a simulator is written from what a source *documents*.

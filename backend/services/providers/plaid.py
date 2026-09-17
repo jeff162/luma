@@ -76,11 +76,11 @@ class PlaidAdapter(ProviderAdapter):
             for a in plaid_service.fetch_accounts(app_config, credential)
         ]
 
-    # What Plaid can capture per transaction. `authorized_date`, the descriptor, the counterparties and
+    # What Plaid can capture per transaction. `posted_date`, the descriptor, the counterparties and
     # the check number are locked on: duplicate detection reads all four, so letting them be turned off
     # would silently degrade matching. Location is enrichment and defaults off.
     CAPTURE_FIELDS = [
-        {"key": "authorized_date",      "label": "Transaction date (as well as posted date)", "locked": True,  "default_on": True},
+        {"key": "posted_date",          "label": "Posted date (as well as transaction date)", "locked": True,  "default_on": True},
         {"key": "provider_description", "label": "Original description",                      "locked": True,  "default_on": True},
         {"key": "counterparties",       "label": "Merchant and counterparties",               "locked": True,  "default_on": True},
         {"key": "check_number",         "label": "Check number",                              "locked": True,  "default_on": True},
@@ -98,8 +98,11 @@ class PlaidAdapter(ProviderAdapter):
             "amount":                  t["amount"],
             "merchant_name":           t["merchant_name"],
             "raw_name":                t["raw_name"],
-            "date":                    t["date"],
-            "authorized_date":         t.get("authorized_date"),
+            # Plaid's `date` is the posted date once a charge has posted and the transaction date while it
+            # is pending; `authorized_date` is the transaction date, where the institution supplies one.
+            # The ledger dates a charge by when it was made (see the provider contract in base.py).
+            "date":                    t.get("authorized_date") or t["date"],
+            "posted_date":             None if t["is_pending"] else t["date"],
             "is_pending":              t["is_pending"],
             "counterparties":          t.get("counterparties") or [],
             "check_number":            t.get("check_number"),

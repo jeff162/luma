@@ -405,14 +405,14 @@ def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, cont
             "Date": txn["date"],
             "Amount": txn["amount"],
             "Description": txn["raw_name"] or "",
-            **({"Transaction date": txn["authorized_date"]} if txn.get("authorized_date") else {}),
+            **({"Posted date": txn["posted_date"]} if txn.get("posted_date") else {}),
         },
         "matched_transaction": verdict.matched or {},
         # Enough to re-materialize the row if the user imports it anyway.
         "txn_payload": {
             "account_id": account_id,
             "date": txn["date"],
-            "authorized_date": txn.get("authorized_date"),
+            "posted_date": txn.get("posted_date"),
             "amount": txn["amount"],
             "merchant_name": merchant_name,
             "raw_name": txn["raw_name"],
@@ -1020,18 +1020,19 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             Shared by the two paths that learn something new about a held row — an explicit `modified`, and
             a pending row the provider re-sends once it has settled — because both revise the same facts
             about the same charge. Keeping the second one narrower than the first was a real defect rather
-            than an economy: it flipped `is_pending` alone, so a row whose date could only have come from
-            the pending version kept that date permanently, and its `content_hash` went on describing a
+            than an economy: it flipped `is_pending` alone, so a row settled with no `posted_date` and
+            kept whatever else the pending version said, and its `content_hash` went on describing a
             state the provider had already superseded. A provider with no pending→posted pointer reaches
             here rather than through the in-place conversion above, since for it the settled charge is the
             same transaction id, not a new one pointing back."""
             conn.execute(
                 """
-                UPDATE txn SET amount = ?, date = ?, is_pending = ?, merchant_name = ?, raw_name = ?,
-                               content_hash = ?
+                UPDATE txn SET amount = ?, date = ?, posted_date = ?, is_pending = ?, merchant_name = ?,
+                               raw_name = ?, content_hash = ?
                 WHERE  id = ?
                 """,
-                (t["amount"], t["date"], 1 if t["is_pending"] else 0, t["merchant_name"], t["raw_name"],
+                (t["amount"], t["date"], t.get("posted_date"), 1 if t["is_pending"] else 0,
+                 t["merchant_name"], t["raw_name"],
                  make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or ""), txn_id),
             )
 
@@ -1128,12 +1129,13 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
                     conn.execute(
                         """
-                        UPDATE txn SET external_transaction_id = ?, amount = ?, date = ?, is_pending = ?,
-                                       merchant_name = ?, raw_name = ?, content_hash = ?
+                        UPDATE txn SET external_transaction_id = ?, amount = ?, date = ?, posted_date = ?,
+                                       is_pending = ?, merchant_name = ?, raw_name = ?, content_hash = ?
                         WHERE  id = ?
                         """,
-                        (t["external_transaction_id"], t["amount"], t["date"], 1 if t["is_pending"] else 0,
-                         t["merchant_name"], t["raw_name"], content_hash, pend["id"]),
+                        (t["external_transaction_id"], t["amount"], t["date"], t.get("posted_date"),
+                         1 if t["is_pending"] else 0, t["merchant_name"], t["raw_name"], content_hash,
+                         pend["id"]),
                     )
                     updated += 1
                     _bump(tally, t["external_account_id"], "updated")
@@ -1228,7 +1230,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 amount=t["amount"],
                 scope_id=dedupe.context.scope_id_for(acc["id"], source_label),
                 txn_payload=txn_payload,
-                authorized_date=t.get("authorized_date"),
+                posted_date=t.get("posted_date"),
             )
             card_id = get_card(t["date"])
             if verdict.hard_reject:
@@ -1259,7 +1261,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 """
                 INSERT INTO txn
                     (id, external_transaction_id, account_id, owner_id, category_id, category_source,
-                     amount, merchant_name, display_name, raw_name, date, authorized_date, is_pending,
+                     amount, merchant_name, display_name, raw_name, date, posted_date, is_pending,
                      display_name_source, content_hash, import_evidence_json, import_batch_id,
                      suspect_duplicate_of, suspect_duplicate_reason, needs_review)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
@@ -1269,7 +1271,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # row's "Categorized by" line reads.
                 (txn_id, t["external_transaction_id"], acc["id"], acc["owner_id"], cat_id,
                  "rule" if cat_id else None, t["amount"],
-                 merchant_name, display_name, t["raw_name"], t["date"], t.get("authorized_date"),
+                 merchant_name, display_name, t["raw_name"], t["date"], t.get("posted_date"),
                  1 if t["is_pending"] else 0, display_name_source, content_hash, evidence_json, card_id,
                  verdict.suspect_of if verdict.soft_flag else None,
                  verdict.reason_key if verdict.soft_flag else None),

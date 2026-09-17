@@ -412,10 +412,10 @@ def build_sync_evidence(txn: dict, *, source_label: str, captured_fields: set[st
     # A checkbook number restarts at 1 on every account: worth reading, worthless as evidence two rows are
     # the same charge (two accounts both writing check #1042 is ordinary).
     add("Check number", txn.get("check_number"), role=EVIDENCE_ROLE_CATEGORICAL)
-    # Recorded as text so the authorized/posted disagreement is visible on the row itself, not only
-    # inferable from the column. The dedupe sweep reads the real `authorized_date` column for its date
+    # Recorded as text so the transaction/posted disagreement is visible on the row itself, not only
+    # inferable from the column. The dedupe sweep reads the real `posted_date` column for its date
     # window; this copy is for display and must never re-enter matching as text.
-    add("Authorized date", txn.get("authorized_date"), role=EVIDENCE_ROLE_CATEGORICAL)
+    add("Posted date", txn.get("posted_date"), role=EVIDENCE_ROLE_CATEGORICAL)
     if "location" in captured_fields:
         add("Location", txn.get("location"), role=EVIDENCE_ROLE_CATEGORICAL)
 

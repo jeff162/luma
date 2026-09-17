@@ -161,9 +161,9 @@ between two records of one charge the way a processor tag does. Two observations
 to be worth re-checking:
 
 - Rows arriving by sync are far barer than the docs imply: on the ledger measured, of 346 connection
-  rows only 30 carried `import_evidence_json` and only 3 carried `authorized_date` — though
+  rows only 30 carried `import_evidence_json` and only 3 carried a second date (then `authorized_date`, now `posted_date`) — though
   `architecture.md` describes sync writing evidence in the same shape a CSV import writes, and
-  `data-model.md` treats `authorized_date` as the real fix for the date-window tail. Whether that is
+  `data-model.md` treats that second date as the real fix for the date-window tail. Whether that is
   provider-specific or a capture gap is itself worth settling.
 - More captured text per row changes the input to every text tier, so the earlier null result does not
   carry over to a differently-shaped feed.

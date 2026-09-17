@@ -126,7 +126,7 @@ def _rescan_candidates(conn: sqlite3.Connection, card_ids: list[str]) -> list:
     card_ph = ",".join("?" * len(card_ids))
     return conn.execute(
         f"""
-        SELECT id, account_id, date, authorized_date, amount, content_hash, merchant_name,
+        SELECT id, account_id, date, posted_date, amount, content_hash, merchant_name,
                display_name, raw_name, import_evidence_json, import_batch_id
         FROM   txn
         WHERE  import_batch_id IN ({card_ph})
@@ -211,7 +211,7 @@ def rescan_connection_duplicates(conn: sqlite3.Connection, connection) -> dict:
                 "raw_name": row["raw_name"],
                 "import_evidence": parse_import_evidence(row["import_evidence_json"]),
             },
-            authorized_date=row["authorized_date"],
+            posted_date=row["posted_date"],
         )
         if verdict.hard_reject:
             # A re-scan removes a row only when it can name the copy that survives. The ladder's

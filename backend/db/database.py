@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 58
+CURRENT_VERSION = 59
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1643,6 +1643,121 @@ def _documents_may_wait_for_their_transaction(conn):
     conn.execute("ALTER TABLE document_v58 RENAME TO document")
 
 
+# What a zero posting timestamp converted to before adapters read it as "not posted yet". Never a posted date.
+_UNPOSTED_EPOCH_DATE = "1970-01-01"
+
+
+def _restamped_hash(row: dict, old_date: str, new_date: str):
+    """The row's `content_hash` moved to `new_date`, or unchanged when it was not derived from `old_date` by
+    the sync formula — a hash of unknown derivation is left alone rather than replaced by a guess."""
+    # Lazy: core imports this module.
+    from backend.routers.import_export.core import make_hash
+
+    description = row.get("raw_name") or row.get("merchant_name") or ""
+    amount = row.get("amount")
+    if amount is None or row.get("content_hash") != make_hash(old_date, amount, description):
+        return row.get("content_hash")
+    return make_hash(new_date, amount, description)
+
+
+def redate_txn_row_to_transaction_date(row: dict) -> dict:
+    """Data half of v59 for one `txn` row, shared with the restore of a backup taken before it.
+
+    Before v59 `date` was the posted date and `authorized_date` the transaction date; since, `date` is the
+    transaction date wherever the source gave one and `posted_date` the posted date. A row still carrying
+    `authorized_date` is in the old shape, which is the whole test — no version is needed. Only a row a
+    provider delivered can name a posted date: a CSV publishes one undifferentiated date, and a pending row
+    and a row dated at the epoch have not posted.
+    """
+    if "authorized_date" not in row:
+        return row
+    transacted = row.pop("authorized_date")
+    old_date = row.get("date")
+    from_provider = bool(transacted or row.get("external_transaction_id"))
+    posted = (old_date if from_provider and old_date and old_date != _UNPOSTED_EPOCH_DATE
+              and not row.get("is_pending") else None)
+    row["posted_date"] = posted
+    if transacted and transacted != old_date:
+        row["content_hash"] = _restamped_hash(row, old_date, transacted)
+        row["date"] = transacted
+    return row
+
+
+def redate_held_sync_duplicate(values: dict | None, payload: dict | None) -> tuple[dict | None, dict | None]:
+    """The same change for a synced row held in a card's duplicate report, whose `txn_payload` is what
+    "Import anyway" inserts and whose `values` is what the report shows. Returns them rewritten."""
+    if not isinstance(payload, dict) or "authorized_date" not in payload:
+        return values, payload
+    transacted = payload.pop("authorized_date")
+    old_date = payload.get("date")
+    posted = old_date if old_date and old_date != _UNPOSTED_EPOCH_DATE else None
+    payload["posted_date"] = posted
+    if transacted and transacted != old_date:
+        payload["content_hash"] = _restamped_hash(payload, old_date, transacted)
+        payload["date"] = transacted
+    if isinstance(values, dict):
+        values.pop("Transaction date", None)
+        values["Date"] = payload.get("date")
+        if posted:
+            values["Posted date"] = posted
+    return values, payload
+
+
+@migration(59)
+def _date_synced_rows_by_transaction(conn):
+    # A charge belongs to the day it was made, not the day the bank processed it: that is the day it is
+    # looked for on a statement, remembered by, and whose month it counts in. The posted date is kept
+    # beside it, and duplicate detection goes on testing both. Guarded like v56 for the isolated
+    # per-migration tests' minimal schemas.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "txn" not in tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if "authorized_date" not in columns:
+        return  # already renamed, or a fresh database created in this shape
+    conn.execute("ALTER TABLE txn RENAME COLUMN authorized_date TO posted_date")
+    if not {"date", "is_pending", "external_transaction_id", "amount", "raw_name", "merchant_name",
+            "content_hash"} <= columns:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, date, posted_date AS authorized_date, is_pending, external_transaction_id, amount,
+               raw_name, merchant_name, content_hash
+        FROM   txn
+        WHERE  external_transaction_id IS NOT NULL OR posted_date IS NOT NULL
+        """
+    ).fetchall()
+    for r in rows:
+        row = redate_txn_row_to_transaction_date(dict(r))
+        conn.execute(
+            "UPDATE txn SET date = ?, posted_date = ?, content_hash = ? WHERE id = ?",
+            (row["date"], row["posted_date"], row["content_hash"], row["id"]),
+        )
+
+    if "import_batch_duplicate" not in tables:
+        return
+    held = conn.execute(
+        """
+        SELECT batch_id, row_number, values_json, txn_payload_json
+        FROM   import_batch_duplicate
+        WHERE  instr(txn_payload_json, '"authorized_date"') > 0
+        """
+    ).fetchall()
+    for r in held:
+        try:
+            values = json.loads(r["values_json"]) if r["values_json"] else None
+            payload = json.loads(r["txn_payload_json"])
+        except (TypeError, ValueError):
+            continue
+        values, payload = redate_held_sync_duplicate(values, payload)
+        conn.execute(
+            "UPDATE import_batch_duplicate SET values_json = ?, txn_payload_json = ? "
+            "WHERE batch_id = ? AND row_number = ?",
+            (json.dumps(values) if values is not None else r["values_json"], json.dumps(payload),
+             r["batch_id"], r["row_number"]),
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2178,12 +2293,13 @@ def init_db(db_path: str | None = None):
                 notes                TEXT,
                 owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 content_hash         TEXT,
-                -- When the charge was AUTHORIZED, where `date` is when it POSTED. Providers supply both;
-                -- a CSV usually carries only one, and which one differs by source. Duplicate detection
-                -- matches when EITHER date lines up, which is what turns a genuine cross-source duplicate
-                -- separated by settlement lag into an exact match rather than a near-miss. NULL when the
-                -- source doesn't distinguish them. Reporting and filtering always use `date`.
-                authorized_date      TEXT,
+                -- When the charge POSTED, where `date` is when it was made wherever the source says so.
+                -- Providers supply both; a CSV usually carries only one, and which one differs by source.
+                -- Duplicate detection matches when EITHER date lines up, which is what turns a genuine
+                -- cross-source duplicate separated by settlement lag into an exact match rather than a
+                -- near-miss. NULL when the source doesn't distinguish them, and while a charge is pending.
+                -- Reporting and filtering always use `date`.
+                posted_date          TEXT,
                 import_evidence_json TEXT,
                 import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
                 trashed_at           TEXT,

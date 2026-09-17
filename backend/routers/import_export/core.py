@@ -734,8 +734,8 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, needs_review)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           display_name, raw_name, date, posted_date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, needs_review)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -746,6 +746,7 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         payload.get("display_name"),
         payload.get("raw_name"),
         payload.get("date"),
+        payload.get("posted_date"),
         int(payload.get("is_pending") or 0),
         payload.get("content_hash"),
         json.dumps(payload.get("import_evidence")) if isinstance(payload.get("import_evidence"), dict) else None,

@@ -806,7 +806,7 @@ class SimpleFinAdapter(ProviderAdapter):
         # Only what SimpleFIN actually supplies. A provider that cannot report counterparties, a merchant
         # id, a check number or a location omits them rather than offering controls that would do nothing.
         return [
-            {"key": "authorized_date",      "label": "Transaction date (as well as posted date)",
+            {"key": "posted_date",          "label": "Posted date (as well as transaction date)",
              "locked": True, "default_on": True},
             {"key": "provider_description", "label": "Original description",
              "locked": True, "default_on": True},
@@ -815,9 +815,8 @@ class SimpleFinAdapter(ProviderAdapter):
     @staticmethod
     def _normalize_txn(account_external_id: str, t: dict) -> dict:
         posted_date = _epoch_to_iso_date(t.get("posted"))
-        # When the charge was made, as against when it posted — the field duplicate detection values most,
-        # because two sources for one charge routinely report different ones of the two. It is also the
-        # only date a pending row has, which is why it is read before the mapping rather than inside it.
+        # When the charge was made, as against when it posted. Optional in the protocol, so the posted
+        # date stands in where a source omits it.
         transacted_date = _epoch_to_iso_date(t.get("transacted_at"))
         return {
             # **Namespaced by account, exactly as the account id itself is namespaced by provider.** The
@@ -842,15 +841,15 @@ class SimpleFinAdapter(ProviderAdapter):
             # hover both read this, and the store number a cleaned label drops is exactly the detail that
             # tells two similar charges apart and matches a CSV's own raw column.
             "raw_name":                (t.get("memo") or "").strip() or t.get("description"),
-            # The posted date where the charge has posted, and the transaction date while it is still
-            # pending. A pending row needs a real date for the same reason it is imported at all: it is
-            # ledger content, showing money already committed, and every date test in the duplicate ladder
-            # works within a few days of a charge's actual date — so a row dated decades away is invisible
-            # to the ladder and to every report. The settled version arrives under the same id and the sync
-            # re-stamps this with the true posted date then. Both absent leaves it None, which
-            # `_fetch_window` drops: a row with no date anywhere has nothing to file it under.
-            "date":                    posted_date or transacted_date,
-            "authorized_date":         transacted_date,
+            # The day the charge was made, which is the day it is looked for on a statement and the month
+            # it belongs to; the posted date only where the source gives nothing else. A pending row has
+            # only the first, so it keeps its date when it settles and the sync fills in `posted_date`.
+            # Both absent leaves it None, which `_fetch_window` drops: a row with no date anywhere has
+            # nothing to file it under.
+            "date":                    transacted_date or posted_date,
+            # Kept beside it because two sources for one charge routinely report different ones of the
+            # two, and duplicate detection tests both.
+            "posted_date":             posted_date,
             "is_pending":              bool(t.get("pending")),
         }
 

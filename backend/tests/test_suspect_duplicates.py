@@ -699,8 +699,8 @@ class SuspectDuplicateTests(unittest.TestCase):
     def test_import_does_not_flag_on_a_shared_categorical_evidence_value(self):
         # Regression: two synced rows on different accounts, unrelated merchants, same amount, one day
         # apart — a pair the SQL gate hands to the text gate on purpose, expecting the text to reject
-        # it. Both carry the same `Authorized date` because both providers publish one and the two
-        # charges happen to have been authorized the same day. That value is stamped categorical, so it
+        # it. Both carry the same `Posted date` because both providers publish one and the two
+        # charges happen to have posted the same day. That value is stamped categorical, so it
         # must not reach the matcher: admitting it made the pair byte-identical on the date string and
         # flagged it at the EXACT tier ('cross_account'), which auto-confirms on merge.
         account_a = self._insert_account("Bank A")
@@ -711,7 +711,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         same_day_evidence = json.dumps({
             "account": {"header": "Account", "value": "SAVINGS"},
             "extra_text_fields": [
-                {"header": "Authorized date", "value": "2026-08-02", "role": "categorical"},
+                {"header": "Posted date", "value": "2026-08-02", "role": "categorical"},
             ],
         })
         self._insert_txn(
@@ -746,7 +746,7 @@ class SuspectDuplicateTests(unittest.TestCase):
             return json.dumps({
                 "extra_text_fields": [
                     {"header": "Counterparty", "value": counterparty},
-                    {"header": "Authorized date", "value": "2026-08-02", "role": "categorical"},
+                    {"header": "Posted date", "value": "2026-08-02", "role": "categorical"},
                 ],
             })
 

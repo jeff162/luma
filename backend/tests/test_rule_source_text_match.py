@@ -248,7 +248,7 @@ class SyncedRowSourceTextTests(unittest.TestCase):
             "merchant_name": "Fablecard",
             "raw_name": "FABLECARD",
             "date": "2026-08-01",
-            "authorized_date": None,
+            "posted_date": None,
             "is_pending": False,
             "counterparties": [ORIGINAL_STATEMENT],
         }]

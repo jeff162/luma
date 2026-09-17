@@ -153,7 +153,7 @@ class SyncDedupeTests(unittest.TestCase):
                      json.dumps({"account": {"header": "Account", "value": "CREDIT CARD (...4103)"}})),
                 )
 
-    def _synced(self, txn_id, day, amount, merchant, raw, authorized_date=None):
+    def _synced(self, txn_id, day, amount, merchant, raw, posted_date=None):
         return {
             "external_transaction_id": txn_id,
             "external_account_id": self.EXTERNAL,
@@ -161,7 +161,7 @@ class SyncDedupeTests(unittest.TestCase):
             "merchant_name": merchant,
             "raw_name": raw,
             "date": day,
-            "authorized_date": authorized_date,
+            "posted_date": posted_date,
             "is_pending": False,
         }
 
@@ -237,24 +237,24 @@ class SyncDedupeTests(unittest.TestCase):
         self.assertIsNotNone(row["suspect_duplicate_of"], "the pair must be raised for review")
         self.assertEqual(row["suspect_duplicate_of"], "csv-0")
 
-    def test_authorized_date_pulls_a_row_into_a_covered_range_its_posted_date_missed(self):
-        # The dual-date case, and the reason capturing authorized_date matters more than any window.
-        # Monarch dates this charge by its TRANSACTION date (07-25, inside its coverage); Plaid dates
-        # the same charge by its POSTED date (07-29, outside). Testing only the posted date, coverage
-        # never engaged and the duplicate sailed through. Testing either date, it is covered.
-        self._csv_batch([("2026-07-25", -7.49, "Whole Foods")])
+    def test_posted_date_pulls_a_row_into_a_covered_range_its_transaction_date_missed(self):
+        # The dual-date case, and the reason capturing both dates matters more than any window. The CSV
+        # dates this charge by its POSTED date (07-20, the first day of its coverage); the provider row is
+        # dated by its TRANSACTION date (07-18, before it). Testing one date, coverage never engaged and
+        # the duplicate sailed through. Testing either date, it is covered.
+        self._csv_batch([("2026-07-20", -7.49, "Whole Foods")], coverage=("2026-07-20", "2026-07-26"))
         self._map("existing")
-        res = self._sync([self._synced("p1", "2026-07-29", -7.49, "Whole Foods", "WHOLE FOODS",
-                                       authorized_date="2026-07-25")])
+        res = self._sync([self._synced("p1", "2026-07-18", -7.49, "Whole Foods", "WHOLE FOODS",
+                                       posted_date="2026-07-20")])
         self.assertEqual(res["added"], 0)
         self.assertEqual(res["deduped"], 1)
 
-    def test_without_an_authorized_date_the_same_row_is_not_covered(self):
+    def test_without_a_posted_date_the_same_row_is_not_covered(self):
         # The control for the test above: identical inputs minus the second date. It imports, which is
         # correct — nothing then places the charge inside the covered range.
-        self._csv_batch([("2026-07-25", -7.49, "Whole Foods")])
+        self._csv_batch([("2026-07-20", -7.49, "Whole Foods")], coverage=("2026-07-20", "2026-07-26"))
         self._map("existing")
-        res = self._sync([self._synced("p1", "2026-07-29", -7.49, "Whole Foods", "WHOLE FOODS")])
+        res = self._sync([self._synced("p1", "2026-07-18", -7.49, "Whole Foods", "WHOLE FOODS")])
         self.assertEqual(res["added"], 1)
 
     def test_a_row_outside_the_covered_range_still_imports(self):
@@ -288,12 +288,13 @@ class SyncDedupeTests(unittest.TestCase):
 
     # ---- capture + evidence on inserted rows ----------------------------
 
-    def test_inserted_rows_carry_authorized_date_and_source_evidence(self):
+    def test_inserted_rows_carry_posted_date_and_source_evidence(self):
         self._map("new")
-        self._sync([self._synced("p1", "2026-07-05", -20.0, "CVS Caremark", "CAREMARK MAIL",
-                                 authorized_date="2026-07-02")])
+        self._sync([self._synced("p1", "2026-07-02", -20.0, "CVS Caremark", "CAREMARK MAIL",
+                                 posted_date="2026-07-05")])
         row = self._rows_on(self.PLAID_ACCOUNT)[0]
-        self.assertEqual(row["authorized_date"], "2026-07-02")
+        self.assertEqual(row["date"], "2026-07-02")
+        self.assertEqual(row["posted_date"], "2026-07-05")
         evidence = json.loads(row["import_evidence_json"])
         # The account label is what lets this row serve as a terminal-window candidate later.
         self.assertEqual(evidence["account"]["value"], self.LABEL)

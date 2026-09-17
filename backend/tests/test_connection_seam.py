@@ -303,7 +303,7 @@ class ProviderAdapterTests(unittest.TestCase):
                  # reads as a match everywhere downstream rather than as a rejection.
                  "currency": None}
             ])
-        # The optional capture fields (authorized_date, counterparties, …) ride the same neutral dict;
+        # The optional capture fields (posted_date, counterparties, …) ride the same neutral dict;
         # a provider that can't supply one leaves it absent, and the adapter normalizes it to
         # None/empty rather than dropping the key, so downstream code never branches on provider.
         with mock.patch("backend.services.plaid_service.fetch_transactions", return_value=[
@@ -313,7 +313,7 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertEqual(adapter.fetch_transactions(cfg, "tok-1"), [
                 {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
                  "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False,
-                 "authorized_date": None, "counterparties": [],
+                 "posted_date": "2026-01-01", "counterparties": [],
                  "check_number": None, "location": None, "currency": None}
             ])
 

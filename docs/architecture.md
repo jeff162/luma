@@ -926,9 +926,9 @@ came of leaving it unstated, in `docs/data-model.md`.
 - **Captured fields are declared by the adapter, not hardcoded per provider.**
   `ProviderAdapter.capture_fields()` returns `[{key, label, locked, default_on}]`, so each adapter states
   its own set and the SimpleFIN adapter is unaffected by the Plaid choices. **Locked** fields are the
-  ones duplicate detection depends on and are not the user's to disable (`authorized_date`,
+  ones duplicate detection depends on and are not the user's to disable (`posted_date`,
   `provider_description`, `counterparties`, `check_number`); optional ones
-  (`location`) are user-selectable and persist as `connection.captured_fields`. `authorized_date` is a
+  (`location`) are user-selectable and persist as `connection.captured_fields`. `posted_date` is a
   first-class `txn` column; everything else goes into `import_evidence_json` **in the identical shape a CSV
   import writes**, which is what makes a synced row visible to the text matcher and — via
   `evidence.account.value` — to the terminal-window matcher. Plaid's `personal_finance_category`,

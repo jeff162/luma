@@ -2,7 +2,7 @@
 Per-transaction field capture from a data-source connection.
 
 Two things are being pinned. First, the provider boundary actually extracts the fields duplicate
-detection depends on — above all `authorized_date`, since two sources reporting *different* dates for
+detection depends on — above all the second date, since two sources reporting *different* dates for
 the same charge is what made real duplicates read as near-misses. Second, a synced row's captured
 detail lands in the same `import_evidence_json` shape a CSV import writes, because that shape is what
 the dedupe text matcher and the terminal-window matcher both read; a bespoke shape would leave synced
@@ -90,13 +90,29 @@ class PlaidNormalizationTests(unittest.TestCase):
 
     def test_adapter_passes_capture_fields_through_the_neutral_seam(self):
         normalized = PlaidAdapter._normalize_txn(plaid_service._normalize_txn(PLAID_TXN))
-        self.assertEqual(normalized["authorized_date"], "2026-07-02")
         self.assertEqual(normalized["check_number"], "1042")
         # Plaid sends a merchant entity id; nothing reads it, so it is not carried across.
         self.assertNotIn("merchant_entity_id", normalized)
         self.assertEqual(normalized["counterparties"], ["CVS Caremark"])
         # No Plaid field names survive the seam.
         self.assertNotIn("plaid_transaction_id", normalized)
+
+    def test_the_ledger_date_is_when_the_charge_was_made(self):
+        normalized = PlaidAdapter._normalize_txn(plaid_service._normalize_txn(PLAID_TXN))
+        self.assertEqual(normalized["date"], "2026-07-02")
+        self.assertEqual(normalized["posted_date"], "2026-07-05")
+
+    def test_without_an_authorized_date_the_posted_date_stands_in(self):
+        normalized = PlaidAdapter._normalize_txn(plaid_service._normalize_txn({**PLAID_TXN, "authorized_date": None}))
+        self.assertEqual(normalized["date"], "2026-07-05")
+        self.assertEqual(normalized["posted_date"], "2026-07-05")
+
+    def test_a_pending_charge_has_no_posted_date(self):
+        # Plaid's `date` on a pending charge is when it was made, not a posting.
+        normalized = PlaidAdapter._normalize_txn(
+            plaid_service._normalize_txn({**PLAID_TXN, "pending": True, "authorized_date": None}))
+        self.assertEqual(normalized["date"], "2026-07-05")
+        self.assertIsNone(normalized["posted_date"])
 
     def test_every_declared_capture_field_is_actually_produced(self):
         # Fail-on-omission: a field the picker offers but the adapter never fills would be a control
@@ -111,7 +127,7 @@ class SyncEvidenceTests(unittest.TestCase):
     def _evidence(self, _captured={"location"}, **overrides):
         txn = {
             "raw_name": "CAREMARK MAIL",
-            "authorized_date": "2026-07-02",
+            "posted_date": "2026-07-05",
             "counterparties": ["CVS Caremark"],
             "check_number": "1042",
             "location": "1 Main St, Boston, MA",
@@ -131,7 +147,7 @@ class SyncEvidenceTests(unittest.TestCase):
         # The payoff: because the shape matches a CSV's, collect_duplicate_match_texts picks the
         # provider's descriptor and counterparties up with no per-source handling.
         raw = build_sync_evidence(
-            {"raw_name": "CAREMARK MAIL", "counterparties": ["CVS Caremark"], "authorized_date": None,
+            {"raw_name": "CAREMARK MAIL", "counterparties": ["CVS Caremark"], "posted_date": None,
              "check_number": None, "location": None},
             source_label="CREDIT CARD ···4103", captured_fields=set(),
         )
@@ -150,22 +166,22 @@ class SyncEvidenceTests(unittest.TestCase):
         without = self._evidence(_captured=set())
         self.assertNotIn("Location", headers(without))
         # Locked captures stay regardless of the user's optional selection.
-        self.assertEqual(headers(without), {"Counterparty", "Check number", "Authorized date"})
+        self.assertEqual(headers(without), {"Counterparty", "Check number", "Posted date"})
 
     def test_empty_values_are_omitted_rather_than_stored_blank(self):
         ev = self._evidence(check_number="", counterparties=[], _captured=set())
-        self.assertEqual({f["header"] for f in ev.get("extra_text_fields", [])}, {"Authorized date"})
+        self.assertEqual({f["header"] for f in ev.get("extra_text_fields", [])}, {"Posted date"})
 
     def test_only_the_counterparty_is_offered_to_the_duplicate_text_matcher(self):
         # A CSV infers roles from column cardinality; a sync stamps them, because it knows what each
         # field is. Everything but the counterparty is structured metadata two unrelated charges can
-        # carry identically — the authorized date most of all, since every synced row has one and the
+        # carry identically — the posted date most of all, since every synced row has one and the
         # cross-account sweep already spends the date as its ±7-day window. Leaving these unstamped
-        # made any two same-amount rows sharing an authorized date an exact-tier duplicate.
+        # made any two same-amount rows sharing a captured date an exact-tier duplicate.
         ev = self._evidence()
         roles = {f["header"]: f.get("role") for f in ev["extra_text_fields"]}
         self.assertIsNone(roles["Counterparty"])
-        for header in ("Check number", "Authorized date", "Location"):
+        for header in ("Check number", "Posted date", "Location"):
             self.assertEqual(roles[header], EVIDENCE_ROLE_CATEGORICAL, header)
 
         # The behavior the roles buy: only the counterparty reaches the cross-account matcher.
@@ -206,7 +222,7 @@ class CapturedFieldSelectionTests(unittest.TestCase):
         with database.get_db() as conn:
             conn.execute(
                 "UPDATE connection SET captured_fields = ? WHERE id = 'c1'",
-                (json.dumps(["authorized_date", "made_up", "location"]),),
+                (json.dumps(["posted_date", "made_up", "location"]),),
             )
             self.assertEqual(captured_field_keys(conn, "c1", PlaidAdapter()), {"location"})
 

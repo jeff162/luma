@@ -23,9 +23,9 @@ An `extra_text_fields` entry is one of two kinds, and text matching must treat t
     value in such a field, so feeding it to the matcher manufactures duplicates out of coincidence.
 
 The motivating failure for the structured half: `build_sync_evidence` records each synced row's
-`authorized_date` as a captured field, and both provider adapters publish it as an ISO date string.
+second date as a captured field, and both provider adapters publish it as an ISO date string.
 The cross-account sweep's text set folded in every captured value, so any two synced rows on
-different accounts sharing an amount and an authorized date matched **byte-identically on the date
+different accounts sharing an amount and that date matched **byte-identically on the date
 string** and were flagged as high-confidence cross-account duplicates — with entirely unrelated
 merchants. Worse, the date is precisely the signal the sweep's SQL gate has already spent (a ±7-day
 window), so the text gate — the strong discriminator the wide window is *justified by* — was

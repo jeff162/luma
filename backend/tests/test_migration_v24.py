@@ -100,7 +100,8 @@ class MigrationV24Tests(unittest.TestCase):
     def test_it_adds_the_columns_an_existing_database_lacks(self):
         self._migrate()
         self.assertIn("captured_fields", _columns(self.conn, "connection"))
-        self.assertIn("authorized_date", _columns(self.conn, "txn"))
+        # v59 renamed it once `date` became the transaction date.
+        self.assertIn("posted_date", _columns(self.conn, "txn"))
         self.assertIn("terminal_window_days", _columns(self.conn, "csv_import_profile"))
         self.assertEqual(database.get_db_version(self.conn), database.CURRENT_VERSION)
 

@@ -169,7 +169,7 @@ def are_distinct_checks(merchant_a: Optional[str], merchant_b: Optional[str]) ->
 # +4 (Whole Foods) and +6 (a truncated "Rancatore" spelling) — so ±3 demonstrably missed real duplicates.
 # The false positives at those distances (two distinct same-amount Zelle receipts) are rejected by the
 # TEXT tiers regardless of window, which is the point: text is the discriminator here and the date window
-# is the weak one, so widening it is cheap. Capturing `authorized_date` is the real fix — most of that
+# is the weak one, so widening it is cheap. Capturing both dates (`posted_date`) is the real fix — most of that
 # tail collapses to gap 0 once both dates are known — and this stays the fallback for sources that
 # publish only one date. Those pairs and the Zelle control are kept as a fixture in
 # backend/tests/test_cross_account_window_evidence.py, which asserts the +4/+6 pairs are missed at 3 —
@@ -276,7 +276,7 @@ def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
     unrelated rows share by coincidence (a date, a check number, a transaction type), so admitting
     them turns the *strong* half of the cross-account test into a restatement of the weak half. This
     function used to admit every captured field, which made every pair of synced rows sharing an
-    amount and an `authorized_date` an exact-tier match — see services/import_evidence.py.
+    amount and a captured date an exact-tier match — see services/import_evidence.py.
     """
     texts: set[str] = set()
     for value in (merchant_name, raw_name):
@@ -1406,22 +1406,22 @@ def evaluate_duplicate(
     amount: float,
     scope_id: Optional[str],
     txn_payload: dict,
-    authorized_date: Optional[str] = None,
+    posted_date: Optional[str] = None,
 ) -> DedupeVerdict:
     """Run the dedupe rule chain for a single incoming row. See module docstring for the rule
     ladder. The caller builds `context` once per import via `build_dedupe_context` (or constructs
     one directly for tests). `scope_id` is the receiving account's effective-account/linked-group
     scope id, used by the in-scope rules.
 
-    `authorized_date` is the row's *other* date when the source publishes both (when it was
-    authorized, as against when it posted). Every date test below asks whether **either** date
+    `posted_date` is the row's *other* date when the source publishes both (when it posted, as
+    against when it was made). Every date test below asks whether **either** date
     applies, because two sources routinely date the same charge differently — one reports the
     transaction date and the other the posted date. Without this a row reads as outside a covered
     range that morally contains it, and the coverage rule never engages at all.
     """
     incoming_merchant = txn_payload.get("merchant_name")
     # Every date this row could legitimately be filed under, most-authoritative first.
-    row_dates = [d for d in (parsed_date, authorized_date) if d]
+    row_dates = [d for d in (parsed_date, posted_date) if d]
     # This row as its source described it, for tiering the coverage rules' reported candidates. Built
     # once here rather than per candidate: the coverage rules can each look at a handful of them.
     incoming_texts = row_match_texts(
@@ -1685,11 +1685,11 @@ def build_dedupe_context(
         incoming row find it regardless of which date its own source published."""
         dates = [r["date"]]
         try:
-            authorized = r["authorized_date"]
+            posted = r["posted_date"]
         except (KeyError, IndexError):
-            authorized = None
-        if authorized and authorized != r["date"]:
-            dates.append(authorized)
+            posted = None
+        if posted and posted != r["date"]:
+            dates.append(posted)
         return [d for d in dates if d]
 
     def _summary(r, scope: str) -> dict:
@@ -1723,7 +1723,7 @@ def build_dedupe_context(
     if relevant_account_ids:
         ph = _placeholders(relevant_account_ids)
         for r in conn.execute(
-            f"""SELECT id, account_id, content_hash, date, authorized_date, raw_name, merchant_name,
+            f"""SELECT id, account_id, content_hash, date, posted_date, raw_name, merchant_name,
                        display_name, amount, is_pending, import_evidence_json, import_batch_id
                 FROM   txn
                 WHERE  account_id IN ({ph}) AND content_hash IS NOT NULL""",
@@ -1765,7 +1765,7 @@ def build_dedupe_context(
     if relevant_effective_account_ids:
         ph = _placeholders(relevant_effective_account_ids)
         for r in conn.execute(
-            f"""SELECT t.id, t.account_id, t.content_hash, t.date, t.authorized_date, t.raw_name,
+            f"""SELECT t.id, t.account_id, t.content_hash, t.date, t.posted_date, t.raw_name,
                        t.merchant_name, t.display_name, t.amount, t.import_evidence_json, t.import_batch_id,
                        COALESCE(a.parent_account_id, a.id) AS effective_account_id
                 FROM   txn t JOIN account a ON a.id = t.account_id
@@ -2528,11 +2528,11 @@ _CROSS_ACCOUNT_CANDIDATE_SQL = """
           ON   t2.id != t1.id
           -- Either row's dates may line up: two sources routinely publish the transaction date and
           -- the posted date for the same charge, so the pair is a candidate if ANY combination falls
-          -- inside the window. COALESCE keeps a row with no authorized_date comparing on its own date.
+          -- inside the window. COALESCE keeps a row with no posted_date comparing on its own date.
           AND  (   t2.date BETWEEN date(t1.date, ?) AND date(t1.date, ?)
-                OR COALESCE(t2.authorized_date, t2.date) BETWEEN date(t1.date, ?) AND date(t1.date, ?)
-                OR t2.date BETWEEN date(COALESCE(t1.authorized_date, t1.date), ?)
-                               AND date(COALESCE(t1.authorized_date, t1.date), ?))
+                OR COALESCE(t2.posted_date, t2.date) BETWEEN date(t1.date, ?) AND date(t1.date, ?)
+                OR t2.date BETWEEN date(COALESCE(t1.posted_date, t1.date), ?)
+                               AND date(COALESCE(t1.posted_date, t1.date), ?))
           AND  ROUND(t2.amount, 2) = ROUND(t1.amount, 2)
           AND  t2.trashed_at IS NULL
           AND  (t2.import_batch_id IS NULL OR t2.import_batch_id != t1.import_batch_id)
@@ -3107,13 +3107,13 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     # candidate list is enough to mean it never ran on this row at all.
     context = DedupeContext(conn=None)
     for r in conn.execute(
-        f"""SELECT t.id, t.account_id, t.date, t.authorized_date, t.raw_name, t.merchant_name,
+        f"""SELECT t.id, t.account_id, t.date, t.posted_date, t.raw_name, t.merchant_name,
                    t.display_name, t.amount, t.import_evidence_json, t.import_batch_id,
                    COALESCE(a.parent_account_id, a.id) AS effective_account_id
             FROM   txn t JOIN account a ON a.id = t.account_id
             WHERE  (t.account_id IN ({account_ph}){scope_clause})
               AND  ROUND(t.amount, 2) IN ({amount_ph})
-              AND  (t.date IN ({date_ph}) OR t.authorized_date IN ({date_ph}))
+              AND  (t.date IN ({date_ph}) OR t.posted_date IN ({date_ph}))
               AND  t.is_pending = 0
               AND  t.trashed_at IS NULL""",
         [*account_ids, *scope_ids, *amounts, *probe_dates, *probe_dates],
@@ -3132,8 +3132,8 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         # Both dates, for the same reason the ingestion path indexes both: the twin may be filed under
         # whichever of the two its own source published.
         dates = [r["date"]]
-        if r["authorized_date"] and r["authorized_date"] != r["date"]:
-            dates.append(r["authorized_date"])
+        if r["posted_date"] and r["posted_date"] != r["date"]:
+            dates.append(r["posted_date"])
         for stored_date in dates:
             key = duplicate_amount_key(stored_date, r["amount"])
             context.existing_rows_by_account_amount.setdefault(r["account_id"], {}).setdefault(key, []).append(summary)

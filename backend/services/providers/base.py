@@ -40,14 +40,15 @@ Normalized contracts (plain dicts, provider-neutral keys):
 - `fetch_transactions(app_config, credential, start_date=None, end_date=None)
         -> [ {"external_transaction_id", "external_account_id", "amount", "merchant_name",
               "raw_name", "date", "is_pending", …optional capture fields} ]`
-      `date` is an ISO string; `amount` keeps the provider's sign convention (downstream categorization
+      `date` is an ISO string — when the charge was made wherever the provider says, else when it
+      posted; `amount` keeps the provider's sign convention (downstream categorization
       is written against it); `external_account_id` joins to `account.external_account_id`.
 
 Optional capture fields, all provider-neutral and all absent-tolerant, declared per adapter by
 `capture_fields()`:
 
-- `authorized_date` — when the charge was authorized, as against `date` (when it posted). The single
-  most valuable one for duplicate detection: two sources for the same charge commonly report
+- `posted_date` — when the charge posted, as against `date` (when it was made); absent while pending.
+  The single most valuable one for duplicate detection: two sources for the same charge commonly report
   *different* ones of these, which is what made real duplicates look like near-misses on date.
 - `provider_description`, `counterparties` — identity beyond the descriptor string, which each source
   truncates differently.
@@ -55,7 +56,7 @@ Optional capture fields, all provider-neutral and all absent-tolerant, declared 
   the check discriminator can tell two same-amount checks apart.
 - `location` — enrichment only; the one field that defaults off.
 
-Everything except `authorized_date` (a first-class `txn` column) is written into the row's
+Everything except `posted_date` (a first-class `txn` column) is written into the row's
 `import_evidence_json` in the same shape a CSV import uses, so the dedupe text matcher and the origin
 hover pick them up with no per-source special-casing.
 """
@@ -382,7 +383,7 @@ class ProviderAdapter(ABC):
         `[{key, label, locked, default_on}]`.
 
         `locked` marks a field the app always captures and the user cannot turn off — either because
-        duplicate detection depends on it (`authorized_date`, the descriptor, the check number) or
+        duplicate detection depends on it (`posted_date`, the descriptor, the check number) or
         because it costs nothing and identifies the merchant (`counterparties`). Everything else is
         the user's call. Adapters declare their own set, so a provider that cannot supply a field
         simply omits it rather than showing a control that does nothing.
