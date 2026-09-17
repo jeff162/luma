@@ -1577,6 +1577,25 @@ class AmazonOrdersTests(unittest.TestCase):
                          [("A-2", "2017-03-04", "2017-items.csv")])
         self.assertEqual(items_detail["duplicate_orders"], [])
 
+    def test_import_detail_duplicates_resolve_to_the_ledger_order(self):
+        # A duplicate row shows the order it duplicates (date, description, amount, account), keeping this
+        # import's order id + source file; once that order is gone it falls back to the recorded id + date.
+        from backend.routers.import_export.amazon import amazon_import_detail
+        first = _cash_order(order_id="A-1"); first.source_file = "2016-orders.csv"; first.source_file_hash = "H-2016O"
+        dup = _cash_order(order_id="A-1"); dup.source_file = "2017-orders.csv"; dup.source_file_hash = "H-2017O"
+        dup.items = []; dup.has_item_detail = False
+        with self._use_db_path(), get_db() as conn:
+            original = run_amazon_import(conn, [first], account_id="amazon", filename="2016-orders.csv")
+            again = run_amazon_import(conn, [dup], account_id="amazon", filename="2017-orders.csv")
+            [ledger_order] = amazon_import_detail(conn, original["batch_id"])["orders"]
+            [row] = amazon_import_detail(conn, again["batch_id"])["duplicate_orders"]
+            self.assertEqual((row["id"], row["amount"], row["name"], row["account"]),
+                             (ledger_order["id"], ledger_order["amount"], ledger_order["name"], ledger_order["account"]))
+            self.assertEqual((row["order_id"], row["source_file"]), ("A-1", "2017-orders.csv"))
+            conn.execute("DELETE FROM txn_link_member WHERE txn_id = ?", (ledger_order["id"],))
+            [fallback] = amazon_import_detail(conn, again["batch_id"])["duplicate_orders"]
+        self.assertEqual(fallback, {"order_id": "A-1", "date": dup.order_date, "source_file": "2017-orders.csv"})
+
     def test_import_detail_orders_and_payments(self):
         # The orders view carries each order's source file + item-detail flag; the payments view tallies the
         # matched card charges by the ledger account they landed on.

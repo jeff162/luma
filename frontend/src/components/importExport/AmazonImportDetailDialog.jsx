@@ -80,9 +80,15 @@ const CATEGORIES = [
   },
   {
     key: 'duplicates', label: 'Duplicates', warn: true, rows: (d) => d.duplicate_orders || [],
+    // Each row is the ledger order it duplicates when that order still exists (`id` set), else just the
+    // recorded order id + date.
     columns: [
-      { key: 'order_id', label: 'Order id', width: 220, render: (e) => <span style={{ fontSize: 12 }}>{e.order_id}</span> },
-      { key: 'date', label: 'Order date', width: 140, render: (e) => <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date || '—'}</span> },
+      {
+        key: 'order', label: 'Amazon order', width: 380,
+        render: (e) => (e.id ? <OrderCell txn={e} />
+          : <span style={{ fontSize: 12, color: 'var(--muted)' }}>{e.date || '—'}</span>),
+      },
+      { key: 'order_id', label: 'Order id', width: 170, render: (e) => <span style={{ fontSize: 12 }}>{e.order_id}</span> },
       { key: 'file', label: 'Source file', render: (e) => <SourceFile value={e.source_file} /> },
     ],
     getRowId: (e, i) => `${e.order_id}:${i}`,

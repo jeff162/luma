@@ -1606,6 +1606,18 @@ def amazon_import_detail(conn: sqlite3.Connection, batch_id: str) -> dict:
                             "name": it.get("description"), "source_file": it.get("source_file")})
         return out
 
+    def _duplicate_rows(dups) -> list[dict]:
+        """A persisted duplicate-order record → the ledger order it duplicates (found through the order-id
+        link, so it resolves for imports recorded before this lookup existed), carrying this import's order id
+        and source file; the recorded order id + date when that order is gone."""
+        out = []
+        for d in dups or []:
+            link = txn_links.find_link(conn, LINK_KIND, d.get("order_id"))
+            order_txn_id = next((m["txn_id"] for m in (link or {}).get("members", []) if m["role"] == "order"), None)
+            summ = _txn_summary(conn, order_txn_id) if order_txn_id else None
+            out.append(dict(summ, order_id=d.get("order_id"), source_file=d.get("source_file")) if summ else d)
+        return out
+
     # Items matched: orders enriched from a *separate* items file (recorded) plus orders this batch created
     # with item detail inline (a combined orders+items import). De-duped by id.
     matched_rows = _enriched_rows(summary.get("enriched_items"))
@@ -1630,7 +1642,7 @@ def amazon_import_detail(conn: sqlite3.Connection, batch_id: str) -> dict:
         "items_matched": matched_rows,
         "already_enriched": _enriched_rows(summary.get("already_enriched_items")),
         "items_discarded": summary.get("discarded_items") or [],
-        "duplicate_orders": summary.get("duplicate_orders") or [],
+        "duplicate_orders": _duplicate_rows(summary.get("duplicate_orders")),
         "payments": payments,
     }
 
