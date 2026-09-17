@@ -378,7 +378,11 @@ def clear_auth_preferences(request: Request):
 
 
 def _identity_view(user: dict) -> dict:
-    return {"id": user["id"], "display_name": user.get("display_name") or user["username"]}
+    # `username` is what the identity signs in with once sign-in protection is on, which the page that turns
+    # it on has to be able to say — and hand a password manager, which files the new password under it.
+    # Local mode only, where it is no secret: anyone reaching this can already select the identity.
+    return {"id": user["id"], "display_name": user.get("display_name") or user["username"],
+            "username": user["username"]}
 
 
 @router.get("/identities")

@@ -8,7 +8,7 @@ import { NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
@@ -565,7 +565,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     api.getIdentities()
       .then(resp => {
         if (cancelled) return
-        const list = (resp.identities || []).map(i => ({ id: i.id, name: i.display_name }))
+        const list = (resp.identities || []).map(i => ({ id: i.id, name: i.display_name, username: i.username }))
         setProfiles(list)
         // Pre-select the operator's active identity as the claim; fall back to the first.
         const preferred = list.find(p => p.id === activeLocalProfile?.id) || list[0]
@@ -642,6 +642,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
 
   const others = profiles.filter(p => p.id !== claimId)
   const single = profiles.length === 1
+  const claimed = profiles.find(p => p.id === claimId)
 
   return (
     <Card style={{ padding: 20 }}>
@@ -679,6 +680,12 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
 
         <div style={{ display: 'grid', gap: 8 }}>
           <FormLabel>Your password (admin)</FormLabel>
+          {claimed?.username ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Sign in with the username <strong>{claimed.username}</strong>.
+            </div>
+          ) : null}
+          <PasswordManagerUsername value={claimed?.username || ''} />
           <PasswordInput aria-label="Your password" value={adminPassword} onChange={setAdminPassword} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
           <PasswordInput value={adminConfirm} onChange={setAdminConfirm} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
