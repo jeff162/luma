@@ -162,7 +162,7 @@ def get_split_parts_map(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dic
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
         f"""
-        SELECT s.txn_id, s.category_id, s.amount, s.label, c.name AS category_name
+        SELECT s.id, s.txn_id, s.category_id, s.amount, s.label, c.name AS category_name
         FROM   txn_split s
         LEFT JOIN category c ON c.id = s.category_id
         WHERE  s.txn_id IN ({placeholders})
@@ -173,6 +173,8 @@ def get_split_parts_map(conn: sqlite3.Connection, txn_ids: Sequence[str]) -> dic
     out: dict[str, list[dict]] = {}
     for row in rows:
         out.setdefault(row["txn_id"], []).append({
+            # Lets an expanded row find its own allocation among its siblings (its `split_part_id`).
+            "id": row["id"],
             "category_id": row["category_id"],
             "category_name": row["category_name"],
             "amount": row["amount"],

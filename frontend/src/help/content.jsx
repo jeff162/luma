@@ -629,6 +629,11 @@ export const HELP_TOPICS = [
             captured, such as a memo or an original statement line.
           </li>
           <li>
+            <strong>Item descriptions</strong> &mdash; the description given to an item of a{' '}
+            <HelpLink to="/help/transaction-splits">split transaction</HelpLink>. Inside a category report
+            only the item in that category is matched.
+          </li>
+          <li>
             <strong>Category</strong> &mdash; part of the category&apos;s name. <code>uncategorized</code> finds
             transactions without one.
           </li>
@@ -646,8 +651,9 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           A transaction found by text that is not on screen is marked. A match in the imported text
-          underlines the name with a dotted line, and hovering the name shows that text. A match inside an
-          attachment highlights the row&apos;s 📎 marker, which opens the document.
+          underlines the name with a dotted line, and hovering the name shows that text. A match in an item
+          description underlines the <strong>Split (N)</strong> marker the same way, and hovering it lists the
+          items. A match inside an attachment highlights the row&apos;s 📎 marker, which opens the document.
         </p>
 
         <HelpHeading anchor="keywords">Keywords</HelpHeading>
@@ -790,9 +796,15 @@ export const HELP_TOPICS = [
         <p>
           The ledger shows the transaction <em>once</em>, at its full amount. Inside a report or a
           category drill-down it appears instead as the <em>item</em> that matched, at that
-          item's amount. Opening the same transaction's detail panel shows the whole amount again. That
-          difference is intended: one is the purchase, the other is the part of it that belongs to the
-          category being looked at.
+          item's amount, with the item&apos;s description under the merchant name. Opening the same
+          transaction's detail panel shows the whole amount again. That difference is intended: one is the
+          purchase, the other is the part of it that belongs to the category being looked at.
+        </p>
+        <p>
+          Item descriptions are matched by the{' '}
+          <HelpLink to="/help/searching-transactions">transaction search</HelpLink>. A{' '}
+          <HelpLink to="/help/csv-export">CSV export</HelpLink> lists a split transaction once, at its full
+          amount, with its category left blank.
         </p>
         <p>
           Tags behave the way they read. A tag put on the transaction applies to the whole thing and to
@@ -2371,9 +2383,45 @@ export const HELP_TOPICS = [
 
         <HelpHeading anchor="export-and-backup">Export and Backup / Restore</HelpHeading>
         <p>
-          <strong>Export</strong> writes transactions out as a CSV file. <strong>Backup /
+          <strong>Export</strong> writes transactions out as a CSV file &mdash; see{' '}
+          <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>. <strong>Backup /
             Restore</strong> makes and restores whole-database archives, optionally encrypted to a backup
           key &mdash; see <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'csv-export',
+    section: 'importing',
+    title: 'Exporting transactions to CSV',
+    surfaces: ['Import / Export (Export)', 'Copy transactions (Download CSV)'],
+    summary: 'A CSV export writes the transactions matching a filter, with the chosen columns, in roughly the shape they were imported. It is not a backup: splits, tags, rules and attachments stay behind.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          The <strong>Export</strong> tab writes the transactions matching its filter to a CSV file, one
+          row per transaction, with the columns ticked below the filter. With no filter set, every
+          transaction is written. For a list too large to copy, the Transactions page&apos;s{' '}
+          <strong>Copy transactions</strong> dialog offers the same file as <strong>Download CSV</strong>.
+        </p>
+        <p>
+          A CSV export gives the data back roughly as it was imported, with some of the work done since
+          &mdash; renames, categories, notes. It cannot carry all of it, and is not a way to move or keep
+          the data: a <HelpLink to="/help/data-and-backups">backup</HelpLink> is.
+        </p>
+
+        <h4>Split transactions</h4>
+        <p>
+          A row holds one category, and a{' '}
+          <HelpLink to="/help/transaction-splits">split transaction</HelpLink> has several. An export
+          therefore lists a split once, at its full amount, with <strong>Category</strong> and{' '}
+          <strong>Group</strong> left blank. Item descriptions are not exported.
+        </p>
+        <p>
+          Filtered to a category, the export lists the items in that category instead, each at its own
+          amount and under its own category &mdash; the same rows the category report shows.
         </p>
       </>
     ),

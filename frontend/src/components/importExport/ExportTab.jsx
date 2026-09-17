@@ -13,6 +13,7 @@ import { FilterProvider, useFilters } from '../../lib/FilterContext.jsx'
 import FilterBar from '../FilterBar.jsx'
 import { Button, Card } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
+import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { DEFAULT_EXPORT_COLS, EXPORT_COLUMNS } from '../../lib/importExport/constants.js'
 
 export function ExportTab() {
@@ -49,7 +50,12 @@ function ExportTabContent() {
 
   return (
     <div>
-      <SectionTitle>Export transactions to a .csv file</SectionTitle>
+      <SectionTitle>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <FeatureExplainer topic="csv-export" placement="bottom-left" />
+          Export transactions to a .csv file
+        </span>
+      </SectionTitle>
       <Card style={{ marginBottom: 12, padding: 0 }}>
         <FilterBar />
       </Card>

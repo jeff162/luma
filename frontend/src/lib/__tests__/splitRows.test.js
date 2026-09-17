@@ -4,7 +4,7 @@
 // are asserted here rather than left to the surfaces that consume them.
 
 import { describe, it, expect } from 'vitest'
-import { isSplitPartRow, transactionRowKey, splitPartSummary, wholeTransactionRow } from '../splitRows.js'
+import { isSplitPartRow, transactionRowKey, splitPartLabel, splitPartSummary, wholeTransactionRow } from '../splitRows.js'
 
 describe('isSplitPartRow', () => {
   it('is false for an ordinary transaction', () => {
@@ -36,6 +36,22 @@ describe('transactionRowKey', () => {
 
   it('cannot collide with a plain transaction id', () => {
     expect(transactionRowKey({ id: 't1', is_split: true, split_part_id: 'p1' })).toBe('t1:p1')
+  })
+})
+
+describe('splitPartLabel', () => {
+  const parts = [{ id: 'p1', label: 'Pantry restock' }, { id: 'p2', label: 'Shelf brackets' }]
+
+  it('is the label of the allocation this row is, not a sibling\'s', () => {
+    expect(splitPartLabel({ id: 't1', is_split: true, split_part_id: 'p2', split_parts: parts })).toBe('Shelf brackets')
+  })
+
+  it('is empty for a whole split, whose parts are several', () => {
+    expect(splitPartLabel({ id: 't1', is_split: true, split_part_id: null, split_parts: parts })).toBe('')
+  })
+
+  it('is empty for a part left unlabelled', () => {
+    expect(splitPartLabel({ id: 't1', is_split: true, split_part_id: 'p1', split_parts: [{ id: 'p1', label: null }] })).toBe('')
   })
 })
 

@@ -356,6 +356,92 @@ class SplitLabelTests(SplitFixtureMixin, unittest.TestCase):
             self.assertEqual(round(sum(p["amount"] for p in proposed["parts"]), 2), 100.0)
 
 
+class SplitLabelSearchTests(SplitFixtureMixin, unittest.TestCase):
+    """The search box reads a part's label. Unscoped a split is the purchase, so any part's label finds it —
+    and since the row shows no label, it is marked. Scoped to a category a row is one part, so only that
+    part's own label counts."""
+
+    def _labelled_split(self, client, path):
+        account, _, leaves = self._seed(path)
+        txn = self._add_txn(path, account=account, amount=100.0)
+        client.put(f"/api/transactions/{txn}/split", json={"parts": [
+            {"category_id": leaves["Groceries Fixture"], "amount": 60.0, "label": "Pantry restock"},
+            {"category_id": leaves["Hardware Fixture"], "amount": 40.0, "label": "Shelf brackets"},
+        ]})
+        return leaves, txn
+
+    def test_a_part_label_finds_the_purchase_and_marks_it(self):
+        with api_client() as (client, path):
+            _, txn = self._labelled_split(client, path)
+            rows = client.get("/api/transactions", params={"quick_filter": "bracket"}).json()["transactions"]
+            self.assertEqual([r["id"] for r in rows], [txn])
+            self.assertTrue(rows[0]["matched_split_label"])
+
+    def test_a_row_found_another_way_is_not_marked(self):
+        with api_client() as (client, path):
+            _, txn = self._labelled_split(client, path)
+            rows = client.get("/api/transactions", params={"quick_filter": "Fixture Store"}).json()["transactions"]
+            self.assertEqual([r["id"] for r in rows], [txn])
+            self.assertFalse(rows[0]["matched_split_label"])
+
+    def test_scoped_to_a_category_only_the_part_whose_label_matched_is_found(self):
+        with api_client() as (client, path):
+            leaves, txn = self._labelled_split(client, path)
+            both = f"{leaves['Groceries Fixture']},{leaves['Hardware Fixture']}"
+            rows = client.get("/api/transactions", params={
+                "category_ids": both, "quick_filter": "bracket",
+            }).json()["transactions"]
+            self.assertEqual([(r["id"], r["amount"]) for r in rows], [(txn, 40.0)])
+            groceries = client.get("/api/transactions", params={
+                "category_ids": leaves["Groceries Fixture"], "quick_filter": "bracket",
+            }).json()["transactions"]
+            self.assertEqual(groceries, [])
+
+    def test_a_prefixed_search_does_not_read_labels(self):
+        with api_client() as (client, path):
+            self._labelled_split(client, path)
+            rows = client.get("/api/transactions", params={"quick_filter": "merchant:bracket"}).json()["transactions"]
+            self.assertEqual(rows, [])
+
+
+class SplitExportTests(SplitFixtureMixin, unittest.TestCase):
+    """A CSV row cannot hold a split. The whole purchase exports with Category and Group blank rather than the
+    pre-split category kept for un-splitting; a category-scoped export carries each part's own category."""
+
+    def _export(self, client, **params):
+        text = client.get("/api/import-export/transactions.csv", params={
+            "columns": "amount,category,group", **params,
+        }).text
+        return [line.split(",") for line in text.splitlines()[1:] if line.strip()]
+
+    def test_a_whole_split_exports_with_no_category(self):
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0, category=leaves["Salary Fixture"])
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0},
+                {"category_id": leaves["Hardware Fixture"], "amount": 40.0},
+            ]})
+            self.assertEqual(self._export(client), [["100.0", "", ""]])
+
+    def test_a_category_scoped_export_carries_the_parts_own_category(self):
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            txn = self._add_txn(path, account=account, amount=100.0, category=leaves["Salary Fixture"])
+            client.put(f"/api/transactions/{txn}/split", json={"parts": [
+                {"category_id": leaves["Groceries Fixture"], "amount": 60.0},
+                {"category_id": leaves["Hardware Fixture"], "amount": 40.0},
+            ]})
+            self.assertEqual(self._export(client, category_ids=leaves["Hardware Fixture"]),
+                             [["40.0", "Hardware Fixture", "Household Fixture"]])
+
+    def test_an_unsplit_row_keeps_its_category(self):
+        with api_client() as (client, path):
+            account, _, leaves = self._seed(path)
+            self._add_txn(path, account=account, amount=12.0, category=leaves["Groceries Fixture"])
+            self.assertEqual(self._export(client), [["12.0", "Groceries Fixture", "Household Fixture"]])
+
+
 class SplitSuggestionCategoryTests(SplitFixtureMixin, unittest.TestCase):
     """An order of a dozen things should not arrive as a dozen empty pickers.
 

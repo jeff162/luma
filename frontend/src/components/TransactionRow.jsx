@@ -23,7 +23,7 @@ import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
 import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
 import { reimbursementMarkerTooltip, reimbursementStatus } from '../lib/reimbursements.js'
-import { isSplitPartRow, splitPartSummary } from '../lib/splitRows.js'
+import { isSplitPartRow, splitPartLabel, splitPartSummary } from '../lib/splitRows.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -357,8 +357,11 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
   // and source account). Only attach the hover when there is something to show beyond the visible name.
   // See lib/importSourceFields.js.
   const showOriginHover = nameTruncated || hasFileOriginDetail(txn)
+  // On one part of a split (a category-scoped list), what that part covers — the row's name is the whole
+  // purchase's, so without this every part of it reads alike.
+  const partLabel = splitPartLabel(txn)
 
-  return (
+  const nameRow = (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       {showOriginHover ? (
         <RowTooltip
@@ -390,6 +393,16 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
           >↗</button>
         </RowTooltip>
       )}
+    </div>
+  )
+  if (!partLabel) return nameRow
+  return (
+    <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%' }}>
+      {nameRow}
+      <span
+        title={partLabel}
+        style={{ fontSize: 11, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      >{partLabel}</span>
     </div>
   )
 }
@@ -1049,10 +1062,15 @@ export function TransactionAmountCell({ txn, onOpenDetail, showExcludedFromTotal
 // charge and of a deposit both read as magnitudes that add up to the row beside them. Direction is
 // carried by the color instead — the same green a deposit's own amount gets, since a part that moves
 // money in is the thing worth marking, not every part of an ordinary purchase.
-function SplitPartsHoverCard({ parts, txnAmount }) {
+function SplitPartsHoverCard({ parts, txnAmount, matchedSearch = false }) {
   const dir = transactionDirection(txnAmount)
   return (
     <div style={{ display: 'grid', gap: 3, minWidth: 160 }}>
+      {/* Set by the ledger's search when the row matched on a part's description, which the row itself
+          does not show — this card is then the only place the reason for the row being listed is visible. */}
+      {matchedSearch ? (
+        <div style={{ fontSize: 12, color: 'var(--accent)' }}>Matched the search in an item description below.</div>
+      ) : null}
       {parts.map((part, i) => (
         // Keyed by position, not by category: two allocations may name the same category, so the
         // category id is not an identity here. The list is static — rendered in the stored order,
@@ -1191,10 +1209,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       )
     }
 
+    const matchedSearch = !!txn.matched_split_label
     const chip = (
       <span style={{
         border: '1px dashed var(--border)', borderRadius: 6, color: 'var(--muted)',
         fontSize: 12, padding: '1px 7px', whiteSpace: 'nowrap',
+        // The same mark a name found through hidden text carries; the hover lists the descriptions.
+        ...(matchedSearch ? { textDecoration: 'underline dotted var(--accent)', textUnderlineOffset: 3 } : null),
       }}>
         {partCount ? `Split (${partCount})` : 'Split'}
       </span>
@@ -1206,7 +1227,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
           style={{ cursor: onOpenSplit ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           {parts.length ? (
-            <RowTooltip content={<SplitPartsHoverCard parts={parts} txnAmount={txn.amount} />} maxWidth={320}>
+            <RowTooltip content={<SplitPartsHoverCard parts={parts} txnAmount={txn.amount} matchedSearch={matchedSearch} />} maxWidth={320}>
               {chip}
             </RowTooltip>
           ) : chip}

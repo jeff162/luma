@@ -441,7 +441,6 @@ def export_transactions_csv(
     if not col_keys:
         col_keys = ["date", "merchant_name", "amount", "account", "category"]
 
-    select_exprs = [f"{EXPORT_COLUMNS[k][0]} AS {k}" for k in col_keys]
     headers      = [EXPORT_COLUMNS[k][1] for k in col_keys]
 
     # The filter, row source and order are the list feed's own rather than a reading of its parameters, so
@@ -454,6 +453,20 @@ def export_transactions_csv(
         facets=facets, sort_by=sort_by, sort_dir=sort_dir,
         filters=filters if isinstance(filters, dict) else {},
     )
+
+    # A split row that is the whole purchase has no one category a CSV row can carry, so its Category and
+    # Group are left blank. Its `category_id` is only the pre-split category kept for un-splitting, which
+    # the file would otherwise present as current. An expanded part row carries its own category.
+    whole_split = "t.is_split = 1 AND t.split_part_id IS NULL" if expand_splits else "t.is_split = 1"
+
+    def select_expr(key):
+        expr = EXPORT_COLUMNS[key][0]
+        if key in ("category", "group"):
+            expr = f"CASE WHEN {whole_split} THEN NULL ELSE {expr} END"
+        # Quoted, because `group` is an SQL keyword: unquoted, choosing the Group column failed the export.
+        return f'{expr} AS "{key}"'
+
+    select_exprs = [select_expr(k) for k in col_keys]
 
     # The connection is opened *inside* the generator, not around it. A `with get_db()` block here would
     # close before the response body is consumed, which is why this used to fetchall() the entire filtered

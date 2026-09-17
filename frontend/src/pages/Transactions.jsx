@@ -18,7 +18,7 @@ import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { MerchantCell, CategoryCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
-import { transactionRowKey } from '../lib/splitRows.js'
+import { isSplitPartRow, transactionRowKey } from '../lib/splitRows.js'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
@@ -187,7 +187,11 @@ function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = f
     case 'merchant':
       return getTxnMerchantLabel(txn)
     case 'category':
-      return showSourceInCategorySlot ? getTxnImportSourceLabel(txn) : (txn.category_name || 'Uncategorized')
+      if (showSourceInCategorySlot) return getTxnImportSourceLabel(txn)
+      // A whole split has no one category, and its `category_name` is the pre-split one kept for un-splitting —
+      // blank, as the CSV export writes it. A part row carries its own category.
+      if (txn.is_split && !isSplitPartRow(txn)) return ''
+      return txn.category_name || 'Uncategorized'
     case 'account':
       return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
     case 'tags':

@@ -344,7 +344,7 @@ def _split_quick_filter_field(value: str):
     return field, match.group(2).strip()
 
 
-def _build_quick_filter_clause(value: str):
+def _build_quick_filter_clause(value: str, *, expanded: bool = False):
     text = (value or "").strip()
     if not text:
         return None
@@ -377,6 +377,12 @@ def _build_quick_filter_clause(value: str):
         hidden_sql, hidden_params = _hidden_text_sql(f"%{lowered}%", field)
         or_clauses.append(hidden_sql)
         params.extend(hidden_params)
+
+    if field is None:
+        # What a split's parts cover, in the user's words. Neither a name nor imported text, so only the
+        # unprefixed search reads it.
+        or_clauses.append(split_label_match_sql(expanded=expanded))
+        params.append(f"%{lowered}%")
 
     if want("category"):
         or_clauses.append("LOWER(COALESCE(c.name, '')) LIKE ?")
@@ -514,6 +520,30 @@ def _hidden_text_sql(pattern: str, field: Optional[str]):
         clauses.append(imported_sql)
         params.extend(imported_params)
     return f"({' OR '.join(clauses)})", params
+
+
+def split_label_match_sql(*, expanded: bool) -> str:
+    """Whether a split part's label matches one LIKE pattern, against a row source that is or is not expanded.
+
+    Expanded, a row is one part, and only *its* label counts — a search for one item inside a category
+    scope must not bring back another category's part of the same purchase. Unexpanded, a row is the whole
+    purchase, so any part's label does.
+    """
+    part = "s.id = t.split_part_id" if expanded else "s.txn_id = t.id"
+    return f"EXISTS (SELECT 1 FROM txn_split s WHERE {part} AND LOWER(COALESCE(s.label, '')) LIKE ?)"
+
+
+def split_label_match_query(quick_filter: Optional[str]) -> Optional[str]:
+    """The LIKE pattern a quick filter implies for split part labels, or None if it searches none.
+
+    Used by the list feed to mark a whole split found through a part's label, which the row itself does not
+    show (an expanded part row shows its own label, so it needs no mark).
+    """
+    text = (quick_filter or "").strip()
+    if not text:
+        return None
+    field, _ = _split_quick_filter_field(text)
+    return None if field is not None else f"%{text.lower()}%"
 
 
 def hidden_text_match_sql(quick_filter: Optional[str]):
@@ -686,7 +716,7 @@ def _build_transaction_filter(
     account_id=None, source_account_ids=None, category_id=None, require_all_tag_ids=None,
     require_all_attribute_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
-    sync_connection_id=None,
+    sync_connection_id=None, expanded=False,
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
     amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
@@ -871,7 +901,7 @@ def _build_transaction_filter(
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if quick_filter:
-        quick_filter_clause = _build_quick_filter_clause(quick_filter)
+        quick_filter_clause = _build_quick_filter_clause(quick_filter, expanded=expanded)
         if quick_filter_clause:
             clause, clause_params = quick_filter_clause
             clauses.append(clause)
@@ -944,7 +974,6 @@ def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple
     `FROM txn_effective_sql(conn, expand=expand_splits) t` with the builder's joins (a, p, c, pc).
     """
     facets = coerce_facets(facets) or TransactionFacets()
-    clauses, params = _build_transaction_filter(**filters, **facets.as_params())
 
     # A category-shaped facet is what makes split expansion correct *here*. Scoped to a category, a
     # split transaction belongs in the result as the part that matched, carrying the part's amount — so
@@ -959,6 +988,7 @@ def transaction_list_scope(*, facets, sort_by, sort_dir, filters: dict) -> tuple
         or facets.exclude_category_ids or facets.exclude_group_ids
         or filters.get("view") in ("spending", "income", "cash_flow")
     )
+    clauses, params = _build_transaction_filter(**filters, **facets.as_params(), expanded=expand_splits)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
     sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
@@ -1042,6 +1072,10 @@ def list_transactions(
     if hidden_text_match:
         document_match_column += f" {hidden_text_match[0]} AS matched_hidden_text,"
         document_match_params += hidden_text_match[1]
+    label_query = None if expand_splits else split_label_match_query(quick_filter)
+    if label_query:
+        document_match_column += f" {split_label_match_sql(expanded=False)} AS matched_split_label,"
+        document_match_params.append(label_query)
 
     with get_db() as conn:
         _src = txn_effective_sql(conn, expand=expand_splits)
@@ -1905,7 +1939,7 @@ def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
 
     if selection.mode == "filter":
         flt = _bulk_filter_params(selection.filter)
-        clauses, params = _build_transaction_filter(**flt)  # include_trashed defaults False
+        clauses, params = _build_transaction_filter(**flt, expanded=True)  # include_trashed defaults False
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         # Expanded, so a "select all matching" under a category filter resolves the same rows the
         # ledger showed — including split transactions that matched on one part. DISTINCT because a

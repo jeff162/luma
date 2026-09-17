@@ -146,6 +146,40 @@ describe('CategoryCell on a split transaction', () => {
 })
 
 
+describe('CategoryCell on a split the search found by an item description', () => {
+  const FOUND = {
+    id: 't1', amount: 100, is_split: true, split_part_count: 2, matched_split_label: 1,
+    split_parts: [
+      { id: 'p1', category_id: 'groceries', category_name: 'Groceries', amount: 60, label: 'Pantry restock' },
+      { id: 'p2', category_id: 'hardware', category_name: 'Hardware', amount: 40, label: 'Shelf brackets' },
+    ],
+  }
+
+  it('marks the chip and says on hover where the match was', async () => {
+    // Nothing else on the row carries the term, so without the mark the row reads as a wrong result.
+    const user = userEvent.setup()
+    render(<CategoryCell txn={FOUND} categories={CATEGORIES} onSave={vi.fn()} />)
+    const chip = screen.getByText('Split (2)')
+    expect(chip.style.textDecoration).toContain('underline')
+
+    await user.hover(chip)
+
+    expect(await screen.findByText('Matched the search in an item description below.')).toBeTruthy()
+  })
+
+  it('is not marked when the search did not find it that way', async () => {
+    const user = userEvent.setup()
+    render(<CategoryCell txn={{ ...FOUND, matched_split_label: 0 }} categories={CATEGORIES} onSave={vi.fn()} />)
+    const chip = screen.getByText('Split (2)')
+    expect(chip.style.textDecoration).toBe('')
+
+    await user.hover(chip)
+
+    expect(await screen.findByText('Groceries')).toBeTruthy()
+    expect(screen.queryByText('Matched the search in an item description below.')).toBeNull()
+  })
+})
+
 // A category-scoped list asks the server to expand splits, so the same cell also has to render one
 // *allocation* — the case the whole-split branch above gets wrong if it is allowed to claim the row.
 describe('CategoryCell on one expanded part of a split', () => {

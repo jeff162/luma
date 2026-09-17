@@ -33,6 +33,16 @@ export function transactionRowKey(txn) {
   return isSplitPartRow(txn) ? `${txn.id}:${txn.split_part_id}` : txn.id
 }
 
+/** The label of the allocation this part row is, or '' — a whole transaction, or a part left unlabelled.
+ *
+ * Found among the row's own `split_parts` by `split_part_id`, which the list payload already carries, so
+ * showing it costs no request.
+ */
+export function splitPartLabel(txn) {
+  if (!isSplitPartRow(txn)) return ''
+  return (txn.split_parts || []).find(part => part.id === txn.split_part_id)?.label || ''
+}
+
 /** What the whole transaction behind a part row looks like: `{ partCount, total }`.
  *
  * `total` is summed from the allocations rather than read off the row, because an expanded row's
