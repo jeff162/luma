@@ -26,6 +26,7 @@ import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -67,38 +68,10 @@ const EMPTY_USAGE_SUMMARY = {
   batch_mapping_count: 0,
   is_in_use: false,
 }
-const MATCHING_TXN_COLUMN_DEFAULTS = [
-  { key: 'date', width: 96 },
-  { key: 'merchant', width: 260 },
-  { key: 'category', width: 150 },
-  { key: 'account', width: 140 },
-  { key: 'amount', width: 108 },
-]
-
-
 
 function getLeftPanelWidthStorageKey(instanceId, userId) {
   return instanceId && userId ? `${LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
-
-function defaultMatchingTxnColumnConfig() {
-  return MATCHING_TXN_COLUMN_DEFAULTS.map(column => ({ ...column }))
-}
-
-function normalizeMatchingTxnColumnConfig(value) {
-  if (!Array.isArray(value)) return null
-  const byKey = new Map(value.map(column => [column?.key, column]))
-  const hasAllColumns = MATCHING_TXN_COLUMN_DEFAULTS.every(column => byKey.has(column.key))
-  if (!hasAllColumns || byKey.size !== MATCHING_TXN_COLUMN_DEFAULTS.length) return null
-  const defaultWidthByKey = new Map(MATCHING_TXN_COLUMN_DEFAULTS.map(column => [column.key, column.width]))
-  // Preserve the incoming column ORDER (so a user reorder sticks). Validation above guarantees the
-  // exact default key set is present, so each entry only needs its width normalized.
-  return value.map(column => ({
-    key: column.key,
-    width: Number(column?.width) || defaultWidthByKey.get(column.key),
-  }))
-}
-
 
 function getFullCategoryRecord(cat, flatCats) {
   if (!cat) return null
@@ -694,15 +667,12 @@ export default function Categories() {
   const [storedCollapsedGroups, setStoredCollapsedGroups] = useUserPreference(GROUP_PREF_KEY, EMPTY_COLLAPSE_STATE)
   const [categorySearch, setCategorySearch] = useState('')
   const [leftPanelWidth, setLeftPanelWidth] = useState(null)
-  // Matching-transactions column layout is single-source-of-truth: the stored preference, normalized
-  // on read against the current columns. There is deliberately no local mirror or load/save effects —
-  // they formed a feedback cycle (persisting updated the context, the load re-normalized into a fresh
-  // array, which retriggered the persist) that made the column divider jitter.
-  const [storedMatchingTxnColumns, setStoredMatchingTxnColumns] = useUserPreference(MATCHING_TXN_COLUMNS_PREF_KEY, null)
-  const matchingTxnColumns = useMemo(
-    () => normalizeMatchingTxnColumnConfig(storedMatchingTxnColumns) || defaultMatchingTxnColumnConfig(),
-    [storedMatchingTxnColumns],
-  )
+  // The same column-layout preference every other transaction table uses (its own key, so this list is
+  // tuned separately). Single-source-of-truth by construction: no local mirror or load/save effects,
+  // which once formed a feedback cycle that made the column divider jitter.
+  const [matchingTxnColumns, setMatchingTxnColumns] = useTransactionTableLayout({
+    preferenceKey: MATCHING_TXN_COLUMNS_PREF_KEY,
+  })
 
   // Entry point to the App-level Group Imported Categories workspace. The count is read-only here (the
   // workspace owns the draft); it drives the header button's badge + dim, live without opening anything.
@@ -1764,11 +1734,6 @@ export default function Categories() {
     )))
   }
 
-  function handleMatchingTxnColumnUpdate(nextColumns) {
-    const normalized = normalizeMatchingTxnColumnConfig(nextColumns)
-    if (normalized) setStoredMatchingTxnColumns(normalized)
-  }
-
   function openDetailPanel(type, item) {
     if (!item?.id) return
     setDetailPanels(prev => [
@@ -2526,7 +2491,7 @@ export default function Categories() {
                       scrollRef={matchingTxnsListRef}
                       fillHeight={true}
                       columnConfig={matchingTxnColumns}
-                      onColumnConfigChange={handleMatchingTxnColumnUpdate}
+                      onColumnConfigChange={setMatchingTxnColumns}
                     />
                   )}
                   {matchingTxnsLoadingMore ? (

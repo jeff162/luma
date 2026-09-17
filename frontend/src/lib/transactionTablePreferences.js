@@ -10,6 +10,7 @@ const BASE_TRANSACTION_TABLE_COLUMNS = [
   { key: 'category', width: 150 },
   { key: 'account', width: 140 },
   { key: 'sourceAccount', width: 150 },
+  { key: 'tags', width: 96 },
   { key: 'amount', width: 108 },
 ]
 
@@ -28,16 +29,27 @@ export function buildTransactionTableDefaultColumnConfig(options = {}) {
 export function normalizeTransactionTableColumnConfig(value, options = {}) {
   if (!Array.isArray(value)) return null
   const expectedColumns = getExpectedColumns(options)
-  const byKey = new Map(value.map(column => [column?.key, column]))
-  const hasAllColumns = expectedColumns.every(column => byKey.has(column.key))
-  if (!hasAllColumns || byKey.size !== expectedColumns.length) return null
   const defaultWidthByKey = new Map(expectedColumns.map(column => [column.key, column.width]))
-  // Preserve the incoming column ORDER (so a user reorder sticks). Validation above guarantees the
-  // exact expected key set for this surface is present, so each entry only needs its width normalized.
-  return value.map(column => ({
-    key: column.key,
-    width: Number(column?.width) || defaultWidthByKey.get(column.key),
-  }))
+  const seen = new Set()
+  // Preserve the incoming column ORDER (so a user reorder sticks), keeping only the columns this
+  // surface shows. A saved layout is read for what it *does* say rather than being required to match
+  // the current column set exactly: demanding that made every saved layout unreadable the moment a
+  // column was added (`tags`), which read as resizes and reorders not sticking at all.
+  const normalized = []
+  for (const column of value) {
+    const key = column?.key
+    if (!defaultWidthByKey.has(key) || seen.has(key)) continue
+    seen.add(key)
+    normalized.push({ key, width: Number(column?.width) || defaultWidthByKey.get(key) })
+  }
+  if (!normalized.length) return null
+  // A column the saved layout predates goes in at its canonical position, beside its natural
+  // neighbours rather than stranded at the end.
+  expectedColumns.forEach((column, canonicalIndex) => {
+    if (seen.has(column.key)) return
+    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, { key: column.key, width: column.width })
+  })
+  return normalized
 }
 
 /*
