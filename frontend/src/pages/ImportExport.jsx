@@ -113,6 +113,7 @@ import {
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
   DATA_SOURCE_MANAGER_POS_PREF_KEY,
   AMAZON_IMPORT_ACCOUNT_PREF_KEY,
+  DEMO_IMPORT_DISABLED_MESSAGE,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
   IMPORTED_CATEGORY_SETTINGS_KEY,
   IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
@@ -172,7 +173,7 @@ function byMarketplaceCardRecency(a, b) {
 // Keep the import UI recoverable if a preview or mapping render crashes.
 function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const navigate = useNavigate()
-  const { dbInstanceId, preferenceSubjectId } = useAppSession()
+  const { dbInstanceId, preferenceSubjectId, demoLoaded } = useAppSession()
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
   const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
@@ -286,11 +287,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const [showStarterRules, setShowStarterRules] = useState(false)
   const [starterPromptDismissed, setStarterPromptDismissed] = useState(false)
   const [addingStarterCats, setAddingStarterCats] = useState(false)
-  // While demo data is loaded the backend blocks imports + restore; reflect that in the UI by disabling
-  // those controls (with an explanatory tooltip) rather than letting the user try and hit a 409.
+  // While demo data is loaded (`demoLoaded`, from the session) the backend blocks imports; the upload
+  // stage disables its drop target rather than letting the user try and hit a 409.
   // `demoLoadable` (empty tenant) surfaces the "Load demo data" offer here so it's reachable after a
   // skip or a clear, not only from first-run onboarding.
-  const [demoLoaded, setDemoLoaded] = useState(false)
   const [demoLoadable, setDemoLoadable] = useState(false)
   const [loadingDemo, setLoadingDemo] = useState(false)
   const busyDemo = useBusyIndicator(loadingDemo)
@@ -303,9 +303,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   useEffect(() => {
     let cancelled = false
     api.getDemoDataStatus().then(r => {
-      if (cancelled) return
-      setDemoLoaded(!!r?.loaded)
-      setDemoLoadable(!!r?.loadable)
+      if (!cancelled) setDemoLoadable(!!r?.loadable)
     }).catch(() => { })
     return () => { cancelled = true }
   }, [batches.length, profiles.length])
@@ -4832,6 +4830,9 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
 // account is chosen and every discovered card has a decision.
 function AmazonImportTab({ initialFiles }) {
   const NEW_ACCOUNT = '__new__'
+  // The backend refuses the import while demo data is loaded, so the tab says so up front rather than after
+  // the form is filled in.
+  const { demoLoaded } = useAppSession()
   const [accounts, setAccounts] = useState([])
   // Persisted per user so the chosen Amazon account carries over from visit to visit.
   const [accountId, setAccountId] = useUserPreference(AMAZON_IMPORT_ACCOUNT_PREF_KEY, '')
@@ -5008,8 +5009,9 @@ function AmazonImportTab({ initialFiles }) {
 
   const instruments = scan?.instruments || []
   const unresolved = instruments.filter(i => i.state === 'unmapped')
-  const canImport = accountId && files.length > 0 && unresolved.length === 0 && !loading && !busy
-  const importHint = loading || canImport || files.length === 0 ? ''
+  const canImport = accountId && files.length > 0 && unresolved.length === 0 && !loading && !busy && !demoLoaded
+  const importHint = demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE
+    : loading || canImport || files.length === 0 ? ''
     : !accountId ? 'Choose an account to import into'
     : unresolved.length ? `Map the card ${formatInstrumentLabel(unresolved[0].last4, unresolved[0].network)} (or mark it untracked)`
     : ''
@@ -5049,8 +5051,8 @@ function AmazonImportTab({ initialFiles }) {
             {/* The shared target (components/DropZone.jsx), extracted when attaching documents became
                 the third surface wanting one. The CSV upload stage keeps its own: its zone is a
                 container for the data-source chooser rendered inside it, which this does not model. */}
-            <DropZone onFiles={addFiles} accept=".csv" multiple>
-              Drop the AZAD CSV file(s) here, or click to browse.
+            <DropZone onFiles={addFiles} accept=".csv" multiple disabled={demoLoaded}>
+              {demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE : 'Drop the AZAD CSV file(s) here, or click to browse.'}
             </DropZone>
           </>
         ) : (
@@ -5063,7 +5065,7 @@ function AmazonImportTab({ initialFiles }) {
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              <Button small variant="ghost" onClick={() => fileInputRef.current?.click()}>Add file(s)</Button>
+              <Button small variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={demoLoaded}>Add file(s)</Button>
               <Button small variant="ghost" onClick={clearAll}>Clear</Button>
             </div>
             {scan?.unrecognized_files?.length ? (

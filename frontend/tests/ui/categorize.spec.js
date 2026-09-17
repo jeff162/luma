@@ -1,5 +1,18 @@
 import { expect, test } from '@playwright/test'
 
+// Runs a picker action and waits for the server to store the category it sets. The cell updates before the
+// save lands, so asserting on it alone let a test end with its restore still in flight — and the next test
+// then opened the row on the category this one had moved it to.
+async function savingCategory(page, action) {
+  const saved = page.waitForResponse(response => response.request().method() === 'PATCH'
+    && /\/transactions\/[^/]+\/category$/.test(new URL(response.url()).pathname) && response.ok())
+  await action()
+  await saved
+}
+
+const pickCategory = (page, name) => savingCategory(page,
+  () => page.locator('[data-picker-row-active]').filter({ hasText: name }).first().click())
+
 // The core daily flow: change a transaction's category via the inline CategoryPicker on the
 // transactions page, and confirm it persists. We unit-test the picker in isolation but never the full
 // page round-trip. Scoped to one uniquely-named transaction so it can't collide with other specs'
@@ -21,13 +34,13 @@ test('changing a transaction category via the inline picker persists', async ({ 
   // Interest Income → Investment (the picker input's placeholder is the current category name).
   await categoryCell.click()
   await page.getByPlaceholder('Interest Income').fill('Investment')
-  await page.locator('[data-picker-row-active]').filter({ hasText: 'Investment' }).first().click()
+  await pickCategory(page, 'Investment')
   await expect(page.locator('[title="Click to change category"]')).toContainText('Investment')
 
   // Restore, so the shared demo baseline is unchanged.
   await page.locator('[title="Click to change category"]').click()
   await page.getByPlaceholder('Investment').fill('Interest Income')
-  await page.locator('[data-picker-row-active]').filter({ hasText: 'Interest Income' }).first().click()
+  await pickCategory(page, 'Interest Income')
   await expect(page.locator('[title="Click to change category"]')).toContainText('Interest Income')
 })
 
@@ -44,7 +57,7 @@ test('a category created from the inline picker is listed once afterwards', asyn
   await page.getByPlaceholder('Interest Income').fill(name)
   await page.keyboard.press('Enter')
   await page.getByLabel('Choose category group').selectOption({ index: 1 })
-  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await savingCategory(page, () => page.getByRole('button', { name: 'Create', exact: true }).click())
   await expect(categoryCell).toContainText(name)
 
   try {
@@ -58,7 +71,7 @@ test('a category created from the inline picker is listed once afterwards', asyn
     await page.getByPlaceholder('Search…', { exact: true }).fill('Interest Payment')
     await categoryCell.click()
     await page.getByPlaceholder(name).fill('Interest Income')
-    await page.locator('[data-picker-row-active]').filter({ hasText: 'Interest Income' }).first().click()
+    await pickCategory(page, 'Interest Income')
     await expect(categoryCell).toContainText('Interest Income')
     const categories = await (await request.get('/api/categories')).json()
     const created = categories.find(category => category.name === name)

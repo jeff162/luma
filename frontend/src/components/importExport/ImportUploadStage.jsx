@@ -10,7 +10,7 @@
 import TransientTextInput from '../TransientTextInput.jsx'
 import { Spinner } from '../ui.jsx'
 import { DataSourcePill } from './importPresentational.jsx'
-import { MANUAL_DATA_SOURCE_VALUE } from '../../lib/importExport/constants.js'
+import { DEMO_IMPORT_DISABLED_MESSAGE, MANUAL_DATA_SOURCE_VALUE } from '../../lib/importExport/constants.js'
 import { useBusyIndicator } from '../../lib/useBusyIndicator.js'
 
 export function ImportUploadStage({
@@ -44,7 +44,6 @@ export function ImportUploadStage({
   demoLoaded = false,
 }) {
   const busy = useBusyIndicator(loading)
-  const demoImportMessage = 'Imports are disabled while demo data is loaded — clear it from the banner above to import your own data.'
   const dropEnabled = !chooserOpen && !demoLoaded
   return (
     <>
@@ -132,7 +131,7 @@ export function ImportUploadStage({
         <div style={{ width: '100%' }}>
           <div
             ref={dropRef}
-            title={demoLoaded ? demoImportMessage : undefined}
+            title={demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE : undefined}
             onDragOver={e => { if (dropEnabled) e.preventDefault() }}
             onDrop={dropEnabled ? handleDrop : (e => e.preventDefault())}
             onClick={() => { if (dropEnabled) fileInputRef.current?.click() }}
@@ -177,7 +176,7 @@ export function ImportUploadStage({
                     lineHeight: 1.45,
                   }}>
                     {demoLoaded
-                      ? demoImportMessage
+                      ? DEMO_IMPORT_DISABLED_MESSAGE
                       : profiles.length === 0
                         ? 'Press Skip or add a Data Source to begin'
                         : 'Select a saved data source, create a new one, or press Skip to use a temporary draft.'}
@@ -269,13 +268,27 @@ export function ImportUploadStage({
               </div>
             ) : null}
             <div style={{ fontSize: 28, marginBottom: 8 }}>{chooserOpen ? '🧭' : '📂'}</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-              {demoLoaded
-                ? 'Imports are disabled while demo data is loaded'
-                : chooserOpen
-                  ? (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')
-                  : 'Drop CSV file(s) here, or click to browse'}
-            </div>
+            {chooserOpen ? (
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
+                {demoLoaded
+                  ? DEMO_IMPORT_DISABLED_MESSAGE
+                  : (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')}
+              </div>
+            ) : (
+              // The zone itself can't be the button (the "choose a data source" button sits inside it), so the
+              // heading is the keyboard-reachable browse control, and where the disabled state is announced.
+              <button
+                type="button"
+                aria-disabled={demoLoaded || undefined}
+                onClick={e => { e.stopPropagation(); if (dropEnabled) fileInputRef.current?.click() }}
+                style={{
+                  display: 'block', margin: '0 auto 6px', padding: 0, background: 'none', border: 'none',
+                  font: 'inherit', fontSize: 15, fontWeight: 600, color: 'inherit', cursor: 'inherit',
+                }}
+              >
+                {demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE : 'Drop CSV file(s) here, or click to browse'}
+              </button>
+            )}
             {!chooserOpen && !hasSelectedSource && !demoLoaded ? (
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 The matching data source is detected automatically or {' '}

@@ -58,3 +58,6 @@ export const IMPORTED_CATEGORY_FILTER_PILL_LABEL = 'Filter by owner/account'
 export const IMPORTED_CATEGORY_FILTER_DIALOG_TITLE = 'Which accounts have useful categories?'
 export const IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION = "Only the checked accounts' categories are applied and used to propose rules — every transaction still imports either way."
 export const IMPORTED_CATEGORY_SCOPE_ALL_LABEL = 'Include all categorized transactions from this data set'
+
+// Shown on every import control disabled while demo data is loaded (the backend refuses those imports).
+export const DEMO_IMPORT_DISABLED_MESSAGE = 'Demo Data Loaded: Imports are disabled'

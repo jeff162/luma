@@ -22,7 +22,6 @@ let authStatus = SIGN_IN_OFF
 vi.mock('../../../lib/api.js', () => ({
   downloadUrl: (...args) => downloadUrl(...args),
   api: {
-    getDemoDataStatus:          async () => ({ loaded: false }),
     getBackupRecipients:        async () => recipients,
     getCredentialsBackupStatus: async () => ({ has_credentials: true, credential_count: 2 }),
     getAuthStatus:              async () => authStatus,
@@ -36,6 +35,9 @@ vi.mock('../../../lib/api.js', () => ({
 }))
 
 const { BackupRestoreTab } = await import('../BackupRestoreTab.jsx')
+const { AppSessionProvider } = await import('../../../lib/AppSessionContext.jsx')
+
+const renderTab = () => render(<AppSessionProvider value={{ demoLoaded: false }}><BackupRestoreTab /></AppSessionProvider>)
 
 afterEach(() => { cleanup(); downloadUrl.mockReset(); recipients = []; authStatus = SIGN_IN_OFF })
 
@@ -46,7 +48,7 @@ const KEYS = [
 
 describe('BackupRestoreTab credentials backup', () => {
   it('offers exactly one credentials button, with no encrypted variant', async () => {
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Generate credentials backup')
     expect(screen.queryByText('Generate encrypted credentials backup')).toBeNull()
     // The data backup keeps its encrypted choice — that one is a real choice.
@@ -59,7 +61,7 @@ describe('BackupRestoreTab credentials backup', () => {
     })
     downloadUrl.mockRejectedValueOnce(failure)
 
-    render(<BackupRestoreTab />)
+    renderTab()
     await userEvent.click(await screen.findByText('Generate credentials backup'))
 
     await waitFor(() => {
@@ -68,7 +70,7 @@ describe('BackupRestoreTab credentials backup', () => {
   })
 
   it('routes the download through the fetching helper, not an href', async () => {
-    render(<BackupRestoreTab />)
+    renderTab()
     const button = await screen.findByText('Generate credentials backup')
     // A <a href> wrapper is what made every error a raw JSON page; the button must not sit inside one.
     expect(button.closest('a')).toBeNull()
@@ -87,7 +89,7 @@ describe('encrypted backup recipient scope', () => {
   it('starts immediately when there is only one recipient', async () => {
     const user = userEvent.setup()
     recipients = [KEYS[0]]
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Generate encrypted backup')
 
     await user.click(screen.getByText('Generate encrypted backup'))
@@ -99,7 +101,7 @@ describe('encrypted backup recipient scope', () => {
   it('asks which keys when there is more than one, and downloads nothing until confirmed', async () => {
     const user = userEvent.setup()
     recipients = KEYS
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Generate encrypted backup')
 
     await user.click(screen.getByText('Generate encrypted backup'))
@@ -117,7 +119,7 @@ describe('encrypted backup recipient scope', () => {
   it('cancelling downloads nothing', async () => {
     const user = userEvent.setup()
     recipients = KEYS
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Generate encrypted backup')
     await user.click(screen.getByText('Generate encrypted backup'))
     await screen.findByText(/Who should be able to read/)
@@ -134,7 +136,7 @@ describe('encrypted backup recipient scope', () => {
 describe('section order', () => {
   it('runs Backup, then Restore, then the key list', async () => {
     recipients = KEYS
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Generate encrypted backup')
 
     const headings = ['Backup', 'Restore', 'Backup Encryption Keys']
@@ -155,7 +157,7 @@ describe('BackupRestoreTab restore authority', () => {
   it('tells a member that restoring needs an admin, and does not take a file from them', async () => {
     authStatus = member
     recipients = KEYS
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Restoring a backup needs an admin.')
     expect(screen.getByLabelText('Choose backup file to restore').disabled).toBe(true)
     await screen.findByText('Adding, changing or removing backup keys needs an admin.')
@@ -164,7 +166,7 @@ describe('BackupRestoreTab restore authority', () => {
 
   it('offers an admin the restore and the key controls', async () => {
     authStatus = admin
-    render(<BackupRestoreTab />)
+    renderTab()
     await screen.findByText('Add a key')
     expect(screen.queryByText('Restoring a backup needs an admin.')).toBeNull()
     expect(screen.getByLabelText('Choose backup file to restore').disabled).toBe(false)

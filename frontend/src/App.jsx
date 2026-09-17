@@ -1046,7 +1046,9 @@ export default function App() {
   const [creatingLocalProfile, setCreatingLocalProfile] = useState(false)
   const [localProfileError, setLocalProfileError] = useState('')
   // Demo-data mode: a global app strip + the guard that blocks new imports/connections while the
-  // explorable demo set is loaded (see the demo-data marker in the backend).
+  // explorable demo set is loaded (see the demo-data marker in the backend). Shared through the session
+  // context so every gated control reads this one copy — loading and clearing both reload the app, so
+  // nothing needs to re-fetch it in between.
   const [demoLoaded, setDemoLoaded] = useState(false)
   // Held in state purely so applying it re-renders; the value itself is read from MONEY_DISPLAY_CONFIG.
   const [, setLedgerCurrencyCode] = useState('')
@@ -1081,6 +1083,7 @@ export default function App() {
     bundledLicenseAvailable,
     activeLocalProfile,
     preferenceSubjectId,
+    demoLoaded,
     setAuthEnabled,
     setSecurityProfile,
     setPasswordPolicy,
@@ -1098,6 +1101,7 @@ export default function App() {
     bundledLicenseAvailable,
     activeLocalProfile,
     preferenceSubjectId,
+    demoLoaded,
   ])
 
   async function hydrateStartupRoute(profileId = '', options = {}) {

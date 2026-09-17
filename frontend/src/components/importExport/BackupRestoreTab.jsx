@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
+import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { AppDialog, Button, Card, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
@@ -46,12 +47,7 @@ function describeRestoreIncompatibility(detail) {
 export function BackupRestoreTab() {
   const demoRestoreMessage = 'Restoring a backup is disabled while demo data is loaded — clear it from the banner above first.'
   // Restore is blocked server-side while demo data is loaded; disable the file picker to match.
-  const [demoLoaded, setDemoLoaded] = useState(false)
-  useEffect(() => {
-    let cancelled = false
-    api.getDemoDataStatus().then(r => { if (!cancelled) setDemoLoaded(!!r?.loaded) }).catch(() => { })
-    return () => { cancelled = true }
-  }, [])
+  const { demoLoaded } = useAppSession()
   const [backupRecipients, setBackupRecipients] = useState([])
   const [credentialBackupStatus, setCredentialBackupStatus] = useState({ has_credentials: false, credential_count: 0 })
   const [restoreFile, setRestoreFile] = useState(null)
