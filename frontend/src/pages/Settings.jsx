@@ -3380,7 +3380,7 @@ export default function Settings() {
             />
           </StickySection>
 
-          {authEnabled && (
+          {authEnabled && currentUser?.role === 'admin' && (
             <StickySection
               title="User management"
               description={`Manage who can sign in.`}
