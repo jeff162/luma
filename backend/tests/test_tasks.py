@@ -533,3 +533,44 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         with self._use_db_path():
             visible = {t["id"] for t in get_tasks(request)["tasks"]}
         self.assertIn("connections_need_reauth", visible)
+
+
+class ServerErrorTaskTests(TasksFixtureTestCase):
+    """Errors in the server's log that no administrator has seen. Shown to whoever can open the Error log
+    it links to, and cleared for the whole install when someone does."""
+
+    def _task(self, role=None):
+        user = {"id": "test-user", **({"role": role} if role else {})}
+        request = SimpleNamespace(url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
+                                  state=SimpleNamespace(user=user))
+        with self._use_db_path():
+            result = get_tasks(request)
+        return next((t for t in result["tasks"] if t["id"] == "server_errors"), None)
+
+    def test_it_is_shown_to_whoever_can_open_the_error_log(self):
+        control_database.record_server_errors(2, busy_timeout_ms=500)
+        # Sign-in off: there is no perimeter to hold a role against, so everyone can open the page.
+        self.assertEqual(self._task()["count"], 2)
+
+        control_database.enable_auth_mode()
+        self.assertEqual(self._task(role="admin")["count"], 2)
+        self.assertIsNone(self._task(role="member"))
+
+    def test_acknowledging_clears_it_until_the_next_error(self):
+        control_database.record_server_errors(2, busy_timeout_ms=500)
+        control_database.acknowledge_server_errors(2)
+        self.assertIsNone(self._task())
+
+        control_database.record_server_errors(1, busy_timeout_ms=500)
+        self.assertEqual(self._task()["count"], 1)
+
+    def test_an_acknowledgment_cannot_reach_past_the_errors_that_exist(self):
+        # Otherwise an acknowledgment arriving with a stale or inflated count would silence errors not yet
+        # logged — and one that moved backwards would resurrect errors already seen.
+        control_database.record_server_errors(1, busy_timeout_ms=500)
+        control_database.acknowledge_server_errors(5)
+        control_database.acknowledge_server_errors(0)
+        self.assertIsNone(self._task())
+
+        control_database.record_server_errors(1, busy_timeout_ms=500)
+        self.assertEqual(self._task()["count"], 1)

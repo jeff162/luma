@@ -35,13 +35,14 @@ the finding, not the reminder; don't re-impose them here.
 import json
 
 from fastapi import APIRouter, HTTPException, Request
+from backend.authorization import is_admin_or_local
 from backend.db.database import get_db
 from backend.db.control_database import (
     auth_required,
     get_data_provider_intended,
     get_https_warning_suppressed,
 )
-from backend import transport
+from backend import app_log_file, transport
 from backend.services import crypto_service
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
@@ -127,6 +128,32 @@ def _vault_access_task(request: Request | None) -> dict | None:
         "link":        "/accounts?tab=connections",
         "link_label":  "Review vault access",
         "severity":    SEVERITY_INFO,
+    }
+
+
+def _server_error_task(request: Request | None) -> dict | None:
+    """Errors in the server's log that no administrator has seen (`backend/app_log_file.py`).
+
+    A crashed request tells whoever hit it only that something failed, and with several users the admin
+    who could read the traceback may never hear of it at all. Shown to exactly who can open the Error log
+    it links to — the same predicate that page's endpoint enforces. Opening that page acknowledges the
+    count for the whole install, which takes this away; dismissing it here hides it until the next error.
+    """
+    if request is None or not is_admin_or_local(request):
+        return None
+    unseen = app_log_file.error_counts()["unacknowledged"]
+    if not unseen:
+        return None
+    return {
+        "id":          "server_errors",
+        "title":       "The server logged an error" if unseen == 1 else "The server logged errors",
+        "description": f"{unseen} error{'' if unseen == 1 else 's'} recorded since the error log was last "
+                       "opened. Each is a failure the server did not handle, and its entry in the log "
+                       "says where it happened.",
+        "count":       unseen,
+        "link":        "/settings?section=errorLog",
+        "link_label":  "Open the error log",
+        "severity":    SEVERITY_WARNING,
     }
 
 
@@ -217,6 +244,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     vault_task = _vault_access_task(request)
     if vault_task:
         tasks.append(vault_task)
+
+    error_task = _server_error_task(request)
+    if error_task:
+        tasks.append(error_task)
 
     with get_db() as conn:
         owner_count = conn.execute("""

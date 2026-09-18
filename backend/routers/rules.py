@@ -28,7 +28,7 @@ from backend.services.categorizer import (
 from backend.services.rule_overlaps import find_rule_overlaps, dismiss_finding, restore_finding
 from backend.services.rule_range_drift import find_range_drift
 from backend.services import signal_dismissals
-from backend.app_logging import log_warning
+from backend.app_logging import log_error
 from backend.services.recurring_detection import (
     CADENCES,
     link_series_members,
@@ -210,7 +210,7 @@ def _rescan_recurring(txn_ids, prior_payee_keys=frozenset()) -> None:
         with get_db() as conn:
             rescan_edited_transactions(conn, ids, prior_payee_keys=prior_payee_keys)
     except Exception as err:
-        log_warning(f"[rules] recurring rescan failed: {err}")
+        log_error(f"[rules] recurring rescan failed: {err}", exc_info=err)
 
 
 def _rule_affected_txn_ids(conn, rule) -> list[str]:

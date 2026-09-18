@@ -17,8 +17,12 @@ export function useErrorLog(enabled) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setLog(await api.getErrorLog())
+      const result = await api.getErrorLog()
+      setLog(result)
       setError('')
+      // Having been shown is what acknowledging means, so it is done here rather than on a button. Through the
+      // count read with these entries, not the latest: an error logged since stays unseen.
+      if (result?.unacknowledged > 0) api.acknowledgeErrorLog(result.recorded).catch(() => { })
     } catch (err) {
       setError(err?.message || 'The error log could not be read.')
     } finally {

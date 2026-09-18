@@ -274,12 +274,14 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # A copy of the server's log beside the data, whatever is or is not capturing its output. After uvicorn
+    # has configured its loggers, which the handler has to sit beside rather than replace (`app_log_file.py`).
+    # Before `init_db`, so a start that fails there is kept and counted for the Tasks reminder — and left
+    # attached when it does, since uvicorn reports the failure only after this function has raised.
+    app_log_file.install()
     # The control DB is already initialized (configuration was resolved from it below); this readies the
     # financial database so no request handling starts against partial state.
     init_db()
-    # A copy of the server's log beside the data, whatever is or is not capturing its output. After uvicorn
-    # has configured its loggers, which the handler has to sit beside rather than replace (`app_log_file.py`).
-    app_log_file.install()
     try:
         yield
     finally:

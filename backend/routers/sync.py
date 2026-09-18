@@ -32,7 +32,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from backend.app_logging import log_warning
+from backend.app_logging import log_error, log_warning
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
@@ -1812,7 +1812,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             try:
                 _write_sync_diagnostics(conn, sync_diagnostics)
             except Exception as e:
-                log_warning(f"[sync] could not write sync diagnostics: {e}")
+                log_error(f"[sync] could not write sync diagnostics: {e}", exc_info=e)
 
     # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py): a CSV/manual
     # row re-fetched via a data source is a *cross-account* duplicate (the sync creates a new account
@@ -1831,7 +1831,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 for card_id in cards_touched:
                     sweep_import_suspects(conn, card_id, txn_ids=card_added_ids.get(card_id, []))
         except Exception as e:
-            log_warning(f"[sync] duplicate sweep failed: {e}")
+            log_error(f"[sync] duplicate sweep failed: {e}", exc_info=e)
 
     # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
     # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
@@ -1842,7 +1842,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             with get_db() as conn:
                 scan_imported_payees(conn, payee_keys_for_ids(conn, touched_ids))
         except Exception as e:
-            log_warning(f"[sync] recurring auto-scan failed: {e}")
+            log_error(f"[sync] recurring auto-scan failed: {e}", exc_info=e)
 
     # `historical_complete` is the client's stop-polling signal: true once no connection has more to deliver
     # *right now*. A paused connection counts as nothing-more-right-now even though its history is
@@ -2041,7 +2041,7 @@ def recategorize():
             with get_db() as conn:
                 run_auto_scan(conn)
         except Exception as e:
-            log_warning(f"[recategorize] recurring auto-scan failed: {e}")
+            log_error(f"[recategorize] recurring auto-scan failed: {e}", exc_info=e)
     return {"updated": n}
 
 

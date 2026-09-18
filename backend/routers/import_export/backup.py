@@ -79,7 +79,7 @@ from backend.db.database import (
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db import control_database
 from backend.db.control_database import auth_required
-from backend.app_logging import log_warning
+from backend.app_logging import log_error
 from backend.runtime_config import app_name
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
@@ -1082,7 +1082,7 @@ def export_credentials(request: Request):
             if fingerprint:
                 control_database.record_credentials_export(user["id"], fingerprint)
         except Exception as exc:                                    # pragma: no cover - defensive
-            log_warning(f"[backup] could not record the credentials export: {exc}")
+            log_error(f"[backup] could not record the credentials export: {exc}", exc_info=exc)
     return StreamingResponse(
         iter([_zip_json_bytes("luma_credentials.json", payload)]),
         media_type="application/zip",

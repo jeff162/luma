@@ -104,10 +104,20 @@ rotate a failure out of the file. So does what a client can cause without signin
 uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
 genuine failures out the same way. It rotates at 1 MB and keeps one previous file (`luma.log.1`). What it
 cannot hold is anything before the application starts, such as a missing dependency or a crash during
-import: that stays in the output alone, which on macOS means `luma-desktop.log`. Settings → **Error log**
-reads the errors back out of it, for administrators only, since a traceback can carry transaction details
-and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest. `LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals'
+import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
+in the application's own startup (a migration raising), is held — the log is set up before the data
+database is readied. Settings → **Error log** reads the errors back out of it, for administrators only,
+since a traceback can carry transaction details and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest.
+`LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals'
 output beside the scripts.
+
+**Errors raise a task for administrators.** Each error the file keeps is also counted into the control
+database as it is logged, and the Tasks page shows how many no administrator has seen yet, to exactly the
+people who can open the Error log. Opening it acknowledges them for the whole install. The count is kept
+rather than re-read from the file because the file rotates, which would take an unseen error with it; so
+nothing scans the log at startup. An error is a failure someone should look at — a crashed request, or a
+step that failed after the work around it had succeeded — and a warning is something the server coped
+with, which stays in the file and raises nothing.
 
 ## LAN server
 

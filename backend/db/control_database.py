@@ -345,6 +345,56 @@ def delete_app_setting(key: str):
         conn.execute("DELETE FROM app_setting WHERE key = ?", (key,))
 
 
+# How many errors the server has logged, and how many of those an administrator has seen by opening
+# Settings -> Error log (`backend/app_log_file.py`). Install-wide rather than per user, like the log itself:
+# an error needs looking at once, by whoever looks. Counted as they are logged rather than re-derived from
+# the file, which rotates — an error nobody had seen would drop out of the count along with its line.
+_SERVER_ERRORS_RECORDED = "server_errors_recorded"
+_SERVER_ERRORS_ACKNOWLEDGED = "server_errors_acknowledged"
+
+
+def record_server_errors(count: int, busy_timeout_ms: int) -> None:
+    """Add `count` to the recorded total. `busy_timeout_ms` is the caller's: the log handler runs inside a
+    failing request, sometimes on the event loop, and must not wait out the ordinary lock timeout."""
+    with get_control_db() as conn:
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+        conn.execute(
+            """
+            INSERT INTO app_setting (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + CAST(excluded.value AS INTEGER),
+                                           updated_at = datetime('now')
+            """,
+            (_SERVER_ERRORS_RECORDED, int(count)),
+        )
+
+
+def server_error_counts() -> tuple[int, int]:
+    """(recorded, acknowledged)."""
+    with get_control_db() as conn:
+        rows = dict(conn.execute(
+            "SELECT key, value FROM app_setting WHERE key IN (?, ?)",
+            (_SERVER_ERRORS_RECORDED, _SERVER_ERRORS_ACKNOWLEDGED),
+        ).fetchall())
+    return int(rows.get(_SERVER_ERRORS_RECORDED) or 0), int(rows.get(_SERVER_ERRORS_ACKNOWLEDGED) or 0)
+
+
+def acknowledge_server_errors(through: int) -> None:
+    """Mark the errors up to `through` as seen — the total the reader was shown alongside the entries, so
+    one logged while the page was open stays unseen. Never moves backwards, and never past what exists."""
+    with get_control_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_setting (key, value, updated_at)
+            VALUES (?, MIN(?, COALESCE((SELECT CAST(value AS INTEGER) FROM app_setting WHERE key = ?), 0)),
+                    datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)),
+                                           updated_at = datetime('now')
+            """,
+            (_SERVER_ERRORS_ACKNOWLEDGED, int(through), _SERVER_ERRORS_RECORDED),
+        )
+
+
 def _existing_shared_tenant_id() -> str | None:
     """The one shared workspace tenant, if any exists. There is a single workspace, so a new identity
     must adopt it rather than mint a second tenant (which would collide on the unique `tenant.db_path`).

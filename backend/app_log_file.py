@@ -30,7 +30,18 @@ diagnosing arrives with a traceback of its own.
 enormous record cannot make the Settings view slow. The file itself keeps the full text.
 
 **What it cannot hold** is anything before the application starts — a missing dependency, a crash during
-import. That stays in the process's output alone.
+import. That stays in the process's output alone. A start that fails later, in the application's own
+startup (a migration raising), is held: `main.py` installs this before readying the data database.
+
+**Errors are counted as they are logged, for the Tasks reminder.** An error here is a failure someone
+should look at — a crashed request, or a step that failed after the work around it succeeded
+(`app_logging.log_error`) — while a warning is something the server coped with, which is also the line the
+Settings view draws. So a second handler beside the file's counts each error the file keeps into the control
+database, and Tasks tells an administrator how many they have not seen. Counted rather than re-derived from
+the file at startup, because the file rotates: an unseen error would leave the count with its line. The
+handler runs inside a failing request, sometimes on the event loop, and possibly failing *because* a
+database is locked — so its write waits briefly, and on failure the error is held in memory and added by the
+next write (the next error, or the next read of the count) rather than lost or retried in place.
 
 A traceback can carry transaction details and file paths. The file sits beside a database holding the
 same, so it adds no new kind of exposure, but the Settings view of it is admin-only for that reason.
@@ -40,12 +51,13 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from backend import runtime_config
-from backend.db import database
+from backend.db import control_database, database
 
 LOG_FILENAME = "luma.log"
 LOG_MAX_BYTES = 1024 * 1024
@@ -73,8 +85,19 @@ _ENTRY_PATTERN = re.compile(
 )
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 
+# Long enough for the control database's ordinary short writes to finish, short enough that an error logged
+# on the event loop does not hold every other request behind it.
+_COUNT_WRITE_TIMEOUT_MS = 500
+
 _handler: RotatingFileHandler | None = None
+_counter: logging.Handler | None = None
 _attached: list[logging.Logger] = []
+
+# Errors logged but not yet in the control database's count. Taken whole by one flush at a time; a flush
+# that finds another under way leaves its error for the next, rather than waiting on it or counting twice.
+_pending_errors = 0
+_pending_lock = threading.Lock()
+_flush_lock = threading.Lock()
 
 
 class _UtcFormatter(logging.Formatter):
@@ -92,6 +115,49 @@ class _WorthKeeping(logging.Filter):
         if record.name == "uvicorn.error" and record.msg in _CLIENT_TRAFFIC_WARNINGS:
             return False
         return record.levelno >= logging.WARNING
+
+
+class _ErrorCounter(logging.Handler):
+    """Counts the errors the file keeps. Same filter, attached after the file handler on the same loggers,
+    so every error counted is already in the file by the time the count says so."""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.addFilter(_WorthKeeping())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        global _pending_errors
+        with _pending_lock:
+            _pending_errors += 1
+        _flush_error_count()
+
+
+def _flush_error_count() -> None:
+    global _pending_errors
+    if not _flush_lock.acquire(blocking=False):
+        return
+    try:
+        with _pending_lock:
+            taken = _pending_errors
+        if not taken:
+            return
+        try:
+            control_database.record_server_errors(taken, busy_timeout_ms=_COUNT_WRITE_TIMEOUT_MS)
+        except Exception:
+            # Not logged: this runs inside the logging of an error, and the file already holds the entry.
+            return
+        with _pending_lock:
+            _pending_errors -= taken
+    finally:
+        _flush_lock.release()
+
+
+def error_counts() -> dict:
+    """How many errors have been logged in all and how many of them no administrator has seen, adding any
+    held back by a failed write first."""
+    _flush_error_count()
+    recorded, acknowledged = control_database.server_error_counts()
+    return {"recorded": recorded, "unacknowledged": max(recorded - acknowledged, 0)}
 
 
 def _access_status(record: logging.LogRecord) -> int:
@@ -129,7 +195,7 @@ def install() -> Path | None:
 
     Replaces any earlier installation rather than adding to it: the test suite runs the application's
     startup once per client, and a second handler would double every line."""
-    global _handler, _attached
+    global _handler, _counter, _attached
     uninstall()
     path = log_path()
     try:
@@ -141,13 +207,15 @@ def install() -> Path | None:
         return None
     handler.setFormatter(_UtcFormatter("%(asctime)sZ %(levelname)s %(name)s: %(message)s", "%Y-%m-%dT%H:%M:%S"))
     handler.addFilter(_WorthKeeping())
+    counter = _ErrorCounter()
 
     attached: list[logging.Logger] = []
     for logger in (logging.getLogger(), *(logging.getLogger(name) for name in _SERVER_LOGGERS)):
         if not _reaches(logger, attached):
             logger.addHandler(handler)
+            logger.addHandler(counter)
             attached.append(logger)
-    _handler, _attached = handler, attached
+    _handler, _counter, _attached = handler, counter, attached
 
     marker = logging.getLogger(_MARKER_LOGGER)
     marker.setLevel(logging.INFO)
@@ -156,13 +224,18 @@ def install() -> Path | None:
 
 
 def uninstall() -> None:
-    global _handler, _attached
+    global _handler, _counter, _attached, _pending_errors
     if _handler is None:
         return
     for logger in _attached:
         logger.removeHandler(_handler)
+        logger.removeHandler(_counter)
     _handler.close()
-    _handler, _attached = None, []
+    _handler, _counter, _attached = None, None, []
+    # A last chance for errors a failed write held back; what still cannot be written goes with the process.
+    _flush_error_count()
+    with _pending_lock:
+        _pending_errors = 0
 
 
 def parse_entries(text: str) -> list[dict]:

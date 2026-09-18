@@ -3130,7 +3130,8 @@ export const HELP_TOPICS = [
 
           <li>
             <strong>Error log</strong> lists the errors recorded in the "console log" file.
-            This is only visible to users who are administrators.
+            This is only visible to users who are administrators. A new error adds a task to the
+            Tasks page for them, which clears once the error log has been opened.
           </li>
           <li>
             <strong>Dismissed duplicate pairs</strong> Lists the pairs of transactions that have

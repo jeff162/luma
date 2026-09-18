@@ -47,7 +47,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend import app_config
-from backend.app_logging import log_warning
+from backend.app_logging import log_error, log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
@@ -2735,7 +2735,7 @@ async def run_import(
                 ]
                 scan_imported_payees(conn, payee_keys_for_ids(conn, ids))
         except Exception as e:
-            log_warning(f"[import] recurring auto-scan failed: {e}")
+            log_error(f"[import] recurring auto-scan failed: {e}", exc_info=e)
 
     return result
 

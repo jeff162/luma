@@ -9,14 +9,16 @@ reads the errors back out of it, tracebacks included, newest first.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from backend import app_log_file
-from backend.db import database
+from backend.db import control_database, database
 from backend.tests._api_client import api_client
 
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -39,6 +41,11 @@ class AppLogFileTests(unittest.TestCase):
         patcher = mock.patch.object(database, "DB_PATH", str(self.dir / "luma-data.db"))
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Errors are counted into the control database as they are logged.
+        control = mock.patch.object(control_database, "CONTROL_DB_PATH", str(self.dir / "luma-control.db"))
+        control.start()
+        self.addCleanup(control.stop)
+        control_database.init_control_db()
         saved = {name: (logging.getLogger(name).propagate, logging.getLogger(name).level) for name in _UVICORN_LOGGERS}
         self.addCleanup(self._restore_loggers, saved)
         # Registered last so it runs first: the handler is closed before its directory goes.
@@ -88,6 +95,7 @@ class AppLogFileTests(unittest.TestCase):
         app_log_file.install()
         logging.getLogger("uvicorn.error").error("only once")
         self.assertEqual(sum("only once" in line for line in self._lines()), 1)
+        self.assertEqual(app_log_file.error_counts()["recorded"], 1)
 
     def test_only_failed_requests_leave_an_access_line(self):
         self._as_uvicorn_configures_it()
@@ -175,6 +183,40 @@ class AppLogFileTests(unittest.TestCase):
         result = app_log_file.recent_errors()
         self.assertEqual((result["present"], result["entries"]), (False, []))
 
+    def test_errors_are_counted_for_the_tasks_reminder_and_nothing_else_is(self):
+        self._as_uvicorn_configures_it()
+        app_log_file.install()
+        logging.getLogger("uvicorn.error").error("a request crashed")
+        logging.getLogger("luma.test").warning("coped with this")
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d', "127.0.0.1:5000", "POST", "/api/rules/r1", "1.1", 500)
+        self.assertEqual(app_log_file.error_counts(), {"recorded": 1, "unacknowledged": 1})
+
+    def test_an_error_whose_count_could_not_be_written_is_added_by_the_next_write(self):
+        app_log_file.install()
+        locked = sqlite3.OperationalError("database is locked")
+        with mock.patch.object(control_database, "record_server_errors", side_effect=locked):
+            logging.getLogger("luma.test").error("logged while the control database was busy")
+        self.assertIn("busy", "\n".join(self._lines()))
+        self.assertEqual(app_log_file.error_counts()["recorded"], 1)
+
+    def test_a_start_that_fails_readying_the_database_is_still_recorded(self):
+        # uvicorn reports a failed start only after the lifespan has raised, so the handler has to be in
+        # place before `init_db` runs and still attached once it has failed.
+        from backend import main
+
+        async def start():
+            async with main.lifespan(main.app):
+                pass
+
+        with mock.patch.object(main, "init_db", side_effect=RuntimeError("migration failed")):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(start())
+        logging.getLogger("uvicorn.error").error("Application startup failed. Exiting.")
+
+        self.assertIn("Application startup failed", "\n".join(self._lines()))
+        self.assertEqual(app_log_file.error_counts()["recorded"], 1)
+
     def test_uninstalling_stops_the_copy(self):
         app_log_file.install()
         app_log_file.uninstall()
@@ -190,6 +232,27 @@ class ErrorLogEndpointTests(unittest.TestCase):
             response = client.get("/api/diagnostics/log/errors")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual([entry["message"] for entry in response.json()["entries"]], ["surfaced in Settings"])
+
+    def test_reading_the_errors_and_acknowledging_them_clears_the_task(self):
+        def task_ids(client):
+            return {task["id"] for task in client.get("/api/tasks").json()["tasks"]}
+
+        with api_client() as (client, _):
+            logging.getLogger("luma.test").error("first")
+            self.assertIn("server_errors", task_ids(client))
+
+            shown = client.get("/api/diagnostics/log/errors").json()
+            self.assertEqual((shown["recorded"], shown["unacknowledged"]), (1, 1))
+            # An error logged after the page read its entries has not been seen, whatever the order the
+            # acknowledgment arrives in.
+            logging.getLogger("luma.test").error("second, after the page was read")
+            acknowledged = client.post("/api/diagnostics/log/errors/acknowledge",
+                                       json={"through": shown["recorded"]})
+            self.assertEqual(acknowledged.json(), {"recorded": 2, "unacknowledged": 1})
+            self.assertIn("server_errors", task_ids(client))
+
+            client.post("/api/diagnostics/log/errors/acknowledge", json={"through": 2})
+            self.assertNotIn("server_errors", task_ids(client))
 
 
 if __name__ == "__main__":

@@ -306,6 +306,9 @@ export const api = {
   shutdownApp: () => request('/app/shutdown', { method: 'POST' }),
   // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   getErrorLog: () => request('/diagnostics/log/errors'),
+  // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.
+  acknowledgeErrorLog: (through) =>
+    request('/diagnostics/log/errors/acknowledge', { method: 'POST', body: JSON.stringify({ through }) }),
   listUsers: () => request('/auth/users'),
   createUser: (data) => request('/auth/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

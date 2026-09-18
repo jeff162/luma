@@ -19,9 +19,13 @@ from fastapi import HTTPException, Request
 from backend.db.control_database import auth_required
 
 
+def _is_admin(user: dict | None) -> bool:
+    return bool(user) and user.get("role") == "admin"
+
+
 def require_admin(request: Request) -> dict:
     user = getattr(request.state, "user", None)
-    if not user or user.get("role") != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
@@ -34,3 +38,12 @@ def require_admin_or_local(request: Request) -> dict:
         user = getattr(request.state, "user", None)
         return user or {"role": "admin", "local_mode": True}
     return require_admin(request)
+
+
+def is_admin_or_local(request: Request | None) -> bool:
+    """`require_admin_or_local` as a question, for a surface that shows or hides rather than refuses. A
+    reminder pointing at an admin-only page has to agree with that page's guard, or it sends someone to a
+    refusal."""
+    if not auth_required():
+        return True
+    return _is_admin(getattr(getattr(request, "state", None), "user", None))
