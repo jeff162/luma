@@ -914,10 +914,17 @@ the thing that depends on it. Creating first and revealing after leaves a window
 object exists and its secret does not — a backup recipient whose private key was never kept means backups
 encrypted to a key nobody holds, and that is discovered on the day they are needed.
 
+The window has a second side. Once the secret has been saved, no exit may discard the dependent object:
+a Cancel still on offer after the download leaves a kept private key whose public half was thrown away.
+The backup key generator therefore treats the download or copy itself as the acknowledgment — saving
+creates the recipient, and the dialog's only button from then on is **Done**.
+
 Say plainly what losing it costs and that there is no reset. Offer both a download and a clipboard copy,
 with a fallback message when the clipboard is unavailable (a non-secure context or a denied permission)
 telling the user to select and copy manually — otherwise the failure is a button that silently does
-nothing. And drop the value from component state as soon as the dependent object is created.
+nothing — and a copy made by hand has to count as a save as well. Drop the value from component state
+when the dialog closes; keeping it until then is what allows a second copy after the first has created
+the dependent object.
 
 ## Enter in a small explicit-submit form
 

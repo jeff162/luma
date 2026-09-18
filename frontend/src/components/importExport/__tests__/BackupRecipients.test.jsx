@@ -12,7 +12,7 @@
 // which is the contract that matters anyway.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 const generateBackupKeypair = vi.fn()
@@ -95,26 +95,6 @@ describe('backup recipient names are checked before the key is made', () => {
     expect(await screen.findByLabelText('Generated private key')).toBeTruthy()
   })
 
-  it('will not add the recipient until the private key has been saved', async () => {
-    const user = userEvent.setup()
-    generateBackupKeypair.mockResolvedValueOnce({
-      public_key: 'PUBLIC', private_key: 'PRIVATE', fingerprint: 'SHA256:bbb', encrypted: false,
-    })
-    const nameField = await openGenerateDialog(user)
-    await user.type(nameField, 'test3')
-    await user.click(screen.getByText('Generate'))
-    await screen.findByLabelText('Generated private key')
-
-    // The ordering that stops a recipient existing whose private key was never kept.
-    await user.click(screen.getByText('Create key'))
-    expect(createBackupRecipient).not.toHaveBeenCalled()
-
-    createBackupRecipient.mockResolvedValueOnce(createdRow('test3'))
-    await user.click(screen.getByText('Download private key'))
-    await user.click(screen.getByText('Create key'))
-    expect(createBackupRecipient).toHaveBeenCalledWith({ label: 'test3', public_key: 'PUBLIC' })
-  })
-
   it('applies the same check when pasting an existing key', async () => {
     const user = userEvent.setup()
     render(<BackupRecipients />)
@@ -126,6 +106,83 @@ describe('backup recipient names are checked before the key is made', () => {
     expect(screen.getByText(/already exists/)).toBeTruthy()
     await user.click(screen.getByText('Add key'))
     expect(createBackupRecipient).not.toHaveBeenCalled()
+  })
+})
+
+// Saving the private key is what creates the recipient. Before it, nothing may create one (backups sealed
+// to a key nobody kept); after it, nothing may discard one — a Cancel offered after the download is how a
+// saved private key once ended up with no recipient behind it.
+describe('saving the generated private key adds the recipient', () => {
+  async function generateKey(user) {
+    generateBackupKeypair.mockResolvedValueOnce({
+      public_key: 'PUBLIC', private_key: 'PRIVATE', fingerprint: 'SHA256:bbb', encrypted: false,
+    })
+    const nameField = await openGenerateDialog(user)
+    await user.type(nameField, 'test3')
+    await user.click(screen.getByText('Generate'))
+    return screen.findByLabelText('Generated private key')
+  }
+
+  it('adds on download, then offers only Done', async () => {
+    const user = userEvent.setup()
+    await generateKey(user)
+
+    await user.click(screen.getByText('Done'))
+    expect(createBackupRecipient).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Generated private key')).toBeTruthy()
+
+    createBackupRecipient.mockResolvedValueOnce(createdRow('test3'))
+    await user.click(screen.getByText('Download private key'))
+
+    expect(createBackupRecipient).toHaveBeenCalledWith({ label: 'test3', public_key: 'PUBLIC' })
+    await screen.findByText(/Backup key added/)
+    expect(screen.queryByText('Cancel')).toBeNull()
+    // The row's own name must not read back as a collision with itself.
+    expect(screen.queryByText(/already exists/)).toBeNull()
+
+    await user.click(screen.getByText('Done'))
+    expect(screen.queryByLabelText('Generated private key')).toBeNull()
+    expect(screen.getByText('test3')).toBeTruthy()
+  })
+
+  it('adds once however many copies are taken', async () => {
+    const user = userEvent.setup()
+    await generateKey(user)
+    createBackupRecipient.mockResolvedValue(createdRow('test3'))
+
+    await user.click(screen.getByText('Download private key'))
+    await user.click(screen.getByText('Copy'))
+    await screen.findByText(/Backup key added/)
+
+    expect(createBackupRecipient).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts a copy of the whole key made by hand', async () => {
+    const user = userEvent.setup()
+    const keyField = await generateKey(user)
+    createBackupRecipient.mockResolvedValueOnce(createdRow('test3'))
+
+    keyField.setSelectionRange(0, 3)
+    fireEvent.copy(keyField)
+    expect(createBackupRecipient).not.toHaveBeenCalled()
+
+    keyField.setSelectionRange(0, keyField.value.length)
+    fireEvent.copy(keyField)
+    expect(createBackupRecipient).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers a retry when adding fails', async () => {
+    const user = userEvent.setup()
+    await generateKey(user)
+    createBackupRecipient.mockRejectedValueOnce(new Error('Server unavailable'))
+
+    await user.click(screen.getByText('Download private key'))
+    await screen.findByText('Server unavailable')
+
+    createBackupRecipient.mockResolvedValueOnce(createdRow('test3'))
+    await user.click(screen.getByText('Retry'))
+    await screen.findByText(/Backup key added/)
+    expect(createBackupRecipient).toHaveBeenCalledTimes(2)
   })
 })
 

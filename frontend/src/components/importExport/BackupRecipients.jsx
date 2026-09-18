@@ -14,10 +14,11 @@
 // a shared one silently attaches the name typed for one flow to a key created by the other.
 //
 // **The generator stores nothing, and the ordering is the safety property.** The endpoint returns a
-// keypair and creates no recipient; the dialog adds one only after the user confirms they have saved the
-// private key. The reverse order would let a recipient exist whose private key was never kept — backups
-// sealed to a key nobody holds, discovered on the day they are needed. The private half lives in dialog
-// state for exactly as long as that takes and is dropped when the dialog closes.
+// keypair and creates no recipient; the dialog adds one the moment the private key is downloaded or
+// copied, and from then on its only exit keeps it. The reverse order would let a recipient exist whose
+// private key was never kept — backups sealed to a key nobody holds, discovered on the day they are
+// needed. A Cancel still offered after the save is the same hole from the other side: a kept private key
+// whose public half was thrown away. The private half lives in dialog state until the dialog closes.
 
 import { useState, useEffect, useRef, useId } from 'react'
 import { api, saveBlob } from '../../lib/api.js'
@@ -381,7 +382,7 @@ function AddRecipientDialog({ existingNames, onAdded, onClose }) {
 }
 
 /** Make a key pair here, for someone with no key of their own. Two steps in one dialog: name it and
- *  generate, then save the private half before the recipient is created. */
+ *  generate, then save the private half — which is what creates the recipient. */
 function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   const fieldIdBase = useId()
   const [label, setLabel] = useState('')
@@ -389,9 +390,12 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   const [confirmPassphrase, setConfirmPassphrase] = useState('')
   const [generating, setGenerating] = useState(false)
   const [generated, setGenerated] = useState(null)
-  const [savedAcknowledged, setSavedAcknowledged] = useState(false)
+  // 'pending' until the private key leaves the dialog, then 'adding' → 'added', or 'failed' with a retry.
+  const [addState, setAddState] = useState('pending')
+  // State cannot stop a second save landing before the re-render (Download, then Copy straight after),
+  // and each would otherwise create the recipient again.
+  const addStarted = useRef(false)
   const [copied, setCopied] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const inputStyle = { ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%' }
   // A typo here produces a perfectly valid key file that cannot be opened, and says nothing about it
@@ -399,8 +403,9 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   // set-passphrase flow does. An empty passphrase is a deliberate choice and needs no confirmation.
   const passphraseReady = !passphrase || passphrase === confirmPassphrase
   // Checked before generating, not after: the name is locked once a key exists, so a collision found at
-  // "add recipient" would mean discarding a key the user has already been told to save.
-  const nameTaken = isNameTaken(existingNames, label)
+  // "add recipient" would mean discarding a key the user has already been told to save. Once added, the
+  // name is in `existingNames` because it is this key's own.
+  const nameTaken = addState !== 'added' && isNameTaken(existingNames, label)
 
   async function generate() {
     setGenerating(true)
@@ -417,66 +422,90 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   function downloadPrivateKey() {
     const stem = (label.trim() || 'luma-backup').replace(/[^A-Za-z0-9._-]+/g, '-')
     saveBlob(new Blob([generated.private_key], { type: 'application/x-pem-file' }), `${stem}-private-key.pem`)
-    setSavedAcknowledged(true)
+    addRecipient()
   }
 
   async function copyPrivateKey() {
     try {
       await navigator.clipboard.writeText(generated.private_key)
       setCopied(true)
-      setSavedAcknowledged(true)
       setTimeout(() => setCopied(false), 2000)
+      addRecipient()
     } catch {
       setError('Could not reach the clipboard — select the key above and copy it manually.')
     }
   }
 
+  // The manual copy the clipboard error asks for is a save too — without this it would leave the
+  // recipient uncreated and the dialog with no way forward but Cancel. Only a copy of the whole key counts.
+  function copiedByHand(event) {
+    const { selectionStart, selectionEnd, value } = event.target
+    if (selectionStart === 0 && selectionEnd === value.length) addRecipient()
+  }
+
   async function addRecipient() {
-    setSaving(true)
+    if (addStarted.current || nameTaken || !label.trim()) return
+    addStarted.current = true
+    setAddState('adding')
     setError('')
     try {
       onAdded(await api.createBackupRecipient({ label: label.trim(), public_key: generated.public_key }))
-      onClose()
+      setAddState('added')
     } catch (err) {
       setError(err.message || 'Failed to save backup recipient')
-      setSaving(false)
+      setAddState('failed')
+      addStarted.current = false
     }
+  }
+
+  let description = `${APP_NAME} will generate an RSA key pair. The public key is saved here as the backup key; the private key is shown once and never stored.`
+  if (addState === 'added') description = 'Backup key added. The private key disappears when this dialog closes.'
+  else if (generated) description = 'Save the private key — this is the only copy. Downloading or copying it adds the backup key.'
+
+  let actions
+  if (addState === 'added') {
+    actions = <Button onClick={onClose}>Done</Button>
+  } else {
+    let primary
+    if (!generated) {
+      primary = (
+        <Button onClick={generate} disabled={generating || nameTaken || !label.trim() || !passphraseReady}>
+          {generating ? 'Generating…' : 'Generate'}
+        </Button>
+      )
+    } else if (addState === 'failed') {
+      primary = <Button onClick={addRecipient} disabled={nameTaken || !label.trim()}>Retry</Button>
+    } else {
+      primary = (
+        <Tooltip content={addState === 'adding' ? '' : 'Download or copy the private key first'}>
+          <Button disabled>{addState === 'adding' ? 'Adding…' : 'Done'}</Button>
+        </Tooltip>
+      )
+    }
+    actions = <>
+      <Button variant="ghost" onClick={onClose} disabled={addState === 'adding'}>Cancel</Button>
+      {primary}
+    </>
   }
 
   return (
     <AppDialog
       title="Generate a key pair"
-      description={generated
-        ? 'Save the private key before adding it — this is the only copy.'
-        : `${APP_NAME} will generate an RSA key pair. The public key is saved here as the backup key; the private key is shown once and never stored.`}
+      description={description}
       onClose={onClose}
       borderColor={generated ? 'var(--warning)' : 'var(--border)'}
-      actions={<>
-        <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        {generated ? (
-          <Tooltip content={savedAcknowledged ? '' : 'Download or copy the private key first'}>
-            <Button
-              onClick={addRecipient}
-              disabled={!savedAcknowledged || saving || !label.trim()}
-            >
-              {saving ? 'Adding…' : 'Create key'}
-            </Button>
-          </Tooltip>
-        ) : (
-          <Button onClick={generate} disabled={generating || nameTaken || !label.trim() || !passphraseReady}>
-            {generating ? 'Generating…' : 'Generate'}
-          </Button>
-        )}
-      </>}
+      actions={actions}
     >
       <div style={{ display: 'grid', gap: 12 }}>
+        {/* Locked once a key exists, since the saved file is named for it — unless adding failed, where a
+            name taken meanwhile (another tab) is the likely cause and the file name matters less. */}
         <Input
           id={`${fieldIdBase}-label`}
           value={label}
           onChange={setLabel}
           placeholder="Key name (e.g. Offsite drive)"
           aria-label="Backup key name"
-          disabled={!!generated}
+          disabled={!!generated && addState !== 'failed'}
         />
         {nameTaken ? (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>
@@ -532,6 +561,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
               value={generated.private_key}
               rows={6}
               aria-label="Generated private key"
+              onCopy={copiedByHand}
               style={{ ...inputStyle, minHeight: 120, resize: 'vertical', fontFamily: 'monospace', fontSize: 11, lineHeight: 1.4, borderRadius: 10 }}
             />
             <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
