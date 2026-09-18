@@ -3106,8 +3106,8 @@ export const HELP_TOPICS = [
             See <HelpLink to="/help/tags">how tags work</HelpLink>.
           </li>
           <li>
-            <strong>Sign-in protection</strong> controls whether passwords are required and if so
-            what the requirements are. See <HelpLink to="/help/account-security">account security</HelpLink>.
+            <strong>Account security</strong> turns sign-in protection on and off and sets the
+            password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
           <li>
             <strong>Configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
@@ -3323,6 +3323,14 @@ export const HELP_TOPICS = [
           is not disk encryption, so
           it is not a substitute for keeping the machine itself secure (see{' '}
           <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>).
+        </p>
+        <p>*needs review*</p>
+        <p>
+          The switch at the top of <em>Account security</em> turns sign-in protection on and off.
+          Turning it on sets a password for the administrator's own account; any other users choose
+          theirs at their next sign-in. Turning it off takes an administrator and removes the
+          password check for everyone, but keeps every account and password, so turning it back on
+          later needs nothing re-entered.
         </p>
         <p>
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to

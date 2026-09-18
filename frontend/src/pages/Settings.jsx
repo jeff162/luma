@@ -565,23 +565,87 @@ function PasswordPolicyPanel({ passwordPolicy, onChange }) {
   )
 }
 
-// Sign-in protection is turned on here. Identities are already unified `user_account` rows, so this
-// only assigns passwords/roles: the operator claims one identity as the admin (setting a password),
-// and may set an optional starting password for each other identity. Every non-claimed account is
-// forced to set its own password at next login, so a blank starting password just means "the person
-// claims it themselves." On success the page reloads into authenticated mode signed in as the admin.
-function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
+// The first row of Account security in both states: whether sign-in protection is on, and the switch
+// that changes it. Neither direction takes effect on the click — turning on needs a password (the form
+// that click opens), turning off reopens network access (a confirm) — so the switch shows the stored
+// state and moves only once the change has been made. Off, there is no role to hold and anyone here may
+// turn it on; on, only an admin may turn it off. The server applies the same split.
+function SignInProtectionControl({ authEnabled, canManage, onRequestEnable }) {
+  const [confirmingOff, setConfirmingOff] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  // A flag flip — identities and their password hashes are preserved, so turning it back on later is
+  // seamless — and the page reloads into local mode.
+  async function turnOff() {
+    setSaving(true)
+    setError('')
+    try {
+      await api.disableAuth()
+      window.location.reload()
+    } catch (err) {
+      setError(err.message || 'Failed to turn off sign-in protection')
+      setSaving(false)
+      setConfirmingOff(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {confirmingOff ? (
+        <AppConfirmDialog
+          title="Turn off sign-in protection?"
+          description="Anyone who can reach this installation on the network will be able to open it and pick any identity — no password, no 2FA. Accounts and their passwords are kept, so you can turn protection back on at any time."
+          confirmLabel="Turn off sign-in protection"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={turnOff}
+          onCancel={() => setConfirmingOff(false)}
+          confirmDisabled={saving}
+          width="min(520px, 100%)"
+        />
+      ) : null}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Sign-in protection</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            {authEnabled
+              ? 'On — opening this installation requires signing in.'
+              : 'Off — anyone who can reach this installation can open it and pick any user.'}
+          </div>
+        </div>
+        {canManage && (
+          <Toggle
+            checked={authEnabled}
+            onChange={next => (next ? onRequestEnable() : setConfirmingOff(true))}
+            ariaLabel="Sign-in protection"
+            disabled={saving}
+          />
+        )}
+      </div>
+      {error && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>{error}</div>}
+    </div>
+  )
+}
+
+// Turning sign-in protection on, opened by the switch above it. Identities are already unified
+// `user_account` rows, so this only assigns passwords/roles: the operator claims one identity as the
+// admin (setting a password), and may set an optional starting password for each other identity. Every
+// non-claimed account is forced to set its own password at next login, so a blank starting password
+// just means "the person claims it themselves." The password policy is the stored one, chosen in the
+// policy panel above this form rather than inside it. On success the page reloads into authenticated
+// mode signed in as the admin. `focusKey` changes on every press of the switch, so pressing it again
+// while the form is already open returns to the password field instead of doing nothing visible.
+function EnableSignInForm({ passwordPolicy: policy, activeLocalProfile, focusKey, onCancel }) {
   const [profiles, setProfiles] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [claimId, setClaimId] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
   const [adminConfirm, setAdminConfirm] = useState('')
   const [otherPasswords, setOtherPasswords] = useState({})
-  // The operator picks the password policy for the install here (seeded from the stored default) rather
-  // than being locked to it; it is persisted server-side as part of enabling sign-in.
-  const [policy, setPolicy] = useState(passwordPolicy)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const adminPasswordRef = useRef(null)
 
   useEffect(() => {
     let cancelled = false
@@ -597,6 +661,8 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
       .catch(err => { if (!cancelled) setLoadError(err.message || 'Failed to load users') })
     return () => { cancelled = true }
   }, [activeLocalProfile?.id])
+
+  useEffect(() => { adminPasswordRef.current?.focus() }, [focusKey, profiles])
 
   // Checked as the fields change rather than on submit. `error` is left holding only what the server
   // said, and is cleared by any edit: a message about the previous attempt that outlives the fix reads
@@ -622,7 +688,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     }
     setSaving(true)
     try {
-      await api.enableAuth({ claim_user_id: claimId, admin_password: adminPassword, initial_passwords, password_policy: policy })
+      await api.enableAuth({ claim_user_id: claimId, admin_password: adminPassword, initial_passwords })
       window.location.reload()
     } catch (err) {
       setError(err.message || 'Failed to enable sign-in protection')
@@ -644,25 +710,32 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     }
   }
 
-  if (profiles === null && !loadError) return <Spinner />
+  const cancelButton = (
+    <Button small variant="ghost" type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
+  )
+
+  // Nothing until the identities arrive: the shared `Spinner` is a page-level block, and the wait is one
+  // local request.
+  if (profiles === null && !loadError) return null
 
   if (loadError) {
-    return <Card style={{ padding: 20 }}><div style={{ color: '#ef4444', fontSize: 13 }}>{loadError}</div></Card>
+    return <div style={{ color: '#ef4444', fontSize: 13 }}>{loadError}</div>
   }
 
   if (profiles.length === 0) {
     return (
-      <Card style={{ padding: 20 }}>
+      <InsetPanel>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
           Turning this on enables authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
         </div>
-        <div style={{ marginTop: 14 }}>
+        {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
+        <div style={{ display: 'flex', gap: 8 }}>
           <Button small onClick={enablePlain} disabled={saving}>
             {saving ? 'Enabling...' : 'Enable sign-in protection'}
           </Button>
+          {cancelButton}
         </div>
-        {error && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>{error}</div>}
-      </Card>
+      </InsetPanel>
     )
   }
 
@@ -670,138 +743,75 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
   const claimed = profiles.find(p => p.id === claimId)
 
   return (
-    <Card style={{ padding: 20 }}>
-      <form onSubmit={enableWithMigration} style={{ display: 'grid', gap: 16 }}>
-        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-          {single
-            ? 'Turning this on password-protects your user. Set a password to continue — you become the admin.'
-            : 'Turning this on password-protects each user. Choose which user is yours (you become the admin), then optionally set a starting password for the others. Everyone without a password is required to set a password the next time they sign in.'}
-        </div>
-
-        {!single && (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <FormLabel>Which user is yours?</FormLabel>
-            {profiles.map(p => (
-              <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
-                <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => edited(setClaimId)(p.id)} disabled={saving} />
-                <span style={{ fontWeight: 600 }}>{p.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gap: 8 }}>
-          <FormLabel>Password requirements</FormLabel>
-          <div style={{ display: 'grid', gap: 6 }}>
-            {PASSWORD_POLICIES.map(option => (
-              <label key={option.value} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: saving ? 'default' : 'pointer' }}>
-                <input type="radio" name="enable-password-policy" checked={policy === option.value} onChange={() => edited(setPolicy)(option.value)} disabled={saving} />
-                <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
-                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gap: 8 }}>
-          <FormLabel>Your password (admin)</FormLabel>
-          {claimed?.username ? (
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-              Sign in with the username <strong>{claimed.username}</strong>.
-            </div>
-          ) : null}
-          <PasswordManagerUsername value={claimed?.username || ''} />
-          <PasswordInput aria-label="Your password" value={adminPassword} onChange={edited(setAdminPassword)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
-          <FieldIssue>{passwordShortfall(adminPassword, policy)}</FieldIssue>
-          <PasswordInput value={adminConfirm} onChange={edited(setAdminConfirm)} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
-          <FieldIssue>{passwordMismatchShown(adminPassword, adminConfirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
-        </div>
-
-        {!single && others.length > 0 && (
-          <div style={{ display: 'grid', gap: 10 }}>
-            <FormLabel>Starting passwords for the other users (optional)</FormLabel>
-            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-              Leave blank to let each person set their own on first sign-in. Whatever you enter, they will be asked to choose a new password the next time they sign in.
-            </div>
-            {others.map(p => (
-              <div key={p.id} style={{ display: 'grid', gap: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600 }}>{p.name}</span>
-                <PasswordInput
-                  placeholder="Leave blank to let them set it"
-                  wrapperStyle={PASSWORD_FIELD_WIDTH}
-                  value={otherPasswords[p.id] || ''}
-                  onChange={edited(value => setOtherPasswords(prev => ({ ...prev, [p.id]: value })))}
-                  disabled={saving}
-                  style={PASSWORD_FIELD_STYLE}
-                  {...NEW_SECRET_PROPS}
-                />
-                <FieldIssue>{otherShortfall(p.id)}</FieldIssue>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
-
-        <div>
-          <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
-            <Button small type="submit" disabled={saving || !!blockingIssue}>
-              {saving ? 'Enabling...' : 'Enable sign-in protection'}
-            </Button>
-          </Tooltip>
-        </div>
-      </form>
-    </Card>
-  )
-}
-
-// Turning sign-in protection back off (admin-gated). It is a flag flip — identities and their password
-// hashes are preserved so re-enabling is seamless — but it reopens network access, so it confirms first.
-function DisableAuthSection() {
-  const [confirming, setConfirming] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  async function disable() {
-    setSaving(true)
-    setError('')
-    try {
-      await api.disableAuth()
-      window.location.reload()
-    } catch (err) {
-      setError(err.message || 'Failed to turn off sign-in protection')
-      setSaving(false)
-      setConfirming(false)
-    }
-  }
-
-  return (
-    <Card style={{ padding: 20 }}>
-      {confirming ? (
-        <AppConfirmDialog
-          title="Turn off sign-in protection?"
-          description="Anyone who can reach this installation on the network will be able to open it and pick any identity — no password, no 2FA. Accounts and their passwords are kept, so you can turn protection back on at any time."
-          confirmLabel="Turn off sign-in protection"
-          confirmVariant="danger"
-          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={disable}
-          onCancel={() => setConfirming(false)}
-          confirmDisabled={saving}
-          width="min(520px, 100%)"
-        />
-      ) : null}
+    <InsetPanel as="form" onSubmit={enableWithMigration} style={{ gap: 16 }}>
       <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-        Sign-in protection is on. Turning it off drops the login perimeter but keeps every account and
-        password, so re-enabling later is seamless.
+        {single
+          ? 'Turning this on password-protects your user. Set a password to continue — you become the admin.'
+          : 'Turning this on password-protects each user. Choose which user is yours (you become the admin), then optionally set a starting password for the others. Everyone without a password is required to set a password the next time they sign in.'}
       </div>
-      {error && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>{error}</div>}
-      <div style={{ marginTop: 14 }}>
-        <Button small variant="danger" onClick={() => setConfirming(true)} disabled={saving}>
-          {saving ? 'Turning off...' : 'Turn off sign-in protection'}
-        </Button>
+
+      {!single && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <FormLabel>Which user is yours?</FormLabel>
+          {profiles.map(p => (
+            <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+              <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => edited(setClaimId)(p.id)} disabled={saving} />
+              <span style={{ fontWeight: 600 }}>{p.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gap: 8 }}>
+        <FormLabel>Your password (admin)</FormLabel>
+        {claimed?.username ? (
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Sign in with the username <strong>{claimed.username}</strong>.
+          </div>
+        ) : null}
+        <PasswordManagerUsername value={claimed?.username || ''} />
+        <PasswordInput ref={adminPasswordRef} aria-label="Your password" value={adminPassword} onChange={edited(setAdminPassword)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+        <FieldIssue>{passwordShortfall(adminPassword, policy)}</FieldIssue>
+        <PasswordInput value={adminConfirm} onChange={edited(setAdminConfirm)} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+        <FieldIssue>{passwordMismatchShown(adminPassword, adminConfirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
       </div>
-    </Card>
+
+      {!single && others.length > 0 && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          <FormLabel>Starting passwords for the other users (optional)</FormLabel>
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+            Leave blank to let each person set their own on first sign-in. Whatever you enter, they will be asked to choose a new password the next time they sign in.
+          </div>
+          {others.map(p => (
+            <div key={p.id} style={{ display: 'grid', gap: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>{p.name}</span>
+              <PasswordInput
+                placeholder="Leave blank to let them set it"
+                wrapperStyle={PASSWORD_FIELD_WIDTH}
+                value={otherPasswords[p.id] || ''}
+                onChange={edited(value => setOtherPasswords(prev => ({ ...prev, [p.id]: value })))}
+                disabled={saving}
+                style={PASSWORD_FIELD_STYLE}
+                {...NEW_SECRET_PROPS}
+              />
+              <FieldIssue>{otherShortfall(p.id)}</FieldIssue>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
+          <Button small type="submit" disabled={saving || !!blockingIssue}>
+            {saving ? 'Enabling...' : 'Enable sign-in protection'}
+          </Button>
+        </Tooltip>
+        {cancelButton}
+      </div>
+    </InsetPanel>
   )
 }
 
@@ -917,7 +927,9 @@ function SignInPasskeysPanel({ user, onUserChange }) {
   )
 }
 
-function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
+// The signed-in user's own sign-in factors — passkeys and the authenticator app. Per-user, unlike the
+// switch and policy above them in Account security, and shown only while sign-in protection is on.
+function SignInFactorsPanel() {
   const fieldIdBase = useId()
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -1017,8 +1029,8 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
     }
   }
 
-  if (loading) return <Spinner />
-  if (!currentUser) return null
+  // Nothing while loading: the shared `Spinner` is a page-level block, and this sits mid-card.
+  if (loading || !currentUser) return null
 
   const inputStyle = {
     ...getFormControlStyle({ size: 'md', surface: 'base' }),
@@ -1026,10 +1038,7 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
   }
 
   return (
-    <Card style={{ padding: 20 }}>
-      {onPasswordPolicyChange && (
-        <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
-      )}
+    <>
       {/* Above the authenticator app because it changes what that section means: a passkey sign-in
           satisfies the second factor, so someone deciding between the two needs to read this first. */}
       <SignInPasskeysPanel user={currentUser} onUserChange={setCurrentUser} />
@@ -1173,6 +1182,37 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
           {error}
         </div>
       )}
+    </>
+  )
+}
+
+// Everything about signing in, in one section whatever the state: the sign-in protection switch, the
+// password policy, then either the form that turns protection on or the user's own passkeys and 2FA.
+// One section rather than one per state, so the switch and the policy are in the same place on both
+// sides of it. The switch and policy are installation-wide and so admin-only once protection is on.
+export function AccountSecuritySection({ authEnabled, currentUser, activeLocalProfile, passwordPolicy, onPasswordPolicyChange }) {
+  const canManage = !authEnabled || currentUser?.role === 'admin'
+  // Counts presses of the switch while protection is off; non-zero means the enable form is open.
+  const [enableRequest, setEnableRequest] = useState(0)
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <SignInProtectionControl
+        authEnabled={authEnabled}
+        canManage={canManage}
+        onRequestEnable={() => setEnableRequest(n => n + 1)}
+      />
+      {canManage && <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />}
+      {authEnabled ? (
+        <SignInFactorsPanel />
+      ) : enableRequest > 0 ? (
+        <EnableSignInForm
+          passwordPolicy={passwordPolicy}
+          activeLocalProfile={activeLocalProfile}
+          focusKey={enableRequest}
+          onCancel={() => setEnableRequest(0)}
+        />
+      ) : null}
     </Card>
   )
 }
@@ -3324,28 +3364,21 @@ export default function Settings() {
             />
           </StickySection>
 
-          {!authEnabled && (
-            <StickySection
-              title="Sign-in protection"
-              description="Enable to add passwords, 2FA to access the application."
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('signInProtection')}
-            >
-              <AuthModeSection passwordPolicy={passwordPolicy} activeLocalProfile={activeLocalProfile} />
-            </StickySection>
-          )}
-
-          {authEnabled && (
-            <StickySection
-              title="Account security"
-              description="Manage password requirements, passkeys, and authenticator-based sign-in protection."
-              actions={<FeatureExplainer topic="account-security" placement="bottom-left" />}
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('accountSecurity')}
-            >
-              <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} />
-            </StickySection>
-          )}
+          <StickySection
+            title="Account security"
+            description="Sign-in protection, password requirements, passkeys, and two-factor sign-in."
+            actions={<FeatureExplainer topic="account-security" placement="bottom-left" />}
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('accountSecurity')}
+          >
+            <AccountSecuritySection
+              authEnabled={authEnabled}
+              currentUser={currentUser}
+              activeLocalProfile={activeLocalProfile}
+              passwordPolicy={passwordPolicy}
+              onPasswordPolicyChange={setPasswordPolicy}
+            />
+          </StickySection>
 
           {authEnabled && (
             <StickySection
@@ -3355,17 +3388,6 @@ export default function Settings() {
               {...bindSection('userManagement')}
             >
               <UserAdminSection passwordPolicy={passwordPolicy} />
-            </StickySection>
-          )}
-
-          {authEnabled && currentUser?.role === 'admin' && (
-            <StickySection
-              title="Sign-in protection"
-              description="Turn off login for this installation (accounts and passwords are kept)."
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('disableSignInProtection')}
-            >
-              <DisableAuthSection />
             </StickySection>
           )}
 

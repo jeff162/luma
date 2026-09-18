@@ -1259,13 +1259,15 @@ export function SegmentedToggle({ value, options, onChange, ariaLabel }) {
 // Shared on/off switch for boolean settings. A pill track with a sliding knob (flex alignment
 // positions the knob, so there is no manual offset math), rendered as an accessible role="switch"
 // button with an optional trailing label. Prefer this over a bare checkbox for settings toggles so
-// the look stays consistent across the app.
-export function Toggle({ checked, onChange, label, disabled = false, style }) {
+// the look stays consistent across the app. `ariaLabel` names a switch whose label is rendered
+// elsewhere in its row rather than beside it.
+export function Toggle({ checked, onChange, label, ariaLabel, disabled = false, style }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => { if (!disabled) onChange(!checked) }}
       style={{
