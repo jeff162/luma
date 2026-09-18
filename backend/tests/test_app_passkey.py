@@ -15,6 +15,8 @@ the TOTP prompt, and if that ever silently reverts, the feature has lost its rea
 
 import unittest
 
+from webauthn import base64url_to_bytes
+
 from backend.tests._api_client import api_client
 from backend.tests._software_authenticator import SoftwareAuthenticator, b64url
 
@@ -47,8 +49,11 @@ class PasskeySignInTests(unittest.TestCase):
     def _register(self, client, authenticator: SoftwareAuthenticator, *, label="Laptop"):
         begun = client.post("/api/auth/passkey/register/begin")
         self.assertEqual(begun.status_code, 200, begun.text)
-        challenge = begun.json()["options"]["challenge"]
-        credential = authenticator.create(rp_id=RP_ID, challenge=challenge, origin=ORIGIN)
+        options = begun.json()["options"]
+        # A real authenticator stores whatever handle the options name and returns it on every sign-in,
+        # so the test takes it from there too rather than assuming how the server derives it.
+        authenticator.user_handle = base64url_to_bytes(options["user"]["id"])
+        credential = authenticator.create(rp_id=RP_ID, challenge=options["challenge"], origin=ORIGIN)
         return client.post(
             "/api/auth/passkey/register/complete",
             json={"credential": credential, "label": label},
@@ -73,7 +78,7 @@ class PasskeySignInTests(unittest.TestCase):
         with api_client(base_url=BASE_URL) as (client, _):
             admin_id = self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             registered = self._register(client, authenticator)
             self.assertEqual(registered.status_code, 200, registered.text)
             self.assertEqual(len(registered.json()["user"]["app_passkeys"]), 1)
@@ -97,7 +102,7 @@ class PasskeySignInTests(unittest.TestCase):
         with api_client(base_url=BASE_URL) as (client, _):
             admin_id = self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self.assertEqual(self._register(client, authenticator).status_code, 200)
 
             setup = client.post("/api/auth/2fa/setup")
@@ -126,21 +131,27 @@ class PasskeySignInTests(unittest.TestCase):
             self.assertEqual(completed.json()["user"]["id"], admin_id)
 
     def test_a_removed_passkey_no_longer_signs_in(self):
+        """A second device stays registered so the sign-in ceremony still starts — with none left it is
+        refused before any passkey is asked for, which would never reach the check this is about."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
-            registered = self._register(client, authenticator)
-            passkey_id = registered.json()["user"]["app_passkeys"][0]["id"]
+            laptop, phone = SoftwareAuthenticator(), SoftwareAuthenticator()
+            passkey_id = self._register(client, laptop).json()["user"]["app_passkeys"][0]["id"]
+            self._register(client, phone, label="Phone")
 
             removed = client.delete(f"/api/auth/passkey/{passkey_id}")
             self.assertEqual(removed.status_code, 200, removed.text)
-            self.assertEqual(removed.json()["user"]["app_passkeys"], [])
+            self.assertEqual([p["label"] for p in removed.json()["user"]["app_passkeys"]], ["Phone"])
 
             client.post("/api/auth/logout")
             challenge = self._begin_login(client)
-            assertion = authenticator.get(rp_id=RP_ID, challenge=challenge, origin=ORIGIN)
+            assertion = laptop.get(rp_id=RP_ID, challenge=challenge, origin=ORIGIN)
             self.assertEqual(self._complete_login(client, assertion).status_code, 401)
+
+            challenge = self._begin_login(client)
+            assertion = phone.get(rp_id=RP_ID, challenge=challenge, origin=ORIGIN)
+            self.assertEqual(self._complete_login(client, assertion).status_code, 200)
 
     # --- the refusals ---------------------------------------------------------------------------
 
@@ -149,9 +160,9 @@ class PasskeySignInTests(unittest.TestCase):
         the second attempt has nothing to verify against — which is the property that makes a captured
         assertion worthless."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -168,9 +179,9 @@ class PasskeySignInTests(unittest.TestCase):
         """Proves the signature is actually checked, rather than the credential merely being looked up.
         Everything is right except the key that signed it."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -184,9 +195,9 @@ class PasskeySignInTests(unittest.TestCase):
 
     def test_an_assertion_from_another_origin_is_refused(self):
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -200,9 +211,9 @@ class PasskeySignInTests(unittest.TestCase):
         """User verification is what makes a passkey stand in for two factors, so an assertion that
         merely proves someone touched the device must not sign anyone in."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -217,9 +228,9 @@ class PasskeySignInTests(unittest.TestCase):
         authenticator that keeps a real counter, since the check is skipped entirely for one that does
         not — see the sibling test below, which is the case that would break if this one were tightened."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode(), sign_count=5)
+            authenticator = SoftwareAuthenticator(sign_count=5)
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -237,9 +248,9 @@ class PasskeySignInTests(unittest.TestCase):
         regression would lock out the very devices this feature is for, so a 0 against a stored 0 is an
         ordinary sign-in — twice over, since the second is where a naive `<=` check would fire."""
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -255,6 +266,7 @@ class PasskeySignInTests(unittest.TestCase):
         with api_client(base_url=BASE_URL) as (client, _):
             self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
+            self._register(client, SoftwareAuthenticator())
             client.post("/api/auth/logout")
 
             stranger = SoftwareAuthenticator()
@@ -278,9 +290,9 @@ class PasskeySignInTests(unittest.TestCase):
 
     def test_the_same_passkey_cannot_be_registered_twice(self):
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self.assertEqual(self._register(client, authenticator).status_code, 200)
             again = self._register(client, authenticator, label="Same device")
             self.assertEqual(again.status_code, 400, again.text)
@@ -291,9 +303,9 @@ class PasskeySignInTests(unittest.TestCase):
 
     def test_params_reports_availability_without_a_session(self):
         with api_client(base_url=BASE_URL) as (client, _):
-            admin_id = self._turn_sign_in_on(client)
+            self._turn_sign_in_on(client)
             self._sign_in_with_password(client)
-            authenticator = SoftwareAuthenticator(user_handle=admin_id.encode())
+            authenticator = SoftwareAuthenticator()
             self._register(client, authenticator)
             client.post("/api/auth/logout")
 
@@ -312,6 +324,73 @@ class PasskeySignInTests(unittest.TestCase):
             self.assertFalse(params.json()["available"])
             self.assertEqual(params.json()["reason"], "insecure_context")
             self.assertIsNone(params.json()["rp_id"])
+
+
+    # --- what a device's passkey chooser is given ------------------------------------------------
+    #
+    # A device keeps one passkey list per host — not per install, port or feature — so the vault's
+    # passkeys and every other Luma database served on the same host land in the same list. These pin the
+    # three things that keep sign-in usable in that list and keep it from damaging the vault's entries.
+
+    def test_sign_in_names_exactly_the_workspaces_sign_in_passkeys(self):
+        """The list is what stops the browser offering every passkey it holds for the host."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            laptop, phone = SoftwareAuthenticator(), SoftwareAuthenticator()
+            self._register(client, laptop)
+            self._register(client, phone, label="Phone")
+            client.post("/api/auth/logout")
+
+            begun = client.post("/api/auth/passkey/login/begin")
+            self.assertEqual(begun.status_code, 200, begun.text)
+            listed = {entry["id"] for entry in begun.json()["options"]["allowCredentials"]}
+            self.assertEqual(listed, {b64url(laptop.credential_id), b64url(phone.credential_id)})
+
+    def test_nothing_to_sign_in_with_is_refused_before_a_device_is_asked(self):
+        """An empty list means "any passkey" to a browser, so it must never be sent."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            client.post("/api/auth/logout")
+            self.assertFalse(client.get("/api/auth/passkey/params").json()["any_registered"])
+            self.assertEqual(client.post("/api/auth/passkey/login/begin").status_code, 400)
+
+    def test_a_sign_in_passkey_is_registered_under_its_own_account_handle(self):
+        """The handle is how an authenticator decides two passkeys are the same account, and it may replace
+        one with the other. Sharing the vault's would let adding one delete the other from the device."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            sign_in = client.post("/api/auth/passkey/register/begin").json()["options"]["user"]
+            vault = client.get("/api/auth/vault/passkey/params").json()
+            self.assertNotEqual(base64url_to_bytes(sign_in["id"]), vault["user_handle"].encode())
+
+    def test_the_two_kinds_are_labelled_apart(self):
+        """Both kinds sit in one list on the device; a bare username twice gives no way to pick."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            sign_in = client.post("/api/auth/passkey/register/begin").json()["options"]["user"]
+            vault = client.get("/api/auth/vault/passkey/params").json()
+            self.assertNotEqual(sign_in["name"], vault["user_name"])
+            self.assertNotEqual(sign_in["displayName"], vault["display_name"])
+            self.assertNotIn("Tester", {sign_in["name"], vault["user_name"]})
+
+    def test_an_assertion_carrying_the_vaults_handle_is_refused(self):
+        """A passkey that claims the account id as its handle — the vault's, and what sign-in passkeys
+        used to be registered under — does not sign in, whatever else about it checks out."""
+        with api_client(base_url=BASE_URL) as (client, _):
+            admin_id = self._turn_sign_in_on(client)
+            self._sign_in_with_password(client)
+            laptop = SoftwareAuthenticator()
+            self._register(client, laptop)
+            client.post("/api/auth/logout")
+
+            laptop.user_handle = admin_id.encode()
+            challenge = self._begin_login(client)
+            assertion = laptop.get(rp_id=RP_ID, challenge=challenge, origin=ORIGIN)
+            self.assertEqual(self._complete_login(client, assertion).status_code, 401)
+            self.assertEqual(client.get("/api/auth/me").status_code, 401)
 
 
 if __name__ == "__main__":

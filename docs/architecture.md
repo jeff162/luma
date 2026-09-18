@@ -515,9 +515,14 @@ The mechanism, end to end:
   holds passkeys. The two features share no storage, no endpoint and no ceremony (`security-model.md` →
   *Passkeys and the second factor*).
 - `services/app_passkey.py` wraps `py_webauthn`: it builds the ceremony options, verifies the completed
-  ceremony (origin, RP id, type, signature, user verification, sign-counter regression), and owns the
-  policy around that — user verification is **required** on both ceremonies, and registration asks for a
-  *discoverable* credential so the sign-in screen can offer a passkey before anyone types a username.
+  ceremony (origin, RP id, type, signature, user verification, sign-counter regression, and that a
+  returned user handle is the owner's), and owns the policy around that — user verification is
+  **required** on both ceremonies, and registration asks for a *discoverable* credential so the sign-in
+  screen can offer a passkey before anyone types a username. The sign-in ceremony's `allowCredentials`
+  names every active account's sign-in passkey (never an empty list, which a browser reads as "any").
+  Sign-in passkeys are registered under their own user handle (`sign_in_user_handle`, a hash of the
+  account id) while the vault's use the account id, and `passkey_account_names` labels both kinds —
+  the vault's params call it too (`security-model.md` → *Passkeys and the second factor* for why each).
 - `POST /auth/passkey/register/begin|complete` needs a signed-in session; `GET /auth/passkey/params` and
   `POST /auth/passkey/login/begin|complete` are public (listed in the tenant middleware's `public_paths`),
   because the sign-in screen runs them before a session exists. `DELETE /auth/passkey/{id}` removes one.

@@ -1265,6 +1265,22 @@ def list_app_passkey_credential_ids(user_id: str) -> list[str]:
     return [row["credential_id"] for row in rows]
 
 
+def list_all_app_passkey_credentials() -> list[dict]:
+    """Every active account's sign-in credential ids and transports, for the sign-in screen's
+    `allowCredentials`. A disabled account's passkeys are left out: listing them would only offer a
+    device prompt that `verify_assertion` is bound to refuse."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.credential_id, p.transports
+            FROM app_passkey p JOIN user_account u ON u.id = p.user_id
+            WHERE u.status = 'active'
+            ORDER BY p.created_at, p.id
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_app_passkey_by_credential(credential_id: str) -> dict | None:
     """The row a presented assertion belongs to, with the account it authenticates.
 
@@ -1325,14 +1341,6 @@ def delete_app_passkey(user_id: str, passkey_id: str) -> bool:
         )
     return cursor.rowcount > 0
 
-
-def app_passkeys_exist() -> bool:
-    """Whether any account has one, which is what decides if the sign-in screen offers the button at
-    all. Deliberately workspace-wide rather than per-user: the screen has to answer this *before*
-    anyone has said who they are."""
-    with get_control_db() as conn:
-        row = conn.execute("SELECT 1 FROM app_passkey LIMIT 1").fetchone()
-    return row is not None
 
 
 def create_user(

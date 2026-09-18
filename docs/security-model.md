@@ -163,6 +163,28 @@ crosses the login perimeter — so they keep separate endpoints, separate storag
 coupling *Do not couple them* forbids: signing in would imply vault authority. A user who holds both is
 prompted twice, deliberately.
 
+**Keeping them apart has to hold on the device, not only on the server.** A device keeps one passkey list
+per *host* — not per install, per port or per feature — so the vault's passkeys, the sign-in passkeys and
+those of every other Luma database served on the same host all sit in one list. Three rules follow, each
+learned from a chooser that offered four identical entries of which one worked:
+
+- **A sign-in passkey has its own user handle**, derived from the account id rather than equal to it
+  (`sign_in_user_handle`); the vault's passkeys keep the account id. The handle is how an authenticator
+  decides two passkeys are the same account, and the authenticator protocol lets it replace a stored
+  passkey when a new one arrives for the same site and handle — the synced password managers do exactly
+  that. A shared handle would let adding one kind silently delete the other from the device. Sign-in also
+  refuses an assertion whose returned handle is not its owner's, which is the WebAuthn verification
+  procedure's owner check and the one the library leaves to the caller.
+- **Sign-in names its credentials.** The sign-in ceremony's `allowCredentials` lists every sign-in passkey
+  in the workspace, so the device offers only those, and with one registered skips the chooser entirely.
+  This reverses a first choice to send no list, made so an unauthenticated caller could not learn how many
+  sign-in passkeys exist. That is still what the list reveals — a count and some opaque ids, neither of
+  which can produce an assertion — and hiding the size of the household is not what the perimeter is for;
+  keeping non-users out is. An empty list is never sent: to a browser it means *any* passkey, which is the
+  whole-host chooser the list exists to prevent.
+- **Each kind is labelled as what it is** ("name (Luma sign-in)", "name (Luma vault)"), since the device's
+  chooser and its saved-passkey list show that label and nothing else.
+
 **Their reach differs in the direction people expect least.** Sign-in needs only a plain assertion,
 while a vault slot needs the PRF extension — so an authenticator that cannot hold a vault slot at all can
 still sign in, and the *login* feature is the one that works on more devices.

@@ -120,9 +120,10 @@ export async function registerSignInPasskey(options) {
   return { ok: true, credential: serializeRegistration(credential) }
 }
 
-// Run a sign-in assertion. No `allowCredentials` comes back from the server, so the browser offers
-// whichever discoverable passkey it holds for this host and the account follows from the answer — which
-// is what lets the sign-in screen offer this before anyone has typed a username.
+// Run a sign-in assertion. The server's `allowCredentials` names every sign-in passkey in the workspace,
+// so the browser offers only those — not the vault's, and not ones from other installs on the same host —
+// and the account follows from whichever answers, which is what lets the sign-in screen offer this
+// before anyone has typed a username.
 export async function assertSignInPasskey(options) {
   let assertion
   try {

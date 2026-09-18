@@ -17,7 +17,6 @@ from pydantic import BaseModel
 from backend import app_config
 from backend.runtime_config import env_file_path
 from backend.db.control_database import (
-    app_passkeys_exist,
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
@@ -38,6 +37,7 @@ from backend.db.control_database import (
     get_https_warning_suppressed,
     get_login_account,
     get_password_policy,
+    list_all_app_passkey_credentials,
     get_security_profile,
     set_https_warning_suppressed,
     get_user_by_id,
@@ -862,11 +862,11 @@ def passkey_params(request: Request):
     """Whether this connection can run a passkey ceremony, and whether there is any point offering one.
 
     Public, because the sign-in screen has to decide whether to show the button before anyone has said
-    who they are. `any_registered` is a single workspace-wide boolean for the same reason it is not a
-    list: an unauthenticated caller learns that the feature is in use here, and nothing about who uses it.
+    who they are. `any_registered` asks the same question the sign-in ceremony's credential list does —
+    an active account's passkey — so the button is never offered for a list that would come back empty.
     """
     context = _passkey_context(request)
-    return {**context, "any_registered": app_passkeys_exist()}
+    return {**context, "any_registered": bool(list_all_app_passkey_credentials())}
 
 
 @router.post("/passkey/register/begin")
@@ -909,7 +909,10 @@ def passkey_login_begin(request: Request):
     if not auth_required():
         raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
     context = _require_passkey_context(request)
-    options, challenge = app_passkey.authentication_options(context["rp_id"])
+    try:
+        options, challenge = app_passkey.authentication_options(context["rp_id"])
+    except app_passkey.PasskeyRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     request.session[_LOGIN_CHALLENGE_KEY] = challenge
     return {"options": json.loads(options)}
 
@@ -1422,11 +1425,15 @@ def vault_passkey_params(request: Request):
     """
     user = _require_current_user(request)
     context = _passkey_context(request)
+    # Labelled as the vault's, because a device shows one passkey list per host and sign-in keeps its own
+    # passkeys there too; see `app_passkey.passkey_account_names`. The handle stays the account id: it is
+    # what every existing vault passkey was registered under, and sign-in is the one that moved off it.
+    user_name, display_name = app_passkey.passkey_account_names(user, "vault")
     return {
         **context,
         "user_handle":   user["id"],
-        "user_name":     user["username"],
-        "display_name":  user.get("display_name") or user["username"],
+        "user_name":     user_name,
+        "display_name":  display_name,
         "register_salt": crypto_service.new_passkey_salt(),
         # Registered credentials, so `get()` can scope itself and the UI can list what exists.
         "credentials":   crypto_service.passkey_credentials(user["id"]),
