@@ -106,6 +106,8 @@ const SPENDING_VIEW_BY_BUILTIN_OPTIONS = [
 function makeTagReportId() {
   return `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
+// The display-without-save report's id. It lives only in session state and never enters the catalog.
+const TRANSIENT_TAG_REPORT_ID = '__transient__'
 
 // The frame selector: which cross-cutting question the Single and Trends modes are answering. Cash flow
 // is a *frame*, not a top-level mode, because it wants the same period, compare and trend machinery the
@@ -612,13 +614,22 @@ function Breadcrumb({ items, onNavigate }) {
  * renderer, not by priority). The user can either display the report as a transient
  * preset (gone when they switch to anything else) or name and save it for reuse via
  * the Spending-by picker.
+ *
+ * Given a `report` it opens on that report's tags. A saved report is edited in place
+ * (Save → `onSaveTags`, keeping its id and name); the transient one keeps the new-report
+ * actions, since it has nothing to save over. Tags that no longer exist are not listed,
+ * so saving drops them — the deliberate rebuild the missing-tags toast asks for.
  */
-function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
-  const [selectedIds, setSelectedIds] = useState(() => new Set())
-  const [name, setName] = useState('')
+function TagReportBuilder({ availableTags, report = null, onClose, onDisplay, onSave, onSaveTags }) {
+  const originalIds = report?.tagIds || []
+  const [selectedIds, setSelectedIds] = useState(() => {
+    const knownIds = new Set(availableTags.map(t => t.id))
+    return new Set(originalIds.filter(id => knownIds.has(id)))
+  })
   const [savePromptOpen, setSavePromptOpen] = useState(false)
-  const trimmedName = name.trim()
   const hasSelection = selectedIds.size > 0
+  const editingSaved = !!report && report.id !== TRANSIENT_TAG_REPORT_ID
+  const changed = selectedIds.size !== originalIds.length || originalIds.some(id => !selectedIds.has(id))
 
   function toggleTag(id) {
     setSelectedIds(prev => {
@@ -640,29 +651,40 @@ function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
     setSavePromptOpen(true)
   }
 
-  function handleConfirmSave() {
-    const cleaned = trimmedName
-    if (!cleaned || !hasSelection) return
-    onSave({ name: cleaned, tagIds: Array.from(selectedIds) })
+  function handleConfirmSave(name) {
+    if (!hasSelection) return
+    onSave({ name, tagIds: Array.from(selectedIds) })
+    onClose()
+  }
+
+  function handleSaveTags() {
+    if (!hasSelection || !changed) return
+    onSaveTags(Array.from(selectedIds))
     onClose()
   }
 
   const sortedTags = [...availableTags].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  const title = editingSaved ? `Edit tag report · ${report.name}` : report ? 'Edit tag report' : 'New tag report'
 
   return (
     <>
       <AppDialog
-        title="New tag report"
+        title={title}
         description="Pick the tags you want as wedges. Transactions matching multiple selected tags get their own combination wedge; everything else falls into Other / Untagged."
         width="min(480px, 100%)"
         onClose={onClose}
-        actions={
+        actions={editingSaved ? (
+          <>
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button onClick={handleSaveTags} disabled={!hasSelection || !changed}>Save</Button>
+          </>
+        ) : (
           <>
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
             <Button variant="ghost" onClick={handleDisplay} disabled={!hasSelection}>Display</Button>
             <Button onClick={handleSaveAndDisplay} disabled={!hasSelection}>Save &amp; display</Button>
           </>
-        }
+        )}
       >
         {sortedTags.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--muted)', padding: '8px 0' }}>
@@ -707,28 +729,44 @@ function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
         </div>
       </AppDialog>
       {savePromptOpen && (
-        <AppDialog
-          title="Save tag report"
-          description="The name will appear in the Spending-by picker."
-          width="min(380px, 100%)"
+        <SaveTagReportDialog
           zIndex={1300}
-          onClose={() => setSavePromptOpen(false)}
-          actions={
-            <>
-              <Button variant="ghost" onClick={() => setSavePromptOpen(false)}>Cancel</Button>
-              <Button onClick={handleConfirmSave} disabled={!trimmedName}>Save</Button>
-            </>
-          }
-        >
-          <Input
-            value={name}
-            onChange={setName}
-            placeholder="e.g. Essentials, Per-owner"
-            aria-label="Tag report name"
-          />
-        </AppDialog>
+          onCancel={() => setSavePromptOpen(false)}
+          onSave={handleConfirmSave}
+        />
       )}
     </>
+  )
+}
+
+/*
+ * Name prompt for saving a tag selection as a named report — the builder's "Save & display" step,
+ * and "Save as…" on the unsaved custom report.
+ */
+function SaveTagReportDialog({ zIndex, onCancel, onSave }) {
+  const [name, setName] = useState('')
+  const trimmed = name.trim()
+  return (
+    <AppDialog
+      title="Save tag report"
+      description="The name will appear in the Spending-by picker."
+      width="min(380px, 100%)"
+      zIndex={zIndex}
+      onClose={onCancel}
+      actions={
+        <>
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button onClick={() => onSave(trimmed)} disabled={!trimmed}>Save</Button>
+        </>
+      }
+    >
+      <Input
+        value={name}
+        onChange={setName}
+        placeholder="e.g. Essentials, Per-owner"
+        aria-label="Tag report name"
+      />
+    </AppDialog>
   )
 }
 
@@ -824,7 +862,7 @@ function MissingTagsToast({ reportName, onDismiss, onSuppress }) {
         }}
       >×</button>
       <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.45, marginBottom: 8, paddingRight: 14 }}>
-        Some tags in <strong>{reportName}</strong> no longer exist and have been ignored. Open the builder to rebuild the report deliberately.
+        Some tags in <strong>{reportName}</strong> no longer exist and have been ignored. Use <em>Edit tags…</em> on the report to rebuild it deliberately.
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button
@@ -1714,13 +1752,15 @@ export default function Dashboard() {
   const [transientTagReport, setTransientTagReport] = useState(null)
   const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
   const { tags: availableTags } = useTags()
-  const [tagBuilderOpen, setTagBuilderOpen] = useState(false)
+  // null when closed; `{ reportId }` opens it on that report's tags, `{ reportId: null }` starts a new one.
+  const [tagBuilder, setTagBuilder] = useState(null)
   const [tagSignatureBuckets, setTagSignatureBuckets] = useState([])
   const [tagModeLoading, setTagModeLoading] = useState(false)
   const [detailTagSignatures, setDetailTagSignatures] = useState([])
   const [missingTagsToastReportId, setMissingTagsToastReportId] = useState(null)
   const [pickerMenuOpen, setPickerMenuOpen] = useState(null)
   const [renameTargetId, setRenameTargetId] = useState(null)
+  const [saveAsOpen, setSaveAsOpen] = useState(false)
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [showAllSpendingRows, setShowAllSpendingRows] = useState(false)
   const [otherDrillDepth, setOtherDrillDepth] = useState(0)
@@ -1918,7 +1958,7 @@ export default function Dashboard() {
       setMissingTagsToastReportId(null)
       return
     }
-    if (activeTagReport.id === '__transient__') {
+    if (activeTagReport.id === TRANSIENT_TAG_REPORT_ID) {
       setMissingTagsToastReportId(null)
       return
     }
@@ -2569,7 +2609,7 @@ export default function Dashboard() {
 
   function handleSpendingViewByChange(value) {
     if (value === NEW_TAG_REPORT_OPTION) {
-      setTagBuilderOpen(true)
+      setTagBuilder({ reportId: null })
       return
     }
     // Picking anything other than the transient report clears it so it does not linger
@@ -2590,7 +2630,7 @@ export default function Dashboard() {
   }
 
   function handleDisplayTagReportTransient(tagIds) {
-    const transient = { id: '__transient__', name: 'Custom (unsaved)', tagIds }
+    const transient = { id: TRANSIENT_TAG_REPORT_ID, name: 'Custom (unsaved)', tagIds }
     setTransientTagReport(transient)
     setSpendingViewBy(`${TAG_REPORT_PREFIX}${transient.id}`)
   }
@@ -2599,6 +2639,16 @@ export default function Dashboard() {
     const cleaned = String(newName || '').trim()
     if (!cleaned) return
     setTagReports(savedTagReports.map(r => r.id === id ? { ...r, name: cleaned } : r))
+  }
+
+  // A deliberate rebuild resets the missing-tags suppression: it dismissed the old tag set's gaps, not
+  // any a later tag deletion opens in the new one.
+  function handleEditTagReportTags(id, tagIds) {
+    setTagReports(savedTagReports.map(r => {
+      if (r.id !== id) return r
+      const { dismissedMissingWarning: _dismissed, ...rest } = r
+      return { ...rest, tagIds }
+    }))
   }
 
   function handleDeleteTagReport(id) {
@@ -2875,7 +2925,7 @@ export default function Dashboard() {
                             <div
                               style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 14, fontWeight: 600 }}
                               onContextMenu={event => {
-                                if (!activeTagReport || activeTagReport.id === '__transient__') return
+                                if (!activeTagReport) return
                                 event.preventDefault()
                                 setPickerMenuOpen({
                                   id: activeTagReport.id,
@@ -2891,7 +2941,7 @@ export default function Dashboard() {
                                 aria-label={viewIsIncome ? 'Choose dashboard income breakdown' : 'Choose dashboard spending breakdown'}
                               />
                               <FeatureExplainer topic="dashboard-tag-reports" placement="bottom-left" />
-                              {activeTagReport && activeTagReport.id !== '__transient__' && (
+                              {activeTagReport && (
                                 <button
                                   type="button"
                                   title="Manage this tag report"
@@ -3503,26 +3553,46 @@ export default function Dashboard() {
           onClose={() => closeTagDetail(entry.key)}
         />
       ))}
-      {tagBuilderOpen && (
-        <TagReportBuilder
-          availableTags={availableTags}
-          onClose={() => setTagBuilderOpen(false)}
-          onDisplay={handleDisplayTagReportTransient}
-          onSave={handleSaveTagReport}
-        />
-      )}
+      {tagBuilder && (() => {
+        const report = tagBuilder.reportId ? allTagReports.find(r => r.id === tagBuilder.reportId) : null
+        if (tagBuilder.reportId && !report) return null
+        return (
+          <TagReportBuilder
+            availableTags={availableTags}
+            report={report}
+            onClose={() => setTagBuilder(null)}
+            onDisplay={handleDisplayTagReportTransient}
+            onSave={handleSaveTagReport}
+            onSaveTags={tagIds => handleEditTagReportTags(report.id, tagIds)}
+          />
+        )
+      })()}
       {/* Deleting a saved report drops it from the preference list with nothing to restore it from,
-          which is what `danger` is reserved for — see ActionMenu. */}
+          which is what `danger` is reserved for — see ActionMenu. The unsaved custom report has
+          nothing to rename or delete (picking anything else discards it); it offers a way to keep it. */}
       {pickerMenuOpen && (
         <ActionMenu
           anchorRect={pickerMenuOpen.anchorRect}
           align="start"
           minWidth={140}
           onClose={() => setPickerMenuOpen(null)}
-          items={[
+          items={pickerMenuOpen.id === TRANSIENT_TAG_REPORT_ID ? [
+            { label: 'Edit tags…', onClick: () => setTagBuilder({ reportId: pickerMenuOpen.id }) },
+            { label: 'Save as…', onClick: () => setSaveAsOpen(true) },
+          ] : [
             { label: 'Rename', onClick: () => setRenameTargetId(pickerMenuOpen.id) },
+            { label: 'Edit tags…', onClick: () => setTagBuilder({ reportId: pickerMenuOpen.id }) },
             { label: 'Delete', danger: true, onClick: () => setDeleteTargetId(pickerMenuOpen.id) },
           ]}
+        />
+      )}
+      {saveAsOpen && transientTagReport && (
+        <SaveTagReportDialog
+          onCancel={() => setSaveAsOpen(false)}
+          onSave={name => {
+            handleSaveTagReport({ name, tagIds: transientTagReport.tagIds })
+            setSaveAsOpen(false)
+          }}
         />
       )}
       {renameTargetId && (() => {

@@ -502,7 +502,8 @@ export const HELP_TOPICS = [
           Click <strong>+ Tag report</strong> in the picker to build one. Check the tags
           to include and either press <em>Save &amp; display</em> to save the report
           or <em>Display</em> to see the report without saving.
-          Right-click (or use the &middot;&middot;&middot; menu) to rename or delete a saved report.
+          Right-click (or use the &middot;&middot;&middot; menu) to rename a saved report, change its
+          tags, or delete it. The same menu on an unsaved report changes its tags or saves it under a name.
         </p>
         <p>
           Each unique combination of selected tags found in the transaction data becomes its own

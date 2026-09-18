@@ -130,3 +130,72 @@ test('trends averages drill from a group to its categories and open a category r
   await back.click()
   await expect(page.getByRole('button', { name: /^Show the categories in / }).first()).toBeVisible()
 })
+
+// A tag report's right-click / ⋯ menu edits it in place: the unsaved custom report can have its tags
+// changed and be saved under a name, and a saved one can have its tags changed without losing its
+// identity. The builder has to open on the report's current tags each time, or "edit" is a rebuild.
+// The catalog is shared state on the one demo database, so the report gets a unique name and is
+// deleted at the end — which also puts the breakdown back on group for the other specs.
+test('tag report menu edits tags and saves the unsaved report under a name', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+  await page.getByRole('button', { name: 'Expenses' }).click()
+
+  const picker = page.getByLabel('Choose dashboard spending breakdown')
+  const selected = picker.locator('option:checked')
+  const discretionary = page.getByRole('checkbox', { name: 'Discretionary' })
+  const essential = page.getByRole('checkbox', { name: 'Essential Expenses' })
+  const menuItems = page.getByRole('menuitem')
+  const openHeaderMenu = () => page.getByText('Spending by', { exact: true }).click({ button: 'right' })
+
+  await picker.selectOption({ label: '+ Tag report' })
+  await discretionary.check()
+  await page.getByRole('button', { name: 'Display', exact: true }).click()
+  await expect(selected).toHaveText('Custom (unsaved)')
+
+  // The unsaved report: nothing to rename or delete, but its tags can change and it can be kept.
+  await openHeaderMenu()
+  await expect(menuItems).toHaveText(['Edit tags…', 'Save as…'])
+  await page.getByRole('menuitem', { name: 'Edit tags…' }).click()
+  await expect(discretionary).toBeChecked()
+  await essential.check()
+  await page.getByRole('button', { name: 'Display', exact: true }).click()
+  await expect(selected).toHaveText('Custom (unsaved)')
+
+  const name = `Spec tag report ${Date.now().toString(36)}`
+  await openHeaderMenu()
+  await page.getByRole('menuitem', { name: 'Save as…' }).click()
+  await page.getByLabel('Tag report name').fill(name)
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(selected).toHaveText(name)
+  await expect(picker.locator('option', { hasText: 'Custom (unsaved)' })).toHaveCount(0)
+
+  // The saved report: Rename stays beside Edit tags…, which opens on both tags and saves over the report.
+  const manage = page.getByTitle('Manage this tag report')
+  await manage.click()
+  await expect(menuItems).toHaveText(['Rename', 'Edit tags…', 'Delete'])
+  await page.getByRole('menuitem', { name: 'Edit tags…' }).click()
+  await expect(discretionary).toBeChecked()
+  await expect(essential).toBeChecked()
+  const save = page.getByRole('button', { name: 'Save', exact: true })
+  await expect(save).toBeDisabled()
+  await essential.uncheck()
+  await save.click()
+  await expect(selected).toHaveText(name)
+
+  // Persisted, not just held in the page: after a reload the builder opens on the edited set.
+  await page.reload()
+  await expect(selected).toHaveText(name)
+  await manage.click()
+  await page.getByRole('menuitem', { name: 'Edit tags…' }).click()
+  await expect(discretionary).toBeChecked()
+  await expect(essential).not.toBeChecked()
+  await page.getByRole('button', { name: 'Cancel' }).click()
+
+  await manage.click()
+  await page.getByRole('menuitem', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(picker.locator('option', { hasText: name })).toHaveCount(0)
+})

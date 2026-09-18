@@ -8,8 +8,8 @@ enhancements to the dashboard tag-report feature. Related: `tag-report-exclude-w
 
 **Context.** Tag reports are currently managed from the dashboard picker:
 right-click or the `⋯` button on a saved report opens a small menu with
-Rename / Delete. There is no Settings-page surface listing all saved
-reports.
+Rename / Edit tags… / Delete (on the unsaved custom report: Edit tags… /
+Save as…). There is no Settings-page surface listing all saved reports.
 
 **Why deferred.** Right-click + the `⋯` menu is enough discoverability for
 the small surface area today. Add the Settings mirror if the picker menu
