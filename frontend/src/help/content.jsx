@@ -918,43 +918,42 @@ export const HELP_TOPICS = [
     section: 'transactions',
     title: 'Reimbursable expenses',
     surfaces: ['Transactions (Reimbursements)', 'Transaction detail (Reimbursement)', 'Transactions (↩ marker)', 'Tasks'],
-    summary: 'Concert tickets bought for friends, a work expense claimed afterwards. The reimbursable part goes into a category under the Reimbursable group, which keeps it out of spending totals. Linking the expense to the repayment tracks what is still owed; completing it closes the record and moves any difference into a real category. Anything outstanding longer than expected is raised on Tasks, so an expense that is never closed isn\'t excluded from totals indefinitely.',
+    summary: 'Expenses which imply future income or which pair with existing income. Both Income and Expenses are excluded from spending. Alerts if the transaction is not closed in a reasonable time frame.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          Some money leaves as an expense and comes back weeks or months later. Three concert tickets on
-          one card charge with two of them bought for friends, a work expense paid personally and claimed
-          afterwards, a medical expense submitted for insurance reimbursement, a group dinner where one person
-          pays the bill and receives money from the others. These are all transactions that,
-          at least partially, should not be counted against spending, nor should the repayment
-          count against income.
+          Some spending gets paid back, either at the time like a dinner out with friends, some at a later date
+          such as work expenses or perhaps a set of tickets bought for friends. These are all transactions where
+          the spending should not be reflected as an expense and the reimbursement should not be
+          reflected as income.
         </p>
         <p>
-          Tracking reimbursable expenses works by parking the part that is expected to be paid back in a category
-          that is a member of the system's <em>Reimbursable</em> group.
-          A system group, {' '}
-          <strong>Reimbursable</strong>, sits alongside the other category groups and is excluded
-          from totals, exactly as <strong>Transfers</strong> is. Also similar to the <strong>Transfers</strong> group,
-          the <strong>Reimbursable</strong> group can be renamed but not deleted.
+          Tracking reimbursable expenses works by categorizing the reimbursable portion in a category
+          that is a member of the system's <em>Reimbursable</em> group.{' '}
+          <strong>Reimbursable</strong> is similar to the <strong>Transfers</strong> group. Both of them
+          are created by the system, cannot be deleted, and are excluded from
+          spending. <strong>Reimbursable</strong> is different in that the <em>Reimbursements</em> button
+          on the Transactions page looks in this category for unresolved transactions that need to be
+          joined as a reimbursement pair. Pairing is useful because it allows the system to generate alerts
+          if repayment is not received in a timely fashion.
         </p>
 
         <h4>Creating categories</h4>
         <p>
           The <em>Reimbursable</em> group ships empty. It may be useful to name the categories so that they
           indicate <em>what the money is for</em> -- Concert tickets, Work expenses, Health care expense, etc.
-          Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy to enter them when assigning
-          categories.
+          Using "Reimbursable" as a prefix (Reimbursable work expenses) makes it easy find the categories.
         </p>
-        <h4>Recording one</h4>
+        <h4>Identifying a reimbursable expense</h4>
         <p>
           A wholly reimbursable expense is categorized entirely into one of the categories in
           the <em>Reimbursable</em> group. If the
           transaction is only partially reimbursable, one ticket kept, two bought for friends, {' '}
           <HelpLink to="/help/transaction-splits">split the transaction</HelpLink> and put the reimbursable
-          portion in a reimbursable category and categorize the remainder. Splitting can also be used
-          for the reimbursable portion of an expense when the repayment comes from multiple sources:
-          a group dinner for instance.
+          portion in a reimbursable category and the remainder in the appropriate spending category. Repayment
+          can come from a single source such as an insurance check for a health expense or from several sources
+          such as a group dinner.
         </p>
         <p>
           The repayment, when it arrives, is categorized into the reimbursable category too. That is what
@@ -963,18 +962,14 @@ export const HELP_TOPICS = [
 
         <h4>Linking payments and expenses</h4>
         <p>
-          Linking is about tying related payments and expenses together to support tracking
-          how much is outstanding, whether it is overdue and for reporting the expenses and
-          repayments together. It also allows for naming the transaction set.
+          Linking ties related payments and expenses together to support tracking the outstanding
+          amount. Linking also allows for naming the transaction set.
         </p>
         <p>
           The <strong>Reimbursement</strong> button at the top of the Transaction screen launches a
           report containing the unsettled transactions in the reimbursable group and supports pairing
-          expenses and repayments. Dragging a payment to an expense or an expense to a
-          payment pairs them. Multiple items can be paired on one side or the other (e.g. there can be
-          multiple payments for a single expense or multiple expenses for a single payment). Where a
-          transaction is divided, the portions are offered as toggles and any combination can be chosen;
-          several portions become one claim for their total.
+          expenses and repayments. Dragging a payment to an expense pairs them. Multiple income
+          transactions can be paired with a single expense.
         </p>
         <h4>Viewing outstanding reimbursements</h4>
         <p>
@@ -3315,9 +3310,9 @@ export const HELP_TOPICS = [
   {
     id: 'account-security',
     section: 'general-concepts',
-    title: 'Account security: password and two-factor',
+    title: 'Account security: password, passkeys and two-factor',
     surfaces: ['Account security (Settings)'],
-    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
+    summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. A passkey signs in without a typed password and without a two-factor code; two-factor adds a code at sign-in and is optional.`,
     body: () => (
       <>
         <p>
@@ -3333,11 +3328,27 @@ export const HELP_TOPICS = [
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to
           all users, and it can be tightened or relaxed at any time.
         </p>
+        <p>*needs review*</p>
+        <p>
+          <strong>Passkeys</strong> sign in with a fingerprint, face or device PIN instead of a typed
+          password. Each device gets its own passkey, added under <em>Account security</em> while
+          signed in. The account password keeps working and is still what signs in on a connection
+          that cannot run a passkey &mdash; passkeys need an HTTPS connection to a named host, so an
+          instance reached by IP address cannot use them at all.
+        </p>
+        <p>
+          A passkey is <strong>not</strong> a vault passkey. The vault's passkeys unlock stored data
+          connection credentials (see{' '}
+          <HelpLink to="/help/data-providers">data providers</HelpLink>); these sign in to the
+          application. Adding one here grants nothing in the vault, and an account may hold both.
+        </p>
         <p>
           <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
           When it is on, the code is requested <strong>every fresh sign-in</strong> &mdash; a browser
           with an active session is not asked again until that session ends, but there is no "trust
-          this device" that skips the code on a new sign-in. If authenticator access is lost, the{' '}
+          this device" that skips the code on a new sign-in. A passkey is the exception: the device
+          already checks a fingerprint, face or PIN before it will sign anything, so a passkey sign-in
+          completes without a code. If authenticator access is lost, the{' '}
           <strong>recovery codes</strong> displayed when authenticator use is enabled
           are the way back in, so save these in a password manager or somewhere equally safe.
         </p>
