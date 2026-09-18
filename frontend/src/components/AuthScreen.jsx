@@ -6,9 +6,11 @@ import { api } from '../lib/api.js'
 import { PASSKEY_SIGN_IN_UNAVAILABLE, assertSignInPasskey, signInAvailability } from '../lib/appPasskey.js'
 import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
-import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import {
+  PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall,
+} from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
-import { PasswordInput, PasswordManagerUsername } from './ui.jsx'
+import { FieldIssue, PasswordInput, PasswordManagerUsername, Tooltip } from './ui.jsx'
 
 const s = {
   page: {
@@ -75,6 +77,17 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
   const [passkeyParams, setPasskeyParams] = useState(null)
   const [passkeyBusy, setPasskeyBusy] = useState(false)
 
+  // The two steps that *choose* a password — the first account, and a forced change — are checked as
+  // they are typed, and their button is greyed for the reason shown (`lib/passwordPolicy.js`). Signing in
+  // with an existing password is not held to the policy here: the policy may have been tightened since
+  // that password was set, and the server is the one to say whether it still opens the account.
+  const passwordStepIssue = awaitingPasswordChange
+    ? passwordIssue({ password: newPassword, confirm: newPasswordConfirm, policy: passwordPolicy, withConfirm: true })
+    : (needsBootstrap && !awaiting2fa) ? passwordIssue({ password, policy: passwordPolicy }) : ''
+  // An error is about the attempt that produced it, so editing a password field retires it — otherwise a
+  // refusal of the previous value sits beside the corrected one and reads as a verdict on it.
+  const edited = setter => value => { setError(''); setter(value) }
+
   // TransientTextInput intercepts Enter (preventDefault + commit), so the native "Enter submits the
   // form" never fires. Wire it explicitly: Enter advances to the next field, and Enter on the final
   // field submits (requestSubmit routes through the form's onSubmit and respects a disabled button,
@@ -138,6 +151,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
 
   async function handleSubmit(e) {
     e.preventDefault()
+    if (passwordStepIssue || submitting) return
     setSubmitting(true)
     setError('')
     try {
@@ -154,14 +168,8 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
 
   async function handlePasswordChangeSubmit(e) {
     e.preventDefault()
-    if (!validatePasswordForPolicy(newPassword, passwordPolicy)) {
-      setError(`Password does not meet the policy: ${passwordPolicyHelpText(passwordPolicy)}`)
-      return
-    }
-    if (newPassword !== newPasswordConfirm) {
-      setError('Passwords do not match.')
-      return
-    }
+    // Guarded on the same issue the button is, so Enter can never submit what the button refuses.
+    if (passwordStepIssue || submitting) return
     setSubmitting(true)
     setError('')
     try {
@@ -192,7 +200,6 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
   const buttonLabel = submitting
     ? (awaitingPasswordChange ? 'Saving password...' : (awaiting2fa ? 'Verifying code...' : (needsBootstrap ? 'Creating account...' : 'Signing in...')))
     : (awaitingPasswordChange ? 'Set password' : (awaiting2fa ? 'Verify code' : (needsBootstrap ? 'Create first account' : 'Sign in')))
-  const bootstrapPasswordOk = validatePasswordForPolicy(password, passwordPolicy)
   // Only on the first step. Once a sign-in is part-way through a forced password change or a second
   // factor, a passkey is not an alternative route — it is a different sign-in, and offering it there
   // would abandon the one in progress.
@@ -250,7 +257,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
               <PasswordInput
                 as={TransientTextInput}
                 value={newPassword}
-                onChange={setNewPassword}
+                onChange={edited(setNewPassword)}
                 onKeyDown={advanceOnEnter(newPasswordConfirmRef)}
                 restoreOnEscape
                 onBlurCommit={false}
@@ -258,11 +265,12 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 autoComplete="new-password"
                 style={s.input}
               />
+              <FieldIssue style={{ marginTop: -4 }}>{passwordShortfall(newPassword, passwordPolicy)}</FieldIssue>
               <PasswordInput
                 as={TransientTextInput}
                 ref={newPasswordConfirmRef}
                 value={newPasswordConfirm}
-                onChange={setNewPasswordConfirm}
+                onChange={edited(setNewPasswordConfirm)}
                 onKeyDown={submitOnEnter}
                 restoreOnEscape
                 onBlurCommit={false}
@@ -270,6 +278,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 autoComplete="new-password"
                 style={s.input}
               />
+              <FieldIssue style={{ marginTop: -4 }}>
+                {passwordMismatchShown(newPassword, newPasswordConfirm) ? PASSWORD_MISMATCH : ''}
+              </FieldIssue>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>
                 {passwordPolicyHelpText(passwordPolicy)}
               </div>
@@ -280,7 +291,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 as={TransientTextInput}
                 ref={passwordRef}
                 value={password}
-                onChange={setPassword}
+                onChange={edited(setPassword)}
                 onKeyDown={submitOnEnter}
                 restoreOnEscape
                 onBlurCommit={false}
@@ -288,6 +299,9 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
                 autoComplete={needsBootstrap ? 'new-password' : 'current-password'}
                 style={s.input}
               />
+              {needsBootstrap && (
+                <FieldIssue style={{ marginTop: -4 }}>{passwordShortfall(password, passwordPolicy)}</FieldIssue>
+              )}
               {needsBootstrap && (
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>
                   {passwordPolicyHelpText(passwordPolicy)}
@@ -314,9 +328,13 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
           </div>
         )}
 
-        <button type="submit" disabled={submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)} style={{ ...s.button, marginTop: 18, opacity: (submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)) ? 0.7 : 1 }}>
-          {buttonLabel}
-        </button>
+        {/* Full-width trigger: the tooltip wraps its child only while it has something to say, and its
+            default inline wrapper would shrink this full-width button exactly when it greys out. */}
+        <Tooltip content={passwordStepIssue && !submitting ? passwordStepIssue : ''} triggerStyle={{ display: 'flex', width: '100%' }}>
+          <button type="submit" disabled={submitting || !!passwordStepIssue} style={{ ...s.button, marginTop: 18, opacity: (submitting || passwordStepIssue) ? 0.7 : 1 }}>
+            {buttonLabel}
+          </button>
+        </Tooltip>
         {passkeyOffered && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '14px 0 4px' }}>

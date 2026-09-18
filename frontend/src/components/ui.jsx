@@ -774,8 +774,13 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
   )
 }
 
+// `type` defaults to "button", not the browser's "submit". This used to be dropped entirely, so every Button
+// inside a form submitted it whatever the caller wrote: a `type="button"` Cancel in the two-factor setup
+// form only avoided submitting because its click also removed the form, before the browser's default
+// action ran. A button that acts through its own onClick should not *also* submit by accident of where it
+// sits; one that means to submit says `type="submit"`.
 export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title,
-  'aria-label': ariaLabel, 'aria-busy': ariaBusy }) {
+  type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy }) {
   const base = {
     padding: small ? '6px 12px' : '9px 16px',
     borderRadius: 8, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
@@ -799,6 +804,7 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
       // Carries the pressed look (`index.html`), the one state an inline style cannot express. Without it
       // a click gave no sign of having landed unless the action happened to change the screen.
       className="ui-button"
+      type={type}
       aria-label={ariaLabel}
       aria-busy={ariaBusy}
       // The DOM attribute, not just the dimmed look and the dropped handlers. Without it the control
@@ -1033,6 +1039,20 @@ export function PasswordManagerUsername({ value }) {
   return (
     <input type="text" autoComplete="username" value={value} readOnly tabIndex={-1} aria-hidden="true"
       style={{ display: 'none' }} />
+  )
+}
+
+// What is still wrong with a field, shown under it while the user types — the note a greyed submit button
+// points back to. Renders nothing when there is nothing to say, so a caller passes its issue string
+// unconditionally rather than wrapping every use in a condition. `role="status"` so a screen reader hears
+// the reason change as it is typed, which is the only way someone who cannot see the greyed button
+// learns why it will not submit.
+export function FieldIssue({ children, style }) {
+  if (!children) return null
+  return (
+    <div role="status" style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.4, ...style }}>
+      {children}
+    </div>
   )
 }
 

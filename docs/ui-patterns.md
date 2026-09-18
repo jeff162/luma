@@ -961,6 +961,18 @@ holds rather than trying to keep managers away:
   passphrase from the vault passphrase, which is how a key passphrase came to be offered at unlock. A
   distinct name labels the entry; it does not stop a manager listing it on another password field.
 
+**A field that chooses a secret is checked as it is typed, and its button is greyed for a stated reason.**
+The vault passphrase dialog set the shape and every app-password form follows it — enabling sign-in, the
+first account, a forced change at sign-in, adding and editing users. What is still wrong appears under the
+field in the words of the unmet rule (`FieldIssue`), "do not match" appears from the first character of the
+confirmation, and the disabled button's hover gives the same sentence, because one expression
+(`passwordIssue` in `lib/passwordPolicy.js`, `newPassphraseIssue` in the vault dialog) feeds both. The
+refused-on-submit shape it replaced had a failure beyond the wasted round trip: its message described the
+attempt that produced it, so after a correction a valid password sat beside "does not meet the policy".
+What is left in a form's error line is only what the server said, and any edit retires it. Signing in with
+an *existing* password is deliberately not held to the policy client-side — the policy may have tightened
+since that password was set.
+
 ### Import history outlives the connection that produced it
 
 A sync card is the **provenance of transactions still in the ledger**, so it survives the connection being

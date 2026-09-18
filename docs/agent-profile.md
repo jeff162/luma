@@ -572,9 +572,11 @@ for what the *user* can act on.
   `backend/*.py`.
 
 - **An assertion that cannot fail is worse than no assertion.** Before trusting a new check, ask what it
-  would take for it to go red. The concrete case: the shared `Button` never sets the DOM `disabled`
-  attribute (it dims and drops the handler), so `expect(btn.disabled).toBe(true)` passes against every
-  implementation of everything. Assert the consequence — click it, and check the call did not happen.
+  would take for it to go red. The concrete case: the shared `Button` used to dim and drop its handler
+  without setting the DOM `disabled` attribute, so an assertion on that attribute said nothing about
+  whether the button could still act. It sets the attribute now, but the lesson stands for any control a
+  wrapper renders: the attribute is a claim about the element, not about the action. Assert the
+  consequence — click it, and check the call did not happen.
 
 - **When a new test goes red, check its premise before changing the code.** A test written from a
   description of the behaviour encodes an assumption about the situation, and that assumption is wrong

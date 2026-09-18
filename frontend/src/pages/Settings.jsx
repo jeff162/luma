@@ -8,11 +8,14 @@ import { NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FieldIssue, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
-import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import {
+  PASSWORD_MISMATCH, PASSWORD_POLICIES, passwordIssue, passwordMismatchShown, passwordPolicyHelpText,
+  passwordShortfall,
+} from '../lib/passwordPolicy.js'
 import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../lib/appPasskey.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -107,8 +110,18 @@ function UserAdminSection({ passwordPolicy }) {
     row.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [editingUserId])
 
+  // What each form would refuse on, checked as it is typed (`lib/passwordPolicy.js`) and shown both under
+  // the fields and on the greyed button. A blank password when editing means "keep the current one".
+  const createIssue = !form.username.trim() ? 'Enter a username.'
+    : passwordIssue({ password: form.password, policy: passwordPolicy })
+  const editIssue = !editForm.username.trim() ? 'Enter a username.'
+    : !editForm.display_name.trim() ? 'Enter a display name.'
+      : passwordIssue({ password: editForm.password, policy: passwordPolicy, optional: true })
+
   async function handleCreate(e) {
     e.preventDefault()
+    // Guarded on the same issue the button is, so Enter can never submit what the button refuses.
+    if (createIssue || creating) return
     setCreating(true)
     setError('')
     try {
@@ -227,7 +240,7 @@ function UserAdminSection({ passwordPolicy }) {
           </div>
           <div>
             <FormLabel style={{ marginBottom: 4 }}>Password</FormLabel>
-            <PasswordInput aria-label="Password" value={form.password} onChange={value => setForm(prev => ({ ...prev, password: value }))} style={inputStyle} {...NEW_SECRET_PROPS} />
+            <PasswordInput aria-label="Password" value={form.password} onChange={value => { setError(''); setForm(prev => ({ ...prev, password: value })) }} style={inputStyle} {...NEW_SECRET_PROPS} />
           </div>
           <div>
             <FormLabel htmlFor={`${fieldIdBase}-create-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -236,12 +249,18 @@ function UserAdminSection({ passwordPolicy }) {
               <option value="admin">Admin</option>
             </select>
           </div>
-          <Button small type="submit" disabled={creating || !form.username.trim() || !validatePasswordForPolicy(form.password, passwordPolicy)}>
-            {creating ? 'Creating...' : 'Add user'}
-          </Button>
+          <Tooltip content={createIssue && !creating ? createIssue : ''} align="right">
+            <Button small type="submit" disabled={creating || !!createIssue}>
+              {creating ? 'Creating...' : 'Add user'}
+            </Button>
+          </Tooltip>
         </form>
-        <div style={{ padding: '10px 16px', color: 'var(--muted)', fontSize: 12, borderBottom: '1px solid var(--border)' }}>
-          Password policy: {passwordPolicyHelpText(passwordPolicy)}
+        {/* The live note sits in this line rather than under the password field: the row above aligns its
+            fields to the bottom, so a note inside the password's cell would lift that one input out of
+            line with the rest. */}
+        <div style={{ padding: '10px 16px', color: 'var(--muted)', fontSize: 12, borderBottom: '1px solid var(--border)', display: 'grid', gap: 4 }}>
+          <div>Password policy: {passwordPolicyHelpText(passwordPolicy)}</div>
+          <FieldIssue>{passwordShortfall(form.password, passwordPolicy)}</FieldIssue>
         </div>
 
         {error && (
@@ -278,7 +297,7 @@ function UserAdminSection({ passwordPolicy }) {
                 </div>
                 <div>
                   <FormLabel style={{ marginBottom: 4 }}>New password</FormLabel>
-                  <PasswordInput aria-label="New password" value={editForm.password} onChange={value => setEditForm(prev => ({ ...prev, password: value }))} placeholder="Leave blank to keep current" style={inputStyle} {...NEW_SECRET_PROPS} />
+                  <PasswordInput aria-label="New password" value={editForm.password} onChange={value => { setError(''); setEditForm(prev => ({ ...prev, password: value })) }} placeholder="Leave blank to keep current" style={inputStyle} {...NEW_SECRET_PROPS} />
                 </div>
                 <div>
                   <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
@@ -298,6 +317,7 @@ function UserAdminSection({ passwordPolicy }) {
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {editForm.password ? passwordPolicyHelpText(passwordPolicy) : 'Leave the password field empty to keep the existing password.'}
               </div>
+              <FieldIssue style={{ marginTop: -8 }}>{passwordShortfall(editForm.password, passwordPolicy)}</FieldIssue>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
@@ -307,13 +327,15 @@ function UserAdminSection({ passwordPolicy }) {
                 Require a password change at next sign-in
               </label>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <Button
-                  small
-                  onClick={() => handleSaveUser(user.id)}
-                  disabled={savingUserId === user.id || !editForm.username.trim() || !editForm.display_name.trim() || (editForm.password && !validatePasswordForPolicy(editForm.password, passwordPolicy))}
-                >
-                  {savingUserId === user.id ? 'Saving...' : 'Save changes'}
-                </Button>
+                <Tooltip content={editIssue && savingUserId !== user.id ? editIssue : ''} align="right">
+                  <Button
+                    small
+                    onClick={() => handleSaveUser(user.id)}
+                    disabled={savingUserId === user.id || !!editIssue}
+                  >
+                    {savingUserId === user.id ? 'Saving...' : 'Save changes'}
+                  </Button>
+                </Tooltip>
                 <Button small variant="ghost" onClick={cancelEditing}>Cancel</Button>
                 {viewer?.id !== user.id && (
                   <Button small variant="ghost" onClick={() => setPendingDeleteUser(user)} disabled={deletingUserId === user.id}>
@@ -576,23 +598,26 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     return () => { cancelled = true }
   }, [activeLocalProfile?.id])
 
+  // Checked as the fields change rather than on submit. `error` is left holding only what the server
+  // said, and is cleared by any edit: a message about the previous attempt that outlives the fix reads
+  // as a verdict on what is on screen now — which is how a valid password came to sit beside "does not
+  // meet the policy".
+  const others = (profiles || []).filter(p => p.id !== claimId)
+  const adminIssue = passwordIssue({ password: adminPassword, confirm: adminConfirm, policy, withConfirm: true })
+  const otherShortfall = id => passwordShortfall(otherPasswords[id], policy)
+  const otherWithIssue = others.find(p => otherShortfall(p.id))
+  const blockingIssue = !claimId ? 'Choose which user is yours.'
+    : adminIssue || (otherWithIssue ? `Starting password for "${otherWithIssue.name}": ${otherShortfall(otherWithIssue.id)}` : '')
+  const edited = setter => value => { setError(''); setter(value) }
+
   async function enableWithMigration(e) {
     e.preventDefault()
+    // Guarded on the same issue the button is, so Enter can never submit what the button refuses.
+    if (blockingIssue || saving) return
     setError('')
-    if (!claimId) { setError('Choose which user is yours.'); return }
-    if (!validatePasswordForPolicy(adminPassword, policy)) {
-      setError(`Your password does not meet the policy: ${passwordPolicyHelpText(policy)}`)
-      return
-    }
-    if (adminPassword !== adminConfirm) { setError('Passwords do not match.'); return }
-    const others = (profiles || []).filter(p => p.id !== claimId)
     const initial_passwords = {}
     for (const p of others) {
       const pw = otherPasswords[p.id] || ''
-      if (pw && !validatePasswordForPolicy(pw, policy)) {
-        setError(`The starting password for "${p.name}" does not meet the policy.`)
-        return
-      }
       if (pw) initial_passwords[p.id] = pw
     }
     setSaving(true)
@@ -641,7 +666,6 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     )
   }
 
-  const others = profiles.filter(p => p.id !== claimId)
   const single = profiles.length === 1
   const claimed = profiles.find(p => p.id === claimId)
 
@@ -659,7 +683,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
             <FormLabel>Which user is yours?</FormLabel>
             {profiles.map(p => (
               <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
-                <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => setClaimId(p.id)} disabled={saving} />
+                <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => edited(setClaimId)(p.id)} disabled={saving} />
                 <span style={{ fontWeight: 600 }}>{p.name}</span>
               </label>
             ))}
@@ -671,7 +695,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
           <div style={{ display: 'grid', gap: 6 }}>
             {PASSWORD_POLICIES.map(option => (
               <label key={option.value} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: saving ? 'default' : 'pointer' }}>
-                <input type="radio" name="enable-password-policy" checked={policy === option.value} onChange={() => setPolicy(option.value)} disabled={saving} />
+                <input type="radio" name="enable-password-policy" checked={policy === option.value} onChange={() => edited(setPolicy)(option.value)} disabled={saving} />
                 <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
               </label>
@@ -687,8 +711,10 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
             </div>
           ) : null}
           <PasswordManagerUsername value={claimed?.username || ''} />
-          <PasswordInput aria-label="Your password" value={adminPassword} onChange={setAdminPassword} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
-          <PasswordInput value={adminConfirm} onChange={setAdminConfirm} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <PasswordInput aria-label="Your password" value={adminPassword} onChange={edited(setAdminPassword)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <FieldIssue>{passwordShortfall(adminPassword, policy)}</FieldIssue>
+          <PasswordInput value={adminConfirm} onChange={edited(setAdminConfirm)} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <FieldIssue>{passwordMismatchShown(adminPassword, adminConfirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
         </div>
 
@@ -705,11 +731,12 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
                   placeholder="Leave blank to let them set it"
                   wrapperStyle={PASSWORD_FIELD_WIDTH}
                   value={otherPasswords[p.id] || ''}
-                  onChange={value => setOtherPasswords(prev => ({ ...prev, [p.id]: value }))}
+                  onChange={edited(value => setOtherPasswords(prev => ({ ...prev, [p.id]: value })))}
                   disabled={saving}
                   style={PASSWORD_FIELD_STYLE}
                   {...NEW_SECRET_PROPS}
                 />
+                <FieldIssue>{otherShortfall(p.id)}</FieldIssue>
               </div>
             ))}
           </div>
@@ -718,9 +745,11 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
         {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
 
         <div>
-          <Button small type="submit" disabled={saving}>
-            {saving ? 'Enabling...' : 'Enable sign-in protection'}
-          </Button>
+          <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
+            <Button small type="submit" disabled={saving || !!blockingIssue}>
+              {saving ? 'Enabling...' : 'Enable sign-in protection'}
+            </Button>
+          </Tooltip>
         </div>
       </form>
     </Card>
