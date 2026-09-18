@@ -367,7 +367,7 @@ describe('DocumentsPanel', () => {
   })
 
   it('reports its documents to the host, not merely how many', async () => {
-    // The row's paperclip *opens* documents from the host's own copy, so it needs their ids. Reporting
+    // The row's document marker *opens* documents from the host's own copy, so it needs their ids. Reporting
     // a count was enough to draw the marker and not enough to act on it.
     api.getTransactionDocuments.mockResolvedValue({ documents: [INVOICE, PHOTO] })
     const onDocumentsChange = vi.fn()

@@ -14,8 +14,10 @@ import {
   reimbursementBoard,
   reimbursementListLabel,
   residualSummary,
+  UNASSIGNED_OWNER,
 } from '../lib/reimbursements.js'
 import ClaimPortionPicker from './ClaimPortionPicker.jsx'
+import OwnerChip, { ownerChipLabels } from './OwnerChip.jsx'
 import ReimbursementEditorDialog from './ReimbursementEditorDialog.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import { UndoToast } from './CategoryTreePrimitives.jsx'
@@ -97,15 +99,19 @@ export default function ReimbursementsReportDialog({
   const dueCount = everything.expenses.filter(entry => isDue(entry.dueOn)).length
   const allOwners = everything.expenses.flatMap(entry => entry.owners || [])
   const ownerName = owner && allOwners.find(o => o.id === owner)?.name
+  // One pill per owner on the Expected side, Unassigned last since it is nobody's name.
+  const boardOwners = [...new Map(allOwners.map(o => [o.id, o])).values()].sort((a, b) =>
+    (a.id === UNASSIGNED_OWNER) - (b.id === UNASSIGNED_OWNER) || a.name.localeCompare(b.name))
+  const chipLabels = ownerChipLabels(boardOwners)
   const filtered = everything.expenses.length - board.expenses.length
   // What the narrowed list actually adds up to. The headline above stays the *group's whole balance*,
   // which is the property that makes it trustworthy — so with a filter on, the two would silently
   // disagree unless the subset states its own figure.
   const shownTotal = board.expenses.reduce((sum, entry) => sum
     + (entry.kind === 'record' ? entry.reimbursement.residual : entry.row.unclaimed), 0)
-  // Worth naming an owner on a row only where the board holds more than one. Otherwise it is the same
-  // name repeated down the column, which says nothing and costs the label its room.
-  const showOwners = new Set(allOwners.map(o => o.id)).size > 1
+  // Worth naming an owner on a row, or filtering by one, only where the board holds more than one.
+  // Otherwise it is the same name repeated down the column, which says nothing and costs the label its room.
+  const showOwners = boardOwners.length > 1
 
   async function saveReminderDays(days) {
     setSavingDays(true)
@@ -268,13 +274,14 @@ export default function ReimbursementsReportDialog({
       description="Money that left as an expense and is expected back. Completed ones drop off this list."
       onClose={onClose}
       width="min(700px, 100%)"
+      bodyStyle={{ display: 'flex', flexDirection: 'column' }}
       actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
     >
       {report === null && !error ? <Spinner /> : null}
       {error ? <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>{error}</div> : null}
 
       {report ? (
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '1 1 auto', minHeight: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Still outstanding</span>
             {/* A magnitude: the label already says which way this money points, and a signed figure
@@ -282,6 +289,17 @@ export default function ReimbursementsReportDialog({
                 but the number states their direction there, and their colour keys off it. */}
             <span style={{ fontSize: 16, fontWeight: 600 }}>{formatMoneyMagnitude(Math.abs(report.total))}</span>
           </div>
+
+          {/* The same narrowing a Tasks reminder arrives with, made something the reader can set. It
+              narrows the Expected side only, as that narrowing always has — see `reimbursementBoard`. */}
+          {showOwners ? (
+            <div role="group" aria-label="Show whose" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <OwnerChip owner={{ name: 'Everyone' }} swatch={false} selected={!owner} onClick={() => setOwner(null)} />
+              {boardOwners.map(o => (
+                <OwnerChip key={o.id} owner={o} selected={owner === o.id} onClick={() => setOwner(o.id)} />
+              ))}
+            </div>
+          ) : null}
 
           {/* The narrowing a task's link arrived with, stated and removable. A report that quietly hid
               most of its rows would be worse than one that did not filter — the reader would be looking
@@ -335,7 +353,14 @@ export default function ReimbursementsReportDialog({
               />
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14 }}>
+            /* Each column scrolls on its own, in whatever height the dialog has left. Scrolled together, a
+               long Expected column carried the Received one out of view on the way down to a target, so
+               a payment and what it repays could not both be on screen. The floor keeps a few rows
+               visible on a short window; below it the whole body scrolls instead. */
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)',
+              gap: 14, flex: '1 1 auto', minHeight: 200,
+            }}>
               <Section
                 title="Expected"
                 note="Drag a payment from the right onto what it repays."
@@ -344,7 +369,7 @@ export default function ReimbursementsReportDialog({
                   <BoardEntry
                     key={`${entry.kind}-${entry.id}`}
                     entry={entry}
-                    showOwner={showOwners}
+                    ownerLabels={showOwners ? chipLabels : null}
                     dropTarget={dropTarget === entry.id}
                     busy={busy}
                     onOpen={() => openEntry(entry)}
@@ -492,7 +517,7 @@ const looseRowStyle = {
  * across two reimbursements appears under both, and stating its full value in each would double it on
  * screen.
  */
-function BoardEntry({ entry, showOwner, dropTarget, busy, onOpen, onComplete, onDragOver, onDragLeave, onDrop }) {
+function BoardEntry({ entry, ownerLabels, dropTarget, busy, onOpen, onComplete, onDragOver, onDragLeave, onDrop }) {
   const [hovered, setHovered] = useState(false)
   const tracked = entry.kind === 'record'
   const amount = tracked ? entry.reimbursement.residual : entry.row.unclaimed
@@ -504,7 +529,7 @@ function BoardEntry({ entry, showOwner, dropTarget, busy, onOpen, onComplete, on
   // Whose it is, where that is not the same answer for everything on screen. A record whose expenses
   // span two people names both — the debt genuinely concerns both, and picking one would hide it from
   // the other.
-  const owners = showOwner ? (entry.owners || []).map(owner => owner.name).join(' & ') : ''
+  const owners = ownerLabels ? entry.owners || [] : []
   return (
     <div
       onDragOver={onDragOver}
@@ -523,13 +548,16 @@ function BoardEntry({ entry, showOwner, dropTarget, busy, onOpen, onComplete, on
       {/* The row opens its record (or its transaction), which nothing about a list row says on its own —
           the ledger's ↗ on hover is how the rest of the app makes that readable. */}
       <button type="button" onClick={onOpen} title="Open" style={{ ...looseRowStyle, width: '100%', background: 'none', border: 'none' }}>
-        <span style={{ fontWeight: tracked ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {/* Ahead of the name rather than after it: it is the reason the row is being looked at, and a
-              marker at the end of a truncating label is the first thing to disappear. */}
-          {due ? <span title={`Due since ${entry.dueOn}`} style={{ color: 'var(--danger)' }}>● </span> : null}
-          {tracked ? reimbursementListLabel(entry.reimbursement) : entry.row.payee}
-          {owners ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}> · {owners}</span> : null}
-          <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: hovered ? 1 : 0 }}> ↗</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+          {/* The due marker and the owners go ahead of the name rather than after it: the marker is the
+              reason the row is being looked at, and anything at the end of a truncating label is the
+              first thing to disappear. */}
+          {due ? <span title={`Due since ${entry.dueOn}`} style={{ color: 'var(--danger)', flexShrink: 0 }}>●</span> : null}
+          {owners.map(owner => <OwnerChip key={owner.id} owner={owner} label={ownerLabels.get(owner.id)} />)}
+          <span style={{ fontWeight: tracked ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {tracked ? reimbursementListLabel(entry.reimbursement) : entry.row.payee}
+            <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: hovered ? 1 : 0 }}> ↗</span>
+          </span>
         </span>
         <span style={{ textAlign: 'right', color: getTransactionAmountColor(amount) }}>
           {formatTransactionAmount(amount)}
@@ -566,12 +594,15 @@ function BoardEntry({ entry, showOwner, dropTarget, busy, onOpen, onComplete, on
 
 function Section({ title, note, children }) {
   return (
-    <div style={{ display: 'grid', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </div>
       {note ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{note}</div> : null}
-      <div style={{ display: 'grid', gap: 3 }}>{children}</div>
+      <div style={{
+        display: 'grid', gap: 3, alignContent: 'start', flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
+        scrollbarWidth: 'thin',
+      }}>{children}</div>
     </div>
   )
 }

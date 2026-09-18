@@ -436,7 +436,7 @@ def _member_rows(conn: sqlite3.Connection, link: dict) -> list[dict]:
         SELECT t.id AS txn_id, t.date, t.amount, t.trashed_at, t.owner_id,
                COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
                COALESCE(a.display_name, a.name, '') AS account_name,
-               o.name AS owner_name
+               o.name AS owner_name, o.color AS owner_color
         FROM   txn t
         LEFT   JOIN account a ON a.id = t.account_id
         LEFT   JOIN owner   o ON o.id = t.owner_id
@@ -463,6 +463,7 @@ def _member_rows(conn: sqlite3.Connection, link: dict) -> list[dict]:
             # owner had been corrected on a single row.
             "owner_id": row["owner_id"],
             "owner_name": row["owner_name"],
+            "owner_color": row["owner_color"],
             "trashed": row["trashed_at"] is not None,
             "claim": claim["amount"],
             "claim_label": claim.get("label"),
@@ -1312,7 +1313,7 @@ def _loose_rows(
         SELECT t.id AS txn_id, t.date, t.amount, t.owner_id,
                COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '') AS payee,
                COALESCE(a.display_name, a.name, '') AS account_name,
-               o.name AS owner_name
+               o.name AS owner_name, o.color AS owner_color
         FROM   txn t
         LEFT   JOIN account a ON a.id = t.account_id
         LEFT   JOIN owner   o ON o.id = t.owner_id
@@ -1331,6 +1332,7 @@ def _loose_rows(
             "account_name": row["account_name"],
             "owner_id": row["owner_id"],
             "owner_name": row["owner_name"],
+            "owner_color": row["owner_color"],
             "receivable": receivable.get(row["txn_id"], 0.0),
             "unclaimed": unclaimed.get(row["txn_id"], 0.0),
             "parts": receivable_parts(conn, row["txn_id"]),

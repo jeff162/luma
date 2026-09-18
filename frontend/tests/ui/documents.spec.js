@@ -26,7 +26,7 @@ test('a transaction is findable by the text inside its attached receipt', async 
   await expectOnlyMatch(page, 'doc:rabies booster', 'City Vet Clinic')
 
   // The row's only explanation for being here: every field on it lacks both words, so the marker has to
-  // say the match was inside the document. A plain paperclip would leave the result looking like a bug.
+  // say the match was inside the document. A plain document marker would leave the result looking like a bug.
   const marker = page.getByRole('button', { name: 'Matched inside an attached document — open it' })
   await expect(marker).toBeVisible()
 

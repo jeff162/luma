@@ -322,7 +322,7 @@ function ownersOf(rows) {
   for (const row of rows || []) {
     const id = row?.owner_id || UNASSIGNED_OWNER
     if (!seen.some(owner => owner.id === id)) {
-      seen.push({ id, name: row?.owner_name || 'Unassigned' })
+      seen.push({ id, name: row?.owner_name || 'Unassigned', color: row?.owner_color || null })
     }
   }
   return seen

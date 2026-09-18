@@ -9,9 +9,10 @@
 
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ReimbursementsReportDialog from '../ReimbursementsReportDialog.jsx'
+import { ownerChipLabels } from '../OwnerChip.jsx'
 import { api } from '../../lib/api.js'
 
 vi.mock('../../lib/api.js', () => ({
@@ -384,5 +385,25 @@ describe('opened from a reminder', () => {
     openReport()
     expect(await screen.findByText('Alex trip')).toBeTruthy()
     expect(screen.getByText('Robin lunch')).toBeTruthy()
+  })
+  it('narrows to one owner from the pills, and back', async () => {
+    openReport()
+    const pills = await screen.findByRole('group', { name: 'Show whose' })
+    await userEvent.click(within(pills).getByRole('button', { name: 'Robin' }))
+    expect(screen.queryByText('Alex trip')).toBeNull()
+    expect(screen.getByText('Robin lunch')).toBeTruthy()
+    await userEvent.click(within(pills).getByRole('button', { name: 'Everyone' }))
+    expect(screen.getByText('Alex trip')).toBeTruthy()
+  })
+})
+
+describe('owner chips', () => {
+  it('shortens a name to the first, unless two owners share it', () => {
+    const labels = ownerChipLabels([
+      { id: 'a', name: 'Alex Rivera' },
+      { id: 'b', name: 'Sam Okafor' },
+      { id: 'c', name: 'Sam Whitfield' },
+    ])
+    expect([...labels.values()]).toEqual(['Alex', 'Sam Okafor', 'Sam Whitfield'])
   })
 })

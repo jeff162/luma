@@ -421,6 +421,30 @@ function NoteGlyph({ size = 13, color = 'currentColor' }) {
   )
 }
 
+// A page with its bottom corner curled, for attached documents. Drawn rather than an emoji: 📎 read as the
+// purchase marker's 🔗 at row size, and a colour emoji ignores `color`, which the search-match emphasis
+// relies on. Portrait and tailless so it does not read as the note glyph beside it.
+function DocumentGlyph({ size = 13, color = 'currentColor' }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
+      <path
+        d="M12.5 10V2.5a1 1 0 0 0-1-1H4.5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1H8.5"
+        stroke={color}
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8.5 14.5C10.9 14.5 12.5 12.6 12.5 10C11.7 11.3 10.4 11.9 9 11.6C9 12.7 8.8 13.7 8.5 14.5z"
+        stroke={color}
+        strokeWidth="1.15"
+        strokeLinejoin="round"
+      />
+      <path d="M5.5 4.75h5M5.5 7.25h5M5.5 9.75h2" stroke={color} strokeWidth="1.15" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 function PencilGlyph({ size = 13, color = 'currentColor' }) {
   return (
     <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
@@ -584,7 +608,7 @@ function TagStackChip({ tags, onClick }) {
 // popover to <body> and positioning it `fixed` against the anchor's live rect escapes that trap
 // (the same approach CategoryPicker uses). Right-aligned to the anchor (the marker strip); flips
 // above the anchor when there isn't room below.
-// The chooser the paperclip opens when a transaction carries more than one document — an estimate and
+// The chooser the document marker opens when a transaction carries more than one document — an estimate and
 // then a final invoice, or a two-page bill scanned as two images. Names only: what a document *is* is
 // the viewer's job, and this exists purely to answer "which one".
 function DocumentListPopover({ documents, onOpen, onClose }) {
@@ -777,7 +801,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
         {txn.purchase ? (
           /* One payment of a multi-payment purchase — a deposit and a balance, an instalment plan.
              It opens the purchase, like every other interactive marker in this strip opens what it
-             stands for: the note glyph, the tag chips and the paperclip all do, and this repo has twice
+             stands for: the note glyph, the tag chips and the document marker all do, and this repo has twice
              reversed a marker left inert on the reasoning that another route already existed. The
              editor it opens is the same dialog the detail panel's purchase summary opens, so a
              mis-linked payment is repaired from wherever it was noticed. */
@@ -894,7 +918,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
             }
           >
             {/* Opens the document, like every other marker in this strip opens what it stands for —
-                the note glyph and the tag chips both do, so an inert paperclip reads as broken rather
+                the note glyph and the tag chips both do, so an inert document marker reads as broken rather
                 than as restraint. *Attaching* still belongs to the detail panel, which has room for it.
                 When the search matched *inside* a document, this marker is the row's only explanation
                 for being here at all — every field on screen lacks the term — so it is emphasized
@@ -915,11 +939,15 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
               }
               style={{
                 ...iconButtonStyle,
+                width: documentCount > 1 ? 'auto' : iconButtonStyle.width,
+                minWidth: iconButtonStyle.width,
+                gap: 1,
+                fontSize: 11,
                 color: matchedDocument ? 'var(--accent)' : 'var(--muted)',
                 fontWeight: matchedDocument ? 700 : undefined,
               }}
             >
-              📎{documentCount > 1 ? documentCount : ''}
+              <DocumentGlyph size={13} />{documentCount > 1 ? documentCount : ''}
             </button>
           </RowTooltip>
         ) : null}

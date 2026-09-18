@@ -71,7 +71,7 @@ stored zip member, restored after the ledger commits and swept against it); `res
 resumable documents phase, with the gate that refuses an import, a sync or a second restore while one is
 outstanding; the attach/list/serve/detach endpoints; tier-1 PDF text extraction (`pypdf`); and the FTS5
 index. UI: the shared `DropZone` (extracted on the `shared-components.md` watchlist trigger, with the
-Amazon tab moved onto it), `DocumentsPanel` on the transaction detail panel, the ledger row's paperclip,
+Amazon tab moved onto it), `DocumentsPanel` on the transaction detail panel, the ledger row's document marker,
 and `DocumentViewerDialog`. Documents follow their transaction through the trash, and the purge and the
 demo-data clear both reclaim their files.
 
@@ -88,7 +88,7 @@ green test suite:
 - **Document text reaches the plain search box**, not only `doc:`, with matched rows flagged so the
   ledger can show *why* they came back. The prefix-only rule was reversed on first use — see the backlog
   file, which records it as a don't-re-impose.
-- **The ledger's paperclip opens documents**, rather than only counting them.
+- **The ledger's document marker opens documents**, rather than only counting them.
 
 The **Help topic** (`transaction-documents`) is written — filed under a new *Transaction detail* index
 section, reached from an inline `?` on the Documents panel, and drafted against the voice of the existing

@@ -3,7 +3,7 @@
 **Phase 1 shipped 2026-08-24; phases 2–4 have not started.** Attaching, viewing, storing, backing up
 and searching a document — the `document` table, the on-disk store, the format-agnostic ingestion seam
 (file, paste, the `text/html` flavour, a saved `.eml`), tier-1 PDF text extraction with its FTS5 index,
-the shared `DropZone` / `DocumentsPanel` / `DocumentViewerDialog`, the ledger paperclip, and the backup
+the shared `DropZone` / `DocumentsPanel` / `DocumentViewerDialog`, the ledger document marker, and the backup
 and resumable-restore halves — are all live. The durable record is in
 [`../data-model.md`](../data-model.md) → *Attached documents* (write order, the digest, downscaling, the
 per-file cap, what the backup carries) and `architecture.md` → *Attached documents*, with the client-side

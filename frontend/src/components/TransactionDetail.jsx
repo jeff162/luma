@@ -313,7 +313,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTxn.display_name, detailTxn.merchant_name, detailTxn.raw_name, editingName])
 
-  // Kept stable, deliberately. `DocumentsPanel` reports its documents so the ledger's paperclip updates
+  // Kept stable, deliberately. `DocumentsPanel` reports its documents so the ledger's document marker updates
   // without refetching the page, and that report patches the host row — which re-renders this panel. An
   // inline arrow here would hand the panel a new identity on each of those renders, and the panel would
   // refetch on every one, looping between loading and loaded. See the ref in DocumentsPanel for the

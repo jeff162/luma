@@ -653,7 +653,7 @@ export const HELP_TOPICS = [
           A transaction found by text that is not on screen is marked. A match in the imported text
           underlines the name with a dotted line, and hovering the name shows that text. A match in an item
           description underlines the <strong>Split (N)</strong> marker the same way, and hovering it lists the
-          items. A match inside an attachment highlights the row&apos;s 📎 marker, which opens the document.
+          items. A match inside an attachment highlights the row&apos;s document marker, which opens the document.
         </p>
 
         <HelpHeading anchor="keywords">Keywords</HelpHeading>
@@ -988,6 +988,12 @@ export const HELP_TOPICS = [
           leaves them exactly as they were.
         </p>
         <p>
+          Where more than one person is set up as an owner, each expected row starts with a chip naming
+          whose account the expense is on (hovering it shows the full name), and the pills above the
+          columns narrow the <strong>Expected</strong> column to one person. <strong>Received</strong> is
+          never narrowed, since a repayment can land on anyone&apos;s account.
+        </p>
+        <p>
           In the transaction list a <strong>&#8617;</strong> marker on a row opens its reimbursement
           directly, dimmed once that reimbursement is finished.
         </p>
@@ -1105,7 +1111,7 @@ export const HELP_TOPICS = [
           the row's menu. Multiple documents can be attached to a single transaction.
         </p>
         <p>
-          A row with attachments also shows a paperclip marker. Clicking it opens the document directly
+          A row with attachments also shows a document marker. Clicking it opens the document directly
           when there is only one, or lists them to choose from when there are several.
         </p>
 
