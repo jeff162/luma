@@ -638,6 +638,10 @@ and every alternative turned down — is in `security-model.md` → *Secret cust
   — because no transaction spans the control and data DBs, and a failure between the two writes would
   otherwise strand every credential under a key no slot can produce. An interrupted rotation is **resumed**
   on the next call, never restarted. Revoke *then* rotate: rotation re-seals for whatever slots remain.
+  `POST /auth/vault/reissue-credentials` is the exposure response for an open vault
+  (`services/exposure_response.py`): each connection whose adapter declares `reissues_credential` gets a
+  new credential from the provider, stored at once, and the rest come back as outcomes for the user to
+  finish — see `security-model.md` → *Responding to an exposure*.
 - **Recovery and reset.** A forgotten passphrase used to be an unhandled dead end — `unlock` needs the
   passphrase and `set_passphrase` on a configured vault takes the `require_dek` path — so the vault now
   carries a **recovery ladder**, offered strictly cheapest-first because only the last rung costs

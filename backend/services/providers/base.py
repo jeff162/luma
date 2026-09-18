@@ -141,6 +141,12 @@ class ProviderAdapter(ABC):
     # longer read my bank" and "this still can, and I have one more thing to do".
     revokes_on_disconnect: bool = True
 
+    # Whether the provider can issue a replacement credential for an existing connection, invalidating the
+    # old one, **without the user authorizing again** (`reissue_credential`). This is what lets a response
+    # to an exposed database retire the copied credentials while every connection keeps syncing. False
+    # means the only way to retire a copied credential is to revoke it and link again.
+    reissues_credential: bool = False
+
     # Whether re-authorizing the same source comes back with the SAME `external_id`.
     #
     # True where the provider issues the handle (Plaid's `item_id`), so a re-link upserts onto the existing
@@ -389,6 +395,12 @@ class ProviderAdapter(ABC):
         simply omits it rather than showing a control that does nothing.
         """
         return []
+
+    def reissue_credential(self, app_config: dict, credential: str) -> str:
+        """Exchange `credential` for a new one naming the same connection, invalidating the old one at the
+        provider, and return the new one. Only for adapters declaring `reissues_credential = True`. Raises on
+        failure; the caller must store the returned value at once, since the old one is already dead."""
+        raise NotImplementedError(f"{self.provider} cannot reissue a credential")
 
     @abstractmethod
     def remove(self, app_config: dict, credential: str) -> None:

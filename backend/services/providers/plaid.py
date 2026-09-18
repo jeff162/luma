@@ -45,6 +45,8 @@ class PlaidAdapter(ProviderAdapter):
     zero_amount_rows = KEEP_ZERO_AMOUNT
     # Every transaction carries `iso_currency_code`, and the adapter judges rows one by one.
     currency_scope = CURRENCY_PER_TRANSACTION
+    # `/item/access_token/invalidate`: a new access token for the same Item, the old one dead at once.
+    reissues_credential = True
 
     def create_link_token(self, app_config: dict, user_id: str = "local-user",
                           access_token: str | None = None) -> str:
@@ -187,6 +189,9 @@ class PlaidAdapter(ProviderAdapter):
             # `provider_currency` anyway, precisely so it does not depend on what a given page contained.
             "unsupported_currency": dropped,
         }
+
+    def reissue_credential(self, app_config: dict, credential: str) -> str:
+        return plaid_service.invalidate_access_token(app_config, credential)
 
     def remove(self, app_config: dict, credential: str) -> None:
         plaid_service.remove_item(app_config, credential)

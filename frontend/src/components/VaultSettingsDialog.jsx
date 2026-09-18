@@ -21,6 +21,7 @@ import { VaultPassphraseDialog } from './VaultPassphraseDialog.jsx'
 import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { formatDate } from '../lib/utils.js'
+import { connectionProviderLabel } from '../lib/connectionSummary.js'
 
 function Section({ title, description, children, style }) {
   return (
@@ -32,6 +33,15 @@ function Section({ title, description, children, style }) {
       {children}
     </div>
   )
+}
+
+// What each connection's outcome asks of the user. Only `manual` and `failed` leave something to do, and
+// both end the same way: the copied credential is only dead once the provider has been told.
+const REISSUE_NOTE = {
+  reissued: 'Replaced. The copied credential no longer works.',
+  manual: 'This provider cannot replace it from here. Revoke it at the provider, then reconnect.',
+  failed: 'The provider refused. Revoke it at the provider, then reconnect.',
+  unreadable: 'Nothing stored could be read, so nothing was sent. If the provider still lists this connection, revoke it there.',
 }
 
 function Row({ children, style }) {
@@ -60,6 +70,10 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   const [newPasskeyLabel, setNewPasskeyLabel] = useState('')
   const [issuedRecoveryCode, setIssuedRecoveryCode] = useState('')
   const [confirmingRotate, setConfirmingRotate] = useState(false)
+  const [confirmingReissue, setConfirmingReissue] = useState(false)
+  // What the exposure response did and what it left, kept on screen so the steps it lists can be worked
+  // through from here — the passphrase change and key replacement it leads into are in this dialog.
+  const [reissueResult, setReissueResult] = useState(null)
   const [confirmingRevoke, setConfirmingRevoke] = useState(null)
   // Confirmed, unlike removing a passkey. A passkey is usually one of several ways in; the recovery code
   // is frequently the *only* rung between a forgotten passphrase and rebuilding every connection, and
@@ -409,9 +423,79 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
           </div>
         </Section>
 
+        {/* The non-destructive answer to "a copy of the database may be out there", for a vault that can
+            still be opened. Only the provider can retire a credential already in someone else's copy, and
+            where it can hand out a replacement the connection keeps syncing — the vault reset would
+            instead destroy every credential and cost a re-link the bank or plan may not grant. */}
+        <Section
+          title="Respond to an exposure"
+          description="If the database or a backup may have been copied, replace each connection's credential at its provider so the copied ones stop working. Connections keep syncing where the provider supports this; the rest are listed with what to do at the provider."
+        >
+          <div>
+            <Button variant="ghost" small disabled={busy === 'reissue'} onClick={() => setConfirmingReissue(true)}>
+              Replace connection credentials…
+            </Button>
+          </div>
+          {reissueResult ? (
+            <>
+              {reissueResult.outcomes.map(o => (
+                <Row key={o.connection_id} style={{ display: 'grid', gap: 2 }}>
+                  <strong>{o.label}</strong>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{o.detail || REISSUE_NOTE[o.outcome]}</span>
+                </Row>
+              ))}
+              {/* Never retired by the step above: the app secret is not per-connection, and a rotated-away
+                  secret can keep working until it is deleted at the provider. */}
+              {reissueResult.app_secrets_to_rotate.map(a => (
+                <Row key={`app-secret-${a.provider}`} style={{ display: 'grid', gap: 2 }}>
+                  <strong>{connectionProviderLabel(a.provider)} app secret</strong>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Rotate it at the provider, enter the new one with Configure, then delete the old one
+                    there — it keeps working until deleted.
+                  </span>
+                </Row>
+              ))}
+              {reissueResult.has_credentials_backups
+                && reissueResult.outcomes.some(o => o.outcome === 'reissued') ? (
+                  <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+                    Credentials backups made before now restore the replaced credentials, which no longer
+                    work. Make a new one.
+                  </p>
+                ) : null}
+              <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+                Then change the passphrase and replace the vault key, in that order — they protect what is
+                encrypted from now on, including the credentials just issued.
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="ghost" small onClick={onChangePassphrase}>Change passphrase</Button>
+                <Button variant="ghost" small disabled={busy === 'rotate'} onClick={() => setConfirmingRotate(true)}>
+                  Replace vault key…
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </Section>
+
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
         {status ? <div style={{ fontSize: 13, color: 'var(--muted)' }}>{status}</div> : null}
       </div>
+
+      {confirmingReissue ? (
+        <AppConfirmDialog
+          title="Replace connection credentials?"
+          // Confirmed because it reaches past this install: every other copy of the database — a restored
+          // backup elsewhere, a second install — holds the credentials being retired and stops syncing.
+          description="Each connection's credential is replaced at its provider where the provider supports it, and the old one stops working. Connections here keep syncing. Any other copy of this database stops syncing those connections."
+          confirmLabel={busy === 'reissue' ? 'Replacing…' : 'Replace credentials'}
+          confirmDisabled={busy === 'reissue'}
+          cancelDisabled={busy === 'reissue'}
+          onConfirm={async () => {
+            await run('reissue', async () => setReissueResult(await api.reissueVaultCredentials()))
+            setConfirmingReissue(false)
+          }}
+          onCancel={() => setConfirmingReissue(false)}
+        />
+      ) : null}
 
       {confirmingRevoke ? (
         <AppConfirmDialog

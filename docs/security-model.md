@@ -79,6 +79,46 @@ with no revocation call is an ordinary supported case — one live provider is e
 is unremarkable once known: revoke the token at the provider, rotate the vault passphrase and key, then
 re-link.
 
+### Responding to an exposure
+
+**How a leaked credential is retired is the provider's to define, so each step follows that provider's
+documentation on how its credentials are deactivated.** Nothing here generalizes from one provider to the
+next: whether a credential can be replaced without the user authorizing again, and whether an old secret
+dies when a new one is issued, are facts read from the provider, recorded as adapter capabilities where
+code acts on them. A new provider's exposure handling is designed from its own documentation, never by
+analogy with an existing one.
+
+**A provider with an app credential holds two levels of authorization**, and they are retired separately.
+Plaid's are the app's client id and secret, and the per-connection access token the bank login produced;
+a token is usable only together with the secret. As its documentation describes them:
+
+- **The token** can be replaced with no bank login (`/item/access_token/invalidate`: a new token, the old
+  one dead at once), which the adapter declares as `reissues_credential`. Revoking it (`/item/remove`)
+  retires it just as surely but ends the Item, so the connection has to be linked again.
+- **The app secret** is not per-connection, and nothing done to a connection touches it. It is rotated on
+  the provider's dashboard, and **the old one keeps working until it is deleted there** — so the step is
+  rotate, enter the new one with Configure, then delete the old one. Rotating alone retires nothing.
+
+**With the vault open, the response replaces rather than revokes.** *Vault settings → Respond to an
+exposure* (`POST /auth/vault/reissue-credentials`, `services/exposure_response.py`) reissues each
+connection's credential where the provider declares it can, so the copied credentials die while every
+connection keeps syncing, and lists what is left: connections whose provider cannot reissue (revoke at the
+provider, then reconnect), each stored app secret, a fresh credentials backup when an older one exists (it
+would restore the retired credentials), and then the passphrase change and key replacement, which protect
+the newly issued credentials. It is refused while a sync is running, since that pull holds the credential
+being replaced, and it stores each replacement the moment it is issued, because the old one is already
+dead. It does not replace the vault reset, which remains the only route for a **forgotten** passphrase:
+there nothing can be decrypted, so nothing can be sent to a provider.
+
+**The app secret is always left to the user, on either path.** The reset's *exposed* result lists each
+stored secret under *Still to do at the provider* too. Both read the list from what is stored
+(`exposure_response.app_secrets_to_rotate`) rather than from a capability, since a secret never saved was
+never exposed. An ordinary disconnect exposes nothing and asks for none of this.
+
+**Unverified: that Plaid Items survive a secret rotation.** The documentation implies it — rotate, test
+the new secret, then delete the old one would be pointless if every Item were bound to the old secret —
+without stating it. Confirm it in the sandbox environment before relying on it, never on a live connection.
+
 **The reverse direction — the user revokes at the provider — is not symmetric either.** Nothing announces
 it; Luma finds out only when a request is refused. A refused credential raises
 `ProviderCredentialRejected` and sets `reauth_required`, so the card reads **reconnect needed** rather
@@ -455,7 +495,8 @@ connection for reconnection.
 credential requires decrypting it, which requires an open vault — so the original motivating case, a
 forgotten passphrase, is exactly the one where **no revocation is possible for any provider**. A
 compromised-but-known passphrase can revoke on the way out, driven by `revokes_on_disconnect`. The user
-knows which situation they are in, so the dialog asks rather than guessing.
+knows which situation they are in, so the dialog asks rather than guessing — and its *exposed* option
+points at *Respond to an exposure* (above), which needs no reset at all when the vault can be opened.
 
 **A reset reports per-connection outcomes rather than aborting.** Disconnect deliberately *keeps* the
 local connection when revocation fails, so the user can retry rather than believe a credential is dead

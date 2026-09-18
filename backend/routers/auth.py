@@ -65,6 +65,7 @@ from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_lo
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
 from backend.services import app_passkey, crypto_service
+from backend.services.exposure_response import SyncInProgress, app_secrets_to_rotate, reissue_all_credentials
 from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
 from backend.authorization import require_admin, require_admin_or_local
@@ -1262,6 +1263,7 @@ def vault_reset(body: VaultResetRequest, request: Request):
         raise HTTPException(status_code=400, detail="Say whether the passphrase was lost or compromised")
 
     revocations: list[dict] = []
+    app_secrets: list[dict] = []
     if body.reason == "compromised":
         # Refused rather than degraded to the lost path. This path exists *so that* the revocations can
         # run, and running it locked would retire every credential without attempting the one thing the
@@ -1273,6 +1275,7 @@ def vault_reset(body: VaultResetRequest, request: Request):
                            "before it is destroyed.",
             })
         revocations = revoke_all_credentials(user)
+        app_secrets = app_secrets_to_rotate()
 
     # Who else this is about to lock out, captured before the slots are deleted — afterwards there is no
     # way to say whose access was destroyed, and it is the one consequence the caller cannot see coming
@@ -1287,8 +1290,42 @@ def vault_reset(body: VaultResetRequest, request: Request):
         **result,
         "revocations": revocations,
         "unfinished": unfinished(revocations),
+        "app_secrets_to_rotate": app_secrets,
         "also_locked_out": others,
         "user": _session_payload(user),
+    }
+
+
+@router.post("/vault/reissue-credentials")
+def vault_reissue_credentials(request: Request):
+    """Respond to an exposed database without destroying anything: replace every connection's credential
+    where its provider can, and report what is left for the user to do at each provider.
+
+    Not admin-gated — it is the authority of connecting or syncing, and it cannot grant anyone anything: the
+    connections keep working and only a copied credential stops. It needs the vault open, both to read each
+    credential and to seal its replacement. See `services/exposure_response.py`.
+    """
+    user = _require_current_user(request)
+    locked = HTTPException(status_code=423, detail={
+        "code":    "vault_locked",
+        "message": "Unlock the vault so each credential can be replaced at its provider.",
+    })
+    if not crypto_service.is_unlocked(user["id"]):
+        raise locked
+    try:
+        outcomes = reissue_all_credentials(user)
+    except crypto_service.VaultLocked:
+        # The vault locked part-way. Whatever was already reissued is stored, and running this again
+        # simply reissues those once more.
+        raise locked
+    except SyncInProgress as exc:
+        raise HTTPException(status_code=409, detail={"code": "sync_running", "message": str(exc)})
+    return {
+        "outcomes": outcomes,
+        "app_secrets_to_rotate": app_secrets_to_rotate(),
+        # A credentials backup made before now restores the credentials just retired, so the connections
+        # it brings back would fail at their next sync. Worth a new one, and the result screen says so.
+        "has_credentials_backups": bool(credentials_exports_any()),
     }
 
 

@@ -555,6 +555,18 @@ class VaultRecoveryEndpointTests(unittest.TestCase):
             self.assertEqual(r.json()["detail"]["code"], "vault_locked")
             self.assertTrue(client.get("/api/auth/status").json()["user"]["vault_configured"])
 
+    def test_a_compromise_reset_lists_the_app_secret_to_rotate(self):
+        # Revoking connections never retires the app secret they were authorized under, so after an
+        # exposure it is always left for the user — and a forgotten passphrase exposed nothing.
+        for reason, expected in (("compromised", [{"provider": "plaid"}]), ("lost", [])):
+            with self.subTest(reason=reason), api_client() as (client, _):
+                client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+                client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "app-secret"})
+                phrase = client.get("/api/auth/vault/reset-preview").json()["confirm_phrase"]
+                r = client.post("/api/auth/vault/reset", json={"reason": reason, "confirm": phrase})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.json()["app_secrets_to_rotate"], expected)
+
 
 class VaultProofEndpointTests(unittest.TestCase):
     """The wiring the service tests cannot see: the status code the client keys on, and the countdown

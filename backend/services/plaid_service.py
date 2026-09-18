@@ -17,6 +17,7 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.item_remove_request import ItemRemoveRequest
+from plaid.model.item_access_token_invalidate_request import ItemAccessTokenInvalidateRequest
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
@@ -98,6 +99,14 @@ def remove_item(app_config: dict, access_token: str) -> None:
     token is dead everywhere — including any stolen copy — which is the point of an in-app disconnect."""
     client = _get_client(app_config)
     client.item_remove(ItemRemoveRequest(access_token=access_token))
+
+
+def invalidate_access_token(app_config: dict, access_token: str) -> str:
+    """Replace an Item's access_token (`/item/access_token/invalidate`): the old token stops working at once
+    and the Item — the bank's authorization — is untouched, so nothing has to be linked again."""
+    client = _get_client(app_config)
+    response = client.item_access_token_invalidate(ItemAccessTokenInvalidateRequest(access_token=access_token))
+    return response.to_dict()["new_access_token"]
 
 
 def fetch_accounts(app_config: dict, access_token: str) -> list[dict]:

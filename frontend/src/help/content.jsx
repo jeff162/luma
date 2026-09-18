@@ -2033,10 +2033,6 @@ export const HELP_TOPICS = [
         <p>
           Disconnecting retains the accounts and their transactions. If disconnecting the
           account revokes the provider's access the confirmation page will indicate this.
-          Even if it indicates that the provider's access was revoked, the connection
-          secret on the provider side should be rotated or revoked as it could be used to
-          reconnect the accounts.
-
         </p>
       </>
     ),
@@ -3306,7 +3302,11 @@ export const HELP_TOPICS = [
           are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
           and issue new ones. Disconnecting the accounts from within {APP_NAME} revokes the per-account (per-connection)
           credentials for certain providers but for all providers it is necessary to revoke or
-          rotate the secret on the provider webpage.
+          rotate the secret on the provider webpage. A rotated secret can keep working until the
+          old one is deleted there, so delete it once the new one is entered.
+          <strong> Respond to an exposure</strong> in Vault settings replaces the per-connection credentials
+          for providers that support it, so those connections keep working without reconnecting, and lists
+          the remaining steps.
         </p>
         <p>
           If the provider stops accepting the stored credential, the connection card

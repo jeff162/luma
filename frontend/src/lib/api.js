@@ -222,6 +222,9 @@ export const api = {
   // Replace the workspace key and re-encrypt every stored credential under it. Revoke first, then
   // rotate: rotation re-seals for whoever still holds a slot.
   rotateVault: () => request('/auth/vault/rotate', { method: 'POST' }),
+  // After a possible exposure: swap each connection's credential for a new one where its provider can,
+  // and report what is left to do at each provider. Nothing needs re-linking.
+  reissueVaultCredentials: () => request('/auth/vault/reissue-credentials', { method: 'POST' }),
   // Passkey unlock methods. `params` reports whether a ceremony can run here at all (WebAuthn needs a
   // secure context and a named host) and carries the ids/salts a ceremony needs.
   vaultPasskeyParams: () => request('/auth/vault/passkey/params'),

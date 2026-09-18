@@ -84,18 +84,25 @@ Stated plainly, because it determines what is worth reporting and what a user sh
   the provider's to define, not Luma's: depending on the provider and what the connection was created
   with, it may also reach account and routing numbers or identity details, and an app-level credential
   (a client id and secret) reaches every connection made with it rather than one. Treat the ceiling as
-  whatever that provider's own dashboard says the credential can do, and check it there. Revoking it is
-  the response, and it is the *only* action that reaches a credential already sitting in someone else's
-  copy. Revocation differs by provider — a declared capability, `revokes_on_disconnect`: where the
-  provider supports third-party revocation, disconnecting from Luma genuinely ends the access; where it
-  does not, disconnecting removes only Luma's copy and the credential must be revoked at the provider.
-  The disconnect confirmation states which of the two is about to happen.
+  whatever that provider's own dashboard says the credential can do, and check it there. Retiring it at
+  the provider is the response — revoking it, or replacing it where the provider can issue a new one — and
+  it is the *only* action that reaches a credential already sitting in someone else's copy. How a provider
+  deactivates its credentials is its own to define, so each step follows that provider's documentation. Revocation differs by provider — a declared capability, `revokes_on_disconnect`: where the
+  provider supports third-party revocation, disconnecting from Luma genuinely ends that connection's
+  access; where it does not, disconnecting removes only Luma's copy and the credential must be revoked at
+  the provider. The disconnect confirmation states which of the two is about to happen. **Neither retires
+  an app-level secret**: revoking every connection leaves the secret they were authorized under valid, so
+  after a leak it is rotated at the provider *and the old one deleted* — a provider may keep a rotated-away
+  secret working until it is deleted (Plaid does). An ordinary disconnect, with nothing exposed, needs
+  none of this.
 - **After a leaked file, assume the vault secrets are recoverable and change them.** Nothing done
   afterwards protects the copy already taken — only revocation limits that. But whatever an offline
   attack against the copy yields (the passphrase, and through it the slot's private key and the DEK)
   stays valid against **anything encrypted afterwards** until it is deliberately retired — including the
-  replacement credentials that revoking makes necessary. So the full response is, in order: **revoke
-  every credential**, then **change the vault passphrase**, then **replace the vault key**. That is one
+  replacement credentials that retiring makes necessary. So the full response is, in order: **retire
+  every credential** — each connection, replaced where its provider can so it keeps syncing (*Vault
+  settings → Respond to an exposure*) and otherwise revoked, plus any app secret rotated and its old value
+  deleted — then **change the vault passphrase**, then **replace the vault key**. That is one
   response to one incident rather than a schedule; whether the exposure can recur is a property of how
   the file escaped, and closing that path is a separate job from this one.
 - **Those last two are not interchangeable — they retire different artifacts.** A passphrase change

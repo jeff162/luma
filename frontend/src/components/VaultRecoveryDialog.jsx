@@ -42,6 +42,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
+import { connectionProviderLabel } from '../lib/connectionSummary.js'
 
 const CONFIRM_FALLBACK = 'RESET VAULT'
 
@@ -231,6 +232,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
   // --- After a reset: what is left for the user to do ---------------------------------------------
   if (outcome) {
     const todo = outcome.unfinished || []
+    const appSecrets = outcome.app_secrets_to_rotate || []
     return (
       <AppDialog
         title="The vault was rebuilt"
@@ -259,7 +261,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
               was made under, and the connections will work again without reconnecting anything.
             </p>
           ) : null}
-          {todo.length > 0 ? (
+          {todo.length > 0 || appSecrets.length > 0 ? (
             <Rung title="Still to do at the provider">
               <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }}>
                 These credentials were not revoked automatically. Until they are removed at the provider,
@@ -270,6 +272,18 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                   <strong>{t.label}</strong>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                     {t.detail || OUTCOME_NOTE[t.outcome]}
+                  </div>
+                </div>
+              ))}
+              {/* Listed even when every connection revoked cleanly: revoking a connection retires its
+                  token, never the app secret it was authorized under. The delete is the step that
+                  matters — a rotated-away secret can keep working until it is deleted. */}
+              {appSecrets.map(a => (
+                <div key={`app-secret-${a.provider}`} style={{ fontSize: 13 }}>
+                  <strong>{connectionProviderLabel(a.provider)} app secret</strong>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Rotate it at the provider, then delete the old one there — it can keep working until
+                    deleted. Enter the new secret with Configure.
                   </div>
                 </div>
               ))}
@@ -465,7 +479,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                     The passphrase or database may have been exposed.
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)' }}>
                       Unlock the vault first; each credential is then revoked at its provider where that is
-                      supported, before being destroyed.
+                      supported, before being destroyed. With the vault open, Respond to an exposure in Vault
+                      settings replaces credentials instead, without reconnecting anything.
                     </span>
                   </span>
                 </label>

@@ -254,6 +254,21 @@ describe('the reset', () => {
     expect(screen.getByText('Harborline Bank')).toBeTruthy()
     expect(screen.getByText(/stays live until you do/)).toBeTruthy()
   })
+
+  it('names the app secret to rotate even when every connection was revoked', async () => {
+    // Revoking a connection retires its token, not the app secret it was authorized under — so a
+    // clean revocation of every connection still leaves this to do, and is the case it would be missed.
+    resetVault.mockResolvedValue({
+      connections_needing_relink: 2, revocations: [], unfinished: [],
+      app_secrets_to_rotate: [{ provider: 'plaid' }], user: {},
+    })
+    await openResetForm()
+    await userEvent.type(screen.getByPlaceholderText('RESET VAULT'), 'RESET VAULT')
+    await userEvent.click(screen.getByText('Rebuild the vault').closest('button'))
+
+    expect(await screen.findByText('Still to do at the provider')).toBeTruthy()
+    expect(screen.getByText('Plaid app secret')).toBeTruthy()
+  })
 })
 
 describe('asking another member to let you back in', () => {

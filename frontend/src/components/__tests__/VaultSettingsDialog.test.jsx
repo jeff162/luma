@@ -27,6 +27,14 @@ const issueVaultRecoveryCode = vi.fn(async () => ({ recovery_code: 'AAAAAAAA-BBB
 // prompt this dialog raises ends in the same call the lock screen makes.
 const unlockVault = vi.fn(async () => ({ user: { id: 'u1', vault_proof_seconds_remaining: 300 } }))
 const discardVaultRecoveryCode = vi.fn(async () => ({ user: { id: 'u1' } }))
+const reissueVaultCredentials = vi.fn(async () => ({
+  outcomes: [
+    { connection_id: 'c1', label: 'Harborline Bank', outcome: 'reissued', detail: null },
+    { connection_id: 'c2', label: 'Riverstone Credit Union', outcome: 'manual', detail: null },
+  ],
+  app_secrets_to_rotate: [{ provider: 'plaid' }],
+  has_credentials_backups: true,
+}))
 
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -42,6 +50,7 @@ vi.mock('../../lib/api.js', () => ({
     issueVaultRecoveryCode: (...a) => issueVaultRecoveryCode(...a),
     unlockVault: (...a) => unlockVault(...a),
     discardVaultRecoveryCode: (...a) => discardVaultRecoveryCode(...a),
+    reissueVaultCredentials: (...a) => reissueVaultCredentials(...a),
   },
 }))
 
@@ -446,5 +455,24 @@ describe('replacing the vault key', () => {
     renderDialog()
     await userEvent.click((await screen.findByText('Replace vault key…')).closest('button'))
     expect(await screen.findByText(/can no longer decrypt them, even with a copy of the database/)).toBeTruthy()
+  })
+})
+
+describe('responding to an exposure', () => {
+  it('confirms, then lists what was replaced and everything still to do', async () => {
+    // A connection whose provider cannot reissue, and the app secret no connection-level call retires,
+    // are exactly what a user would otherwise believe the button had handled.
+    renderDialog()
+    await userEvent.click((await screen.findByText('Replace connection credentials…')).closest('button'))
+    expect(reissueVaultCredentials).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByText('Replace credentials').closest('button'))
+    await waitFor(() => expect(reissueVaultCredentials).toHaveBeenCalled())
+
+    expect(await screen.findByText('Harborline Bank')).toBeTruthy()
+    expect(screen.getByText(/copied credential no longer works/)).toBeTruthy()
+    expect(screen.getByText(/cannot replace it from here/)).toBeTruthy()
+    expect(screen.getByText('Plaid app secret')).toBeTruthy()
+    expect(screen.getByText(/Credentials backups made before now/)).toBeTruthy()
+    expect(screen.getByText('Change passphrase').closest('button')).toBeTruthy()
   })
 })
