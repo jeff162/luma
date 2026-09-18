@@ -9,6 +9,7 @@ This router serves one frontend in two modes:
 """
 
 import json
+import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -16,9 +17,11 @@ from pydantic import BaseModel
 from backend import app_config
 from backend.runtime_config import env_file_path
 from backend.db.control_database import (
+    app_passkeys_exist,
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
+    delete_app_passkey,
     credentials_exports_any,
     credentials_exports_for_fingerprint,
     enable_auth_mode,
@@ -61,7 +64,7 @@ from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner,
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
-from backend.services import crypto_service
+from backend.services import app_passkey, crypto_service
 from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
 from backend.authorization import require_admin, require_admin_or_local
@@ -94,6 +97,19 @@ class UserUpdateRequest(BaseModel):
 
 class TotpVerifyRequest(BaseModel):
     code: str
+
+
+class PasskeyRegisterRequest(BaseModel):
+    # The credential exactly as `PublicKeyCredential.toJSON()` produced it. Passed through whole rather
+    # than destructured into fields: every byte of it is covered by the checks the verifier runs, and a
+    # model that picked out the parts this code happens to read now would have to be widened by anyone
+    # adding an extension later.
+    credential: dict
+    label: str | None = None
+
+
+class PasskeyLoginRequest(BaseModel):
+    credential: dict
 
 
 class TotpConfirmRequest(TotpVerifyRequest):
@@ -261,6 +277,9 @@ def _session_payload(user: dict) -> dict:
         "vault_passphrase_min_length": crypto_service.VAULT_PRODUCTION_MIN_LEN,
         "vault_passphrase_min_distinct": crypto_service.VAULT_PRODUCTION_MIN_DISTINCT,
         "must_change_password": bool(user.get("must_change_password")),
+        # Login passkeys, which are not vault passkeys and are listed separately for that reason. No key
+        # material rides along — only what the settings list renders.
+        "app_passkeys": app_passkey.registered_passkeys(user["id"]),
         "two_factor_enabled": bool(user.get("totp_enabled")),
         "recovery_code_count": recovery_code_count(user["id"]),
         "tenant_id": user["tenant_id"],
@@ -788,6 +807,168 @@ def regenerate_recovery_codes(body: TotpVerifyRequest, request: Request):
     updated = get_user_by_id(user["id"])
     request.state.user = updated
     return {"user": _session_payload(updated), "recovery_codes": recovery_codes}
+
+
+# --- Passkeys for the login perimeter -------------------------------------------------------------
+#
+# The vault's passkeys are a *different feature* that happens to use the same browser API: these cross
+# the perimeter, those open encrypted credentials. Separate endpoints, separate storage and separate
+# copy, deliberately — see `services/app_passkey.py`. Signing in with one of these confers nothing about
+# the vault, and a user who holds both is prompted twice.
+
+# A challenge is one ceremony's, and it belongs to the browser that asked for it — the same rule the
+# vault applies to an unlock and to a proof stamp. Holding it in the signed session gets both properties
+# with no table: it cannot be replayed from another browser, and popping it on use makes it single-use.
+_REGISTER_CHALLENGE_KEY = "passkey_register_challenge"
+_LOGIN_CHALLENGE_KEY = "passkey_login_challenge"
+
+
+def _require_passkey_context(request: Request) -> dict:
+    context = _passkey_context(request)
+    if not context["available"]:
+        raise HTTPException(status_code=400, detail={
+            "code": context["reason"],
+            "message": "Passkeys need an HTTPS connection to a named host",
+        })
+    return context
+
+
+def _expected_origin(request: Request, rp_id: str) -> str:
+    """Which origin this deployment will accept an assertion from.
+
+    The port is deliberately not pinned, and that is a decision rather than laziness. Luma's frontend
+    and backend ports are both configurable, a dev session serves the app from Vite while the API answers
+    elsewhere, and the browser test harness picks its own pair per run — so a hardcoded origin would
+    break passkeys in most of the configurations this repo supports. What matters is already enforced:
+    the browser will not offer a credential whose RP id does not match the page's host, so an accepted
+    origin is always *this host*, and a different port on the same host is another server on the
+    operator's own machine, which the deployment model already trusts (`security-model.md` → *What is
+    defended*).
+
+    The scheme is not taken on trust, though: anything but loopback has to be HTTPS, which is the same
+    secure-context rule `_passkey_context` applies before a ceremony is offered at all.
+    """
+    origin = request.headers.get("origin") or ""
+    parsed = urllib.parse.urlparse(origin)
+    if parsed.hostname != rp_id:
+        raise HTTPException(status_code=400, detail="This page cannot run a passkey ceremony")
+    if parsed.scheme != "https" and not transport.request_is_loopback(request):
+        raise HTTPException(status_code=400, detail="Passkeys need an HTTPS connection")
+    return origin
+
+
+@router.get("/passkey/params")
+def passkey_params(request: Request):
+    """Whether this connection can run a passkey ceremony, and whether there is any point offering one.
+
+    Public, because the sign-in screen has to decide whether to show the button before anyone has said
+    who they are. `any_registered` is a single workspace-wide boolean for the same reason it is not a
+    list: an unauthenticated caller learns that the feature is in use here, and nothing about who uses it.
+    """
+    context = _passkey_context(request)
+    return {**context, "any_registered": app_passkeys_exist()}
+
+
+@router.post("/passkey/register/begin")
+def passkey_register_begin(request: Request):
+    user = _require_current_user(request)
+    if not auth_required():
+        raise HTTPException(
+            status_code=400,
+            detail="Turn on sign-in protection before adding a passkey; there is no sign-in to use it for",
+        )
+    context = _require_passkey_context(request)
+    options, challenge = app_passkey.registration_options(user, context["rp_id"])
+    request.session[_REGISTER_CHALLENGE_KEY] = challenge
+    return {"options": json.loads(options)}
+
+
+@router.post("/passkey/register/complete")
+def passkey_register_complete(body: PasskeyRegisterRequest, request: Request):
+    user = _require_current_user(request)
+    context = _require_passkey_context(request)
+    challenge = request.session.pop(_REGISTER_CHALLENGE_KEY, None)
+    if not challenge:
+        raise HTTPException(status_code=400, detail="That passkey registration expired. Try again.")
+    try:
+        app_passkey.register_credential(
+            user,
+            credential=body.credential,
+            challenge=challenge,
+            rp_id=context["rp_id"],
+            origin=_expected_origin(request, context["rp_id"]),
+            label=body.label,
+        )
+    except app_passkey.PasskeyRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
+
+
+@router.post("/passkey/login/begin")
+def passkey_login_begin(request: Request):
+    if not auth_required():
+        raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
+    context = _require_passkey_context(request)
+    options, challenge = app_passkey.authentication_options(context["rp_id"])
+    request.session[_LOGIN_CHALLENGE_KEY] = challenge
+    return {"options": json.loads(options)}
+
+
+@router.post("/passkey/login/complete")
+def passkey_login_complete(body: PasskeyLoginRequest, request: Request):
+    """Complete a passkey sign-in.
+
+    **This deliberately skips the two-factor step**, and that is the feature rather than a shortcut. The
+    ceremony is run with user verification *required*, so the authenticator has already demanded a
+    biometric or a PIN: the holder proved possession of the device and something inherent or known, which
+    is what the TOTP prompt after a password exists to establish. Asking for a code as well would be
+    charging twice for the same guarantee — and the friction it adds is exactly what this feature exists
+    to remove (`security-model.md` → *Passkeys and the second factor*).
+    """
+    if not auth_required():
+        raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
+    context = _require_passkey_context(request)
+    origin = _expected_origin(request, context["rp_id"])
+    challenge = request.session.pop(_LOGIN_CHALLENGE_KEY, None)
+    if not challenge:
+        raise HTTPException(status_code=400, detail="That sign-in attempt expired. Try again.")
+    try:
+        stored = app_passkey.verify_assertion(
+            credential=body.credential,
+            challenge=challenge,
+            rp_id=context["rp_id"],
+            origin=origin,
+        )
+    except app_passkey.PasskeyRejected as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+    user = get_user_by_id(stored["user_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="That passkey is not registered here")
+    request.session.clear()
+    if user.get("must_change_password"):
+        # The same gate a password sign-in hits. A passkey proves who is at the browser; it says nothing
+        # about an account whose password an admin has just reset, and letting one route around the
+        # forced change would leave the account holding an unusable sentinel indefinitely.
+        request.session["pending_password_change_user_id"] = user["id"]
+        return {"requires_password_change": True}
+    request.session["user_id"] = user["id"]
+    return {"user": _session_payload(user)}
+
+
+@router.delete("/passkey/{passkey_id}")
+def passkey_remove(passkey_id: str, request: Request):
+    """Remove one of this user's login passkeys.
+
+    Needs a signed-in session and nothing more. The vault's removals take a proof of the passphrase
+    because stripping a slot there can strand encrypted credentials; nothing is stranded here, the
+    password remains the floor, and a lost device is the most likely reason anyone reaches this — so a
+    gate that demanded the missing authenticator would fire exactly when it must not.
+    """
+    user = _require_current_user(request)
+    if not delete_app_passkey(user["id"], passkey_id):
+        raise HTTPException(status_code=404, detail="No such passkey")
+    return {"user": _session_payload(user)}
 
 
 def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:

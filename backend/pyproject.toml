@@ -11,7 +11,11 @@ dependencies = [
     "python-dotenv==1.0.1",
     "python-multipart==0.0.9",
     "itsdangerous==2.2.0",
-    "cryptography==43.0.1",
+    # Its wheels vendor OpenSSL, so this pin decides which OpenSSL every packaged kit ships with.
+    "cryptography==50.0.1",
+    # WebAuthn verification for passkey sign-in; the vault's passkeys verify no assertion and do not
+    # use it.
+    "webauthn==3.0.0",
     # Verifies TLS against the OS certificate store rather than a CA bundle pinned here — a
     # runtime dependency because a frozen build has no CA file on disk at all.
     "truststore==0.10.4",

@@ -133,6 +133,45 @@ A trusting household can therefore be entirely passwordless and still need vault
 may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
 passwordless install can hold vault-encrypted credentials, and an authenticated one can have no vault.
 
+## Passkeys and the second factor
+
+**A passkey signs in, and it also stands in for the authenticator code.** The ceremony runs with user
+verification *required*, so the authenticator itself demands a biometric or a PIN before it will produce
+an assertion — which establishes possession of the device **and** something inherent or known. That is
+what the TOTP prompt after a password exists to establish, so asking for a code as well would charge
+twice for the same guarantee. `_USER_VERIFICATION` in `services/app_passkey.py` is therefore the
+load-bearing setting in that file rather than a hardening default: relax it and the sign-in silently
+becomes possession alone, with the factor it replaced already gone.
+
+**The convenience is the security argument, not a trade against it.** The perimeter is optional — see
+*"Password optional" is a workspace property* above — and what pushes a household into turning sign-in
+off is friction. A login that costs a fingerprint makes keeping the perimeter **on** cheaper than
+switching it off, which is a real gain delivered through adoption rather than through credential
+strength. An argument that measures only the strength of the credential cannot see it, which is how an
+earlier rejection reached the wrong answer: *"a passkey would be security theater over a plaintext
+ledger"* is sound about whether it is a *stronger* credential and says nothing about whether it is a
+better way to sign in.
+
+**A passkey is never the only credential.** A bare-IP host can never register one however it is served
+(*Obstacles*), so an install reached at `192.168.x.x` would otherwise have no way in at all. The password
+remains the floor, every account keeps one, and the passkey is strictly additional.
+
+**The two passkey features must not become one.** The vault's passkeys and these look identical on
+screen and mean entirely different things — one opens encrypted data-source credentials, the other
+crosses the login perimeter — so they keep separate endpoints, separate storage (`app_passkey` versus
+`vault_slot`) and separate copy. Merging the ceremonies is the tempting shortcut and it is the exact
+coupling *Do not couple them* forbids: signing in would imply vault authority. A user who holds both is
+prompted twice, deliberately.
+
+**Their reach differs in the direction people expect least.** Sign-in needs only a plain assertion,
+while a vault slot needs the PRF extension — so an authenticator that cannot hold a vault slot at all can
+still sign in, and the *login* feature is the one that works on more devices.
+
+**Removing a login passkey takes no proof, and that is not an inconsistency.** Stripping a vault slot is
+gated because it can strand encrypted credentials; nothing is stranded here, the password still opens the
+account, and the likeliest reason anyone reaches this screen is a device they no longer have — so a gate
+demanding the missing authenticator would fire exactly when it must not.
+
 **A session's *timestamp* is not part of what secures it, and a clock is not a trustworthy witness.**
 The session cookie is secured by its signature; the timestamp inside it is signed data, unforgeable
 without the secret, and its only job is to bound how long a session lives. `itsdangerous` nonetheless
@@ -474,7 +513,10 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
 - **Verifying the WebAuthn assertion for a vault ceremony.** The vault is not an authentication decision.
   A wrong PRF output fails at the AEAD tag exactly as a wrong passphrase does, so the slot is
   self-verifying; checking a signature would mean storing credential public keys and running challenge
-  state to prove what is already proven, and would add a WebAuthn library to do it.
+  state to prove what is already proven. **This is scoped to the vault and always was.** Passkey *sign-in*
+  is an authentication decision with no such backstop — nothing downstream would notice a forged assertion
+  — so it verifies in full, and the WebAuthn library this entry declined to add for the vault is a
+  dependency now. The rejection still holds where it was made: `crypto_service` imports none of it.
 - **A set of N vault recovery codes.** N codes are N slot rows and therefore N independent
   offline-attackable paths to the same DEK. The redundancy only helps if the copies are kept in N places,
   which is not how recovery codes are stored. The 2FA set-of-ten answers a different question: a sign-in
@@ -537,11 +579,6 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
   per-request detection it needs exists. Standalone-vs-client-server is a *detected* fact, so only the
   data-source declaration is a real question to put to anyone, and only when networked. No backlog item —
   this topic owns it.
-- **A passkey for app login**, reopened 2026-09-04 on convenience grounds. It was rejected as security
-  theater over a plaintext ledger, which answers whether it is a *stronger* credential and not whether it
-  is a better way to sign in; friction is what pushes a household into turning the perimeter off
-  entirely. Additive to the password, never a replacement, and it needs the assertion verification the
-  vault deliberately does without. → [`backlog/passkey-app-login.md`](backlog/passkey-app-login.md)
 - **An mDNS service name.** Env-only, alongside the ports. Not merely convenience: with HTTPS it is what
   makes passkeys reachable on a LAN at all. The open part is the default name when two installations share
   a network. → [`operations.md`](operations.md) → *Open*

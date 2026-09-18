@@ -90,12 +90,6 @@ scale — rather than by feature.
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
   resuming next time rules are in focus.
-- [passkey-app-login.md](passkey-app-login.md) — **not started (2026-09-04).** Sign in with a passkey
-  *alongside* the app password, for convenience. Reverses an earlier rejection that answered a different
-  question — whether a passkey is a stronger credential, not whether it is a better way to log in — and
-  the argument for it is that friction is what pushes a household into turning the perimeter off. The
-  work is WebAuthn *authentication* (stored public keys, challenges, signature verification), which the
-  vault's passkeys deliberately do without, so little beyond the ceremony plumbing carries over.
 - [cleanup-pass.md](cleanup-pass.md) — small, non-urgent cleanups to batch together: console quieting,
   the rest of the native-`title` → shared-`Tooltip` migration, a legacy dead-code sweep, and an opt-in
   per-detail-panel Refresh seam.
@@ -300,6 +294,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/vault-passphrase-recovery.md` | 2026-09-03 | **A** (`security-model.md`) — the recovery ladder, reset as compromise response, the mint-a-method gate and both reversals (the two narrower rules that each miss a case; the other-member refusal that became a redirect). The one owed test moved to `test-coverage-gaps.md` | **No** — deleted, 674 lines. The A-slice was ingested 2026-09-02 but the file was never reduced; on re-reading, nothing survived the diff except that test, and the running test checklist is its natural owner |
 | `docs/backlog/import-rule-suggestion-review-model.md` | 2026-09-15 | data-model — the review's state lifecycle (what owns the rows, which rule, and what `source_row_ids` means in each state), the partition record and the rejected read-time normalization, undo's exactness and its reversal of an edit to a rule the review did not create, and the rejected raw review-write route; architecture — what a review scope carries and what may not branch on it | **No** — deleted. All four stages shipped and both questions stage 2 left were settled (undo now reverses an edit to a pre-existing rule; the three routes that had lost their only caller were removed). What remained past the fold was the stage-by-stage work log |
 
+| `docs/backlog/passkey-app-login.md` | 2026-09-17 | **A** (`security-model.md`) — *Passkeys and the second factor*: why required user verification stands in for the TOTP step, why the convenience case is itself a security argument, why the password stays the floor, why the two passkey features must not merge, and the scoping of the vault's assertion-verification rejection; architecture — the mechanism as built (table, service, endpoints, session-held challenge, frontend modules) | **No** — deleted. Every open question in it was decided as the work landed: discoverable credentials required, the management surface beside the vault's passkeys but separately labelled, and a password mandatory per account |
 
 ### Checked, and found to owe nothing
 

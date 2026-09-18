@@ -13,6 +13,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../lib/appPasskey.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
@@ -775,6 +776,118 @@ function DisableAuthSection() {
   )
 }
 
+// Sign-in passkeys, which are **not** the vault's passkeys. Both exist, both use the same browser
+// prompt, and they are deliberately not merged: one crosses the login perimeter, the other opens
+// encrypted data-source credentials. The copy here names the difference rather than assuming anyone
+// will infer it, since an unlabelled second list of passkeys is the conflation the design guards against.
+function SignInPasskeysPanel({ user, onUserChange }) {
+  const [params, setParams] = useState(null)
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const passkeys = user?.app_passkeys || []
+
+  useEffect(() => {
+    let cancelled = false
+    api.signInPasskeyParams()
+      .then(resp => { if (!cancelled) setParams(resp) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  async function addPasskey() {
+    setBusy(true)
+    setError('')
+    try {
+      const { options } = await api.beginSignInPasskeyRegistration()
+      const result = await registerSignInPasskey(options)
+      if (!result.ok) {
+        if (result.reason !== 'cancelled') {
+          setError(PASSKEY_SIGN_IN_UNAVAILABLE[result.reason] || 'That passkey could not be added.')
+        }
+        return
+      }
+      const resp = await api.completeSignInPasskeyRegistration(result.credential, label.trim())
+      onUserChange(resp.user)
+      setLabel('')
+    } catch (err) {
+      setError(err.message || 'That passkey could not be added.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removePasskey(passkeyId) {
+    setBusy(true)
+    setError('')
+    try {
+      onUserChange((await api.removeSignInPasskey(passkeyId)).user)
+    } catch (err) {
+      setError(err.message || 'That passkey could not be removed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const availability = ceremonyAvailability(params)
+  const inputStyle = { ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%', maxWidth: 260 }
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>Sign-in passkeys</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+        A passkey signs in with a fingerprint, face or device PIN instead of a password. The device check
+        counts as the second factor, so a passkey sign-in does not ask for an authenticator code. The
+        password still works and is still required on any connection that cannot run a passkey.
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+        These are separate from vault passkeys, which unlock stored data-source credentials. Adding one
+        here grants no access to the vault.
+      </div>
+
+      {passkeys.length > 0 && (
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          {passkeys.map(passkey => (
+            <InsetPanel key={passkey.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13 }}>{passkey.label || 'Passkey'}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                  Added {formatDate(passkey.created_at)}
+                  {passkey.last_used_at ? ` · Last used ${formatDate(passkey.last_used_at)}` : ' · Not used yet'}
+                </div>
+              </div>
+              <Button small variant="ghost" disabled={busy} onClick={() => removePasskey(passkey.id)}>
+                Remove
+              </Button>
+            </InsetPanel>
+          ))}
+        </div>
+      )}
+
+      {availability.available ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <input
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            placeholder="Name this device (optional)"
+            aria-label="Passkey name"
+            style={inputStyle}
+          />
+          <Button small onClick={addPasskey} disabled={busy}>
+            {busy ? 'Waiting for the passkey...' : 'Add a passkey'}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 12 }}>
+          {PASSKEY_SIGN_IN_UNAVAILABLE[availability.reason] || 'Passkeys cannot be added on this connection.'}
+        </div>
+      )}
+
+      {error && <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
+    </div>
+  )
+}
+
 function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
   const fieldIdBase = useId()
   const [currentUser, setCurrentUser] = useState(null)
@@ -888,6 +1001,9 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
       {onPasswordPolicyChange && (
         <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
       )}
+      {/* Above the authenticator app because it changes what that section means: a passkey sign-in
+          satisfies the second factor, so someone deciding between the two needs to read this first. */}
+      <SignInPasskeysPanel user={currentUser} onUserChange={setCurrentUser} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Authenticator app</div>
@@ -3193,7 +3309,7 @@ export default function Settings() {
           {authEnabled && (
             <StickySection
               title="Account security"
-              description="Manage password requirements and authenticator-based sign-in protection."
+              description="Manage password requirements, passkeys, and authenticator-based sign-in protection."
               actions={<FeatureExplainer topic="account-security" placement="bottom-left" />}
               scrollContainerRef={settingsScrollRef}
               {...bindSection('accountSecurity')}

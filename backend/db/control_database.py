@@ -209,6 +209,32 @@ def init_control_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- A passkey that crosses the *login* perimeter. Deliberately a separate table from
+            -- `vault_slot`, which also holds passkeys: the two answer different questions and must never
+            -- be reachable through one another. A vault slot holds key material and opens encrypted
+            -- credentials; this row holds only a public key and authenticates a session. Signing in with
+            -- one of these confers no vault authority whatsoever.
+            --
+            -- Everything here is public by construction. `public_key` is the COSE key the authenticator
+            -- published, and a leak of this table lets an attacker verify assertions, never produce one —
+            -- the private half never leaves the authenticator.
+            --
+            -- `sign_count` is the authenticator's own monotonic counter, stored so a regression can be
+            -- refused: a counter that goes backwards is the documented signal of a cloned credential.
+            -- Many modern authenticators (notably the platform ones backed by a synced keychain) report a
+            -- permanent 0, which is why a 0 is not treated as a regression.
+            CREATE TABLE IF NOT EXISTS app_passkey (
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+                credential_id TEXT NOT NULL UNIQUE,
+                public_key    TEXT NOT NULL,
+                sign_count    INTEGER NOT NULL DEFAULT 0,
+                transports    TEXT,
+                label         TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                last_used_at  TEXT
+            );
+
             -- One row per credentials backup taken, recording *which wrapping* went into the file.
             --
             -- A credentials backup carries the DEK wrapped under the passphrase in force when it was
@@ -1210,6 +1236,103 @@ def credentials_exports_any() -> list[dict]:
             "SELECT id, exported_at FROM credentials_export ORDER BY exported_at DESC, id DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- App-login passkeys (see the `app_passkey` table and `services/app_passkey.py`) ---------------
+
+
+def list_app_passkeys(user_id: str) -> list[dict]:
+    """One user's registered login passkeys, oldest first. Never returns the public key: the settings
+    list only ever needs to say which devices exist and when each was last used."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, label, transports, created_at, last_used_at
+            FROM app_passkey WHERE user_id = ? ORDER BY created_at, id
+            """,
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_app_passkey_credential_ids(user_id: str) -> list[str]:
+    """Just the credential ids, for the `excludeCredentials` list a registration ceremony sends."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            "SELECT credential_id FROM app_passkey WHERE user_id = ? ORDER BY created_at, id",
+            (user_id,),
+        ).fetchall()
+    return [row["credential_id"] for row in rows]
+
+
+def get_app_passkey_by_credential(credential_id: str) -> dict | None:
+    """The row a presented assertion belongs to, with the account it authenticates.
+
+    Joined rather than looked up in two steps because a credential row whose user has since been
+    deleted must not authenticate anything, and an inner join is what makes that unrepresentable."""
+    with get_control_db() as conn:
+        row = conn.execute(
+            """
+            SELECT p.*, u.status AS user_status
+            FROM app_passkey p JOIN user_account u ON u.id = p.user_id
+            WHERE p.credential_id = ?
+            """,
+            (credential_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def add_app_passkey(
+    user_id: str,
+    *,
+    credential_id: str,
+    public_key: str,
+    sign_count: int = 0,
+    transports: str | None = None,
+    label: str | None = None,
+) -> dict:
+    passkey_id = str(uuid.uuid4())
+    with get_control_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_passkey (id, user_id, credential_id, public_key, sign_count, transports, label)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (passkey_id, user_id, credential_id, public_key, sign_count, transports, label or None),
+        )
+        row = conn.execute(
+            "SELECT id, label, transports, created_at, last_used_at FROM app_passkey WHERE id = ?",
+            (passkey_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def record_app_passkey_use(passkey_id: str, sign_count: int):
+    with get_control_db() as conn:
+        conn.execute(
+            "UPDATE app_passkey SET sign_count = ?, last_used_at = datetime('now') WHERE id = ?",
+            (sign_count, passkey_id),
+        )
+
+
+def delete_app_passkey(user_id: str, passkey_id: str) -> bool:
+    """Remove one of this user's passkeys. Scoped to the owner in the statement itself, so a mistaken
+    caller cannot delete somebody else's by id."""
+    with get_control_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM app_passkey WHERE id = ? AND user_id = ?",
+            (passkey_id, user_id),
+        )
+    return cursor.rowcount > 0
+
+
+def app_passkeys_exist() -> bool:
+    """Whether any account has one, which is what decides if the sign-in screen offers the button at
+    all. Deliberately workspace-wide rather than per-user: the screen has to answer this *before*
+    anyone has said who they are."""
+    with get_control_db() as conn:
+        row = conn.execute("SELECT 1 FROM app_passkey LIMIT 1").fetchone()
+    return row is not None
 
 
 def create_user(

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
+import { PASSKEY_SIGN_IN_UNAVAILABLE, assertSignInPasskey, signInAvailability } from '../lib/appPasskey.js'
 import { ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
@@ -68,6 +69,11 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  // Whether this connection can run a ceremony *and* anyone has registered a passkey here. Both halves
+  // come from one public call, so the button is offered only where pressing it could actually work —
+  // a passkey button that explains itself away after the click is worse than no button.
+  const [passkeyParams, setPasskeyParams] = useState(null)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
 
   // TransientTextInput intercepts Enter (preventDefault + commit), so the native "Enter submits the
   // form" never fires. Wire it explicitly: Enter advances to the next field, and Enter on the final
@@ -95,6 +101,39 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
       return
     }
     onAuthenticated(resp.user)
+  }
+
+  useEffect(() => {
+    // Bootstrap has no account to hold a passkey yet, so the call is skipped rather than answered and
+    // ignored. A failure here leaves the button hidden: the password form behind it always works.
+    if (needsBootstrap) return
+    let cancelled = false
+    api.signInPasskeyParams()
+      .then(params => { if (!cancelled) setPasskeyParams(params) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [needsBootstrap])
+
+  async function handlePasskeySignIn() {
+    setPasskeyBusy(true)
+    setError('')
+    try {
+      const { options } = await api.beginPasskeySignIn()
+      const result = await assertSignInPasskey(options)
+      if (!result.ok) {
+        // A dismissed prompt is not a failure worth shouting about, and the password field is right
+        // there: say what happened only when there is something to say.
+        if (result.reason !== 'cancelled') {
+          setError(PASSKEY_SIGN_IN_UNAVAILABLE[result.reason] || 'That passkey could not be used.')
+        }
+        return
+      }
+      applyAuthResponse(await api.completePasskeySignIn(result.credential))
+    } catch (err) {
+      setError(err.message || 'That passkey could not be used.')
+    } finally {
+      setPasskeyBusy(false)
+    }
   }
 
   async function handleSubmit(e) {
@@ -154,6 +193,11 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
     ? (awaitingPasswordChange ? 'Saving password...' : (awaiting2fa ? 'Verifying code...' : (needsBootstrap ? 'Creating account...' : 'Signing in...')))
     : (awaitingPasswordChange ? 'Set password' : (awaiting2fa ? 'Verify code' : (needsBootstrap ? 'Create first account' : 'Sign in')))
   const bootstrapPasswordOk = validatePasswordForPolicy(password, passwordPolicy)
+  // Only on the first step. Once a sign-in is part-way through a forced password change or a second
+  // factor, a passkey is not an alternative route — it is a different sign-in, and offering it there
+  // would abandon the one in progress.
+  const passkeyOffered = !needsBootstrap && !awaiting2fa && !awaitingPasswordChange
+    && signInAvailability(passkeyParams).available
   const formSubmit = awaitingPasswordChange
     ? handlePasswordChangeSubmit
     : (awaiting2fa ? handleTwoFactorSubmit : handleSubmit)
@@ -273,6 +317,23 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
         <button type="submit" disabled={submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)} style={{ ...s.button, marginTop: 18, opacity: (submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)) ? 0.7 : 1 }}>
           {buttonLabel}
         </button>
+        {passkeyOffered && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '14px 0 4px' }}>
+              <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>or</div>
+              <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+            </div>
+            <button
+              type="button"
+              onClick={handlePasskeySignIn}
+              disabled={passkeyBusy}
+              style={{ ...s.button, marginTop: 10, background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)', opacity: passkeyBusy ? 0.7 : 1 }}
+            >
+              {passkeyBusy ? 'Waiting for the passkey...' : 'Sign in with a passkey'}
+            </button>
+          </>
+        )}
         {awaiting2fa && (
           <button
             type="button"

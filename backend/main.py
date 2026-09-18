@@ -229,6 +229,12 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             "/api/auth/change-password",
             "/api/auth/identities",
             "/api/auth/select-identity",
+            # Signing in with a passkey is the ceremony that *establishes* a session, so its two halves
+            # are public exactly as `/login` is. Registering one is not here: a passkey may only be added
+            # from a session that already signed in some other way.
+            "/api/auth/passkey/params",
+            "/api/auth/passkey/login/begin",
+            "/api/auth/passkey/login/complete",
         }
         if request.url.path in public_paths or not request.url.path.startswith("/api/"):
             return await call_next(request)

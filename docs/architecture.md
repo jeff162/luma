@@ -506,6 +506,35 @@ and the bootstrap it triggers makes more calls that may 401 while it works.
   is recommended, and the HTTP/HTTPS transport guidance); they do not by themselves force auth on or off.
   (The retired `multi_tenant` and `household_shared` profiles are gone.)
 
+**Passkey sign-in** is an additional credential on this perimeter, never a replacement for the password.
+The mechanism, end to end:
+
+- `app_passkey` (control DB) holds one row per registered device: the credential id, the authenticator's
+  COSE public key, its sign counter, transports and a label. Nothing in it is secret — the private half
+  never leaves the authenticator — and it is a **separate table from `vault_slot`** on purpose, which also
+  holds passkeys. The two features share no storage, no endpoint and no ceremony (`security-model.md` →
+  *Passkeys and the second factor*).
+- `services/app_passkey.py` wraps `py_webauthn`: it builds the ceremony options, verifies the completed
+  ceremony (origin, RP id, type, signature, user verification, sign-counter regression), and owns the
+  policy around that — user verification is **required** on both ceremonies, and registration asks for a
+  *discoverable* credential so the sign-in screen can offer a passkey before anyone types a username.
+- `POST /auth/passkey/register/begin|complete` needs a signed-in session; `GET /auth/passkey/params` and
+  `POST /auth/passkey/login/begin|complete` are public (listed in the tenant middleware's `public_paths`),
+  because the sign-in screen runs them before a session exists. `DELETE /auth/passkey/{id}` removes one.
+- **The challenge lives in the signed session**, not in a table, which makes it single-use (it is popped
+  on use) and bound to the browser that asked for it — the same rule the vault applies to an unlock and to
+  a proof stamp.
+- A passkey sign-in **completes without the TOTP step**, since the ceremony's required user verification
+  already establishes the second factor. It still honors `must_change_password`.
+- `_passkey_context` (`routers/auth.py`) answers whether a ceremony can run on this connection at all,
+  returning a *stated reason* (`insecure_context`, `ip_address_host`) rather than letting the browser fail
+  opaquely. The accepted origin is any origin on the RP id's host — the port is deliberately unpinned,
+  since the frontend and backend ports are both configurable and the browser already refuses to offer a
+  credential whose RP id does not match the page.
+- Frontend: `lib/appPasskey.js` (ceremony + serialization, separate from `lib/vaultPasskey.js`),
+  `lib/base64url.js` (shared encoders — the vault stores standard base64, sign-in speaks base64url), the
+  sign-in button in `components/AuthScreen.jsx`, and `SignInPasskeysPanel` in `pages/Settings.jsx`.
+
 Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter — a
 passwordless install can still hold vault-encrypted tokens because the vault secret is per-user and
 independent of the app perimeter. See "Token vault & transport security" below for the vault itself.

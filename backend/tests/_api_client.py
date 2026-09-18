@@ -33,7 +33,14 @@ STRONG_PASSPHRASE = "a-strong-vault-passphrase"
 
 
 @contextmanager
-def api_client():
+def api_client(base_url: str | None = None):
+    """The default `http://testserver` is right for everything that does not care what host it is on.
+
+    `base_url` exists for the cases that do: transport detection reads the request's host and scheme, so
+    a passkey ceremony refuses to run on `testserver` over HTTP exactly as it would on a real cleartext
+    LAN address. Passing `http://localhost` puts the harness on the loopback host those tests need, which
+    is also what the desktop build actually serves.
+    """
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
     control_path = str(Path(tmp.name) / "control.db")
@@ -49,7 +56,7 @@ def api_client():
     control_database.init_control_db()
     from backend.main import app
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url=base_url or "http://testserver") as client:
             # Establish a perimeter-off identity so the tenant middleware resolves a session (and routes
             # to the temp data DB). Every data endpoint runs as this selected identity.
             created = client.post("/api/auth/identities", json={"name": "Tester"})

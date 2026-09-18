@@ -25,24 +25,14 @@
 // removes a prompt where it is not.
 
 import { api } from './api.js'
+import { decodeBase64, encodeBase64 } from './base64url.js'
 
 const PRF_UNSUPPORTED = { ok: false, reason: 'no_prf' }
 
-const b64 = {
-  encode(buffer) {
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    for (const byte of bytes) binary += String.fromCharCode(byte)
-    return btoa(binary)
-  },
-  decode(value) {
-    // Accepts base64url as well as standard base64: credential ids come back from the browser in the
-    // former and the server round-trips whatever it was given.
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-    const binary = atob(normalized)
-    return Uint8Array.from(binary, ch => ch.charCodeAt(0))
-  },
-}
+// Standard base64, not base64url: these slots have been stored that way since they shipped, and the
+// server round-trips whatever it was given. See `base64url.js` for why the two passkey features encode
+// differently.
+const b64 = { encode: encodeBase64, decode: decodeBase64 }
 
 export const PASSKEY_UNAVAILABLE = {
   unsupported:      'This browser does not support passkeys.',
