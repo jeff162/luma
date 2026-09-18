@@ -60,6 +60,14 @@ column.
   version is that the user picks which question is being asked. Worth knowing before the phase starts,
   because it argues for surfacing the basis in the UI rather than treating it as a column swap behind
   three unchanged view names.
+- **Reimbursable money is out of cash flow entirely, and this phase is where that gets decided (parked
+  2026-09-18).** The `Reimbursable` group is excluded from totals, so the portion fronted for someone
+  else appears in neither the month it left nor the month it came back — correct for spending, but not
+  the actual movement of money. A second date alone does not change that: the rows drop out by
+  *category*, not by date. The two excluded groups are excluded for different reasons — a transfer never
+  left the household, while fronted money did leave and became a claim — so a cash-basis frame has to
+  separate them, which it can do by the group's `system_key` without adding the second exclusion flag
+  `data-model.md` → *Cash flow* rules out.
 - **Name.** `cash_date`, from the accounting sense of *cash basis* versus *accrual basis*. Recorded with
   its reasoning because the term is jargon that only pays off for a reader who already has that frame —
   `settled_date` or `cleared_date` would carry the same meaning in plainer banking language, and the
