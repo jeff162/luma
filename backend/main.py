@@ -51,7 +51,6 @@ except Exception as error:  # noqa: BLE001 - see below
 
 import base64
 import json
-import secrets
 from contextlib import asynccontextmanager
 
 import itsdangerous
@@ -66,14 +65,15 @@ from backend.app_logging import log_warning
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
-from backend.services import crypto_service
+from backend.services import crypto_service, sign_in_sessions
 from backend.routers import accounts, app_control, connections, auth, categories, currency, diagnostics, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
-# Starlette's own default, passed explicitly below so the session's lifetime is stated here rather than
-# inherited. The re-verify diagnostic has to age a cookie exactly as the middleware does — same value and
-# same signer — or it would answer a different question than the one being asked.
-_SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+# Passed explicitly below so the session's lifetime is stated rather than inherited, and taken from the
+# session registry so the cookie and its row expire together. The re-verify diagnostic has to age a cookie
+# exactly as the middleware does — same value and same signer — or it would answer a different question
+# than the one being asked.
+_SESSION_MAX_AGE_SECONDS = sign_in_sessions.MAX_AGE_SECONDS
 
 
 def _signed_age(raw: str) -> str:
@@ -143,9 +143,9 @@ def _reverified_here(raw: str | None) -> str:
 def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     """Reject a request as unauthenticated, recording *which* check rejected it.
 
-    The response body stays one opaque message on purpose: which of the three checks below fired is
+    The response body stays one opaque message on purpose: which of the checks below fired is
     not a caller's business, and answering it would tell an unauthenticated caller whether a user id
-    exists. The reason is logged instead, because two of the three **clear the session** — a user who
+    exists. The reason is logged instead, because most of them **clear the session** — a user who
     was signed out mid-session otherwise has no trace to point at, and neither does anyone asked why.
 
     Whether the request *carried* a session cookie is logged alongside it, because the reason alone
@@ -190,31 +190,29 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
 
-def _vault_scope_for(request: Request) -> str | None:
-    """The browser session's vault scope: minted the first time a session carries an identity, and gone
-    whenever the session is cleared, so selecting an identity, signing in and signing out each start a
-    scope no earlier unlock is filed under. See `crypto_service` -> the unlock cache."""
-    session = request.scope.get("session")
-    if session is None or not session.get("user_id"):
-        return None
-    scope = session.get("vault_scope")
-    if not scope:
-        scope = secrets.token_urlsafe(32)
-        session["vault_scope"] = scope
-    return scope
-
-
 class TenantSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        session = request.scope.get("session")
+        # A valid signature is not enough: the session also has to still exist (`sign_in_sessions`). Checked
+        # before anything reads the session — the public paths included, since `/api/auth/status` reports
+        # the signed-in user from it — and only on API paths, which are the only ones that read it.
+        ended = bool(
+            session is not None
+            and session.get("user_id")
+            and request.url.path.startswith("/api/")
+            and not sign_in_sessions.is_live(session)
+        )
+        if ended:
+            session.clear()
         # Bound before the public-path check, because `/api/auth/status` is public and reports whether this
-        # session is unlocked.
-        vault_scope = crypto_service.set_vault_scope(_vault_scope_for(request))
+        # session is unlocked. The session id is the vault scope: see `crypto_service` -> the unlock cache.
+        vault_scope = crypto_service.set_vault_scope(sign_in_sessions.session_id(session))
         try:
-            return await self._resolve_tenant(request, call_next)
+            return await self._resolve_tenant(request, call_next, ended)
         finally:
             crypto_service.reset_vault_scope(vault_scope)
 
-    async def _resolve_tenant(self, request: Request, call_next):
+    async def _resolve_tenant(self, request: Request, call_next, ended: bool):
         # Tenant selection is request-scoped: the control DB authenticates the user, then
         # the app DB context is switched for just this request and always reset afterward.
         public_paths = {
@@ -250,9 +248,11 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 
         user_id = session.get("user_id")
         if not user_id:
+            if ended:
+                return _not_authenticated("the session was signed out, revoked or has expired", request)
             return _not_authenticated("no user_id on the session", request)
         if auth_required() and session.get("pwless"):
-            session.clear()
+            sign_in_sessions.end(session)
             return _not_authenticated(
                 "passwordless session, but the perimeter is on", request
             )

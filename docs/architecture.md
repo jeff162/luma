@@ -491,8 +491,22 @@ and the bootstrap it triggers makes more calls that may 401 while it works.
 - **Identity is carried by the session in both modes.** The tenant middleware (`backend/main.py`) reads a
   single `session['user_id']` regardless of mode; a perimeter-off session is stamped `pwless` (identity
   chosen via `POST /auth/select-identity`, no password), and enabling sign-in invalidates any `pwless`
-  session on its next request (Starlette sessions are stateless signed cookies, so this per-request check
-  *is* the invalidation). There is no per-request identity header.
+  session on its next request. There is no per-request identity header.
+- **A session is also a row.** Every sign-in path calls `sign_in_sessions.start`, which records a
+  `sign_in_session` row in the control DB (keyed by a SHA-256 of the id) and puts the id in the cookie
+  as `sid`. Before anything reads the session on an API path, the middleware checks the row still exists
+  and clears the session if not, so a signed cookie with no live row is signed out. Logging out deletes the
+  browser's row; setting an account's password or disabling it deletes the account's rows
+  (`control_database.update_user`), keeping only the session that made the change when it is the account's
+  own; idle rows are pruned when a session starts. The same id keys the vault's unlock cache
+  (`security-model.md` → *Identity and the network perimeter*).
+- **Typed secrets are limited against guessing** (`services/attempt_limiter.py`): per account, attempts at
+  least two seconds apart and a five-minute pause after five wrong secrets in a row, answered with `429
+  too_many_attempts` and `Retry-After`. It covers `/auth/login`, `/auth/2fa/verify`, `/auth/2fa/disable`,
+  `/auth/2fa/recovery-codes`, `/auth/vault/unlock`, `/auth/vault/change-passphrase` and
+  `/auth/vault/recover`. A pause at `/auth/2fa/verify` also drops the pending challenge and says so
+  (`restart_sign_in`), which the sign-in screen answers by returning to the password step. What is left
+  out, and why, is in `security-model.md` → *Identity and the network perimeter*.
 - **Enable and disable are flag flips.** *Enable* claims one existing identity as admin (sets its password),
   marks every other passwordless identity `must_change_password` (claimable at next login), and flips the
   flag (`enable_auth_with_admin`). *Disable* (admin-gated) just flips the flag back — identities and their
@@ -575,7 +589,8 @@ and every alternative turned down — is in `security-model.md` → *Secret cust
   wrong passphrase does, so the slot is self-verifying and no WebAuthn library is needed. WebAuthn's own
   two preconditions — a secure context, and an RP id that is a domain rather than an IP address — are
   detected server-side and returned as stated reasons, since the answer to both is "use a passphrase here".
-- **Unlocking** holds the DEK in a **server-side, in-process cache keyed by `user_id` with an idle TTL** —
+- **Unlocking** holds the DEK in a **server-side, in-process cache keyed by `user_id` and the sign-in
+  session, with an idle TTL** —
   *never* the signed session cookie (which serializes to the browser). Dropped on logout and on restart
   (re-unlock ⇒ "first sync of the day"). Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,
   unlock,lock}`, `/auth/vault/passkey/{params,register,unlock,set-passphrase}`, `/auth/vault/reenrol`;

@@ -3369,9 +3369,11 @@ export const HELP_TOPICS = [
           are the way back in, so save these in a password manager or somewhere equally safe.
         </p>
         <p>
-          Two-factor is optional and mainly matters if the instance is reachable beyond the trusted
-          network. On a trusted home network it adds little and leaving it turned off is
-          reasonable.
+          Two-factor is optional. It matters most when Luma runs as a server that other devices
+          sign in to: there, signing in is all that stands between someone who can reach the server
+          and the data on it. When Luma runs on the computer it is used from, anyone who can use that
+          computer can read the database files directly, so sign-in protects use of the application
+          rather than the data, and leaving two-factor off is reasonable.
         </p>
       </>
     ),

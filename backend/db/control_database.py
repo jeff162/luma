@@ -10,6 +10,7 @@ preference profiles or secret material belong to each user.
 """
 
 import base64
+import functools
 import hashlib
 import hmac
 import os
@@ -77,6 +78,20 @@ def _hash_password(password: str) -> str:
     )
 
 
+@functools.cache
+def _decoy_password_hash() -> str:
+    return _hash_password(os.urandom(16).hex())
+
+
+def spend_password_check(password: str) -> None:
+    """Take as long as checking a real password, for a sign-in refused without one to check.
+
+    A refusal that came back at once for a username naming no account, and only after the key
+    stretching for one that does, would tell a caller which usernames are real. Built on first use rather
+    than at import, where it would add the stretching's cost to every start."""
+    verify_password(password, _decoy_password_hash())
+
+
 def verify_password(password: str, password_hash: str) -> bool:
     try:
         algo, iterations, salt_b64, digest_b64 = password_hash.split("$", 3)
@@ -138,15 +153,41 @@ def _totp_code(secret: str, for_time: int | None = None) -> str:
     return str(binary % 1_000_000).zfill(6)
 
 
-def verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
+def _matching_totp_step(secret: str, code: str, window: int = 1) -> int | None:
+    """The time step `code` belongs to, or None. `window` steps either side absorb clock drift between
+    the server and the authenticator, which is why three codes are accepted at any moment."""
     normalized = "".join(ch for ch in code if ch.isdigit())
     if len(normalized) != 6:
-        return False
+        return None
     now = int(time.time())
     for offset in range(-window, window + 1):
-        if hmac.compare_digest(_totp_code(secret, now + offset * TOTP_PERIOD), normalized):
-            return True
-    return False
+        at = now + offset * TOTP_PERIOD
+        if hmac.compare_digest(_totp_code(secret, at), normalized):
+            return at // TOTP_PERIOD
+    return None
+
+
+def verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
+    return _matching_totp_step(secret, code, window) is not None
+
+
+def consume_totp_code(user_id: str, secret: str, code: str) -> bool:
+    """Accept an authenticator code once. A code stays valid for up to a minute and a half, so one read off
+    a screen or out of a log could otherwise be replayed inside that time; accepting only steps later than
+    the last one used closes that. The conditional update is the check, so two requests racing with the
+    same code cannot both pass."""
+    step = _matching_totp_step(secret, code)
+    if step is None:
+        return False
+    with get_control_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE user_account SET totp_last_step = ?
+            WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)
+            """,
+            (step, user_id, step),
+        )
+    return cursor.rowcount == 1
 
 
 def build_totp_uri(username: str, secret: str, issuer: str | None = None) -> str:
@@ -258,6 +299,24 @@ def init_control_db():
                 exported_at             TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- One row per signed-in browser, so the server can end a session rather than only ask the
+            -- browser to forget it. The session cookie is signed, not stored, and until this table a copy
+            -- of it stayed valid for its whole lifetime whatever happened to the original: signing out,
+            -- changing the password or disabling the account ended nothing. The cookie now names a row,
+            -- and a cookie whose row is gone is signed out (`services/sign_in_sessions.py`).
+            --
+            -- `id_digest` is a SHA-256 of the id the cookie carries, never the id itself. Unless
+            -- `SESSION_SECRET` is set, the session signing secret is stored in this same database, so a
+            -- copy of the file lets anyone sign a cookie; what it must not also hand them is an id that a
+            -- row still accepts.
+            CREATE TABLE IF NOT EXISTS sign_in_session (
+                id_digest    TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_sign_in_session_user ON sign_in_session(user_id);
+
             -- Retired with the vault rework: the old `user_secret_material` held a per-user DEK wrapped
             -- under an app master key (the `server_managed` model), which never delivered
             -- leaked-DB != leaked-tokens. Its ciphertext is unrecoverable under the new model by design
@@ -295,6 +354,13 @@ def init_control_db():
         try:
             conn.execute(
                 "ALTER TABLE user_account ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+        # The time step of the last authenticator code accepted, so the same code cannot be used twice.
+        try:
+            conn.execute(
+                "ALTER TABLE user_account ADD COLUMN totp_last_step INTEGER"
             )
         except Exception:
             pass
@@ -845,6 +911,55 @@ def recovery_code_count(user_id: str) -> int:
             "SELECT COUNT(*) FROM user_recovery_code WHERE user_id = ? AND used_at IS NULL",
             (user_id,),
         ).fetchone()[0]
+
+
+# --- Sign-in sessions (see the `sign_in_session` table and `services/sign_in_sessions.py`) ----------
+#
+# Thin storage: the ids, their digests and the lifetime policy belong to the service.
+
+def create_sign_in_session(id_digest: str, user_id: str, *, prune_idle_seconds: int) -> None:
+    """Record a new session, first dropping any idle past `prune_idle_seconds` — a browser that was
+    closed and never came back never signs out, so this is where its row goes instead."""
+    with get_control_db() as conn:
+        conn.execute(
+            "DELETE FROM sign_in_session WHERE last_seen_at < datetime('now', ?)",
+            (f"-{int(prune_idle_seconds)} seconds",),
+        )
+        conn.execute(
+            "INSERT INTO sign_in_session (id_digest, user_id) VALUES (?, ?)",
+            (id_digest, user_id),
+        )
+
+
+def sign_in_session_is_live(
+    id_digest: str, user_id: str, *, max_idle_seconds: int, touch_after_seconds: int,
+) -> bool:
+    """Whether the session exists, belongs to `user_id` and has been used within `max_idle_seconds`.
+
+    Its last-seen time is written only once it is `touch_after_seconds` old, so an ordinary request
+    reads here and does not write."""
+    with get_control_db() as conn:
+        row = conn.execute(
+            """
+            SELECT last_seen_at < datetime('now', ?) AS due
+            FROM sign_in_session
+            WHERE id_digest = ? AND user_id = ? AND last_seen_at >= datetime('now', ?)
+            """,
+            (f"-{int(touch_after_seconds)} seconds", id_digest, user_id, f"-{int(max_idle_seconds)} seconds"),
+        ).fetchone()
+        if not row:
+            return False
+        if row["due"]:
+            conn.execute(
+                "UPDATE sign_in_session SET last_seen_at = datetime('now') WHERE id_digest = ?",
+                (id_digest,),
+            )
+    return True
+
+
+def delete_sign_in_session(id_digest: str) -> None:
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM sign_in_session WHERE id_digest = ?", (id_digest,))
 
 
 # --- Vault key slots (see the `vault_slot` table and `crypto_service`) ---------------------------
@@ -1483,13 +1598,20 @@ def update_user(
     role: str | None = None,
     status: str | None = None,
     must_change_password: bool | None = None,
+    keep_sign_in_session: str | None = None,
 ) -> dict:
+    """Edit an account. **Setting a password or disabling the account signs it out everywhere**, in the
+    same transaction as the change: either is how somebody else's access to the account is ended, and a
+    session they already hold would otherwise outlive it. `keep_sign_in_session` is the digest of the
+    session making the change, when it is the account's own, so changing a password does not sign out
+    the browser that changed it."""
     current = get_user_by_id(user_id)
     if not current:
         raise ValueError("user not found")
 
     fields = []
     params = []
+    ends_sessions = False
 
     with get_control_db() as conn:
         if username is not None:
@@ -1516,6 +1638,7 @@ def update_user(
         # unset sentinel (account becomes claimable) and implies must_change_password; a real password
         # is validated, hashed, and clears the flag unless the caller forces it (temp-password reset).
         if password is not None:
+            ends_sessions = True
             if password == "":
                 fields.append("password_hash = ?")
                 params.append(UNSET_PASSWORD_SENTINEL)
@@ -1554,6 +1677,7 @@ def update_user(
                 raise ValueError("at least one active admin is required")
             fields.append("status = ?")
             params.append(normalized_status)
+            ends_sessions = ends_sessions or normalized_status != "active"
 
         if not fields:
             return current
@@ -1563,6 +1687,11 @@ def update_user(
             f"UPDATE user_account SET {', '.join(fields)} WHERE id = ?",
             params,
         )
+        if ends_sessions:
+            conn.execute(
+                "DELETE FROM sign_in_session WHERE user_id = ? AND id_digest IS NOT ?",
+                (user_id, keep_sign_in_session),
+            )
 
     return get_user_by_id(user_id)
 
@@ -1606,7 +1735,7 @@ def begin_totp_setup(user_id: str) -> dict:
 def enable_totp(user_id: str, secret: str):
     with get_control_db() as conn:
         conn.execute(
-            "UPDATE user_account SET totp_secret = ?, totp_enabled = 1 WHERE id = ?",
+            "UPDATE user_account SET totp_secret = ?, totp_enabled = 1, totp_last_step = NULL WHERE id = ?",
             (secret, user_id),
         )
 
@@ -1614,7 +1743,7 @@ def enable_totp(user_id: str, secret: str):
 def disable_totp(user_id: str):
     with get_control_db() as conn:
         conn.execute(
-            "UPDATE user_account SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?",
+            "UPDATE user_account SET totp_secret = NULL, totp_enabled = 0, totp_last_step = NULL WHERE id = ?",
             (user_id,),
         )
         conn.execute(

@@ -18,11 +18,12 @@ import json
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
 from backend.db import control_database, database
-from backend.services import crypto_service
+from backend.services import attempt_limiter, crypto_service, sign_in_sessions
 
 # A vault passphrase that actually clears the floor `crypto_service` enforces on every slot. Shared so a
 # test setting one up says what it means rather than restating the policy — and because the literal it
@@ -91,11 +92,34 @@ def in_browser_session(client):
             payload = json.loads(base64.b64decode(value.split(".")[0]))
         except (ValueError, binascii.Error):
             continue
-        if isinstance(payload, dict) and payload.get("vault_scope"):
-            scope = payload["vault_scope"]
+        if isinstance(payload, dict) and payload.get(sign_in_sessions.SESSION_ID_KEY):
+            scope = payload[sign_in_sessions.SESSION_ID_KEY]
             break
     token = crypto_service.set_vault_scope(scope)
     try:
         yield
     finally:
         crypto_service.reset_vault_scope(token)
+
+
+class LimiterClock:
+    """Stands in for the attempt limiter's clock (`limiter_clock`)."""
+
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@contextmanager
+def limiter_clock():
+    """Let a test step past the attempt limiter's spacing or a lockout without sleeping. Two attempts at
+    one secret inside `MIN_SPACING_SECONDS` of each other are refused, so a test that tries a wrong secret
+    and then the right one has to move time between them, exactly as a person typing would."""
+    clock = LimiterClock()
+    with mock.patch.object(attempt_limiter, "_now", clock):
+        yield clock

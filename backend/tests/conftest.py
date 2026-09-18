@@ -218,3 +218,17 @@ from backend.services.providers import simplefin as _simplefin  # noqa: E402  (a
 
 SHIPPED_SIMPLEFIN_REQUEST_INTERVAL_SECONDS = _simplefin._MIN_REQUEST_INTERVAL_SECONDS
 _simplefin._MIN_REQUEST_INTERVAL_SECONDS = 0.0
+
+
+# The sign-in attempt limiter keeps its counts in process memory, and the suite shares one process across
+# many tests that sign in as the same few names. Each test starts from a clean slate, as a fresh server
+# would, so no test inherits another's failures or lands inside another's two-second spacing.
+import pytest  # noqa: E402
+
+from backend.services import attempt_limiter as _attempt_limiter  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_attempt_limiter():
+    _attempt_limiter.reset()
+    yield

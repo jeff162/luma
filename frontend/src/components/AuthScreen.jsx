@@ -191,6 +191,13 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
       const resp = await api.verifyTwoFactor(twoFactorCode)
       onAuthenticated(resp.user)
     } catch (err) {
+      // Too many wrong codes drop the challenge server-side, so the only way on is the password again.
+      // Staying on the code step would answer every further code with "no pending challenge".
+      if (err.detail?.restart_sign_in) {
+        setAwaiting2fa(false)
+        setTwoFactorCode('')
+        setPassword('')
+      }
       setError(err.message || 'Request failed')
     } finally {
       setSubmitting(false)

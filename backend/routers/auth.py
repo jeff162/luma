@@ -9,6 +9,7 @@ This router serves one frontend in two modes:
 """
 
 import json
+import math
 import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
@@ -20,6 +21,7 @@ from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
+    consume_totp_code,
     delete_app_passkey,
     credentials_exports_any,
     credentials_exports_for_fingerprint,
@@ -51,6 +53,7 @@ from backend.db.control_database import (
     replace_recovery_codes,
     set_security_profile,
     set_password_policy,
+    spend_password_check,
     update_user,
     verify_totp_code,
 )
@@ -64,7 +67,7 @@ from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner,
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
-from backend.services import app_passkey, crypto_service
+from backend.services import app_passkey, attempt_limiter, crypto_service, sign_in_sessions
 from backend.services.exposure_response import SyncInProgress, app_secrets_to_rotate, reissue_all_credentials
 from backend.services.vault_reset import revoke_all_credentials, unfinished
 from backend import transport
@@ -236,6 +239,50 @@ def _require_current_user(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user
+
+
+# Which secret an attempt is at (`attempt_limiter`). Kept apart so that wrong guesses at one kind of secret
+# never pause another: a mistyped vault passphrase says nothing about the sign-in password.
+_SIGN_IN = "sign_in"
+_TWO_FACTOR = "two_factor"
+_VAULT = "vault"
+
+
+def _wait_phrase(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    minutes = math.ceil(seconds / 60)
+    return f"{minutes} minute{'' if minutes == 1 else 's'}"
+
+
+def _too_many_attempts(retry_after: int, *, restart_sign_in: bool = False) -> HTTPException:
+    """The refusal for a limited attempt: 429, with the wait both as `Retry-After` and in the body.
+
+    `restart_sign_in` tells the sign-in screen that the two-factor challenge was dropped, so the next step
+    is the password rather than another code."""
+    detail = {
+        "code": "too_many_attempts",
+        "message": f"Too many attempts. Try again in {_wait_phrase(retry_after)}.",
+        "retry_after": retry_after,
+    }
+    if restart_sign_in:
+        detail["restart_sign_in"] = True
+    return HTTPException(status_code=429, detail=detail, headers={"Retry-After": str(retry_after)})
+
+
+def _begin_attempt(scope: str, subject: str) -> None:
+    try:
+        attempt_limiter.begin(scope, subject)
+    except attempt_limiter.TooManyAttempts as exc:
+        raise _too_many_attempts(exc.retry_after)
+
+
+def _wrong_secret(scope: str, subject: str, refusal: HTTPException) -> HTTPException:
+    """Count a wrong secret and return what to raise: `refusal`, or the lockout when this was the failure
+    that started one — said at once, rather than left for the next attempt to discover."""
+    if attempt_limiter.failed(scope, subject):
+        return _too_many_attempts(attempt_limiter.LOCKOUT_SECONDS)
+    return refusal
 
 
 def _require_local_mode():
@@ -432,9 +479,7 @@ def select_identity(body: SelectIdentityRequest, request: Request):
     user = get_user_by_id(body.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Identity not found")
-    request.session.clear()
-    request.session["user_id"] = user["id"]
-    request.session["pwless"] = True
+    sign_in_sessions.start(request.session, user["id"], pwless=True)
     return {"user": _session_payload(user)}
 
 
@@ -606,8 +651,7 @@ def enable_auth(body: EnableAuthRequest, request: Request):
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        request.session.clear()
-        request.session["user_id"] = admin["id"]
+        sign_in_sessions.start(request.session, admin["id"])
         return _auth_status_payload(request)
     # No claim: enable on an empty workspace (bootstrap the first admin at the sign-in screen). If any
     # passwordless identities happen to exist, mark them claimable so enabling can never lock anyone out.
@@ -647,8 +691,7 @@ def bootstrap(body: BootstrapRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    request.session.clear()
-    request.session["user_id"] = user["id"]
+    sign_in_sessions.start(request.session, user["id"])
     return {"user": _session_payload(user)}
 
 
@@ -658,30 +701,38 @@ def login(body: LoginRequest, request: Request):
         # Perimeter off: there is no password login — identities are chosen via /auth/select-identity.
         raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
 
+    # Limited by the name as typed, before anything is looked up, so a name with no account behind it is
+    # limited exactly like one with an account — a difference would say which names are real.
+    subject = body.username.strip().lower()
+    _begin_attempt(_SIGN_IN, subject)
+
     # Auth mode. A password-set account verifies normally; an unset (sentinel) account is claimable —
     # login accepts it without a password *only* when it is flagged must_change_password, then routes
     # straight into the forced password-set. Either way a must_change_password account cannot complete
     # login until it sets a new password.
     account = get_login_account(body.username)
-    if not account or account["status"] != "active":
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    if account["password_set"]:
+    usable = bool(account) and account["status"] == "active"
+    user = None
+    if usable and account["password_set"]:
         user = authenticate_user(body.username, body.password)
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
-    else:
-        if not account["must_change_password"]:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
+    elif usable and account["must_change_password"]:
         user = get_user_by_id(account["id"])
+    else:
+        spend_password_check(body.password)
+    if not user:
+        raise _wrong_secret(
+            _SIGN_IN, subject, HTTPException(status_code=401, detail="Invalid username or password"),
+        )
+    attempt_limiter.succeeded(_SIGN_IN, subject)
 
-    request.session.clear()
+    sign_in_sessions.end(request.session)
     if user.get("must_change_password"):
         request.session["pending_password_change_user_id"] = user["id"]
         return {"requires_password_change": True}
     if user.get("totp_enabled"):
         request.session["pending_user_id"] = user["id"]
         return {"requires_2fa": True, "recovery_code_count": recovery_code_count(user["id"])}
-    request.session["user_id"] = user["id"]
+    sign_in_sessions.start(request.session, user["id"])
     return {"user": _session_payload(user)}
 
 
@@ -707,7 +758,7 @@ def change_password(body: PasswordChangeRequest, request: Request):
     if updated.get("totp_enabled"):
         request.session["pending_user_id"] = updated["id"]
         return {"requires_2fa": True, "recovery_code_count": recovery_code_count(updated["id"])}
-    request.session["user_id"] = updated["id"]
+    sign_in_sessions.start(request.session, updated["id"])
     return {"user": _session_payload(updated)}
 
 
@@ -719,7 +770,9 @@ def logout(request: Request):
         user_id = session.get("user_id")
         if user_id:
             crypto_service.lock(user_id)
-        session.clear()
+        # Ends the session on the server as well as in this browser, so a copy of the cookie taken
+        # earlier stops working too.
+        sign_in_sessions.end(session)
     return {"ok": True}
 
 
@@ -734,14 +787,25 @@ def verify_2fa(body: TotpVerifyRequest, request: Request):
     if not user or not user.get("totp_enabled") or not user.get("totp_secret"):
         request.session.clear()
         raise HTTPException(status_code=400, detail="Two-factor authentication is not configured")
+    # A lockout also drops the challenge, so continuing means proving the password again — which is
+    # limited on its own, and is what keeps a known password from buying unlimited guesses at the code.
+    try:
+        attempt_limiter.begin(_TWO_FACTOR, user["id"])
+    except attempt_limiter.TooManyAttempts as exc:
+        if exc.locked:
+            request.session.clear()
+        raise _too_many_attempts(exc.retry_after, restart_sign_in=exc.locked)
     if not (
-        verify_totp_code(user["totp_secret"], body.code)
+        consume_totp_code(user["id"], user["totp_secret"], body.code)
         or consume_recovery_code(user["id"], body.code)
     ):
+        if attempt_limiter.failed(_TWO_FACTOR, user["id"]):
+            request.session.clear()
+            raise _too_many_attempts(attempt_limiter.LOCKOUT_SECONDS, restart_sign_in=True)
         raise HTTPException(status_code=401, detail="Invalid authentication code")
+    attempt_limiter.succeeded(_TWO_FACTOR, user["id"])
 
-    request.session.clear()
-    request.session["user_id"] = user["id"]
+    sign_in_sessions.start(request.session, user["id"])
     return {"user": _session_payload(user)}
 
 
@@ -780,6 +844,17 @@ def confirm_2fa_setup(body: TotpConfirmRequest, request: Request):
     return {"user": _session_payload(updated), "recovery_codes": recovery_codes}
 
 
+def _require_authenticator_code(user: dict, code: str) -> None:
+    """The authenticator check for a signed-in change to two-factor itself, limited like the sign-in one:
+    a stolen session must not be able to guess its way to turning the second factor off."""
+    _begin_attempt(_TWO_FACTOR, user["id"])
+    if not consume_totp_code(user["id"], user["totp_secret"], code):
+        raise _wrong_secret(
+            _TWO_FACTOR, user["id"], HTTPException(status_code=401, detail="Invalid authentication code"),
+        )
+    attempt_limiter.succeeded(_TWO_FACTOR, user["id"])
+
+
 @router.post("/2fa/disable")
 def turn_off_2fa(body: TotpVerifyRequest, request: Request):
     user = getattr(request.state, "user", None)
@@ -787,8 +862,7 @@ def turn_off_2fa(body: TotpVerifyRequest, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not user.get("totp_enabled") or not user.get("totp_secret"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
-    if not verify_totp_code(user["totp_secret"], body.code):
-        raise HTTPException(status_code=401, detail="Invalid authentication code")
+    _require_authenticator_code(user, body.code)
     disable_totp(user["id"])
     updated = get_user_by_id(user["id"])
     request.state.user = updated
@@ -802,8 +876,7 @@ def regenerate_recovery_codes(body: TotpVerifyRequest, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not user.get("totp_enabled") or not user.get("totp_secret"):
         raise HTTPException(status_code=400, detail="Two-factor authentication is not enabled")
-    if not verify_totp_code(user["totp_secret"], body.code):
-        raise HTTPException(status_code=401, detail="Invalid authentication code")
+    _require_authenticator_code(user, body.code)
     recovery_codes = replace_recovery_codes(user["id"])
     updated = get_user_by_id(user["id"])
     request.state.user = updated
@@ -949,14 +1022,14 @@ def passkey_login_complete(body: PasskeyLoginRequest, request: Request):
     user = get_user_by_id(stored["user_id"])
     if not user:
         raise HTTPException(status_code=401, detail="That passkey is not registered here")
-    request.session.clear()
+    sign_in_sessions.end(request.session)
     if user.get("must_change_password"):
         # The same gate a password sign-in hits. A passkey proves who is at the browser; it says nothing
         # about an account whose password an admin has just reset, and letting one route around the
         # forced change would leave the account holding an unusable sentinel indefinitely.
         request.session["pending_password_change_user_id"] = user["id"]
         return {"requires_password_change": True}
-    request.session["user_id"] = user["id"]
+    sign_in_sessions.start(request.session, user["id"])
     return {"user": _session_payload(user)}
 
 
@@ -1041,29 +1114,39 @@ def vault_credentials_backups(request: Request):
 @router.post("/vault/change-passphrase")
 def vault_change_passphrase(body: VaultChangePassphraseRequest, request: Request):
     user = _require_current_user(request)
+    _begin_attempt(_VAULT, user["id"])
     try:
         crypto_service.change_passphrase(user["id"], body.old_passphrase, body.new_passphrase)
     except crypto_service.VaultLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
+    except crypto_service.IncorrectSecret as exc:
+        raise _wrong_secret(_VAULT, user["id"], HTTPException(status_code=400, detail=str(exc)))
     except crypto_service.WeakPassphrase as exc:
         raise _weak_passphrase_error(exc)
     except ValueError as exc:
-        # Wrong old passphrase, or an empty new one.
+        # An empty new passphrase.
         raise HTTPException(status_code=400, detail=str(exc))
+    attempt_limiter.succeeded(_VAULT, user["id"])
     return {"user": _session_payload(user)}
 
 
 @router.post("/vault/unlock")
 def vault_unlock(body: VaultPassphraseRequest, request: Request):
     user = _require_current_user(request)
+    _begin_attempt(_VAULT, user["id"])
     try:
         crypto_service.unlock(user["id"], body.passphrase)
     except crypto_service.VaultAccessPending as exc:
+        # The passphrase was right; there is simply nothing granted to it yet.
+        attempt_limiter.succeeded(_VAULT, user["id"])
         raise _access_pending_error(exc)
     except crypto_service.VaultLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
+    except crypto_service.IncorrectSecret as exc:
+        raise _wrong_secret(_VAULT, user["id"], HTTPException(status_code=400, detail=str(exc)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    attempt_limiter.succeeded(_VAULT, user["id"])
     return {"user": _session_payload(user)}
 
 
@@ -1115,6 +1198,7 @@ def vault_recover(body: VaultRecoverRequest, request: Request):
     comes back, so forgetting the replacement is not a return to the dead end.
     """
     user = _require_current_user(request)
+    _begin_attempt(_VAULT, user["id"])
     try:
         code = crypto_service.recover_with_code(user["id"], body.code, body.new_passphrase)
     except crypto_service.VaultLocked as exc:
@@ -1126,14 +1210,17 @@ def vault_recover(body: VaultRecoverRequest, request: Request):
     # carrying the two numbers the dialog gates on would never be sent.
     except crypto_service.WeakPassphrase as exc:
         raise _weak_passphrase_error(exc)
-    except ValueError:
-        # A wrong code is the only ValueError `_open_slot` raises, and it is deliberately not echoed back
-        # with its internal wording ("incorrect passphrase"), which would send the user looking for the
-        # wrong field.
-        raise HTTPException(status_code=400, detail={
+    except crypto_service.IncorrectSecret:
+        # Deliberately not echoed back with its internal wording ("incorrect passphrase"), which would
+        # send the user looking for the wrong field.
+        raise _wrong_secret(_VAULT, user["id"], HTTPException(status_code=400, detail={
             "code":    "bad_recovery_code",
             "message": "That recovery code was not recognized.",
-        })
+        }))
+    except ValueError as exc:
+        # An empty new passphrase.
+        raise HTTPException(status_code=400, detail=str(exc))
+    attempt_limiter.succeeded(_VAULT, user["id"])
     return {"recovery_code": code, "user": _session_payload(user)}
 
 
@@ -1592,6 +1679,9 @@ def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
             role=body.role,
             status=body.status,
             must_change_password=body.must_change_password,
+            # A password change signs the account out everywhere; an admin changing their own keeps the
+            # session they changed it from.
+            keep_sign_in_session=sign_in_sessions.digest_of(request.session) if admin["id"] == user_id else None,
         )
     except ValueError as exc:
         detail = str(exc)

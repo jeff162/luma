@@ -161,9 +161,9 @@ shared data is incoherent, so the optionality lives one level up.
 identity takes no credential while sign-in protection is off, so an unlock filed under the user alone was
 inherited by anyone who picked that name on another browser while its owner was unlocked — and inside the
 five-minute proof window, with it the authority to add a passkey of their own to the owner's slot, which is
-durable access. The unlock cache and the proof stamp are therefore keyed by user *and* a random scope token
-kept in the signed session cookie (`crypto_service` → the unlock cache), and selecting an identity, signing
-in and signing out each start a new token. Each browser unlocks for itself and tabs share. Signing out or
+durable access. The unlock cache and the proof stamp are therefore keyed by user *and* the browser's
+sign-in session id (`crypto_service` → the unlock cache; the id is described below), and selecting an
+identity, signing in and signing out each start a new one. Each browser unlocks for itself and tabs share. Signing out or
 locking affects only that browser; revoking someone's access, or re-enrolling them, ends it in every
 session; a key rotation locks every session but the one that ran it, since the key they hold opens nothing
 afterwards. The same keying applies with sign-in on, where sharing would let a stolen app password reach the
@@ -172,6 +172,68 @@ vault while its owner was unlocked elsewhere.
 A trusting household can therefore be entirely passwordless and still need vault grants, so **no design
 may assume a member has an app password.** The vault is orthogonal to the perimeter in both directions: a
 passwordless install can hold vault-encrypted credentials, and an authenticated one can have no vault.
+
+**A session is a row the server can delete, not only a cookie it can verify.** The cookie is signed, and
+a signature says only that the server once issued it; with nothing stored, a copy taken earlier stayed
+good for the cookie's whole two-week life, whatever its owner did. Each sign-in now records a
+`sign_in_session` row in the control DB and puts its id in the cookie, and a cookie whose row is gone is
+signed out (`services/sign_in_sessions.py`). Signing out deletes the browser's row, so it ends every copy of
+the cookie at once. Setting an account's password or disabling it deletes all of that account's rows in
+the same transaction as the change (`control_database.update_user`), because both are how somebody else's
+access to an account is ended. The one exception is the session making the change when it is the account's
+own, so changing a password does not sign out the browser it was changed from. **The row holds a SHA-256 of the id,
+never the id.** Unless `SESSION_SECRET` is set, the signing secret is stored in the same database, so a
+copy of the file lets anyone sign a cookie; the digest is what stops that copy also supplying an id a row
+would accept. A signed cookie that names a user and no live row — one forged with a leaked secret, or one
+issued before sessions were recorded — is refused like any other. **Every sign-in path goes through
+`sign_in_sessions.start`**, and one that set `user_id` on the session directly would produce exactly that
+refused cookie.
+
+**Every secret a person types is limited against guessing** (`services/attempt_limiter.py`). The
+perimeter is optional, and a networked deployment is where it has to hold up. A six-digit authenticator
+code is strong only because an attacker gets a handful of tries: three codes are accepted at any moment,
+and each blind guess lands with about a 3-in-a-million chance whichever code is current, so rotation does
+nothing to an unlimited stream of guesses. The rules are per account. Attempts are at least two seconds
+apart, a spacing claimed before the secret is checked, so a burst of simultaneous requests is refused
+rather than tried. Five wrong secrets in a row pause the account for five minutes, and the pause refuses
+the *right* secret too, since answering it differently would tell a guesser which one it was. Together
+they hold a guesser to about one attempt a minute. **A limited attempt is refused at once with the wait
+(429, `Retry-After`), never held open**, because a held request occupies a server thread and enough of
+them would lock everyone out. Counts live in process memory, which a restart clears and an attacker
+cannot trigger.
+
+The limit covers:
+
+- **Sign-in passwords**, keyed by the name as typed, so a name with no account is limited exactly like a
+  real one. A refusal with no password to check spends the same key stretching a real check would
+  (`control_database.spend_password_check`), so the response time does not say which names are real
+  either.
+- **Authenticator and 2FA recovery codes**, at sign-in and on the signed-in changes to two-factor itself
+  (turning it off, replacing the recovery codes), so a stolen session cannot guess its way to switching
+  the second factor off. A pause at sign-in also drops the pending challenge, so continuing needs the
+  password again, and the pause is the account's, so proving the password again does not restart the
+  count. A code is accepted **once**: the step it belongs to is recorded, and a code from that step or an
+  earlier one is refused, which closes the minute and a half in which a code read off a screen could be
+  replayed.
+- **The vault passphrase and the vault recovery code**, on unlock, on a passphrase change (the old one is
+  checked) and on recovery. The main threat to a vault passphrase is still an offline attack on a copied
+  control DB, which no online limit reaches; this closes the online route for a session left open.
+
+Left out, each for a reason:
+
+- **Passkeys**, for sign-in and for the vault. Neither can be guessed: sign-in verifies a signature, and a
+  vault passkey presents a 32-byte PRF output. Sign-in by passkey also stays open while the account's
+  password is paused, which is what gives its owner a way in while someone else keeps it paused.
+- **The code that confirms two-factor setup**, checked against a secret the same session was just given.
+  Guessing it gains nothing a caller does not already hold.
+- **The passphrase that opens a credentials backup file.** Whoever holds the file can attack it offline.
+- **Guessing across many names.** The limit is per account, so each name guessed gets its own five
+  attempts. A limit across all accounts would let one caller pause everyone's sign-in, and a
+  per-address limit is no limit at all behind the reverse proxy a networked install sits behind, where
+  every request arrives from the proxy's address.
+
+**Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** That is
+the price of keying by account, and a registered passkey is the way around it.
 
 ## Passkeys and the second factor
 

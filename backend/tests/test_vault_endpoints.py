@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import unittest
 
+from backend.services import attempt_limiter
 from backend.services import crypto_service as cs
-from backend.tests._api_client import STRONG_PASSPHRASE, api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client, limiter_clock
 
 
 class VaultEndpointTests(unittest.TestCase):
@@ -42,10 +43,12 @@ class VaultEndpointTests(unittest.TestCase):
             locked = client.post("/api/auth/vault/lock").json()["user"]
             self.assertFalse(locked["vault_unlocked"])
 
-            bad = client.post("/api/auth/vault/unlock", json={"passphrase": "wrong"})
-            self.assertEqual(bad.status_code, 400)
+            with limiter_clock() as clock:
+                bad = client.post("/api/auth/vault/unlock", json={"passphrase": "wrong"})
+                self.assertEqual(bad.status_code, 400)
 
-            good = client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
+                clock.advance(attempt_limiter.MIN_SPACING_SECONDS)
+                good = client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
             self.assertEqual(good.status_code, 200)
             self.assertTrue(good.json()["user"]["vault_unlocked"])
 

@@ -103,8 +103,8 @@ VAULT_PRODUCTION_MIN_DISTINCT = 6
 # to exactly 32 unpadded base32 characters.
 #
 # **Deliberately not `control_database.generate_recovery_codes`**, which is the sign-in generator: that
-# produces 40 bits, which is sound for a 2FA code because the server checks it against a hash and can rate
-# limit and lock out. A vault slot is the opposite situation — its wrap is offline-attackable by anyone
+# produces 40 bits, which is sound for a 2FA code because the server checks it against a hash and limits
+# how many guesses anyone gets (`attempt_limiter`). A vault slot is the opposite situation — its wrap is offline-attackable by anyone
 # holding the control DB, which is the exact threat the vault exists to answer, and no rate limit reaches
 # an attacker working on their own machine. Reusing the sign-in generator here would quietly reintroduce
 # the weak wrap that the passphrase floor below was raised to eliminate.
@@ -135,6 +135,14 @@ class ProofRequired(Exception):
     passphrase or a passkey again — which is why this carries its own type all the way to its own HTTP
     code rather than reusing the locked one.
     """
+
+
+class IncorrectSecret(ValueError):
+    """The secret presented does not open the slot: a wrong passphrase, recovery code or passkey output.
+
+    A `ValueError` so every existing handler keeps catching it, and its own type so the endpoints can tell
+    a wrong guess — which counts against the attempt limit (`attempt_limiter`) — from every other refusal,
+    which must not."""
 
 
 class WeakPassphrase(ValueError):
@@ -208,10 +216,11 @@ def _sealed_dek_aad(user_id: str, slot_id: str) -> bytes:
 # the owner's DEK, and inside the proof window the authority to add a passkey of their own to the owner's
 # slot. The cost is one unlock per browser; tabs share a session, and so share an unlock.
 #
-# The session is named by a random `vault_scope` token the tenant middleware keeps in the signed session
-# cookie and publishes through `_vault_scope` for the length of a request, the way the tenant DB path
-# travels. Code running outside a request (the service tests, a script) has no scope and shares the `None`
-# one. Process memory only: lost on restart (re-unlock). A raw DEK must never enter the signed cookie.
+# The session is named by its sign-in session id (`services/sign_in_sessions.py`), which the tenant
+# middleware reads from the signed session cookie and publishes through `_vault_scope` for the length of a
+# request, the way the tenant DB path travels. Code running outside a request (the service tests, a
+# script) has no scope and shares the `None` one. Process memory only: lost on restart (re-unlock). A raw
+# DEK must never enter the signed cookie.
 #
 # An entry holds a *list* of DEKs, newest first. It has more than one only mid-rotation, where the
 # outgoing key must stay readable until the last ciphertext has been rewritten — see `rotate_dek`.
@@ -512,18 +521,18 @@ def _open_slot(slot: dict, secret: str, *, user_id: str) -> tuple[bytes | None, 
 
     `private_key` is None for a legacy format-1 slot (it has none). `deks` is empty when the slot is
     still awaiting a grant — the secret was right, there is simply nothing sealed to it yet. A wrong
-    secret raises `ValueError`: the AEAD tag is the verifier, so no separate check is stored.
+    secret raises `IncorrectSecret`: the AEAD tag is the verifier, so no separate check is stored.
     """
     kek = _slot_kek(slot, secret)
     if slot["format"] == 1:
         try:
             return None, [_unwrap(kek, slot["wrapped_dek"], aad=_slot_aad(user_id))]
         except Exception as exc:
-            raise ValueError("incorrect passphrase") from exc
+            raise IncorrectSecret("incorrect passphrase") from exc
     try:
         private_key = _unwrap(kek, slot["wrapped_private_key"], aad=_private_key_aad(user_id, slot["id"]))
     except Exception as exc:
-        raise ValueError("incorrect passphrase") from exc
+        raise IncorrectSecret("incorrect passphrase") from exc
     aad = _sealed_dek_aad(user_id, slot["id"])
     deks = [
         _open_seal(private_key, sealed, aad=aad)
