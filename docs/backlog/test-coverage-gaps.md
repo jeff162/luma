@@ -263,8 +263,7 @@ directly). Watch seeded default rules — use fixture keywords.
 ## Settings.jsx has no component-test harness
 
 `Settings.jsx` is one of the largest surfaces in the app and has no component test of any kind, so
-interactive behavior added there ships unpinned — the sync log's multi-select connection filter pills
-(2026-08-19) are the current example: the backend contract is tested, the pill behavior is not.
+interactive behavior added there ships unpinned.
 
 Standing one up is the real work; the sections are large and lean on `UserPreferencesContext`,
 `AppSessionContext`, and a lot of `api` surface. Worth doing as its own task rather than as a rider on

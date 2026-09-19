@@ -523,6 +523,22 @@ export const api = {
   // live by fetching accounts before it clears the reconnect flag.
   repairPlaidConnection: (connection_id) =>
     request('/plaid/repair', { method: 'POST', body: JSON.stringify({ connection_id }) }),
+  // A Link session that ended in an error, for the connection log — Link runs in the browser, so the
+  // server hears nothing of a failure there unless it is told. `error` is Link's own onExit error object.
+  reportPlaidLinkError: ({ connectionId = null, institutionName = null, requestId = null, error = {} } = {}) =>
+    request('/plaid/link-error', {
+      method: 'POST',
+      suppressMutationSignal: true,
+      body: JSON.stringify({
+        connection_id: connectionId,
+        institution_name: institutionName,
+        request_id: requestId,
+        error_type: error.error_type || null,
+        error_code: error.error_code || null,
+        error_message: error.error_message || null,
+        display_message: error.display_message || null,
+      }),
+    }),
   exchangeToken: (public_token, institution_name) =>
     request('/plaid/exchange', {
       method: 'POST',
@@ -741,16 +757,21 @@ export const api = {
     ),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
-  // Developer-options connection sync diagnostics: recent per-connection /sync calls (status sequence,
-  // cursor fingerprints, count deltas). Both endpoints 404 when developer options are off.
-  // `connectionIds` may be a single id or several — the log's filter pills are multi-select, and the
-  // param repeats once per connection. Empty means unfiltered, never "match nothing".
-  getSyncDiagnostics: (limit = 100, connectionIds = null) => request(
+  // The data-connection log (the Sync log): every sync, plus each connect, reconnect, account refresh,
+  // disconnect and credential reissue/revoke. `subjects` are filter-pill keys — a connection id, or
+  // `connect:<provider>` for connect attempts that never became a connection — and `providers` selects
+  // every row of a provider; a row matching either is returned. Both repeat once per value, and both empty
+  // means unfiltered, never "match nothing".
+  getSyncDiagnostics: ({ limit = 200, subjects = [], providers = [] } = {}) => request(
     `/sync/diagnostics?limit=${limit}`
-    + [].concat(connectionIds || []).filter(Boolean)
-      .map(id => `&connection_id=${encodeURIComponent(id)}`).join(''),
+    + [].concat(subjects || []).filter(Boolean).map(id => `&subject=${encodeURIComponent(id)}`).join('')
+    + [].concat(providers || []).filter(Boolean).map(p => `&provider=${encodeURIComponent(p)}`).join(''),
   ),
   clearSyncDiagnostics: () => request('/sync/diagnostics', { method: 'DELETE' }),
+  setSyncLogRetention: (days) =>
+    request('/sync/diagnostics/retention', {
+      method: 'PUT', body: JSON.stringify({ days }), suppressMutationSignal: true,
+    }),
 
   getTasks:    () => request('/tasks'),
   // Task dismissal is a ratcheting high-water mark on the task's count (see routers/tasks.py), so both

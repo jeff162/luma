@@ -204,8 +204,12 @@ export function requestPoolSummary(windows) {
 // carries the previous resume point on every pull after it. A row that *finishes* the backfill still says
 // "continuing" and picks up the row's own `backfill complete` badge, which reads correctly — it continued,
 // and it finished.
+//
+// A routine top-up gets no label at all. It is what almost every row is, so the chip said nothing, and the
+// word only meant something as the opposite of `initial` — which is the one worth marking.
 export function syncModeLabel(entry) {
   const mode = (entry?.mode || '').trim()
+  if (mode === 'routine') return null
   if (mode !== 'initial') return mode || null
   return String(entry?.cursor_before || '').trim() ? 'initial · continuing' : 'initial'
 }
@@ -314,4 +318,68 @@ export function cardSummary(cards, institution) {
   return cards
     .map(c => `${prefix && c.card?.startsWith(prefix) ? c.card.slice(prefix.length) : c.card} (${c.added})`)
     .join(', ')
+}
+
+// --- The log's other rows ---------------------------------------------------------------------------------
+//
+// Besides syncs, the log records every other operation on a data connection (`event`, and its facts in
+// `detail` — see backend/services/connection_log.py). A row like that has none of a sync's counts, so it is
+// described by these two instead: `label`, the chip naming the operation, and `text`, what came of it. A
+// failure has no `text` — the row's error is what came of it.
+
+const EVENT_LABELS = {
+  connect: 'connect',
+  reconnect: 'reconnect',
+  refresh_accounts: 'refresh accounts',
+  disconnect: 'disconnect',
+  reissue: 'credential reissue',
+  revoke: 'vault reset',
+}
+
+function countOf(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+// Each credential outcome as what it means for the user — the same four the exposure response and the
+// vault reset report on screen (`REISSUED`/`REVOKED`, `MANUAL`, `UNREADABLE`, `FAILED` in the backend).
+const REISSUE_TEXT = {
+  reissued: 'Credential replaced — the copy it replaced no longer works',
+  manual: 'Not replaced — this provider cannot reissue a credential; revoke it at the provider and connect again',
+  unreadable: 'Not replaced — the stored credential could not be read',
+}
+const REVOKE_TEXT = {
+  revoked: 'Access revoked at the provider',
+  manual: 'Not revoked — this provider cannot revoke from here; revoke it at the provider',
+  unreadable: 'Not revoked — the stored credential could not be read',
+}
+const DISCONNECT_TEXT = {
+  no_credential: 'Disconnected — there was no stored credential to revoke',
+  provider_cannot_revoke: 'Disconnected here only — this provider cannot revoke access; revoke it at the provider',
+}
+
+// Null for a sync row, which the log describes with its own fields.
+export function connectionEventSummary(entry) {
+  const event = entry?.event || 'sync'
+  if (event === 'sync') return null
+  const detail = entry.detail || {}
+  const label = EVENT_LABELS[event] || event
+  if (entry.error) return { label, text: null }
+  const accounts = Number.isFinite(detail.accounts) ? countOf(detail.accounts, 'account') : null
+  let text = null
+  if (event === 'connect') {
+    text = ['Connected', accounts ? `${accounts} offered` : null,
+      detail.unmapped ? `${detail.unmapped} to map` : null].filter(Boolean).join(' · ')
+  } else if (event === 'reconnect') {
+    text = ['Reconnected', accounts].filter(Boolean).join(' · ')
+  } else if (event === 'refresh_accounts') {
+    text = accounts ? `${accounts} found` : 'Accounts refreshed'
+  } else if (event === 'disconnect') {
+    text = detail.revoked ? 'Disconnected — access revoked at the provider'
+      : DISCONNECT_TEXT[detail.reason] || 'Disconnected'
+  } else if (event === 'reissue') {
+    text = REISSUE_TEXT[detail.outcome] || null
+  } else if (event === 'revoke') {
+    text = REVOKE_TEXT[detail.outcome] || null
+  }
+  return { label, text }
 }

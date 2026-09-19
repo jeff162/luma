@@ -73,7 +73,9 @@ class MigrationV56Tests(unittest.TestCase):
         self.assertEqual(database.get_db_version(self.conn), database.CURRENT_VERSION)
 
     def test_the_rebuilt_table_cascades_and_keeps_its_index(self):
-        self._upgrade()
+        # v56 alone: v60 later drops the constraint again, for rows that outlive their connection on purpose.
+        database.MIGRATIONS[56](self.conn)
+        self.conn.commit()  # a foreign-key pragma is ignored inside an open transaction
 
         fks = self.conn.execute("PRAGMA foreign_key_list(connection_sync_log)").fetchall()
         self.assertEqual([(fk["from"], fk["table"], fk["on_delete"]) for fk in fks],

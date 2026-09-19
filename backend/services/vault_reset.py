@@ -29,9 +29,8 @@ the provider said. So a failure here is recorded and reported per connection, ne
 is told precisely which ones they must go and revoke themselves, and the reset still completes.
 """
 
-from backend.app_logging import log_warning
 from backend.db.database import get_db
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 
 # What became of each connection's credential at the provider. The dialog groups by these, because they
@@ -59,7 +58,7 @@ def revoke_all_credentials(user: dict) -> list[dict]:
             "SELECT id, provider, external_id, institution, credential, credential_enc FROM connection"
         ).fetchall()]
 
-    outcomes = []
+    outcomes, failures = [], {}
     for row in connections:
         label = _connection_label(row)
         try:
@@ -96,13 +95,14 @@ def revoke_all_credentials(user: dict) -> list[dict]:
             )
             adapter.remove(app_config, credential)
         except Exception as exc:
-            log_warning(f"[vault-reset] could not revoke connection {row['id']} at {row['provider']}: {exc}")
+            failures[row["id"]] = exc
             outcomes.append({"connection_id": row["id"], "provider": row["provider"], "label": label,
                              "outcome": FAILED, "detail": str(exc)[:200] or None})
             continue
 
         outcomes.append({"connection_id": row["id"], "provider": row["provider"], "label": label,
                          "outcome": REVOKED, "detail": None})
+    connection_log.record_outcomes(connection_log.REVOKE, outcomes, connections, failed=FAILED, errors=failures)
     return outcomes
 
 

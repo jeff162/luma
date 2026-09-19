@@ -23,9 +23,8 @@ deactivating it decides the wording: Plaid keeps a rotated-away secret working u
 step is *rotate, enter the new one, then delete the old one* — rotating alone retires nothing.
 """
 
-from backend.app_logging import log_warning
 from backend.db.database import get_db
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import sync_marker_is_live
 
@@ -73,7 +72,7 @@ def reissue_all_credentials(user: dict) -> list[dict]:
     if any(sync_marker_is_live(c["sync_started_at"]) for c in connections):
         raise SyncInProgress("A sync is running. Wait for it to finish, then try again.")
 
-    outcomes = []
+    outcomes, failures = [], {}
     for row in connections:
         base = {"connection_id": row["id"], "provider": row["provider"], "label": _connection_label(row)}
         try:
@@ -99,7 +98,7 @@ def reissue_all_credentials(user: dict) -> list[dict]:
             )
             replacement = adapter.reissue_credential(app_config, credential)
         except Exception as exc:
-            log_warning(f"[exposure] could not reissue connection {row['id']} at {row['provider']}: {exc}")
+            failures[row["id"]] = exc
             outcomes.append({**base, "outcome": FAILED, "detail": str(exc)[:200] or None})
             continue
 
@@ -112,4 +111,6 @@ def reissue_all_credentials(user: dict) -> list[dict]:
                 (stored, stored_enc, row["id"]),
             )
         outcomes.append({**base, "outcome": REISSUED, "detail": None})
+    connection_log.record_outcomes(connection_log.REISSUE, outcomes, connections, failed=FAILED, errors=failures)
     return outcomes
+

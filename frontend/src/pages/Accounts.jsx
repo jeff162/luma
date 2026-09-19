@@ -835,7 +835,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // be acted on. What *is* asking (an account with no destination) is counted in the collapsed summary,
   // per the rule in `docs/ui-patterns.md` that a nudge must survive collapsing.
   const [openAccountLists, setOpenAccountLists] = useState({})
-  // The connection ids the open sync log starts filtered to; null while it is closed. Opened in place, the
+  // What the open sync log starts filtered to — `{ subjects }` (connection ids) or `{ providers }` — and null
+  // while it is closed. Opened in place, the
   // same dialog Import / Export opens, because this is a page people come to when a connection looks wrong
   // and the log is what explains it — sending them to another page to read it was a detour.
   const [syncLogScope, setSyncLogScope] = useState(null)
@@ -1210,11 +1211,21 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             setLinkInProgress(false)  // idempotent: also covers an exchange that threw before the release above
           }
         },
-        onExit: (err) => {
+        onExit: (err, metadata) => {
           // The user closed Link, or it errored out — lift the block either way.
           setLinkInProgress(false)
           plaidHandlerRef.current = null
-          if (err) console.error('Plaid Link error', err)
+          // An error inside Link happens entirely in the browser, so the connection log hears of it only
+          // from here. Best effort: the log is a diagnostic, and failing to write it is not the user's
+          // problem on top of the connect that already failed.
+          if (err) {
+            api.reportPlaidLinkError({
+              connectionId: repairConnection?.id || null,
+              institutionName: metadata?.institution?.name || null,
+              requestId: metadata?.request_id || null,
+              error: err,
+            }).catch(() => {})
+          }
         },
       })
       // Arm the block right before opening Link, and keep the handle so the scrim's Cancel can exit cleanly.
@@ -1547,14 +1558,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
                   {p.connect_noun ? `+ Connect ${p.connect_noun}` : '+ Connect'}
                 </Button>
-                {/* Scoped to this provider's connections, since that is what the card it sits in is about;
-                    the log's own pills widen it to the rest. */}
-                {connections.length ? (
-                  <Button variant="ghost" small onClick={() => setSyncLogScope(connections.map(c => c.id))}
-                    title="What each sync actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
-                    Sync log
-                  </Button>
-                ) : null}
+                {/* Scoped to this provider, since that is what the card it sits in is about — by provider
+                    rather than by its connections' ids, so the scope takes in what has no live connection
+                    to name: a failed connect, and a disconnected connection's record. Offered with no
+                    connections at all for the same reason: a first connect that failed is exactly when
+                    the log is wanted. The log's own pills widen it to the rest. */}
+                <Button variant="ghost" small onClick={() => setSyncLogScope({ providers: [p.provider] })}
+                  title="What each sync, connect and disconnect actually did — how much arrived, whether the full history was fetched, and anything the provider reported">
+                  Sync log
+                </Button>
                 {/* "Sync now" lives in the card header, not here — it is the routine action, so it has to
                     stay reachable while the card is collapsed. */}
               </div>
@@ -1727,7 +1739,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           lastSync={c.last_sync}
                           syncing={!!c.syncing}
                           onOpenReport={() => openLastSyncReport(c)}
-                          onOpenLog={() => setSyncLogScope([c.id])}
+                          onOpenLog={() => setSyncLogScope({ subjects: [c.id] })}
                         />
                         {accts.length || unfedProviderAccounts(c).length ? (() => {
                           const unfed = unfedProviderAccounts(c)
@@ -2005,7 +2017,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     {connectionDialogsNode}
     {panelsNode}
     {syncLogScope ? (
-      <ConnectionSyncLogDialog initialConnectionIds={syncLogScope} onClose={() => setSyncLogScope(null)} />
+      <ConnectionSyncLogDialog
+        initialConnectionIds={syncLogScope.subjects}
+        initialProviders={syncLogScope.providers}
+        onClose={() => setSyncLogScope(null)}
+      />
     ) : null}
     </>
   )

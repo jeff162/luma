@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from backend.db.database import get_db
 from backend.routers.accounts import upsert_connection_accounts, resolve_default_owner_id
 from backend.routers.providers import establish_connection, require_app_config
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 from backend.services.connection_mapping import unmapped_count
 from backend.services.providers import get_adapter
 
@@ -34,6 +34,19 @@ class PublicTokenExchange(BaseModel):
 
 class RepairRequest(BaseModel):
     connection_id: str
+
+
+class LinkErrorReport(BaseModel):
+    # The fields of the error object Link hands its `onExit` callback — Plaid's own error shape, reported
+    # from the browser because Link runs there and nothing reaches the server when it fails.
+    connection_id: str | None = None
+    institution_name: str | None = None
+    error_type: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    display_message: str | None = None
+    # From Link's exit metadata rather than its error object; what Plaid support asks for.
+    request_id: str | None = None
 
 
 def _connection(connection_id: str) -> dict:
@@ -72,6 +85,20 @@ def _credential(request: Request, connection: dict) -> str:
         })
 
 
+# A failed connect is logged under the connection it was repairing, or — for a new one — under no connection
+# at all, which files it with the provider's connect attempts in the log.
+def _record_link_failure(connection: dict | None, error: str, *, institution: str | None = None,
+                         detail: dict | None = None) -> None:
+    connection_log.record_event(
+        event=connection_log.RECONNECT if connection else connection_log.CONNECT,
+        provider=PROVIDER,
+        connection_id=connection["id"] if connection else None,
+        institution=(connection or {}).get("institution") or institution,
+        error=error,
+        detail=detail,
+    )
+
+
 @router.get("/link-token")
 def get_link_token(request: Request, connection_id: str | None = None):
     """Mint the token Link opens with — in **update mode** when `connection_id` names a connection.
@@ -83,14 +110,37 @@ def get_link_token(request: Request, connection_id: str | None = None):
     re-authorizes the Item Luma already holds, so the repair lands on the row that needed it.
     """
     app_config = require_app_config(request, PROVIDER)
-    access_token = _credential(request, _connection(connection_id)) if connection_id else None
+    connection = _connection(connection_id) if connection_id else None
+    access_token = _credential(request, connection) if connection else None
     try:
         token = get_adapter(PROVIDER).create_link_token(app_config, access_token=access_token)
-        return {"link_token": token, "mode": "update" if access_token else "create"}
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Logged as the connect (or reconnect) it is the first step of: the user pressed the button, and a
+        # Link session that never opened is that action failing. 502 rather than 500 for the reason
+        # `establish_connection` gives — Plaid refused, which is not a fault in the app.
+        _record_link_failure(connection, str(e), detail=connection_log.error_detail(e))
+        raise HTTPException(status_code=502, detail={
+            "code": "provider_error",
+            "message": str(e) or "Plaid could not start a connection.",
+        })
+    return {"link_token": token, "mode": "update" if access_token else "create"}
+
+
+@router.post("/link-error")
+def report_link_error(body: LinkErrorReport):
+    """Record a Link session that ended in an error — the one part of connecting that happens entirely in
+    the browser, so without this report the log would show a connect that was never attempted. A session
+    the user simply closed carries no error and is not reported."""
+    connection = _connection(body.connection_id) if body.connection_id else None
+    text = (body.display_message or body.error_message or "Link ended with an error.").strip()
+    code = (body.error_code or "").strip()
+    reported = {k: v for k, v in body.model_dump(include={
+        "error_type", "error_code", "error_message", "display_message", "request_id",
+    }).items() if v}
+    _record_link_failure(connection, f"Plaid: {text}" + (f" ({code})" if code else ""),
+                         institution=body.institution_name,
+                         detail={"provider_error": reported} if reported else None)
+    return {"ok": True}
 
 
 @router.post("/repair")
@@ -113,6 +163,7 @@ def repair_connection(body: RepairRequest, request: Request):
     try:
         accounts = get_adapter(PROVIDER).fetch_accounts(app_config, credential)
     except Exception as e:
+        _record_link_failure(connection, str(e), detail=connection_log.error_detail(e))
         raise HTTPException(status_code=502, detail={
             "code": "provider_error",
             "message": str(e) or "The connection could not be verified with Plaid.",
@@ -132,6 +183,10 @@ def repair_connection(body: RepairRequest, request: Request):
             (connection["id"],),
         )
         pending_mapping = unmapped_count(conn, connection["id"])
+        connection_log.write_event(
+            conn, event=connection_log.RECONNECT, provider=PROVIDER, connection_id=connection["id"],
+            institution=connection["institution"], detail={"accounts": len(accounts)},
+        )
     return {
         "ok": True, "connection_id": connection["id"], "accounts": len(accounts),
         "unmapped": pending_mapping,

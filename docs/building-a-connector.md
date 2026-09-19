@@ -50,6 +50,7 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 * [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
 * [Coverage claims](#coverage-claims)
 * [Reporting what was refused](#reporting-what-was-refused)
+* [What a failure says](#what-a-failure-says)
 * [Where requests may go](#where-requests-may-go)
 * [Considered and rejected](#considered-and-rejected)
 * [Obstacles](#obstacles)
@@ -571,6 +572,23 @@ rejects. The alternative is CSV's rule — delete the batch when nothing was imp
 would keep the card list clean at the price of making the refusals invisible and of having rejects and
 duplicates behave differently on the same card. **This is expected to be revisited once the effect is
 visible in practice; it is not settled.**
+
+## What a failure says
+
+**An adapter's exception text is shown to the user unedited** — in the connect error box, on the connection
+card, and in the Sync log, which records every connect, reconnect, account refresh and disconnect as well as
+each sync (`services/connection_log.py`). So an adapter raises errors whose message is a sentence about what
+went wrong: SimpleFIN's `SimpleFinError`, and Plaid's `PlaidError`, which `plaid_service` builds from
+Plaid's error body rather than letting the client library's status line and header dump through. Where the
+fix is a step in this app, the message names it (a rejected app secret points at Configure). The original is
+not thrown away: an exception's `provider_detail` (Plaid's error fields, request id included) is what the
+Sync log keeps under a row's Details, read from the exception or any it was raised from.
+
+**`ProviderCredentialRejected` is for a refusal the reconnect button can repair**, because it sets
+`reauth_required` and the card then offers exactly that. SimpleFIN raises it for a refused access URL, which
+a new setup token replaces. Plaid raises it only for `ITEM_LOGIN_REQUIRED`: Link's update mode needs a
+working token to start from, so an invalid or removed token would send the user into a reconnect that
+fails, and a rejected *app* secret is not the connection's to fix at all.
 
 ## Where requests may go
 

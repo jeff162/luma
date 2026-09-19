@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
-  parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, windowSummary,
+  allowanceSummary, cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
+  historyDepthSummary, parseCheckpoint, requestPoolSummary, skippedBreakdown, syncModeLabel, windowSummary,
 } from '../syncLogSummary.js'
 
 // The fingerprint format these read is produced by `_cursor_fingerprint` in backend/routers/sync.py and
@@ -342,10 +342,9 @@ describe('syncModeLabel', () => {
       .toBe('initial · continuing')
   })
 
-  it('leaves a routine top-up alone', () => {
-    // A top-up always resumes from a cursor, so the continuing distinction would be true of every one of
-    // them and worth saying about none.
-    expect(syncModeLabel({ mode: 'routine', cursor_before: 'through=2026-08-18' })).toBe('routine')
+  it('leaves a routine top-up unlabelled', () => {
+    // Nearly every row is one, so only the history pulls are marked.
+    expect(syncModeLabel({ mode: 'routine', cursor_before: 'through=2026-08-18' })).toBeNull()
   })
 
   it('passes through anything it does not recognize, and nulls an absent mode', () => {
@@ -353,5 +352,29 @@ describe('syncModeLabel', () => {
     expect(syncModeLabel({ mode: 'backfill' })).toBe('backfill')
     expect(syncModeLabel({})).toBeNull()
     expect(syncModeLabel(undefined)).toBeNull()
+  })
+})
+
+describe('connectionEventSummary', () => {
+  it('leaves a sync row to the fields that describe it', () => {
+    expect(connectionEventSummary({ event: 'sync' })).toBeNull()
+    // Every row written before the column existed was a sync.
+    expect(connectionEventSummary({})).toBeNull()
+  })
+
+  it('lets a failure speak through its error rather than a success sentence', () => {
+    const summary = connectionEventSummary({ event: 'connect', error: 'Plaid: bad secret (INVALID_API_KEYS)' })
+    expect(summary.label).toBeTruthy()
+    expect(summary.text).toBeNull()
+  })
+
+  it('tells a revoking disconnect from one that ended access only here', () => {
+    const revoked = connectionEventSummary({ event: 'disconnect', detail: { revoked: true } })
+    const localOnly = connectionEventSummary({
+      event: 'disconnect', detail: { revoked: false, reason: 'provider_cannot_revoke' },
+    })
+    expect(revoked.text).toBeTruthy()
+    expect(localOnly.text).toBeTruthy()
+    expect(localOnly.text).not.toEqual(revoked.text)
   })
 })

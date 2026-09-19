@@ -17,13 +17,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import transport
-from backend.app_logging import log_warning
 from backend.db.control_database import auth_required
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id, upsert_connection_accounts
 from backend.authorization import require_admin_or_local
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 from backend.services.connection_mapping import unmapped_count
 from backend.services.providers import (
     UnknownProviderError,
@@ -174,9 +173,21 @@ def establish_connection(request: Request, provider: str, payload: dict,
         # 502, not 500: the provider refused or could not be reached, which is not an internal fault and
         # is not the user's to report as a bug. The adapter's message is passed through intact because it
         # is the only thing that says *what went wrong* — collapsing it into "Internal Server Error" is
-        # what turns a five-second fix into a debugging session. Logged as well, since connect writes no
-        # other record anywhere (unlike sync, which has its diagnostics log).
-        log_warning(f"[connect] {provider} connect failed: {e}")
+        # what turns a five-second fix into a debugging session. Recorded in the connection log under the
+        # connection being re-linked, if one was named, and otherwise with the provider's connect attempts.
+        with get_db() as conn:
+            relinking = conn.execute(
+                "SELECT id, institution FROM connection WHERE id = ? AND provider = ?",
+                (adopt_connection_id, provider),
+            ).fetchone() if adopt_connection_id else None
+        connection_log.record_event(
+            event=connection_log.RECONNECT if relinking else connection_log.CONNECT,
+            provider=provider,
+            connection_id=relinking["id"] if relinking else None,
+            institution=relinking["institution"] if relinking else payload.get("institution_name"),
+            error=str(e) or f"Could not connect to {provider}.",
+            detail=connection_log.error_detail(e),
+        )
         raise HTTPException(status_code=502, detail={
             "code": "provider_error",
             "message": str(e) or f"Could not connect to {provider}.",
@@ -265,6 +276,16 @@ def establish_connection(request: Request, provider: str, payload: dict,
             institution=institution, accounts=accounts, default_owner_id=default_owner_id,
         )
         pending_mapping = unmapped_count(conn, connection_id)
+        # Labelled from the row rather than `institution`, which a provider may leave empty and the upsert
+        # then keeps the stored name for.
+        stored_institution = conn.execute(
+            "SELECT institution FROM connection WHERE id = ?", (connection_id,),
+        ).fetchone()["institution"]
+        connection_log.write_event(
+            conn, event=connection_log.RECONNECT if adopt_target else connection_log.CONNECT,
+            provider=provider, connection_id=connection_id, institution=stored_institution,
+            detail={"accounts": len(accounts), "unmapped": pending_mapping},
+        )
 
     return {
         "ok": True, "accounts_added": len(accounts), "connection_id": connection_id,
@@ -399,7 +420,8 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
     user = request.state.user
     with get_db() as conn:
         row = conn.execute(
-            "SELECT external_id, credential, credential_enc FROM connection WHERE provider = ? AND external_id = ?",
+            "SELECT id, institution, external_id, credential, credential_enc FROM connection "
+            "WHERE provider = ? AND external_id = ?",
             (provider, body.external_id),
         ).fetchone()
     if not row:
@@ -431,9 +453,24 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
         except Exception as exc:
             # Keep the local connection if provider-side revocation failed, so the user can retry rather
             # than believe the token is dead when it may still be live.
-            raise HTTPException(status_code=502, detail=f"Could not revoke the connection at the provider: {exc}")
+            message = f"Could not revoke the connection at the provider: {exc}"
+            connection_log.record_event(event=connection_log.DISCONNECT, provider=provider,
+                                        connection_id=row["id"], institution=row["institution"], error=message,
+                                        detail=connection_log.error_detail(exc))
+            raise HTTPException(status_code=502, detail=message)
     with get_db() as conn:
         conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
+        # The disconnect is the one row a removed connection keeps: when it went, and whether access ended at
+        # the provider or only here. Everything else about a connection that no longer exists is history
+        # nobody reads, and would otherwise sit in the log under a pill for something that is gone.
+        connection_log.delete_for_connection(conn, row["id"])
+        connection_log.write_event(
+            conn, event=connection_log.DISCONNECT, provider=provider, connection_id=row["id"],
+            institution=row["institution"],
+            detail={"revoked": revoked,
+                    "reason": None if revoked
+                    else "no_credential" if credential is None else "provider_cannot_revoke"},
+        )
     return {"ok": True, "revoked": revoked}
 
 
@@ -474,11 +511,19 @@ def refresh_accounts(provider: str, body: RefreshAccountsRequest, request: Reque
     try:
         accounts = get_adapter(provider).fetch_accounts(app_config, credential)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not fetch accounts from the provider: {exc}")
+        message = f"Could not fetch accounts from the provider: {exc}"
+        connection_log.record_event(event=connection_log.REFRESH_ACCOUNTS, provider=provider,
+                                    connection_id=row["id"], institution=row["institution"], error=message,
+                                    detail=connection_log.error_detail(exc))
+        raise HTTPException(status_code=502, detail=message)
     with get_db() as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
         upsert_connection_accounts(
             conn, connection_id=row["id"], provider=provider,
             institution=row["institution"], accounts=accounts, default_owner_id=default_owner_id,
+        )
+        connection_log.write_event(
+            conn, event=connection_log.REFRESH_ACCOUNTS, provider=provider, connection_id=row["id"],
+            institution=row["institution"], detail={"accounts": len(accounts)},
         )
     return {"ok": True, "accounts_added": len(accounts), "connection_id": row["id"]}

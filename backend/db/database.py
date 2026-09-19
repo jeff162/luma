@@ -148,7 +148,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 59
+CURRENT_VERSION = 60
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1504,7 +1504,9 @@ def _sync_log_rows_go_with_their_connection(conn):
         return
     foreign_keys = conn.execute("PRAGMA foreign_key_list(connection_sync_log)").fetchall()
     if any(fk["from"] == "connection_id" and fk["on_delete"] == "CASCADE" for fk in foreign_keys):
-        return  # already rebuilt, or a fresh database created in this shape
+        return  # already rebuilt
+    if "event" in {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}:
+        return  # already in v60's shape, which dropped this constraint again on purpose
     conn.execute("DROP TABLE IF EXISTS connection_sync_log_v56")
     conn.execute(_CONNECTION_SYNC_LOG_V56)
     # Only the columns both shapes have: a hand-built fixture carries a subset, and every column it lacks
@@ -1756,6 +1758,66 @@ def _date_synced_rows_by_transaction(conn):
             (json.dumps(values) if values is not None else r["values_json"], json.dumps(payload),
              r["batch_id"], r["row_number"]),
         )
+
+
+# The v60 shape of `connection_sync_log`, written out for the reason `_CONNECTION_SYNC_LOG_V56` is.
+_CONNECTION_SYNC_LOG_V60 = """
+    CREATE TABLE connection_sync_log_v60 (
+        id                   TEXT PRIMARY KEY,
+        connection_id        TEXT,
+        provider             TEXT,
+        institution          TEXT,
+        event                TEXT NOT NULL DEFAULT 'sync',
+        detail               TEXT,
+        started_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        finished_at          TEXT,
+        mode                 TEXT,
+        days_requested       INTEGER,
+        cursor_before        TEXT,
+        cursor_after         TEXT,
+        pages                INTEGER NOT NULL DEFAULT 0,
+        added                INTEGER NOT NULL DEFAULT 0,
+        updated              INTEGER NOT NULL DEFAULT 0,
+        removed              INTEGER NOT NULL DEFAULT 0,
+        skipped              INTEGER NOT NULL DEFAULT 0,
+        status_sequence      TEXT,
+        final_status         TEXT,
+        became_complete      INTEGER NOT NULL DEFAULT 0,
+        error                TEXT,
+        warnings             TEXT,
+        advisories           TEXT,
+        skipped_no_account   INTEGER NOT NULL DEFAULT 0,
+        skipped_already_held INTEGER NOT NULL DEFAULT 0,
+        account_counts       TEXT,
+        card_counts          TEXT,
+        requested_windows    TEXT,
+        request_allowance    TEXT
+    )
+"""
+
+
+@migration(60)
+def _sync_log_records_every_connection_event(conn):
+    # The log now records every data-connection operation rather than only syncs (see
+    # services/connection_log.py), and two of them cannot live under the constraint v56 added: a connect that
+    # fails has no connection to reference, and a disconnect keeps its own row after the connection it
+    # describes is deleted. So `connection_id` becomes nullable without a foreign key, and `event`/`detail`
+    # say what a row records. SQLite cannot drop a constraint in place, hence the rebuild; every existing row
+    # is a sync, which is the new column's default. Guarded like v56 for the isolated per-migration tests.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "connection_sync_log" not in tables:
+        return
+    if "event" in {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}:
+        return  # already rebuilt, or a fresh database created in this shape
+    conn.execute("DROP TABLE IF EXISTS connection_sync_log_v60")
+    conn.execute(_CONNECTION_SYNC_LOG_V60)
+    current = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log_v60)")}
+    shared = ", ".join(r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")
+                       if r["name"] in current)
+    conn.execute(f"INSERT INTO connection_sync_log_v60 ({shared}) SELECT {shared} FROM connection_sync_log")
+    conn.execute("DROP TABLE connection_sync_log")
+    conn.execute("ALTER TABLE connection_sync_log_v60 RENAME TO connection_sync_log")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started ON connection_sync_log(started_at)")
 
 
 def get_db_version(conn) -> int:
@@ -2096,15 +2158,22 @@ def init_db(db_path: str | None = None):
             -- update_status signal (Plaid's transactions_update_status today) seen across the drained pages,
             -- and `became_complete` records the call that flipped the connection out of its initial pull.
             -- Cursors are stored only as a short fingerprint (length + prefix), never the full opaque token.
-            -- connection_id is ON DELETE CASCADE: a disconnect (which deletes the connection) deletes its rows
-            -- too, since nothing reads the log of a connection that is gone (see migration v56 for what
-            -- keeping them with a nulled id did). provider/institution are a snapshot that labels a row
-            -- without a join. See routers/sync.py.
+            -- Despite the name it is the log of every data-connection operation, not only syncs: `event`
+            -- says which, and a non-sync row fills only the columns that describe it plus `detail`. See
+            -- services/connection_log.py. connection_id is NULL only for a connect that failed before the
+            -- provider issued a connection, and carries no foreign key: a disconnect deletes the
+            -- connection's other rows and keeps its own, under the id of a connection that is gone (see
+            -- migration v60). provider/institution are a snapshot that labels a row without a join.
             CREATE TABLE IF NOT EXISTS connection_sync_log (
                 id              TEXT PRIMARY KEY,
-                connection_id   TEXT NOT NULL REFERENCES connection(id) ON DELETE CASCADE,
+                connection_id   TEXT,
                 provider        TEXT,
                 institution     TEXT,
+                -- 'sync' | 'connect' | 'reconnect' | 'refresh_accounts' | 'disconnect' | 'reissue' | 'revoke'
+                event           TEXT NOT NULL DEFAULT 'sync',
+                -- JSON object of the event's own facts for a non-sync row (accounts offered, whether a
+                -- disconnect revoked at the provider); NULL for a sync, whose facts have columns.
+                detail          TEXT,
                 started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 finished_at     TEXT,
                 mode            TEXT,     -- 'initial' (historical backfill) | 'routine' (cursor deltas)

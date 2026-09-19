@@ -115,9 +115,11 @@ stored secret under *Still to do at the provider* too. Both read the list from w
 (`exposure_response.app_secrets_to_rotate`) rather than from a capability, since a secret never saved was
 never exposed. An ordinary disconnect exposes nothing and asks for none of this.
 
-**Unverified: that Plaid Items survive a secret rotation.** The documentation implies it — rotate, test
-the new secret, then delete the old one would be pointless if every Item were bound to the old secret —
-without stating it. Confirm it in the sandbox environment before relying on it, never on a live connection.
+**Checked in the sandbox (2026-09-19): Items survive a secret rotation, and deleting the old secret stops
+syncing as well as linking.** With the old secret deleted, both a sync of an existing Item and a new link
+were refused (`INVALID_API_KEYS`). Once the new secret was entered with Configure, the same Item synced
+again without being linked again. A copy holding the old secret therefore loses its existing connections
+too, not only the ability to link new ones.
 
 **The reverse direction — the user revokes at the provider — is not symmetric either.** Nothing announces
 it; Luma finds out only when a request is refused. A refused credential raises

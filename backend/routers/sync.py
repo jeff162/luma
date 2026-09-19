@@ -31,12 +31,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from backend.app_logging import log_error, log_warning
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
-from backend.services import crypto_service
+from backend.services import connection_log, crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
@@ -189,10 +190,6 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
 
 _MAX_PAGES_PER_CALL = 50  # safety cap (≤ 25k txns/request) so a misbehaving has_more can't loop forever
 
-# Cap on retained connection_sync_log rows: a diagnostic aid, not an audit trail — keep the most recent
-# window and prune the rest so repeated dev syncs can't grow the table unbounded.
-_SYNC_LOG_RETENTION = 500
-
 # How many row ids a sync may record on `connection.last_sync_summary` for its "review what just arrived"
 # report. Above this the ids are dropped and the connection card's arrow opens the import card itself
 # instead — which is the right answer by construction rather than a degradation: the only pull that
@@ -327,25 +324,26 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
     Written on every sync, not only under developer options — see the call site for why. Never lets a
     logging failure affect the sync itself.
 
-    This table is a **diagnostic ring buffer**: capped at `_SYNC_LOG_RETENTION`, pruned on every write and
-    emptied wholesale by `DELETE /sync/diagnostics`. Nothing user-facing may derive from it, because all
-    three of those can remove the row it would be reading. The connection card's own summary lives on
-    `connection` for exactly that reason (`services/providers/config.py`); this row is what a *developer*
-    reads to explain a pull after the fact.
+    This table is a **diagnostic log**: pruned by age on every write (`services/connection_log.py`, which
+    also records the other data-connection operations) and emptied wholesale by `DELETE /sync/diagnostics`.
+    Nothing user-facing may derive from it, because both of those can remove the row it would be reading.
+    The connection card's own summary lives on `connection` for exactly that reason
+    (`services/providers/config.py`); this row is what a *developer* reads to explain a pull after the fact.
     """
     for r in rows:
         conn.execute(
             """
             INSERT INTO connection_sync_log
-                (id, connection_id, provider, institution, started_at, finished_at, mode, days_requested,
-                 cursor_before, cursor_after, pages, added, updated, removed, skipped, status_sequence,
-                 final_status, became_complete, error, warnings, advisories,
+                (id, connection_id, provider, institution, event, started_at, finished_at, mode,
+                 days_requested, cursor_before, cursor_after, pages, added, updated, removed, skipped,
+                 status_sequence, final_status, became_complete, error, warnings, advisories,
                  skipped_no_account, skipped_already_held, account_counts, card_counts, requested_windows,
-                 request_allowance)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 request_allowance, detail)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], r["started_at"],
+                str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], connection_log.SYNC,
+                r["started_at"],
                 r["finished_at"], r["mode"], r["days_requested"], r["cursor_before"], r["cursor_after"],
                 r["pages"], r["added"], r["updated"], r["removed"], r["skipped"],
                 json.dumps(r["status_sequence"]), r["final_status"], 1 if r["became_complete"] else 0,
@@ -366,17 +364,10 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 json.dumps(r["card_counts"]) if r.get("card_counts") else None,
                 json.dumps(r["requested_windows"]) if r.get("requested_windows") else None,
                 json.dumps(r["request_allowance"]) if r.get("request_allowance") else None,
+                json.dumps(r["detail"]) if r.get("detail") else None,
             ),
         )
-    conn.execute(
-        """
-        DELETE FROM connection_sync_log
-        WHERE id NOT IN (
-            SELECT id FROM connection_sync_log ORDER BY started_at DESC, id DESC LIMIT ?
-        )
-        """,
-        (_SYNC_LOG_RETENTION,),
-    )
+    connection_log.prune(conn)
 
 
 def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, content_hash: str,
@@ -1392,7 +1383,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             # so this connection's share is everything appended from here on.
             touched0 = len(touched_ids)
 
-            def _record(*, error=None, became_complete=False):
+            def _record(*, error=None, became_complete=False, detail=None):
                 entry = {
                     "connection_id":  connection["id"],
                     "provider":       connection["provider"],
@@ -1412,6 +1403,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "final_status":   final_status,
                     "became_complete": became_complete,
                     "error":          error,
+                    # What the provider itself said about a failure, beside the readable `error`.
+                    "detail":         detail,
                     # The card shows only `warnings`, and only the most recent pull's. The log keeps both
                     # lists per call, which is what makes "it started failing three syncs ago" answerable.
                     "warnings":       list(connection_warnings),
@@ -1649,7 +1642,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # draw, because for every *other* cause it would be a distinction without a difference.
                 log_warning(f"[sync] connection {connection['id']} needs reconnecting: {e}")
                 _record_sync_failure(conn, connection["id"], str(e), reauth_required=True)
-                _record(error=str(e))
+                _record(error=str(e), detail=connection_log.error_detail(e))
                 continue
             except crypto_service.MissingCredential:
                 # Nothing is stored to authenticate with — the state a vault reset leaves behind, since it
@@ -1693,7 +1686,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # network blip and a revoked credential — only on how long it has been going on.
                 log_warning(f"[sync] error fetching connection {connection['id']}: {e}")
                 _record_sync_failure(conn, connection["id"], str(e))
-                _record(error=str(e))
+                _record(error=str(e), detail=connection_log.error_detail(e))
                 continue
             finally:
                 # What the pull spent at the provider, recorded whether it succeeded or raised — the one
@@ -1930,50 +1923,75 @@ def _skipped_breakdown(account_counts: dict | None, row: dict) -> dict | None:
     return out
 
 
-@router.get("/diagnostics")
-def sync_diagnostics(limit: int = 100,
-                     connection_id: Annotated[list[str] | str | None, Query()] = None):
-    """Recent connection-sync diagnostic rows, newest first. One row per connection per /sync call: the
-    status sequence, cursor fingerprints, count deltas, any warnings/advisories the pull produced, and
-    whether the call completed the initial backfill — enough to see whether a sync stopped at the Initial
-    Update or ran to HISTORICAL_UPDATE_COMPLETE, and why an under-fetch happened.
+# Which pill a log row files under: its connection, or — for a connect that failed before the provider
+# issued one — the provider's connect attempts. One expression, used by the filter and by the counts, so the
+# two can never disagree about which rows a pill stands for.
+_LOG_SUBJECT_SQL = "COALESCE(connection_id, 'connect:' || COALESCE(provider, ''))"
 
-    `connection_id` may be repeated to scope the list to several connections (one is the deep link from a
-    connection card). Filtered here rather than in the browser: the retention window is bounded but its
-    rows are not small — a deep walk records one entry per request — so the whole buffer is worth several
-    hundred KB that a filtered view has no use for.
 
-    `counts` rides along, and is deliberately **not** filtered: it feeds the log's own per-connection
-    filter pills, which have to keep saying how many rows each connection has while some of them are
-    filtered out. Counting the filtered rows would collapse every unselected pill to zero the moment the
-    first one was clicked. Each count is rows currently in the buffer, not syncs ever run — the table is a
-    ring buffer capped at `_SYNC_LOG_RETENTION`, so it is a count of what this log can show."""
-    limit = max(1, min(limit, _SYNC_LOG_RETENTION))
+def _as_list(value) -> list[str]:
     # A bare string is accepted beside the list because this is called directly as a function as well as
     # over HTTP, and iterating a string here would scope the query to its characters.
-    raw = [connection_id] if isinstance(connection_id, str) else (connection_id or [])
-    ids = [c for c in raw if c]
-    where, params = "", []
-    if ids:
-        where = f"WHERE connection_id IN ({','.join('?' * len(ids))})"
-        params.extend(ids)
-    params.append(limit)
+    raw = [value] if isinstance(value, str) else (value or [])
+    return [v for v in raw if v]
+
+
+@router.get("/diagnostics")
+def sync_diagnostics(limit: int = 200,
+                     subject: Annotated[list[str] | str | None, Query()] = None,
+                     provider: Annotated[list[str] | str | None, Query()] = None):
+    """The data-connection log, newest first. Mostly one row per connection per /sync call — the status
+    sequence, cursor fingerprints, count deltas, any warnings/advisories the pull produced, and whether the
+    call completed the initial backfill — plus one row per other operation on a connection (a connect,
+    reconnect, account refresh, disconnect, or credential reissue/revoke; `event` says which).
+
+    **Scoped by `subject` and `provider`, both repeatable, and a row matching either is shown.** A subject is
+    what a filter pill stands for: a connection id, or `connect:<provider>` for connect attempts that never
+    became a connection. `provider` selects every row of that provider, which is what a provider's card
+    opens with — including its disconnected connections and failed connects, which it has no ids for.
+    Filtered here rather than in the browser because rows are not small: a deep walk records every request
+    it made.
+
+    `counts` rides along, and is deliberately **not** filtered: it feeds the log's own filter pills, which
+    have to keep saying how many rows each subject has while some of them are filtered out. Counting the
+    filtered rows would collapse every unselected pill to zero the moment the first one was clicked. Each
+    count is rows the log holds now, inside its retention window, not operations ever run.
+
+    `limit` bounds the payload, not the log, and `total` says how many rows matched, so a reader shown
+    fewer than that is told so rather than left to assume the list is complete."""
+    limit = max(1, limit)
+    subjects, providers = _as_list(subject), _as_list(provider)
+    clauses, params = [], []
+    if subjects:
+        clauses.append(f"{_LOG_SUBJECT_SQL} IN ({','.join('?' * len(subjects))})")
+        params.extend(subjects)
+    if providers:
+        clauses.append(f"provider IN ({','.join('?' * len(providers))})")
+        params.extend(providers)
+    where = f"WHERE {' OR '.join(clauses)}" if clauses else ""
     with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) AS n FROM connection_sync_log {where}", params).fetchone()["n"]
         rows = conn.execute(
-            f"SELECT * FROM connection_sync_log {where} ORDER BY started_at DESC, id DESC LIMIT ?",
-            params,
+            f"SELECT *, {_LOG_SUBJECT_SQL} AS subject FROM connection_sync_log {where} "
+            "ORDER BY started_at DESC, id DESC LIMIT ?",
+            [*params, limit],
         ).fetchall()
         # Labels come from the log's own denormalized columns, which name the row as it was written without
-        # a join. Every row's connection still exists: a disconnect deletes its rows with it (`ON DELETE
-        # CASCADE`), so no row can arrive here without the id its pill filters on.
+        # a join; the bare `institution` beside MAX(started_at) is SQLite's guarantee of the newest row's
+        # value, so a renamed institution labels its pill as it is now called. `disconnected` is the one
+        # fact the log cannot hold about itself — a connection it names may since have been removed.
         count_rows = conn.execute(
-            """
-            SELECT   connection_id, provider, institution, COUNT(*) AS count
+            f"""
+            SELECT   {_LOG_SUBJECT_SQL} AS subject, connection_id, provider, institution,
+                     MAX(started_at) AS latest, COUNT(*) AS count,
+                     (connection_id IS NOT NULL
+                      AND connection_id NOT IN (SELECT id FROM connection)) AS disconnected
             FROM     connection_sync_log
-            GROUP BY connection_id
-            ORDER BY COUNT(*) DESC, institution, connection_id
+            GROUP BY subject
+            ORDER BY COUNT(*) DESC, institution, subject
             """
         ).fetchall()
+        retention = connection_log.retention_days(conn)
 
     def _json_list(value):
         try:
@@ -2009,20 +2027,41 @@ def sync_diagnostics(limit: int = 100,
         # The same number the connection card warns on, from the same function, so a reader following the
         # card's deep-link into this log cannot meet a different verdict about the call they just clicked.
         d["already_held_unexplained"] = unexplained_already_held(accounts=d["account_counts"])
+        d["detail"] = _json_obj(d.get("detail"))
         return d
 
     return {
         "entries": [_entry(r) for r in rows],
+        "total": total,
+        "retention_days": retention,
         "counts": [
             {
+                "subject":       r["subject"],
                 "connection_id": r["connection_id"],
                 "provider":      r["provider"],
                 "institution":   r["institution"] or r["provider"],
+                "disconnected":  bool(r["disconnected"]),
                 "count":         r["count"],
             }
             for r in count_rows
         ],
     }
+
+
+class LogRetentionRequest(BaseModel):
+    days: int
+
+
+@router.put("/diagnostics/retention")
+def set_sync_log_retention(body: LogRetentionRequest):
+    """How many days the log keeps. Applied on the spot, so a shortened window drops the older rows now
+    rather than at the next write."""
+    with get_db() as conn:
+        try:
+            days = connection_log.set_retention_days(conn, body.days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    return {"retention_days": days}
 
 
 @router.delete("/diagnostics")

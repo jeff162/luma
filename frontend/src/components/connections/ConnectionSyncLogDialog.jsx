@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The connection sync log: one row per connection per sync call.
+// The connection sync log: one row per connection per sync call, and one per every other operation on a
+// data connection — a connect (including one that failed before any connection existed), reconnect, account
+// refresh, disconnect, and a credential reissue or vault-reset revoke. The name stayed; the scope grew,
+// because a sync that fails is usually explained by one of those beside it (backend/services/connection_log.py).
 //
 // **It lives with the connections it describes, not in Settings.** It sat there because a read-only
 // diagnostic looks administrative, and the cost was that seeing what a sync had just done meant leaving
@@ -19,18 +22,108 @@ import { api } from '../../lib/api.js'
 import { AppDialog, Button, RefreshButton } from '../ui.jsx'
 import { OutcomeChip } from '../importExport/SourceAccountChip.jsx'
 import {
-  allowanceSummary, cardSummary, checkpointSummary, finalStatusSummary, historyDepthSummary,
-  requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
+  allowanceSummary, cardSummary, checkpointSummary, connectionEventSummary, finalStatusSummary,
+  historyDepthSummary, requestPoolSummary, skippedBreakdown, syncLogDate, syncModeLabel, windowSummary,
 } from '../../lib/syncLogSummary.js'
+import { connectionProviderLabel } from '../../lib/connectionSummary.js'
 
 // A stable default, so an omitted prop does not read as a new selection on every render.
 const EMPTY_IDS = []
+
+// What a row is about: the institution, or — for a connect that failed before the provider named one —
+// the provider itself.
+function rowTitle(entry) {
+  return entry.institution || connectionProviderLabel(entry.provider)
+}
+
+// A pill's name. Two kinds of pill have no live connection behind them, and each says so: a connection
+// the log remembers only for its disconnect, and the provider's connect attempts that never became one.
+function pillLabel(c) {
+  if (!c.connection_id) return `${connectionProviderLabel(c.provider)} connect attempts`
+  return c.disconnected ? `${c.institution} (disconnected)` : c.institution
+}
+
+const CHIP = { padding: '1px 7px', borderRadius: 999, background: 'var(--surface2)', color: 'var(--muted)' }
+const ERROR_CHIP = {
+  padding: '1px 7px', borderRadius: 999,
+  background: 'color-mix(in srgb, var(--danger) 16%, var(--surface2))', color: 'var(--danger)',
+}
+
+// What the provider itself said about a failure (`detail.provider_error`), one field a line: the row's
+// error is the readable version, and this is the original — the part a support request needs, above all
+// the request id. A documentation link is a link.
+function ProviderErrorDetail({ entry }) {
+  const fields = entry.detail?.provider_error
+  if (!fields || typeof fields !== 'object') return null
+  return (
+    <div style={{ display: 'grid', gap: 2, color: 'var(--muted)', fontSize: 11 }}>
+      {Object.entries(fields).map(([key, value]) => (
+        <div key={key} style={{ wordBreak: 'break-word' }}>
+          {key}:{' '}
+          {key === 'documentation_url' && /^https:\/\//.test(String(value))
+            ? <a href={value} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--accent2)' }}>{value}</a>
+            : <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{String(value)}</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// The row's collapsed tier. Collapsed always, never opened by default — including for an error row: what an
+// error row owes the reader is the error, which sits in the always-visible half.
+function DetailsToggle({ children }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <div>
+        <button
+          onClick={() => setOpen(v => !v)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 11, fontWeight: 600, padding: '2px 0', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ fontSize: 9 }}>{open ? '▾' : '▸'}</span>
+          Details
+        </button>
+      </div>
+      {open ? <div style={{ display: 'grid', gap: 6, paddingLeft: 15 }}>{children}</div> : null}
+    </>
+  )
+}
+
+// A row that is not a sync: the operation, what came of it, and its error. None of a sync's counts apply,
+// and rendering them as zeros would say an operation that fetches nothing fetched nothing. Details only
+// when there is something behind them — the provider's own account of a failure.
+function EventRow({ entry, summary, when }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{rowTitle(entry)}</span>
+        <span style={CHIP}>{summary.label}</span>
+        {entry.error ? <span style={ERROR_CHIP}>error</span> : null}
+        <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{when}</span>
+      </div>
+      {summary.text ? <div style={{ color: 'var(--text)' }}>{summary.text}</div> : null}
+      {entry.error ? (
+        <div style={{ color: 'var(--danger)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{entry.error}</div>
+      ) : null}
+      {entry.detail?.provider_error ? (
+        <DetailsToggle><ProviderErrorDetail entry={entry} /></DetailsToggle>
+      ) : null}
+    </div>
+  )
+}
 
 function SyncLogRow({ entry }) {
   // Degrade gracefully if a timestamp can't be parsed (e.g. a pre-fix malformed value) — show the raw
   // string rather than "Invalid Date".
   const parsedWhen = entry.started_at ? new Date(entry.started_at) : null
   const when = parsedWhen && !isNaN(parsedWhen) ? parsedWhen.toLocaleString() : (entry.started_at || '—')
+  const summary = connectionEventSummary(entry)
+  if (summary) return <EventRow entry={entry} summary={summary} when={when} />
+  return <SyncRow entry={entry} when={when} />
+}
+
+function SyncRow({ entry, when }) {
+  const modeLabel = syncModeLabel(entry)
   // The provider's backfill-readiness signal — Plaid's `transactions_update_status`, or SimpleFIN's
   // budget-pause marker. Read from `final_status` rather than the per-page `status_sequence`: the sequence
   // is one entry per drained page, so a walking adapter fills it with one identical value per request, and
@@ -74,21 +167,15 @@ function SyncLogRow({ entry }) {
   // The raw fingerprints stay as the fallback: a provider whose checkpoint this cannot interpret must still
   // show *something*, since whether the token advanced is the first question a stalled sync raises.
   const checkpoint = checkpointSummary(entry.cursor_before, entry.cursor_after)
-  // Collapsed always, never opened by default — including for an error row. What an error row owes the
-  // reader is the error, which sits in the always-visible half; the tier below it is the provider's own
-  // bookkeeping, and a row that springs open is a row that has decided the reader is debugging.
-  const [showDetails, setShowDetails] = useState(false)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>{entry.institution || entry.provider || 'Connection'}</span>
-        <span style={{ padding: '1px 7px', borderRadius: 999, background: 'var(--surface2)', color: 'var(--muted)' }}>{syncModeLabel(entry) || '—'}</span>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{rowTitle(entry)}</span>
+        {modeLabel ? <span style={CHIP}>{modeLabel}</span> : null}
         {entry.became_complete ? (
           <span style={{ padding: '1px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--success, #16a34a) 16%, var(--surface2))', color: 'var(--success, #16a34a)' }}>backfill complete</span>
         ) : null}
-        {entry.error ? (
-          <span style={{ padding: '1px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--danger) 16%, var(--surface2))', color: 'var(--danger)' }}>error</span>
-        ) : null}
+        {entry.error ? <span style={ERROR_CHIP}>error</span> : null}
         <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{when}</span>
       </div>
       {/* What the sync did, in the effect vocabulary the connection card uses. First because it is the one
@@ -150,18 +237,12 @@ function SyncLogRow({ entry }) {
       ))}
       {/* The provider's own bookkeeping, behind a toggle. Everything above answers a question about the
           user's data; everything below answers one about the sync machinery, and mixing the two at one
-          visual weight is what made a routine budget-paused walk read as a wall of alarming output. */}
-      <div>
-        <button
-          onClick={() => setShowDetails(v => !v)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 11, fontWeight: 600, padding: '2px 0', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        >
-          <span style={{ fontSize: 9 }}>{showDetails ? '▾' : '▸'}</span>
-          Details
-        </button>
-      </div>
-      {showDetails ? (
-        <div style={{ display: 'grid', gap: 6, paddingLeft: 15 }}>
+          visual weight is what made a routine budget-paused walk read as a wall of alarming output. A row
+          that springs open is a row that has decided the reader is debugging. */}
+      <DetailsToggle>
+          {/* What the provider said about a failure, first: it is the one thing here that explains the
+              error line above. */}
+          <ProviderErrorDetail entry={entry} />
           {/* Which bucket paid for each request. Below the fold because the headline figure is how many
               requests the pull spent; this answers the follow-up, which only a stuck connection asks. */}
           {pools ? <div style={{ color: 'var(--muted)', fontSize: 11 }}>requests: {pools}</div> : null}
@@ -190,8 +271,7 @@ function SyncLogRow({ entry }) {
               ) : null}
             </div>
           ))}
-        </div>
-      ) : null}
+      </DetailsToggle>
     </div>
   )
 }
@@ -200,9 +280,27 @@ function SyncLogRow({ entry }) {
 // here is already non-identifying at the source — cursors are stored as fingerprints (length + leading
 // slice, never the token) and the table holds no transaction data — so this needs no redaction pass of its
 // own. Keep it that way: anything added to a log row shows up here too.
+// The provider's own error fields, raw — the request id among them is what a provider's support asks for.
+function providerErrorLines(entry) {
+  const fields = entry.detail?.provider_error
+  if (!fields || typeof fields !== 'object') return []
+  return Object.entries(fields).map(([k, v]) => `  provider ${k}: ${v}`)
+}
+
 function syncLogAsText(entries, scopeLabel) {
-  const lines = [`Luma connection sync log${scopeLabel ? ` — ${scopeLabel}` : ''} (${entries.length} calls, newest first)`, '']
+  const lines = [`Luma connection sync log${scopeLabel ? ` — ${scopeLabel}` : ''} (${entries.length} entries, newest first)`, '']
   for (const e of entries) {
+    // Any other operation is its event and its raw facts, for the reason the sync lines below print raw
+    // values: whoever reads this is debugging, and the facts are the starting point.
+    if ((e.event || 'sync') !== 'sync') {
+      lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.event}`)
+      const facts = Object.entries(e.detail || {}).filter(([k]) => k !== 'provider_error')
+      if (facts.length) lines.push(`  ${facts.map(([k, v]) => `${k} ${v}`).join(' · ')}`)
+      if (e.error) lines.push(`  ERROR: ${e.error}`)
+      lines.push(...providerErrorLines(e))
+      lines.push('')
+      continue
+    }
     lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
     const requests = e.requested_windows?.length
     // Raw throughout, including the day count the rendered row states as a duration: this is the artifact
@@ -247,6 +345,7 @@ function syncLogAsText(entries, scopeLabel) {
     // interpretation is a worse artifact than the value it was derived from.
     lines.push(`  cursor ${e.cursor_before || 'none'} → ${e.cursor_after || 'none'}`)
     if (e.error) lines.push(`  ERROR: ${e.error}`)
+    lines.push(...providerErrorLines(e))
     for (const w of e.warnings || []) lines.push(`  WARNING: ${w}`)
     for (const a of e.advisories || []) {
       const times = a.count > 1 ? ` (×${a.count})` : ''
@@ -259,7 +358,7 @@ function syncLogAsText(entries, scopeLabel) {
 }
 
 // The dialog and its state in one component, so the refresh can sit on the dialog's title.
-function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
+function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProviders = EMPTY_IDS, onClose }) {
   // Read-only viewer over connection_sync_log. It answers the two questions a connection can't answer
   // about itself: "did this sync fetch everything?" (the status sequence — a full historical backfill vs.
   // a stop at the ~30-day Initial Update) and "why did nothing arrive?" (the warnings and advisories,
@@ -269,35 +368,49 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
   const [error, setError] = useState('')
   const [clearing, setClearing] = useState(false)
   const [copied, setCopied] = useState(false)
-  // Which connections the list is scoped to — seeded by whatever opened it (one connection's card, or
-  // every connection of one provider), then adjustable here with the pills below. Filtered server-side:
-  // the retention window is bounded but its rows are not small (a deep walk records one entry per
-  // request), so a filtered view has no reason to ship the whole buffer. Empty means no filter, which is
-  // what makes "no pill pressed" show everything.
-  const [connectionIds, setConnectionIds] = useState(() => initialConnectionIds.filter(Boolean))
-  // Rows per connection *in the buffer*, from the same response and deliberately unfiltered — these label
-  // and size the pills, so they have to keep describing every connection while some are filtered out.
+  // What the list is scoped to — seeded by whatever opened it (one connection, or one provider's card),
+  // then adjustable here with the pills below. Two kinds, and a row matching either is shown: `subjects`
+  // are pill keys (a connection id, or `connect:<provider>` for connect attempts), and `providers` take in
+  // every row of a provider, which is how a provider's card includes what it has no ids for. Filtered
+  // server-side, because rows are not small (a deep walk records every request it made). Both empty means
+  // no filter, which is what makes "no pill pressed" show everything.
+  const [scope, setScope] = useState(() => ({
+    subjects: initialConnectionIds.filter(Boolean), providers: initialProviders.filter(Boolean),
+  }))
+  // Rows per pill *in the log*, from the same response and deliberately unfiltered — these label and size
+  // the pills, so they have to keep describing every subject while some are filtered out.
   const [counts, setCounts] = useState([])
+  // How many rows matched, against how many were sent: past the payload bound the list is the newest of
+  // them, and says so, rather than reading as the complete history.
+  const [total, setTotal] = useState(0)
+  const [retentionDays, setRetentionDays] = useState(null)
+  const [savingRetention, setSavingRetention] = useState(false)
 
-  // Re-seeded only when the *set* of ids changes. A caller builds the array inline, so depending on the
-  // array itself would reset the user's own pill choices on every render of the page behind the dialog.
-  const initialKey = initialConnectionIds.filter(Boolean).join('\n')
-  useEffect(() => { setConnectionIds(initialKey ? initialKey.split('\n') : []) }, [initialKey])
+  // Re-seeded only when the *set* of starting values changes. A caller builds the arrays inline, so
+  // depending on the arrays themselves would reset the user's own pill choices on every render of the page
+  // behind the dialog.
+  const initialKey = JSON.stringify([initialConnectionIds.filter(Boolean), initialProviders.filter(Boolean)])
+  useEffect(() => {
+    const [subjects, providers] = JSON.parse(initialKey)
+    setScope({ subjects, providers })
+  }, [initialKey])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const res = await api.getSyncDiagnostics(200, connectionIds)
+      const res = await api.getSyncDiagnostics({ subjects: scope.subjects, providers: scope.providers })
       setEntries(res.entries || [])
       setCounts(res.counts || [])
+      setTotal(res.total ?? (res.entries || []).length)
+      setRetentionDays(res.retention_days ?? null)
     } catch (e) {
       setError(e.message || 'Could not load the sync log.')
       setEntries([])
     } finally {
       setLoading(false)
     }
-  }, [connectionIds])
+  }, [scope])
 
   useEffect(() => { load() }, [load])
 
@@ -314,14 +427,37 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
     }
   }
 
-  const selected = new Set(connectionIds)
-  const scopeLabel = counts
-    .filter(c => selected.has(c.connection_id))
-    .map(c => c.institution || c.provider || 'this connection')
-    .join(', ')
+  async function saveRetention(days) {
+    setSavingRetention(true)
+    setError('')
+    try {
+      await api.setSyncLogRetention(days)
+      await load()
+    } catch (e) {
+      setError(e.message || 'That setting could not be saved.')
+    } finally {
+      setSavingRetention(false)
+    }
+  }
 
-  function togglePill(id) {
-    setConnectionIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+  const filtered = scope.subjects.length > 0 || scope.providers.length > 0
+  const isOn = c => scope.subjects.includes(c.subject) || scope.providers.includes(c.provider)
+  const scopeLabel = counts.filter(isOn).map(pillLabel).join(', ')
+
+  function togglePill(c) {
+    if (!isOn(c)) {
+      setScope(prev => ({ ...prev, subjects: [...prev.subjects, c.subject] }))
+    } else if (scope.providers.includes(c.provider)) {
+      // Turning off one pill of a provider-wide scope keeps that provider's other pills on — now named
+      // one by one, since "every row of this provider" no longer describes the selection.
+      const siblings = counts.filter(o => o.provider === c.provider && o.subject !== c.subject).map(o => o.subject)
+      setScope(prev => ({
+        providers: prev.providers.filter(p => p !== c.provider),
+        subjects: [...new Set([...prev.subjects.filter(x => x !== c.subject), ...siblings])],
+      }))
+    } else {
+      setScope(prev => ({ ...prev, subjects: prev.subjects.filter(x => x !== c.subject) }))
+    }
   }
 
   async function copyForSupport() {
@@ -337,7 +473,7 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
   return (
     <AppDialog
       title="Connection sync log"
-      description="One row per connection per sync call — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider or the import reported along the way."
+      description="Every sync, connect, reconnect and disconnect of a data connection — how much arrived, whether the full history was fetched or the pull stopped early, and anything the provider reported along the way."
       onClose={onClose}
       width="min(860px, 100%)"
       actions={<Button variant="ghost" onClick={onClose}>Close</Button>}
@@ -355,27 +491,28 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
           <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
         </div>
       </div>
-      {/* One pill per connection that has rows here, replacing the old "Showing only X" banner rather than
+      {/* One pill per subject that has rows here, replacing the old "Showing only X" banner rather than
           sitting beside it — two controls for one filter can disagree, and the banner could only ever say
-          what the deep link had chosen. Only connections present in the log are offered: a pill that
-          filters to nothing is a dead end. A disconnected connection has none — its rows are deleted with
-          it — so every pill names a connection that still exists. */}
-      {/* A single connection needs no pill — it would filter to what is already on screen. But an active
+          what the deep link had chosen. Only subjects present in the log are offered: a pill that filters
+          to nothing is a dead end. A disconnected connection keeps a pill for as long as its disconnect
+          row is in the log, and a provider's failed connects share one. */}
+      {/* A single subject needs no pill — it would filter to what is already on screen. But an active
           filter always renders the row, so a deep link to a connection with no rows yet still offers a
           way back to everything instead of stranding the user on an empty list. */}
-      {counts.length > 1 || connectionIds.length ? (
+      {counts.length > 1 || filtered ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {counts.map(c => {
-            const on = selected.has(c.connection_id)
+            const on = isOn(c)
+            const label = pillLabel(c)
             return (
               <button
-                key={c.connection_id}
+                key={c.subject}
                 type="button"
                 aria-pressed={on}
-                onClick={() => togglePill(c.connection_id)}
+                onClick={() => togglePill(c)}
                 title={on
-                  ? `Showing ${c.institution}. Click to stop filtering by it.`
-                  : `Show only ${c.institution}${connectionIds.length ? ' as well' : ''}.`}
+                  ? `Showing ${label}. Click to stop filtering by it.`
+                  : `Show only ${label}${filtered ? ' as well' : ''}.`}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
@@ -385,17 +522,17 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
                   fontWeight: on ? 600 : 400,
                 }}
               >
-                {c.institution}
-                {/* Rows this log is holding for the connection, not syncs it has ever run: the table is a
-                    ring buffer, so this is a count of what clicking would show. */}
+                {label}
+                {/* Rows this log is holding for the subject, not operations ever run: the log keeps only
+                    its retention window, so this is a count of what clicking would show. */}
                 <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.7 }}>{c.count}</span>
               </button>
             )
           })}
-          {connectionIds.length ? (
+          {filtered ? (
             <button
               type="button"
-              onClick={() => setConnectionIds([])}
+              onClick={() => setScope({ subjects: [], providers: [] })}
               /* "Clear filters", not "Show all": with every pill selected the list is already showing
                  everything, so a control promising to change that would be describing nothing. What it
                  does in both states is empty the selection. */
@@ -409,14 +546,50 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
       {entries && entries.length === 0 && !loading ? (
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {connectionIds.length
-            ? `No sync calls recorded for ${scopeLabel || 'this connection'} yet.`
-            : 'No sync calls recorded yet. Sync a data connection, then Refresh here.'}
+          {filtered
+            ? `Nothing recorded for ${scopeLabel || 'this connection'} yet.`
+            : 'Nothing recorded yet. Sync or connect a data connection, then Refresh here.'}
         </div>
       ) : null}
       {entries && entries.length ? (
         <div style={{ display: 'grid', gap: 8, maxHeight: 480, overflowY: 'auto' }}>
           {entries.map(e => <SyncLogRow key={e.id} entry={e} />)}
+        </div>
+      ) : null}
+      {entries && total > entries.length ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+          Showing the newest {entries.length} of {total}. Filter by a connection to see its older entries.
+        </div>
+      ) : null}
+      {/* The log's one setting, at its foot, in the shape the reimbursements report gives its reminder:
+          a sentence around a single number. Rendered once the value is known and keyed on it, because the
+          field is uncontrolled and would otherwise keep whatever it first showed. */}
+      {retentionDays != null ? (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+          fontSize: 12.5, color: 'var(--muted)', borderTop: '1px solid var(--border)', paddingTop: 10,
+        }}>
+          <label htmlFor="sync-log-retention-days">Keep entries for</label>
+          <input
+            key={retentionDays}
+            id="sync-log-retention-days"
+            type="number"
+            min="1"
+            max="365"
+            defaultValue={retentionDays}
+            disabled={savingRetention}
+            // On blur rather than per keystroke: shortening the window deletes the older entries at once,
+            // so a request per digit could delete what the finished number would have kept.
+            onBlur={e => {
+              const next = Number(e.target.value)
+              if (Number.isInteger(next) && next !== retentionDays) saveRetention(next)
+            }}
+            style={{
+              font: 'inherit', fontSize: 12.5, width: 64, padding: '3px 6px', borderRadius: 6,
+              border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+            }}
+          />
+          <span>days</span>
         </div>
       ) : null}
     </div>
@@ -440,6 +613,12 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, onClose }) {
 // working elsewhere — a duplicate review, a reconciliation. This one is opened, read, and dismissed;
 // giving it a nav pill would put a permanent affordance in the chrome for something with no state worth
 // preserving across a navigation.
-export function ConnectionSyncLogDialog({ initialConnectionIds = EMPTY_IDS, onClose }) {
-  return <ConnectionSyncLogBody initialConnectionIds={initialConnectionIds} onClose={onClose} />
+export function ConnectionSyncLogDialog({ initialConnectionIds = EMPTY_IDS, initialProviders = EMPTY_IDS, onClose }) {
+  return (
+    <ConnectionSyncLogBody
+      initialConnectionIds={initialConnectionIds}
+      initialProviders={initialProviders}
+      onClose={onClose}
+    />
+  )
 }

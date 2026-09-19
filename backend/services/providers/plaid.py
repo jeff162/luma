@@ -12,11 +12,12 @@ from the environment via `plaid_service` in this phase; moving them into the vau
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date
 
 from backend.services import plaid_service
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
-from backend.services.providers.base import ProviderAdapter
+from backend.services.providers.base import ProviderAdapter, ProviderCredentialRejected
 from backend.services.source_capabilities import CURRENCY_PER_TRANSACTION, KEEP_ZERO_AMOUNT
 
 # Plaid's `transactions_update_status` values that mean the historical backfill will not advance further.
@@ -28,6 +29,24 @@ _TERMINAL_UPDATE_STATUSES = frozenset({
     "TRANSACTIONS_UPDATE_STATUS_UNKNOWN",
     None,
 })
+
+
+
+@contextmanager
+def _reconnect_signal():
+    """Raise the seam's reconnect signal for the one Plaid failure it describes.
+
+    `ITEM_LOGIN_REQUIRED` is the bank asking for its login again, which is what Link's update mode exists to
+    repair. Left as an ordinary error it counted as one more sync failure, so the card never offered the
+    reconnect — the same outcome `ProviderCredentialRejected` was introduced to prevent for SimpleFIN. Only
+    that code: an invalid or removed token cannot be repaired by update mode, which needs a working token to
+    start from, so offering the reconnect for it would send the user into a flow that fails."""
+    try:
+        yield
+    except plaid_service.PlaidError as exc:
+        if exc.code == "ITEM_LOGIN_REQUIRED":
+            raise ProviderCredentialRejected(str(exc)) from exc
+        raise
 
 
 class PlaidAdapter(ProviderAdapter):
@@ -63,6 +82,8 @@ class PlaidAdapter(ProviderAdapter):
         return {"external_id": result["item_id"], "credential": result["access_token"]}
 
     def fetch_accounts(self, app_config: dict, credential: str) -> list[dict]:
+        with _reconnect_signal():
+            accounts = plaid_service.fetch_accounts(app_config, credential)
         return [
             {
                 "external_account_id": a["plaid_account_id"],
@@ -75,7 +96,7 @@ class PlaidAdapter(ProviderAdapter):
                 # discarded is given a destination — the same contract SimpleFIN's adapter answers.
                 "currency":            a.get("currency"),
             }
-            for a in plaid_service.fetch_accounts(app_config, credential)
+            for a in accounts
         ]
 
     # What Plaid can capture per transaction. `posted_date`, the descriptor, the counterparties and
@@ -116,10 +137,9 @@ class PlaidAdapter(ProviderAdapter):
     def fetch_transactions(
         self, app_config: dict, credential: str, start_date: date | None = None, end_date: date | None = None
     ) -> list[dict]:
-        return [
-            self._normalize_txn(t)
-            for t in plaid_service.fetch_transactions(app_config, credential, start_date=start_date, end_date=end_date)
-        ]
+        with _reconnect_signal():
+            rows = plaid_service.fetch_transactions(app_config, credential, start_date=start_date, end_date=end_date)
+        return [self._normalize_txn(t) for t in rows]
 
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
@@ -135,7 +155,10 @@ class PlaidAdapter(ProviderAdapter):
         # `account_targets` is ignored: a cursor is a checkpoint in a change feed, not a date range, so
         # there is no way to ask this API for one account's history. Plaid reaches it by raising
         # `days_requested`, which backfills every account on the item through the same cursor.
-        result = plaid_service.fetch_transactions_sync(app_config, credential, cursor=cursor, days_requested=days_requested)
+        with _reconnect_signal():
+            result = plaid_service.fetch_transactions_sync(
+                app_config, credential, cursor=cursor, days_requested=days_requested,
+            )
 
         def _normalize(t: dict) -> dict:
             return {

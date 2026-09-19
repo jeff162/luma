@@ -704,7 +704,7 @@ adapter, not a change to the connect/sync callers.
 **One sync writes to three stores, and which one a fact belongs in is decided by who may lose it**:
 durable *connection status* on `connection` / `connection_account` (cursor, last outcome + summary,
 coverage, allowance — provider-shaped, and expected to differ per adapter); a disposable *diagnostic
-history* in `connection_sync_log` (capped, pruned, user-clearable, so nothing user-facing may derive from
+history* in `connection_sync_log` (pruned by age, user-clearable, so nothing user-facing may derive from
 it); and the *bundle of transactions received* on `import_batch` + `import_batch_account`, which behaves
 like a CSV import card apart from the monthly-vs-per-file boundary. Full rule, and the two defects that
 came of leaving it unstated, in `docs/data-model.md`.

@@ -276,7 +276,7 @@ What exists today, and what each actually tells you:
 | `GET /api/health` | is a server listening and answering on this port |
 | Settings → Configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
-| The connection sync log (**Sync log** on Import / Export → Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync failed |
+| The connection sync log (**Sync log** on Import / Export → Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 

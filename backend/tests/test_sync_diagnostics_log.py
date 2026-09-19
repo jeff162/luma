@@ -196,6 +196,26 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn("provider exploded", rows[0]["error"])
 
+    def test_what_the_provider_said_is_kept_beside_the_readable_error(self):
+        # The row's error is the reworded message; the provider's own body rides in `detail`, for the
+        # request id a support request needs. Raised the way the adapter re-raises a login failure, so the
+        # body has to be found on the exception it came from.
+        from backend.services.plaid_service import PlaidError
+        from backend.services.providers.base import ProviderCredentialRejected
+
+        class _Refused(_FakeAdapter):
+            def fetch_transactions_sync(self, *a, **kw):
+                cause = PlaidError("The bank needs its login entered again.", code="ITEM_LOGIN_REQUIRED",
+                                   provider_detail={"error_code": "ITEM_LOGIN_REQUIRED", "request_id": "req-9"})
+                raise ProviderCredentialRejected(str(cause)) from cause
+
+        with self._driven_sync(adapter=_Refused()):
+            pass
+        with self._use_db_path():
+            [entry] = sync_module.sync_diagnostics()["entries"]
+        self.assertEqual(entry["error"], "The bank needs its login entered again.")
+        self.assertEqual(entry["detail"]["provider_error"]["request_id"], "req-9")
+
     def test_a_bank_warning_reaches_both_the_card_and_the_log(self):
         # `last_sync_warnings` is the card's, and holds only the most recent pull. The log keeps it per
         # call, which is what makes "this started three syncs ago" answerable.
@@ -629,7 +649,7 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self._two_connection_log()
         with self._use_db_path():
             self.assertEqual(len(sync_module.sync_diagnostics()["entries"]), 2)
-            scoped = sync_module.sync_diagnostics(connection_id="conn-2")["entries"]
+            scoped = sync_module.sync_diagnostics(subject="conn-2")["entries"]
             self.assertEqual([e["connection_id"] for e in scoped], ["conn-2"])
 
     def test_the_read_endpoint_can_be_scoped_to_several_connections(self):
@@ -637,12 +657,12 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         # that both misbehave should not have to look at them one at a time.
         self._two_connection_log()
         with self._use_db_path():
-            both = sync_module.sync_diagnostics(connection_id=["conn-1", "conn-2"])["entries"]
+            both = sync_module.sync_diagnostics(subject=["conn-1", "conn-2"])["entries"]
             self.assertEqual({e["connection_id"] for e in both}, {"conn-1", "conn-2"})
-            one = sync_module.sync_diagnostics(connection_id=["conn-2"])["entries"]
+            one = sync_module.sync_diagnostics(subject=["conn-2"])["entries"]
             self.assertEqual({e["connection_id"] for e in one}, {"conn-2"})
             # An empty selection means "no filter", not "match nothing" — no pill pressed shows everything.
-            self.assertEqual(len(sync_module.sync_diagnostics(connection_id=[])["entries"]), 2)
+            self.assertEqual(len(sync_module.sync_diagnostics(subject=[])["entries"]), 2)
 
     def test_the_per_connection_counts_ignore_the_current_filter(self):
         """The counts feed the filter pills, so they describe the buffer, not the current view.
@@ -653,27 +673,11 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self._two_connection_log()
         with self._use_db_path():
             unfiltered = sync_module.sync_diagnostics()["counts"]
-            scoped = sync_module.sync_diagnostics(connection_id=["conn-2"])["counts"]
+            scoped = sync_module.sync_diagnostics(subject=["conn-2"])["counts"]
             self.assertEqual(unfiltered, scoped)
             self.assertEqual({c["connection_id"] for c in unfiltered}, {"conn-1", "conn-2"})
             self.assertEqual(sum(c["count"] for c in unfiltered), 2)
             self.assertTrue(all(c["institution"] for c in unfiltered))
-
-    def test_disconnecting_a_connection_deletes_its_rows(self):
-        """A disconnect deletes the connection, and its log rows go with it.
-
-        They used to be kept with `connection_id` nulled. Every disconnected connection's rows then shared
-        one id-less group, whose pill carried whichever institution SQLite happened to pick and could not
-        filter — an empty id reads as "no filter" — so it looked pressed while the list showed everything.
-        Nothing reads the log of a connection that is gone, so the rows are deleted rather than repaired.
-        """
-        self._two_connection_log()
-        with self._use_db_path(), get_db() as conn:
-            conn.execute("DELETE FROM connection WHERE id = 'conn-2'")
-        with self._use_db_path():
-            result = sync_module.sync_diagnostics()
-        self.assertEqual([e["connection_id"] for e in result["entries"]], [self.CONNECTION_ID])
-        self.assertEqual([c["connection_id"] for c in result["counts"]], [self.CONNECTION_ID])
 
 
 class SyncLogMigrationTests(unittest.TestCase):
