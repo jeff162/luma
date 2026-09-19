@@ -6,7 +6,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { createPortal } from 'react-dom'
-import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
+import { Card, PageHeader, Button, SearchInput, Badge, Spinner, EmptyState, AppDialog, AppConfirmDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
@@ -925,7 +925,7 @@ export default function Rules() {
         }}>
           Search rules by merchant
         </label>
-        <Input id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" style={{ width: 260 }} />
+        <SearchInput id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" wrapperStyle={{ width: 260 }} />
 
         {/* Structured facet filter — page-local, session-scoped (never touches the app-wide FilterContext). */}
         <div style={{ position: 'relative' }}>

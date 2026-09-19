@@ -21,7 +21,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
-  PageHeader, Spinner, Button, Select, Input, EmptyState, AppDialog, SegmentedToggle,
+  PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, SegmentedToggle,
   getFloatingPanelSurfaceStyle, RefreshButton} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
@@ -1278,12 +1278,13 @@ export default function Recurring() {
           {/* Above the view selector because it narrows whichever view is showing — which is also what lets
               each view's own pills sit directly above the rows they select. */}
           <div style={{ marginBottom: 10 }}>
-            <Input
+            <SearchInput
               value={search}
               onChange={setSearch}
               placeholder="Search merchant, category, or account…"
               aria-label="Search recurring transactions"
-              style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
+              wrapperStyle={{ maxWidth: 340 }}
+              style={{ padding: '5px 10px', fontSize: 13 }}
             />
           </div>
           {/* The view selector. The badge lives on the control rather than inside the view it names —

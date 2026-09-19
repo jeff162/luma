@@ -40,6 +40,11 @@
       .ui-button:not(:disabled):active { transform: translateY(1px); filter: brightness(0.9); }
       /* RefreshButton's icon. A turn ends at an iteration boundary, so under reduced motion the animation
          still has to iterate — it pulses in place instead of turning. */
+      /* SearchInput (components/ui.jsx) draws its own clear ×, so the browser's is hidden — a pseudo-element
+         no inline style can reach. appearance: none stops Safari's search-field styling overriding the inline
+         padding and radius. */
+      .ui-search-input { -webkit-appearance: none; appearance: none; }
+      .ui-search-input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
       @keyframes ui-refresh-turn { to { transform: rotate(360deg); } }
       @keyframes ui-refresh-pulse { 50% { opacity: 0.35; } }
       .ui-refresh-icon { display: block; }

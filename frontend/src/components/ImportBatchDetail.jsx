@@ -33,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
-import { Button, RefreshButton, Spinner } from './ui.jsx'
+import { Button, RefreshButton, SearchInput, Spinner } from './ui.jsx'
 import AttributeFilterControl from './AttributeFilterControl.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -294,24 +294,14 @@ export default function ImportBatchDetail({
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <input
-              type="search"
+            <SearchInput
               value={filterInput}
-              onChange={(e) => setFilterInput(e.target.value)}
+              onChange={setFilterInput}
               placeholder="Search names, imported text, amounts, or dates (2023, 03/15, -42.10)…"
               aria-label={isSyncCard ? "Search this card's transactions" : "Search this file's transactions"}
               title="Matches names, imported text, category, account, amount, or date. -42.10 is money paid out, +42.10 money received. Dates can be a year (2023), month-in-year (03/2023), or day (03/15/2023); a month (03) or month/day (03/15) matches every year. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or amount:-68."
-              style={{
-                flex: '0 1 360px',
-                minWidth: 240,
-                padding: '8px 12px',
-                fontSize: 13,
-                borderRadius: 8,
-                border: '1px solid var(--accent)',
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                outline: 'none',
-              }}
+              wrapperStyle={{ flex: '0 1 360px', minWidth: 240 }}
+              style={{ fontSize: 13, border: '1px solid var(--accent)' }}
             />
             <AttributeFilterControl
               attributes={filterAttributes}

@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog, Tooltip, RefreshButton, SearchInput } from '../components/ui.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
@@ -1829,24 +1829,18 @@ export default function Categories() {
       <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <input
-              type="search"
+            <SearchInput
               name="category-search"
               value={categorySearch}
-              onChange={event => setCategorySearch(event.target.value)}
+              onChange={setCategorySearch}
               placeholder="Search categories…"
               aria-label="Search categories"
               autoComplete="off"
+              wrapperStyle={{ flex: 1, minWidth: 0 }}
               style={{
-                flex: 1,
-                minWidth: 0,
                 padding: '9px 12px',
                 border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
-                borderRadius: 8,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
                 fontSize: 13,
-                outline: 'none',
               }}
             />
             {emptyCleanupCount > 0 ? (

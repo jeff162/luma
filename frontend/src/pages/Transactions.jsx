@@ -12,7 +12,7 @@ import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import AttributeFilterControl from '../components/AttributeFilterControl.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, Input, SelectAllCheckbox, Tooltip, RefreshButton } from '../components/ui.jsx'
+import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, SearchInput, SelectAllCheckbox, Tooltip, RefreshButton } from '../components/ui.jsx'
 import { planHidingProbes, hidingNoteText, hidingActionLabel } from '../lib/searchHidingProbe.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -958,30 +958,14 @@ export default function Transactions() {
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
         <div style={{ padding: '0 0 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Input
+            <SearchInput
               value={quickFilter}
               onChange={setQuickFilter}
               placeholder="Search…"
               aria-label="Search transactions"
               title="Matches names, imported text, category, account, date, amount, and the text inside attached documents. -42.10 is money paid out, +42.10 money received. Start with a keyword to search one field; everything after it is the value, e.g. merchant:city water, raw:meter reading (imported text only) or doc:brake pads."
-              style={{ width: 180 }}
+              wrapperStyle={{ width: 180 }}
             />
-            {quickFilter.trim() && (
-              <button
-                onClick={() => setQuickFilter('')}
-                style={{
-                  background: 'none',
-                  border: '1px solid var(--border)',
-                  color: 'var(--muted)',
-                  borderRadius: 8,
-                  padding: '5px 9px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-              >
-                Clear
-              </button>
-            )}
             <AmountFilterControl
               value={amountFilter}
               onChange={f => { setAmountFilter(f); isFirstLoad.current = true }}

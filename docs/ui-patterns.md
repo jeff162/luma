@@ -630,6 +630,9 @@ per-page handlers:
   contract: capture a snapshot on open, revert + restore focus to the trigger + `stopPropagation` on
   Escape. `RuleForm`'s clause chip is the reference; its single-value *rename* chip uses
   `TransientTextInput`'s `REVERT_DRAFT_AND_RESTORE_FOCUS` directly.
+- **`SearchInput`** applies the same contract to a search box, where clearing is the local edit: Escape
+  in a field holding text empties it and goes no further, and in an empty field passes through, so the
+  page or panel still backs out on it. Its in-field × is the pointer path to the same clear.
 
 Never add an app-wide/global `Esc` listener for this — each editor or layer owns its own Escape, gated
 on being open/active, so legitimate behaviors elsewhere are never disturbed.

@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
@@ -1026,6 +1026,75 @@ export const PasswordInput = forwardRef(function PasswordInput(
       >
         {revealing ? '…' : revealed ? 'Hide' : 'Show'}
       </button>
+    </div>
+  )
+})
+
+// The search box for a page or panel: the shared `Input` with a × inside its right edge while it holds text,
+// and Escape in the field clearing it. The × is drawn here rather than left to `type="search"` because the
+// browser's own is absent in Firefox and cannot be themed; `.ui-search-input` (index.html) hides that one so
+// there are never two. `type="search"` stays for what it tells assistive tech. Like PasswordInput's reveal,
+// the × is non-tabbable — Escape is the keyboard path — and `style` styles the field while `wrapperStyle`
+// sizes it.
+//
+// Escape is handled only while there is text to clear, and then goes no further: the pages and panels that
+// hold these boxes close or deselect on a window-level Escape, and one key press must not do both. On an
+// empty field it passes through untouched, so Escape still backs out of the surface as before.
+export const SearchInput = forwardRef(function SearchInput(
+  { value, onChange, onKeyDown, style, wrapperStyle, disabled = false, ...rest }, ref,
+) {
+  const fieldRef = useRef(null)
+  useImperativeHandle(ref, () => fieldRef.current, [])
+  const hasText = !!value
+
+  function clear() {
+    onChange('')
+    fieldRef.current?.focus()
+  }
+
+  function handleKeyDown(event) {
+    onKeyDown?.(event)
+    if (event.defaultPrevented || event.key !== 'Escape' || !hasText) return
+    event.preventDefault()
+    event.stopPropagation()
+    onChange('')
+  }
+
+  return (
+    <div style={{ position: 'relative', ...wrapperStyle }}>
+      <Input
+        {...rest}
+        ref={fieldRef}
+        type="search"
+        className="ui-search-input"
+        value={value}
+        onChange={onChange}
+        onKeyDown={handleKeyDown}
+        disabled={disabled}
+        style={{ width: '100%', ...style, paddingRight: 30 }}
+      />
+      {hasText && !disabled ? (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Clear search"
+          title="Clear search"
+          // Keeps focus in the field, so a click reads as editing the search rather than leaving it.
+          onMouseDown={event => event.preventDefault()}
+          onClick={clear}
+          style={{
+            position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 20, height: 20, padding: 0, borderRadius: 999,
+            background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer',
+          }}
+        >
+          <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" fill="none"
+            stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" />
+          </svg>
+        </button>
+      ) : null}
     </div>
   )
 })
