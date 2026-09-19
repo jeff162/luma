@@ -21,6 +21,7 @@ from backend.services.source_capabilities import (
     REJECT_ZERO_AMOUNT,
     SOURCE_AMAZON,
     SOURCE_CSV,
+    SOURCE_PAYPAL_STATEMENT,
     rejects_zero_amount,
     zero_amount_policy_for_source,
 )
@@ -47,6 +48,8 @@ class ZeroAmountPolicyTests(unittest.TestCase):
                          "a CSV carries no identity between files, so the placeholder is unreachable")
         self.assertEqual(zero_amount_policy_for_source(SOURCE_AMAZON), KEEP_ZERO_AMOUNT,
                          "a $0 Amazon order is a finished record, not a placeholder")
+        self.assertEqual(zero_amount_policy_for_source(SOURCE_PAYPAL_STATEMENT), REJECT_ZERO_AMOUNT,
+                         "a statement is a closed month nothing revises, and its $0 lines moved no money")
 
     def test_an_undeclared_source_is_an_error_rather_than_a_guess(self):
         with self.assertRaises(ValueError):

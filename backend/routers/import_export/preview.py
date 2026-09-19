@@ -21,8 +21,6 @@ The actual import (`/run`) and the shared parse/hash/header primitives it co-own
 this module reuses those primitives so preview and run agree on how a file is read.
 """
 
-import csv
-import io
 import json
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -32,11 +30,10 @@ from backend.db.database import get_db
 
 from .core import (
     MAX_DISTINCT_VALUES_PER_COLUMN,
+    PAYPAL_SOURCE_KIND,
     AmountColumnMap,
-    _detect_header_row_index,
-    make_import_file_hash,
     parse_amount,
-    sniff_paypal_activity,
+    parse_csv_text,
 )
 
 router = APIRouter()
@@ -72,9 +69,9 @@ def _summarize_tail_lines(all_lines: list[str], count: int = 20) -> tuple[list[s
 @router.post("/preview")
 async def preview_csv(file: UploadFile = File(...)):
     """
-    Parse the uploaded CSV and return (this is the second copy of the parse seam -- the first is in
-    `core.py::run_import_core`, and preview must read the same rows the import will; see
-    docs/building-a-connector.md -> Adding a file importer):
+    Parse the uploaded CSV and return (through the same front end as the import, `parse_csv_text`, so
+    the preview reads exactly the rows the import will; see docs/building-a-connector.md -> Adding a
+    file importer):
     - raw_lines: first 20 raw text lines (for the file preview panel)
     - header_row_index: which line index the header was detected on
     - headers: list of column names
@@ -94,29 +91,22 @@ async def preview_csv(file: UploadFile = File(...)):
         text = content.decode("latin-1")
 
     try:
-        all_lines = text.splitlines()
-        raw_lines  = all_lines[:20]
-        raw_tail_lines, raw_tail_start_line = _summarize_tail_lines(all_lines)
-
-        header_row_index = _detect_header_row_index(text)
-        data_text = "\n".join(all_lines[header_row_index:])
-        reader = csv.DictReader(io.StringIO(data_text))
-        raw_headers = reader.fieldnames or []
-        # Strip leading/trailing whitespace from header names — HTML option values
-        # trim whitespace, so a header like " Amount" would cause a key mismatch.
-        headers = [h.strip() for h in raw_headers]
-        all_rows = []
-        for row in reader:
-            stripped = {k.strip(): v for k, v in row.items() if k}
-            all_rows.append(stripped)
-        rows       = all_rows[:10]
-        total_rows = len(all_rows)
+        parsed = parse_csv_text(text)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+    all_lines = parsed.lines
+    raw_lines = all_lines[:20]
+    raw_tail_lines, raw_tail_start_line = _summarize_tail_lines(all_lines)
+    header_row_index = parsed.first_row_number - 2   # the header is the line above the first row
+    # Every header cell, blank ones included: a saved source's fingerprint is built from these.
+    headers = parsed.header_cells
+    all_rows = parsed.rows
+    rows = all_rows[:10]
+    total_rows = len(all_rows)
 
     filename  = file.filename or ""
     header_fp = "|".join(headers)
-    file_content_hash = make_import_file_hash(text)
+    file_content_hash = parsed.content_hash
 
     column_distinct_values: dict = {}
     column_value_counts: dict = {}
@@ -217,7 +207,7 @@ async def preview_csv(file: UploadFile = File(...)):
         "filename":               filename,
         "file_content_hash":      file_content_hash,
         "header_fingerprint":     header_fp,
-        "is_paypal":              sniff_paypal_activity(headers),
+        "is_paypal":              parsed.source_kind == PAYPAL_SOURCE_KIND,
         "suggested_profile_id":   suggested_profile_id,
         "previous_batch":         dict(previous_batch) if previous_batch else None,
         "previous_batch_accounts":previous_batch_accounts,

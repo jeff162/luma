@@ -170,8 +170,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
-    applyCategoryChange(txnId, cat, patch => setLocalMonthTxns(prev => prev.map(t => (
-      t.id === txnId ? { ...t, ...patch } : t
+    applyCategoryChange(txnId, cat, (patch, id) => setLocalMonthTxns(prev => prev.map(t => (
+      t.id === id ? { ...t, ...patch } : t
     ))))
   }
 

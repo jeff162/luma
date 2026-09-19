@@ -149,35 +149,41 @@ A file importer has no class and no handle to manage. What it has instead is a *
 nearly everything that goes wrong when adding a format goes wrong at that seam or in what it hands
 downstream.
 
-**The seam.** A format-specific front end produces `(headers: list, rows: list[dict])`, and everything
-after it is format-agnostic — account resolution, `ColumnMap`, amount and date parsing, duplicate
-detection, categorization, the batch/undo contract, the imported-category workspace. None of that
-learns what the file was. For CSV the front end is
-`bytes → decode → _detect_header_row_index → csv.DictReader`.
+**The seam.** A format-specific front end produces a `ParsedFile` (`routers/import_export/core.py`) —
+the headers, the rows keyed by them, a content hash, and the few things only the front end can know —
+and `run_import_parsed` does everything after it, format-agnostic: account resolution, `ColumnMap`,
+amount and date parsing, duplicate detection, categorization, the batch/undo contract, the
+imported-category workspace. None of that learns what the file was. For CSV the front end is
+`parse_csv_text` (`decode → _detect_header_row_index → csv.DictReader`), and the preview and the import
+both call it, so the preview reads exactly the rows the import will — a preview that read different rows
+would be worse than none, because it is trusted. The second front end is the PayPal statement reader
+(`services/paypal_statement.py`), which turns a PDF into rows under fixed column names and so skips the
+mapping stage altogether (`routers/import_export/paypal_statement.py`).
 
-**The seam is real but it is not yet a function, which is the first thing to know before adding a
-second format.** The parse is inlined and **duplicated**: `preview.py::preview_csv` and
-`core.py::run_import_core` each call `_detect_header_row_index(text)` and then build their own
-`csv.DictReader`. Preview and run therefore agree by construction today and would agree only by
-discipline once a second format exists — and a preview that reads different rows than the import is
-worse than no preview at all, because it is trusted. Extract the seam behind a format dispatch *before*
-adding a format, not alongside it (the unbuilt work is tracked in
-[`backlog/import-input-formats.md`](backlog/import-input-formats.md)).
+**Four CSV assumptions sat in that front end, and a format with no text breaks all four.** They are worth
+naming because none of them announces itself — each fails as wrong data rather than as an error — and
+`ParsedFile` is where each is answered:
 
-**Four CSV assumptions are buried in that front end**, and a non-text container breaks all four. They
-are worth naming because none of them announces itself — each fails as wrong data rather than as an
-error:
+* **The file hash.** It drives re-import recognition and profile matching, so `content_hash` is the
+  front end's to define. A CSV hashes its text; a format with none hashes what it parsed, and it must be
+  stable across a re-export of the same data, or every re-import looks like a new file. A PayPal
+  statement is hashed over its account, period and rows, so the same month downloaded again — a
+  different file — is still recognized.
+* **Header detection** scans lines, because exports carry preamble rows above the real header. It is
+  the CSV front end's own step; any tabular container needs the same over *cell* rows.
+* **Downstream parsers expect strings.** The amount and date parsers exist to interpret *human* text, so
+  a front end hands them strings (the statement reader keeps amounts as printed). A spreadsheet's floats
+  and datetimes are normalized at the boundary rather than teaching each parser a second input type.
+* **The file viewer has no analog** for a binary container. `lines` holds the text the viewer shows
+  around a bad row; a format with none leaves it empty, and the import then reports the row without
+  opening a viewer with nothing in it.
 
-* **`make_import_file_hash(text: str)` hashes text.** That hash drives re-import continuity and profile
-  matching, so a format with no `text` needs a content hash defined over its bytes or its parsed cells —
-  and it must be stable across a re-export of the same data, or every re-import looks like a new file.
-* **`_detect_header_row_index(text)` scans lines**, because exports routinely carry preamble rows above
-  the real header. Any tabular container needs the same detection over *cell* rows.
-* **Downstream parsers expect strings.** A spreadsheet hands back floats and datetimes, so the amount
-  and date parsers — which exist to interpret *human* text — receive values they never see from a CSV.
-  Normalize at the boundary rather than teaching each parser a second input type.
-* **The raw-text preview panel has no analog** for a binary container, and that needs an answer rather
-  than an omission.
+**What else only the front end can know.** Which source the rows come from (`source`) is what its
+declarations are read by — see [Zero-amount rows](#zero-amount-rows). Recognizing a source (`source_kind`) is decided where the
+file can be seen. A column's evidence role (below) is measured from a CSV, but a front end that cannot
+measure it — a month's statement is a handful of rows — declares it (`evidence_roles`). And a row can
+belong to another currency without saying so: a PayPal card deposit that paid for a payment in pounds is
+itself in dollars, so the front end names it (`currency_refusals`) and it is refused with the payment.
 
 **Source recognition is a header-only sniff.** `sniff_paypal_activity(headers)` tests whether a marker
 set is a subset of the file's cleaned header keys — no row inspection, because the header is the stable
@@ -197,7 +203,8 @@ or a structured datum that describes a row without naming it). Only descriptive 
 text matching. A categorical value admitted as descriptive turns the strong text test back into the weak
 one, and two unrelated rows sharing a type or a date match byte-identically at the tier that
 auto-confirms on merge. CSV import infers the role from a column's cardinality across the whole file;
-anything that cannot measure a file must stamp the role deliberately. See
+anything that cannot measure a file must stamp the role deliberately (a file front end does so through
+`ParsedFile.evidence_roles`). See
 [`data-model.md`](data-model.md) → *Import batches and profiles*.
 
 **Capture what is helpful.** A captured field is stored on every synced row, and every evidence field
@@ -286,7 +293,7 @@ the lookups. The signature of this regression is `added == skipped` exactly, wit
 ## Zero-amount rows
 
 A source may publish a transaction with **no amount**. Whether to keep it is not a universal fact — it
-depends on what a $0 row *means* from that source, and the four current sources answer for three different
+depends on what a $0 row *means* from that source, and the five current sources answer for three different
 reasons. The declaration and the rule live in `backend/services/source_capabilities.py`.
 
 **Keep $0 rows if either is true:**
@@ -307,10 +314,12 @@ own separate row, and duplicate detection cannot pair the two because their amou
 | Plaid | `keep` | Revises in place, via `modified` and `pending_transaction_id`. |
 | SimpleFIN | `reject` | No change feed and no pending pointer, so nothing *guarantees* reachability: a settling charge is sometimes re-sent under its original id (observed live) and sometimes arrives as a new one, stranding the placeholder. A revision that may or may not find the row cannot carry a policy whose whole premise is that it will. |
 | CSV / PayPal | `reject` | No identity carries between files, so nothing can ever revise the placeholder. |
+| PayPal statement | `reject` | A closed month's finished record that nothing revises; a $0 line in it moved no money — an authorization or a hold. |
 | Amazon | `keep` | A $0 order is a finished record; reconciliation would otherwise read it as an order whose charge was not found. |
 
 Adapters declare `zero_amount_rows` as a class attribute. **Sources that are code paths rather than
-adapter classes** — the CSV importer, the Amazon importer — have nowhere to put an attribute, so they are
+adapter classes** — the CSV importer, the PayPal statement importer, the Amazon importer — have nowhere
+to put an attribute, so they are
 registered in `_NON_ADAPTER_SOURCE_POLICY` and read through `zero_amount_policy_for_source`. Every call
 site goes through the single `rejects_zero_amount` predicate so a typo cannot mean "keep" in one place and
 "reject" in another.
@@ -607,11 +616,6 @@ address from outside and needs no list.
 
 ## Obstacles
 
-- **The CSV parse seam is duplicated, and extracting it has to come before a second file format.**
-  `preview.py` and `core.py` each build their own reader, so preview and run agree by construction today
-  and would agree only by discipline afterwards — and a preview that reads different rows than the
-  import is worse than none, because it is trusted. This is an ordering constraint, not a preference.
-  See [Adding a file importer](#adding-a-file-importer).
 - **A marketplace vendor whose export does not name the paying instrument cannot be linked at all**, only
   created — which makes every order double-count. No amount of matching effort recovers it, because
   amount and date alone match coincidental charges on any account. The check belongs before the design,
@@ -635,10 +639,9 @@ address from outside and needs no list.
 
 Decisions owed on this topic, each naming the live backlog item that will feed it.
 
-- **New *file* ingestion formats: XLSX, then the OFX/QFX/QBO family.** Both are gated on the same
-  prerequisite — extracting the parse seam so preview and run share one format dispatch instead of
-  duplicating the CSV parse. XLSX reuses the whole downstream unchanged; the OFX family additionally
-  needs a mapping-free import path and a `FITID` rung in duplicate detection.
+- **New *file* ingestion formats: XLSX, then the OFX/QFX/QBO family.** The parse seam they waited on is
+  extracted (`ParsedFile`). XLSX reuses the whole downstream unchanged; the OFX family additionally needs
+  a `FITID` rung in duplicate detection, and follows the PayPal statement import as its mapping-free path.
   → [`backlog/import-input-formats.md`](backlog/import-input-formats.md)
 - **OFX Direct Connect as a provider adapter** — a pull with no aggregator in the middle. Researched and
   parked on institution coverage. It would declare `revokes_on_disconnect = False` with no provider-side

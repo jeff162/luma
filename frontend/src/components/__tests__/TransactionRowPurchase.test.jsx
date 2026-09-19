@@ -23,6 +23,7 @@ vi.mock('../../lib/api.js', () => ({
     updatePurchase: vi.fn(),
     removePurchasePayment: vi.fn(),
     deletePurchase: vi.fn(),
+    getTransactions: vi.fn(),
   },
 }))
 
@@ -114,5 +115,32 @@ describe('the ledger purchase marker', () => {
       id: 'p1', label: 'Deck rebuild', position: 1, payment_count: 2,
       linked_total: 6000, expected_total: 6000,
     })
+  })
+})
+
+// The same glyph stands for a refund pairing (services/refund_links.py) rather than a marker of its own.
+// A pairing has nothing to edit, so the marker opens the transaction on the other side.
+describe('the link marker on a refund pairing', () => {
+  const REFUND_LINK = { role: 'refund', others: [{ id: 'pay', name: 'Harbor Cycle Works', date: '2026-04-22', amount: 54.95 }] }
+
+  it('names the payment and opens it in the detail panel', async () => {
+    api.getTransactions.mockResolvedValue({ transactions: [{ id: 'pay', amount: 54.95 }] })
+    const onOpenDetail = vi.fn()
+    const user = userEvent.setup()
+    renderRow({ refund_link: REFUND_LINK }, { onOpenDetail })
+
+    await user.click(screen.getByLabelText('Refund of Harbor Cycle Works · Apr 22, 2026 — open it'))
+    await waitFor(() => expect(onOpenDetail).toHaveBeenCalledWith({ id: 'pay', amount: 54.95 }))
+    expect(api.getTransactions).toHaveBeenCalledWith({ ids: 'pay', limit: 1 })
+  })
+
+  it('opens the purchase on a row that is both, since that is what can be edited', async () => {
+    const onOpenDetail = vi.fn()
+    const user = userEvent.setup()
+    renderRow({ purchase: SUMMARY, refund_link: REFUND_LINK }, { onOpenDetail })
+
+    await user.click(screen.getByLabelText(/open this purchase/))
+    expect(await screen.findByLabelText('Expected total')).toBeTruthy()
+    expect(onOpenDetail).not.toHaveBeenCalled()
   })
 })

@@ -68,10 +68,10 @@ export default defineConfig({
   // Selecting projects is the filter that survives that, so the npm scripts pass `--project`.
   //
   // The order is one-way by construction and the phases never overlap: `app` reads the demo ledger, a
-  // setup spec clears it, then the two lanes that want an empty tenant run one after the other. Within
-  // a phase specs still run in parallel as before.
+  // setup spec clears it, then the lanes that want an empty tenant run one after the other. Within a
+  // phase specs still run in parallel as before.
   //
-  // **`a11y` is chained behind `import` rather than beside it**, which costs a few seconds and buys the
+  // **`a11y` is chained behind `import` (through `marketplace`) rather than beside it**, which costs a few seconds and buys the
   // removal of a whole class of failure. Both lanes clear the saved data sources to reach a known-empty
   // manager, and run side by side they delete each other's: a spec that has selected a source watches it
   // vanish, the page drops the selection it no longer has (ImportExport.jsx, "drop a selected source
@@ -80,7 +80,7 @@ export default defineConfig({
   projects: [
     {
       name: 'app',
-      testIgnore: /(a11y-.*|import-mapping-controls)\.spec\.js/,
+      testIgnore: /(a11y-.*|import-mapping-controls|reconciliation-report|paypal-statement-import)\.spec\.js/,
     },
     {
       name: 'demo-cleared',
@@ -92,10 +92,17 @@ export default defineConfig({
       testMatch: /import-mapping-controls\.spec\.js/,
       dependencies: ['demo-cleared'],
     },
+    // Chained behind `import` for the same reason as `a11y`: it adds accounts and import batches to the
+    // empty tenant, which the mapping specs assume holds none. Each spec removes its own when it finishes.
+    {
+      name: 'marketplace',
+      testMatch: /(reconciliation-report|paypal-statement-import)\.spec\.js/,
+      dependencies: ['import'],
+    },
     {
       name: 'a11y',
       testMatch: /a11y-.*\.spec\.js/,
-      dependencies: ['import'],
+      dependencies: ['marketplace'],
     },
   ],
   webServer: managedServers,

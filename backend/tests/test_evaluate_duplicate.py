@@ -157,16 +157,16 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
 
     def test_covered_named_payment_with_no_ledger_charge_imports(self):
         # No corroborating charge (find_ledger_payment_match -> None): genuinely new, so it passes through.
-        verdict = self._eval_covered_payment(None, "VeloViewer Ltd")
+        verdict = self._eval_covered_payment(None, "Routeplot Ltd")
         self.assertTrue(verdict.passthrough)
         self.assertFalse(verdict.hard_reject)
 
     def test_covered_named_payment_with_a_ledger_charge_stays_rejected(self):
         # A matching card charge exists (find_payment_match -> a candidate): a real duplicate, kept
         # rejected, and the corroborating charge is surfaced in the report.
-        charge = {"id": "CARD-CHARGE", "date": "2025-10-16", "merchant_name": "PAYPAL RANDONNEURS",
+        charge = {"id": "CARD-CHARGE", "date": "2025-10-16", "merchant_name": "PAYPAL LONGRIDERS",
                   "amount": -10.00, "account_id": "ACCT-CARD", "account_name": "Northgate", "cross_account": True}
-        verdict = self._eval_covered_payment(charge, "RANDONNEURS USA")
+        verdict = self._eval_covered_payment(charge, "LONGRIDERS USA")
         self.assertTrue(verdict.hard_reject)
         self.assertEqual(verdict.matched["candidate_count"], 1)
         self.assertEqual(verdict.matched["candidates"][0]["id"], "CARD-CHARGE")

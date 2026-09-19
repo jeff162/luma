@@ -51,6 +51,11 @@ PAYPAL_HEADERS = [
 ]
 
 
+def _plan(rows, headers, col):
+    """The plan for a file, recognized as PayPal the way the CSV front end recognizes it."""
+    return _build_evidence_column_plan(rows, headers, col, is_paypal=sniff_paypal_activity(headers))
+
+
 class ClassifyEvidenceColumnRoleTests(unittest.TestCase):
     def test_low_cardinality_repeated_column_is_categorical(self):
         # PayPal "Type" shape: many rows, few heavily-repeated values.
@@ -86,15 +91,15 @@ class BuildEvidenceColumnPlanTests(unittest.TestCase):
         # evidence_columns is None (legacy/API path) -> zero-effort keyword auto-detect.
         headers = ["Date", "Description", "Amount", "Memo", "Notes"]
         rows = [{"Memo": "streaming", "Notes": "cancel soon"}]
-        plan = _build_evidence_column_plan(rows, headers, self._col())
+        plan = _plan(rows, headers, self._col())
         self.assertEqual({h for h, _ in plan}, {"Memo", "Notes"})
 
     def test_explicit_list_is_authoritative(self):
         # An explicit list captures exactly its columns and nothing else — a keyword column left off
         # the list (the user unchecked it) is not captured.
         headers = ["Date", "Description", "Amount", "Memo", "Item Title"]
-        rows = [{"Memo": "streaming", "Item Title": "Pats tix"}]
-        plan = _build_evidence_column_plan(rows, headers, self._col(evidence_columns=["Item Title"]))
+        rows = [{"Memo": "streaming", "Item Title": "Concert tix"}]
+        plan = _plan(rows, headers, self._col(evidence_columns=["Item Title"]))
         captured = {h for h, _ in plan}
         self.assertEqual(captured, {"Item Title"})
         self.assertNotIn("Memo", captured, "an unchecked keyword column must not sneak back in")
@@ -103,41 +108,41 @@ class BuildEvidenceColumnPlanTests(unittest.TestCase):
         # The user unchecked everything -> capture nothing (distinct from None, which auto-detects).
         headers = ["Date", "Description", "Amount", "Memo", "Notes"]
         rows = [{"Memo": "x", "Notes": "y"}]
-        self.assertEqual(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=[])), [])
+        self.assertEqual(_plan(rows, headers, self._col(evidence_columns=[])), [])
 
     def test_explicit_list_is_not_capped(self):
         # Explicit picks are the user's resolved choice, so the keyword cap doesn't apply.
         picks = ["Memo", "Notes", "Narrative", "Particulars", "Remittance", "Reference", "Payee"]
         headers = ["Date", "Description", "Amount", *picks]
         rows = [{h: f"val {h}" for h in picks}]
-        plan = _build_evidence_column_plan(rows, headers, self._col(evidence_columns=picks))
+        plan = _plan(rows, headers, self._col(evidence_columns=picks))
         self.assertEqual(len(plan), len(picks))
         self.assertGreater(len(plan), MAX_IMPORT_EVIDENCE_TEXT_FIELDS)
 
     def test_reserved_headers_never_captured(self):
         headers = ["Date", "Description", "Amount", "Notes"]
         # Even if the user names a mapped column, it isn't duplicated into evidence.
-        plan = _build_evidence_column_plan([{"Notes": "x"}], headers, self._col(notes="Notes", evidence_columns=["Notes", "Amount"]))
+        plan = _plan([{"Notes": "x"}], headers, self._col(notes="Notes", evidence_columns=["Notes", "Amount"]))
         self.assertEqual(plan, [])
 
     def test_explicit_categorical_pick_gets_categorical_role(self):
         headers = ["Date", "Description", "Amount", "Type"]
         rows = [{"Type": v} for v in (["Deposit"] * 4 + ["Withdrawal"] * 4)]
-        plan = dict(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=["Type"])))
+        plan = dict(_plan(rows, headers, self._col(evidence_columns=["Type"])))
         self.assertEqual(plan.get("Type"), EVIDENCE_ROLE_CATEGORICAL)
 
     def test_paypal_type_and_item_title_forced_even_when_unchecked(self):
         # The user unchecked everything for a PayPal file — Type/Item Title are still captured, because
         # money-movement categorization + enrichment depend on them.
-        rows = [{"Type": "Bank Deposit to PP Account", "Item Title": "Pats tix", "Name": "x"}]
-        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
+        rows = [{"Type": "Bank Deposit to PP Account", "Item Title": "Concert tix", "Name": "x"}]
+        plan = dict(_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
         self.assertIn("Type", plan)
         self.assertIn("Item Title", plan)
 
     def test_paypal_type_forced_even_when_keyword_autodetect_misses_it(self):
         # None path (keyword auto-detect): Type isn't a keyword, but a PayPal file still captures it.
         rows = [{"Type": "General Withdrawal", "Item Title": ""}]
-        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col()))
+        plan = dict(_plan(rows, PAYPAL_HEADERS, self._col()))
         self.assertIn("Type", plan)
         self.assertIn("Item Title", plan)
 
@@ -145,12 +150,19 @@ class BuildEvidenceColumnPlanTests(unittest.TestCase):
         # A bank CSV that happens to have a Type column, unchecked, must NOT get it forced in.
         headers = ["Date", "Description", "Amount", "Type"]
         rows = [{"Type": "DEBIT"}]
-        plan = dict(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=[])))
+        plan = dict(_plan(rows, headers, self._col(evidence_columns=[])))
         self.assertEqual(plan, {})
+
+    def test_forced_transaction_id_is_categorical_although_every_value_differs(self):
+        # Measured, a column unique on every row reads as descriptive text and would feed duplicate
+        # matching; an opaque identifier names nothing, so its role is declared.
+        rows = [{"Type": "Mobile Payment", "Transaction ID": f"{i}AB00000CD000000{i}"} for i in range(8)]
+        plan = dict(_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
+        self.assertEqual(plan.get("Transaction ID"), EVIDENCE_ROLE_CATEGORICAL)
 
     def test_forced_type_keeps_its_categorical_role(self):
         rows = [{"Type": v, "Item Title": f"t{i}"} for i, v in enumerate(["Deposit"] * 4 + ["Withdrawal"] * 4)]
-        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
+        plan = dict(_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
         self.assertEqual(plan.get("Type"), EVIDENCE_ROLE_CATEGORICAL)
 
 
@@ -164,24 +176,24 @@ class PaypalSourceRecognitionTests(unittest.TestCase):
         self.assertFalse(sniff_paypal_activity([]))
 
     def test_forced_evidence_headers_only_for_paypal(self):
-        self.assertEqual(_forced_evidence_headers(PAYPAL_HEADERS), ["Type", "Item Title"])
-        self.assertEqual(_forced_evidence_headers(["Date", "Type", "Item Title", "Amount"]), [])
+        self.assertEqual(_forced_evidence_headers(PAYPAL_HEADERS, True), ["Type", "Transaction ID", "Item Title"])
+        self.assertEqual(_forced_evidence_headers(["Date", "Type", "Item Title", "Amount"], False), [])
 
 
 class CollectDuplicateMatchTextsTests(unittest.TestCase):
     def test_categorical_field_excluded_descriptive_and_unmarked_included(self):
         evidence = {
-            "description": {"header": "Name", "value": "Clinton Moon"},
+            "description": {"header": "Name", "value": "Robin Vale"},
             "extra_text_fields": [
-                {"header": "Item Title", "value": "Pats tix"},                       # descriptive (unmarked)
+                {"header": "Item Title", "value": "Concert tix"},                       # descriptive (unmarked)
                 {"header": "Memo", "value": "gift", "role": "descriptive"},           # explicit descriptive
                 {"header": "Type", "value": "Bank Deposit", "role": "categorical"},   # excluded
             ],
         }
         texts = collect_duplicate_match_texts(
-            merchant_name="Clinton Moon", display_name="Clinton Moon", raw_name=None, import_evidence=evidence
+            merchant_name="Robin Vale", display_name="Robin Vale", raw_name=None, import_evidence=evidence
         )
-        self.assertIn("Pats tix", texts)
+        self.assertIn("Concert tix", texts)
         self.assertIn("gift", texts)
         self.assertNotIn("Bank Deposit", texts)
 

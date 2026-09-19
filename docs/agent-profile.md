@@ -557,7 +557,9 @@ for what the *user* can act on.
   most likely file to trip a lint is the one just written. This was reported as "the hook passes" and the
   user's very next commit failed on exactly the new file. To check work that adds files, either stage them
   first or invoke the checkers directly with the paths (`node scripts/check-backend-timestamps.js <files>`),
-  which is what the hook does anyway.
+  which is what the hook does anyway. The personal-data guard has the same blind spot from the other side:
+  with no paths it scans `git ls-files`, so a new test file passes `npm run lint` unread — name the new
+  files (`node scripts/check-personal-data.js $(git ls-files --others --exclude-standard)`).
 
 - **The backend timestamp guard runs in `npm run lint`, not in the test suite.**
   Despite the name, `scripts/check-backend-timestamps.js` is a Python lint rather than anything about file

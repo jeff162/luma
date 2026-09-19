@@ -1,0 +1,90 @@
+import { expect, test } from '@playwright/test'
+
+// The reconciliation reports as the app actually hosts them: opened from an import's file card or a deep
+// link, floating above the page, stashed to the navigation pane and restored with its data intact, and
+// acting on a row. Their behavior row by row is pinned in vitest; what only the real tree shows is that the
+// one app-level viewer, its lazily loaded dialog and each vendor's presentation are wired together — and,
+// for PayPal, that an import really runs the matching.
+//
+// Runs in the `marketplace` project, after the demo data is cleared — demo mode refuses imports.
+
+const ORDERS_CSV = [
+  'order id,order url,items,to,date,total,shipping,shipping_refund,gift,tax,refund,payments',
+  // Paid by a card nothing in the ledger carries, so no charge matches and the order lands in
+  // "No charge found" — a row with an action to take.
+  '111-0000001-0000001,,Desk Lamp; ,A,2026-02-10,24.99,0,,,1.50,,"Visa ending in 9999: 2026-02-10: $24.99; "',
+].join('\n')
+
+test('an Amazon import opens its reconciliation report, which minimizes, restores and acts on a row', async ({ page, request }) => {
+  const account = await (await request.post('/api/accounts', { data: { name: 'Spec Amazon', type: 'amazon' } })).json()
+  const imported = await request.post('/api/import-export/amazon/import', {
+    multipart: {
+      files: { name: 'spec-orders.csv', mimeType: 'text/csv', buffer: Buffer.from(ORDERS_CSV, 'utf8') },
+      account_id: account.id,
+      apply_categorization: 'false',
+    },
+  })
+  expect(imported.ok()).toBeTruthy()
+  const { batch_id: batchId } = await imported.json()
+
+  try {
+    await page.goto('/import-export')
+    await page.getByRole('button', { name: 'Amazon', exact: true }).click()
+    await page.getByRole('button', { name: /1 transaction · 1 to resolve/ }).click()
+
+    const report = page.getByText('Amazon reconciliation', { exact: true })
+    await expect(report).toBeVisible()
+    await expect(page.getByRole('button', { name: 'No charge found (1)' })).toBeVisible()
+
+    await page.getByRole('button', { name: '– Minimize' }).click()
+    await expect(report).toBeHidden()
+    await page.getByRole('button', { name: /Amazon reconciliation — spec-orders\.csv/ }).click()
+    await expect(page.getByRole('button', { name: 'No charge found (1)' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Mark reviewed', exact: true }).click()
+    await expect(page.getByText('✓ Reviewed')).toBeVisible()
+  } finally {
+    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
+    await request.delete(`/api/accounts/${account.id}`)
+  }
+})
+
+const PAYPAL_CSV = [
+  '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
+  '"2026-08-25","10:00:00","EDT","Harbor Relief Fund","Website Payment","Completed","USD","-50.00","0.00","-50.00","","","0.00","SPEC1",""',
+].join('\n')
+
+test('a PayPal import pairs with the card charge, and the review opens from its deep link', async ({ page, request }) => {
+  const paypal = await (await request.post('/api/accounts', { data: { name: 'Spec PayPal', type: 'paypal' } })).json()
+  const card = await (await request.post('/api/accounts', { data: { name: 'Spec Card', type: 'credit' } })).json()
+  await request.post('/api/transactions', {
+    data: { account_id: card.id, date: '2026-08-23', amount: 50, payee: 'PAYPAL *HARBOR RELIEF' },
+  })
+  const imported = await request.post('/api/import-export/run', {
+    multipart: {
+      file: { name: 'spec-paypal.csv', mimeType: 'text/csv', buffer: Buffer.from(PAYPAL_CSV, 'utf8') },
+      config: JSON.stringify({
+        filename: 'spec-paypal.csv',
+        account_id: paypal.id,
+        account_map: {},
+        column_map: { date: 'Date', description: 'Name', amount: 'Amount', evidence_columns: ['Type'] },
+        date_format: '%Y-%m-%d',
+        amount_convention: 'single_signed',
+        apply_categorization: false,
+      }),
+    },
+  })
+  expect(imported.ok()).toBeTruthy()
+  const { batch_id: batchId } = await imported.json()
+
+  try {
+    await page.goto('/import-export?review=paypal')
+    await expect(page.getByText('PayPal reconciliation', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Matched (1)' })).toBeVisible()
+    await expect(page.getByText('PAYPAL *HARBOR RELIEF')).toBeVisible()
+  } finally {
+    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
+    await request.delete(`/api/accounts/${paypal.id}`)
+    await request.delete(`/api/accounts/${card.id}`)
+  }
+})

@@ -370,6 +370,24 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "severity":    SEVERITY_WARNING,
             })
 
+        # The PayPal reconciliation is about the whole ledger rather than one file — matches are made after
+        # syncs as well as imports — so it has one entry, and its link opens the review itself.
+        from backend.services.paypal_funding import ledger_attention_count
+        paypal_attention = ledger_attention_count(conn)
+        if paypal_attention:
+            tasks.append({
+                "id":          "paypal_funding",
+                "title":       "PayPal transactions to reconcile",
+                "description": f"{paypal_attention} item{'s need' if paypal_attention != 1 else ' needs'} a look: a "
+                               "PayPal transaction with more than one possible bank or card match, one that moved "
+                               "money with no matching transaction found, or a PayPal charge on a bank or card "
+                               "account with no PayPal record.",
+                "count":       paypal_attention,
+                "link":        "/import-export?review=paypal",
+                "link_label":  "Open the PayPal review",
+                "severity":    SEVERITY_WARNING,
+            })
+
         tasks.extend(_recurring_signal_tasks(conn))
         tasks.extend(_rule_range_drift_tasks(conn))
         tasks.extend(_reimbursement_tasks(conn))

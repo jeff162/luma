@@ -2888,17 +2888,20 @@ def init_db(db_path: str | None = None):
         # may carry several.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_document_txn ON document(txn_id)")
         _create_recon_epoch_triggers(conn)
+        _bump_recon_epoch(conn)
         _create_purchase_link_prune_trigger(conn)
+        _create_refund_follow_trigger(conn)
         _create_document_search_index(conn)
         ensure_shared_owner(conn)
 
 
-# The Amazon reconciliation attention count (a duplicate charge to merge, or a split suggestion to
-# confirm) is surfaced per batch in the import history and summed into the Tasks nag — both read paths, hit
-# often. Computing it live per batch runs the whole reconciliation, so it is cached on the batch and
-# recomputed lazily only when stale (see amazon.reconciliation_attention_count). "Stale" is a single
-# monotonic epoch in db_meta ('recon_epoch'): any write to a table the reconciliation reads bumps it, and a
-# batch whose stored recon_epoch trails it is recomputed on the next read.
+# The reconciliation reports' attention counts (Amazon's per import batch, the PayPal reconciliation over the
+# whole ledger) are surfaced in the import history and the Tasks nag — both read paths, hit often.
+# Computing one runs the whole report, so it is cached and recomputed lazily only when stale (see
+# services/reconciliation_attention.py). "Stale" is a single monotonic epoch in db_meta ('recon_epoch'):
+# any write to a table a report reads bumps it, and a count stamped with an older epoch is recomputed on the
+# next read. Every table the PayPal review's buckets depend on (txn, txn_link and its members, account) is
+# already here.
 #
 # These are triggers, not Python bump calls at each mutation, on purpose: the charge-affecting writes are
 # scattered across many endpoints (every transaction edit, link/unlink, account merge/detach, funding-map
@@ -2919,8 +2922,8 @@ _RECON_EPOCH_SOURCE_TABLES = {
 
 
 def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
-    """Create (idempotently) the triggers that bump db_meta 'recon_epoch' on any write to a table the
-    Amazon reconciliation reads. Runs after run_migrations so every referenced table — including the ones a
+    """Create (idempotently) the triggers that bump db_meta 'recon_epoch' on any write to a table a
+    reconciliation report reads. Runs after run_migrations so every referenced table — including the ones a
     migration adds (amazon_funding_map, amazon_charge_distinct, amazon_charge_reviewed) — and db_meta exist
     on both fresh and migrated databases."""
     for table, events in _RECON_EPOCH_SOURCE_TABLES.items():
@@ -2933,6 +2936,18 @@ def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
                     ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
                 END
             """)
+
+
+def _bump_recon_epoch(conn: sqlite3.Connection) -> None:
+    """Make every cached reconciliation count stale, once per start. A cache is stamped only with the data
+    it was computed from, not the code that computed it, so without this a value cached by an earlier
+    version — in a shape or with a meaning that has since changed — would be served to the new code until
+    the next data write. New code only runs after a start, so a cache can never outlive the code that
+    wrote it; the cost is one recompute of each count on its next read."""
+    conn.execute(
+        """INSERT INTO db_meta (key, value) VALUES ('recon_epoch', 1)
+           ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"""
+    )
 
 
 # A `txn_link` row has no foreign key to `txn` — deliberately, since a link may outlive the rows it
@@ -2956,6 +2971,30 @@ def _create_purchase_link_prune_trigger(conn: sqlite3.Connection) -> None:
          AND NOT EXISTS (SELECT 1 FROM txn_link_member WHERE link_id = OLD.link_id)
         BEGIN
             DELETE FROM txn_link WHERE id = OLD.link_id;
+        END
+    """)
+
+# A refund paired with the payment it returns carries that payment's category, and must keep carrying it
+# when the payment is recategorized (services/refund_links.py). A trigger rather than a call at each write
+# site, for the reason the triggers above give: a transaction's category is written from many places —
+# a hand edit, bulk edit, every rule apply, Run categorization, an import's file labels, a split undone — and a missed one would leave the refund quietly counting against a category
+# its payment has left. Only a refund still following (`category_source = 'refund'`) moves, and not while
+# the payment is split, when its `category_id` is only the value the allocations replaced.
+def _create_refund_follow_trigger(conn: sqlite3.Connection) -> None:
+    """Create (idempotently) the trigger that moves a following refund with its payment's category. Runs
+    after run_migrations so every table it reads exists on fresh and migrated databases alike."""
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_refund_follows_payment
+        AFTER UPDATE OF category_id ON txn
+        WHEN NEW.category_id IS NOT OLD.category_id AND NEW.is_split = 0
+        BEGIN
+            UPDATE txn SET category_id = NEW.category_id
+            WHERE  category_source = 'refund'
+              AND  id IN (SELECT r.txn_id
+                          FROM   txn_link_member p
+                          JOIN   txn_link l ON l.id = p.link_id AND l.kind = 'refund'
+                          JOIN   txn_link_member r ON r.link_id = p.link_id AND r.role = 'refund'
+                          WHERE  p.txn_id = NEW.id AND p.role = 'payment');
         END
     """)
 

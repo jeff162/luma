@@ -539,7 +539,7 @@ export default function Transactions() {
     setEditId(null)
     if (catId == null) {
       // The picker's "Uncategorized" clear: drop the override back to unassigned.
-      applyCategoryChange(txnId, null, patch => reconcileCategorizedRow(txnId, patch),
+      applyCategoryChange(txnId, null, (patch, id) => reconcileCategorizedRow(id, patch),
         () => txnMutations.uncategorize(txnId))
       return
     }
@@ -547,7 +547,7 @@ export default function Transactions() {
     // Checked inside the updater, not against `categories`: a picker that just created the category has
     // already queued its own add, which this render's list does not show yet.
     if (catObj) addCategory(catObj)
-    applyCategoryChange(txnId, cat, patch => reconcileCategorizedRow(txnId, patch))
+    applyCategoryChange(txnId, cat, (patch, id) => reconcileCategorizedRow(id, patch))
   }
 
   // Single reconcile callback for a TransactionDetail panel: it persisted through txnMutations (which
@@ -909,6 +909,7 @@ export default function Transactions() {
             onUpdatePurchase={updatePurchase}
             onUpdateDocuments={updateDocuments}
             onMarkReviewed={bulkMode ? undefined : rowActions.markReviewed}
+            onOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
           />
         )
       case 'amount':

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
-import { useAmazonReconciliationViewer } from '../../contexts/AmazonReconciliationViewerContext.jsx'
+import { useReconciliationViewer } from '../../contexts/ReconciliationViewerContext.jsx'
 import { useAmazonImportDetailViewer } from '../../contexts/AmazonImportDetailViewerContext.jsx'
 
 // The shared import-history card for one marketplace vendor (Amazon, and any future AliExpress/Temu-style
@@ -20,12 +20,12 @@ import { useAmazonImportDetailViewer } from '../../contexts/AmazonImportDetailVi
 // registers its own here. `count` is the number of transactions the file imported; `attention` is how many
 // of its orders need action (a duplicate to resolve, a split match to confirm), which tints the pill.
 function AmazonReconciliationAction({ batch, count, attention = 0 }) {
-  const { open } = useAmazonReconciliationViewer()
+  const { open } = useReconciliationViewer()
   const warn = attention > 0
   return (
     <button
       type="button"
-      onClick={() => open({ batchId: batch.id, title: batch.filename })}
+      onClick={() => open({ vendor: 'amazon', batchId: batch.id, title: batch.filename })}
       title={warn
         ? `${attention} order${attention === 1 ? '' : 's'} need review — open the reconciliation report`
         : "Reconcile this import's orders against your card charges"}
@@ -83,7 +83,7 @@ function AmazonImportDetailPills({ batch, summary }) {
   const discarded = Number(s.items_discarded || 0)
   // How many of this items-before-orders card's items are *still* waiting for their orders file, live from
   // the ledger (`unmatched_item_count`). Once a later orders import attaches them the pill flips from a warn
-  // "no match" to a resolved "attached to orders" — so the card stops nagging about a resolved state.
+  // "no matching order" to a resolved "attached to orders" — so the card stops nagging about a resolved state.
   const stillWaiting = batch.unmatched_item_count == null ? discarded : Number(batch.unmatched_item_count)
   const dups = Number(s.already_applied || 0)
   const charges = Number(s.charges_matched || 0)
@@ -92,7 +92,7 @@ function AmazonImportDetailPills({ batch, summary }) {
       {orders > 0 ? <DetailPill count={orders} label={`order${orders === 1 ? '' : 's'}`} title="Orders this import created — click to see them and which file each came from" onClick={() => openAt('orders')} /> : null}
       {matched > 0 ? <DetailPill count={matched} label="items matched" title="Item detail folded into an order" onClick={() => openAt('items_matched')} /> : null}
       {alreadyEnriched > 0 ? <DetailPill count={alreadyEnriched} label="already enriched" title="Item rows whose order already had item detail — a re-imported items file" onClick={() => openAt('already_enriched')} /> : null}
-      {discarded > 0 && stillWaiting > 0 ? <DetailPill count={stillWaiting} label="no match" warn title="Item rows whose orders file isn’t here yet. Their detail is saved and will attach automatically when you import the orders file." onClick={() => openAt('items_discarded')} /> : null}
+      {discarded > 0 && stillWaiting > 0 ? <DetailPill count={stillWaiting} label="no matching order" warn title="Item rows whose orders file isn’t here yet. Their detail is saved and will attach automatically when you import the orders file." onClick={() => openAt('items_discarded')} /> : null}
       {discarded > 0 && stillWaiting === 0 ? <DetailPill count={discarded} label="attached to orders" title="These items had no orders file when imported; their detail has since been attached to orders from a later import." onClick={() => openAt('items_discarded')} /> : null}
       {dups > 0 ? <DetailPill count={dups} label="duplicates" title="Orders already imported (this file added nothing new). Click to see which." onClick={() => openAt('duplicates')} /> : null}
       {charges > 0 ? <DetailPill count={charges} label="payments" title="Matched card charges, by payment method" onClick={() => openAt('payments')} /> : null}

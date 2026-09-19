@@ -318,6 +318,7 @@ export default function TransactionListTable({
             onUpdatePurchase={(id, purchase) => patchRows(id, { purchase })}
             onUpdateDocuments={(id, documents) => patchRows(id, { documents })}
             onMarkReviewed={rowMenuEnabled ? rowActions.markReviewed : undefined}
+            onOpenDetail={onTransactionOpenDetail}
           />
         )
       case 'amount':

@@ -238,8 +238,8 @@ export default function ImportBatchDetail({
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
-    await applyCategoryChange(txnId, resolvedCategory, patch => setRows(prev => prev.map(txn => (
-      txn.id === txnId ? { ...txn, ...patch } : txn
+    await applyCategoryChange(txnId, resolvedCategory, (patch, id) => setRows(prev => prev.map(txn => (
+      txn.id === id ? { ...txn, ...patch } : txn
     ))))
   }
 

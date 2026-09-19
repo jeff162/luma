@@ -25,6 +25,7 @@ const CATEGORIZED_BY_LABEL = {
   rule: 'a categorization rule',
   import: 'category present in the source data',
   manual: 'manual edit',
+  refund: 'the payment it refunds',
 }
 
 // Display names for data-connection providers. A synced batch's `import_batch_provider` is the raw
@@ -45,6 +46,16 @@ export function parseImportEvidence(txn) {
   } catch {
     return null
   }
+}
+
+// The kind of transaction the source recorded (its `Type` column — PayPal's "General Credit Card
+// Withdrawal", say), or '' when none was captured. What a row with no name is shown as, since a funding
+// or withdrawal row genuinely has no counterparty and "—" says nothing about what it was.
+export function getTxnSourceType(txn) {
+  const extras = parseImportEvidence(txn)?.extra_text_fields
+  if (!Array.isArray(extras)) return ''
+  const field = extras.find(f => String(f?.header || '').trim().toLowerCase() === 'type')
+  return String(field?.value || '').trim()
 }
 
 function visibleMerchant(txn) {

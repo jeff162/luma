@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { api } from '../lib/api.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { sniffAmazonExportKind } from '../lib/amazonDetect.js'
+import { PaypalStatementImportDialog } from '../components/importExport/PaypalStatementImportDialog.jsx'
 import {
   Card,
   PageHeader,
@@ -60,7 +61,7 @@ import { DataConnectionsPanel } from '../components/connections/DataConnectionsP
 import { MarketplaceImportHistory } from '../components/importExport/MarketplaceImportHistory.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
-import { useAmazonReconciliationViewer } from '../contexts/AmazonReconciliationViewerContext.jsx'
+import { useReconciliationViewer } from '../contexts/ReconciliationViewerContext.jsx'
 import {
   getBlankImportSnapshot,
   getBlankMappingSuggestions,
@@ -170,6 +171,12 @@ function byMarketplaceCardRecency(a, b) {
   return String(a.imported_at || '') < String(b.imported_at || '') ? 1 : -1
 }
 
+// A PayPal monthly statement arrives as a PDF, or several in a zip; neither is a file the CSV importer
+// could read, so the name decides where it goes and the statement import says what is in it.
+function isPaypalStatementCandidate(file) {
+  return /\.(pdf|zip)$/i.test(file?.name || '')
+}
+
 // Keep the import UI recoverable if a preview or mapping render crashes.
 function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const navigate = useNavigate()
@@ -196,6 +203,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   // The per-Type drill-down report opened from the money-movement review's arrow (stacked over the dialog).
   const [moneyMovementReport, setMoneyMovementReport] = useState(null)
   const [moneyMovementApplying, setMoneyMovementApplying] = useState(false)
+  // PayPal statements dropped on the importer, awaiting the statement import dialog.
+  const [paypalStatementFiles, setPaypalStatementFiles] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -326,7 +335,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   // report can survive route changes. We hold onto the context handles here to open it and to
   // know when it has reloaded (so the file-card pill counts can be refreshed in step).
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
-  const amazonReconciliationViewer = useAmazonReconciliationViewer()
+  const reconciliationViewer = useReconciliationViewer()
   // Shared per-batch file-ledger panels (the `↗`). This tab keeps its own drill-through / URL openers
   // below, which call `openBatchDetail`.
   // The sync log opens as a report rather than standing on the page: it is read on the specific occasion
@@ -448,6 +457,15 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     navigate('/import-export', { replace: true })
   }, [location.search, batches, navigate, openBatchDetail])
 
+  // `?review=paypal` is the Tasks entry's way into the PayPal reconciliation, which is about the whole
+  // ledger rather than one file. Honored once on arrival, then cleaned from the URL like the one above.
+  const openReconciliation = reconciliationViewer.open
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('review') !== 'paypal') return
+    openReconciliation({ vendor: 'paypal', title: '' })
+    navigate('/import-export', { replace: true })
+  }, [location.search, navigate, openReconciliation])
+
   // When the user resolves rows from the floating dialog, the file-card pill counts on this
   // page need to refresh so the displayed numbers stay honest. The context advances
   // `viewer.data.version` on every load — opening the report included, which is what lets a pill that
@@ -459,13 +477,13 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     api.listBatches().then(setBatches).catch(() => { })
   }, [viewerVersion])
 
-  // Same idea for the Amazon reconciliation report: resolving items there changes a batch's "N to resolve"
-  // count (recomputed in listBatches), so refresh the data-sources cards when that report reloads.
-  const amazonReconVersion = amazonReconciliationViewer.viewer?.data?._version || 0
+  // Same idea for the reconciliation reports: resolving items there changes a batch's "N to resolve"
+  // count (recomputed in listBatches), so refresh the data-sources cards when a report loads.
+  const reconVersion = reconciliationViewer.viewer?.data?.version || 0
   useEffect(() => {
-    if (amazonReconVersion === 0) return
+    if (reconVersion === 0) return
     api.listBatches().then(setBatches).catch(() => { })
-  }, [amazonReconVersion])
+  }, [reconVersion])
 
   // And when a sync run ends, wherever it was started: a sync writes onto this page's connection cards and
   // moves their "Last synced", and a history loaded before it finished would otherwise go on showing the
@@ -1913,6 +1931,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   // runs the mismatch verification inside proceedWithImport.
   async function handleFile(file, options = {}) {
     if (!file) return
+    if (isPaypalStatementCandidate(file)) {
+      setPaypalStatementFiles([file])
+      return
+    }
     // An AZAD Amazon export isn't a mappable CSV — detect it by header and hand it to the Amazon import
     // flow (which owns the account choice + linking) instead of the column-mapping path.
     if (onAmazonDetected) {
@@ -1971,12 +1993,16 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
       })
       return
     }
+    // PayPal statements (PDFs, or zips of them) go to their own import; the rest are CSV or Amazon.
+    const statementFiles = files.filter(isPaypalStatementCandidate)
+    if (statementFiles.length) setPaypalStatementFiles(statementFiles)
+    const otherFiles = files.filter(file => !isPaypalStatementCandidate(file))
     // Route any AZAD Amazon exports to the Amazon flow (which already accepts multiple); the rest are CSV.
-    let csvFiles = files
+    let csvFiles = otherFiles
     if (onAmazonDetected) {
       const amazon = []
       csvFiles = []
-      for (const file of files) {
+      for (const file of otherFiles) {
         const head = await file.slice(0, 16384).text().catch(() => '')
         if (sniffAmazonExportKind(head.split(/\r?\n/, 1)[0])) amazon.push(file)
         else csvFiles.push(file)
@@ -3229,6 +3255,19 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
 
   return (
     <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
+      {paypalStatementFiles ? (
+        <PaypalStatementImportDialog
+          files={paypalStatementFiles}
+          accounts={accounts}
+          onClose={() => setPaypalStatementFiles(null)}
+          // The import may have created the PayPal data source, whose cards show only once the page has it.
+          onImported={async () => {
+            const [nextProfiles, nextBatches] = await Promise.all([api.getImportProfiles(), api.listBatches()])
+            handleManagerDataChange({ profiles: nextProfiles, batches: nextBatches })
+          }}
+          onAccountsChanged={async () => setAccounts(await api.getAccounts({ include_children: true }))}
+        />
+      ) : null}
       {noticeDialog ? (
         <AppNoticeDialog
           title={noticeDialog.title}
@@ -4573,6 +4612,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
           handleUndoClick={openUndo}
           openRejectedRowsViewer={openRejectedRowsViewer}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}
+          openReconciliationViewer={reconciliationViewer.open}
         />
       )}
 
@@ -4853,7 +4893,7 @@ function AmazonImportTab({ initialFiles }) {
   const [amazonBatches, setAmazonBatches] = useState([])   // this tab's recent Amazon imports
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const fileInputRef = useRef(null)
-  const amazonReconciliationViewer = useAmazonReconciliationViewer()
+  const reconciliationViewer = useReconciliationViewer()
 
   const loadAccounts = useCallback(
     () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => {}),
@@ -4881,8 +4921,8 @@ function AmazonImportTab({ initialFiles }) {
   }, [accounts, accountId, setAccountId])
 
   // Resolving items in the floating reconciliation report changes a batch's "N to resolve" count, which the
-  // backend recomputes in listBatches — so refetch this tab's Amazon batches when the report reloads.
-  const reconVersion = amazonReconciliationViewer.viewer?.data?._version || 0
+  // backend recomputes in listBatches — so refetch this tab's Amazon batches when the report loads.
+  const reconVersion = reconciliationViewer.viewer?.data?.version || 0
   useEffect(() => {
     if (reconVersion === 0) return
     loadBatches()
@@ -5206,7 +5246,7 @@ function AmazonImportTab({ initialFiles }) {
                 return (
                   <div key={b.batch_id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
                     <button
-                      onClick={() => amazonReconciliationViewer.open({ batchId: b.batch_id, title: b.filename })}
+                      onClick={() => reconciliationViewer.open({ vendor: 'amazon', batchId: b.batch_id, title: b.filename })}
                       style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13, textAlign: 'left' }}
                     >
                       {b.filename} →
@@ -5224,7 +5264,7 @@ function AmazonImportTab({ initialFiles }) {
           <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
             {importedBatches.length === 1 ? (
               <button
-                onClick={() => amazonReconciliationViewer.open({ batchId: importedBatches[0].batch_id, title: importedBatches[0].filename })}
+                onClick={() => reconciliationViewer.open({ vendor: 'amazon', batchId: importedBatches[0].batch_id, title: importedBatches[0].filename })}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
               >
                 View reconciliation report →

@@ -12,16 +12,13 @@ arriving at this file, so the pointer belongs here.
 
 What remains is the two *file* formats, both unstarted, and the prerequisite they share.
 
-## The shared prerequisite — extract the parse seam
+## The shared prerequisite — done
 
-The seam itself, the four CSV assumptions buried in it, and why extraction has to come *before* a second
-format rather than alongside one are described in
-[`../building-a-connector.md`](../building-a-connector.md) → *Adding a file importer*. That is the
-durable half and it belongs there; what is deferred is the extraction.
-
-The work: the parse is inlined and duplicated in `routers/import_export/preview.py::preview_csv` and
-`core.py::run_import_core`, and the generalization is from "pass `text`, parse with csv inside" to
-"parse at the boundary, pass rows in" behind a format dispatch. It gates both formats below.
+The parse seam is extracted: a front end produces a `ParsedFile` and `run_import_parsed` does the rest,
+with the CSV front end (`parse_csv_text`) shared by the preview and the import. The PayPal monthly
+statement import (2026-09-18) was the second front end, and it answered the four CSV assumptions the way
+the two formats below will need — see [`../building-a-connector.md`](../building-a-connector.md) → *Adding
+a file importer*. What remains for them is a front end each, and XLSX's header detection over cell rows.
 
 ## Tier 1 — XLS / XLSX
 
@@ -41,8 +38,9 @@ do first: nothing past the seam changes.
 OFX is a structured exchange format with a defined schema (`<STMTTRN>`: `TRNTYPE` / `DTPOSTED` /
 `TRNAMT` / `FITID` / `NAME` / `MEMO` / `CHECKNUM`; `<BANKACCTFROM>` with `BANKID` / `ACCTID`). QFX and
 QBO are Intuit's branded variants, so supporting OFX gets roughly all three. Because the fields are
-known, this does **not** go through column mapping — it needs a branched, mapping-free flow that maps
-OFX fields to internal ones in code and then feeds the existing construction/dedupe/categorize stages.
+known, this does **not** go through column mapping — it needs a mapping-free flow that maps OFX fields
+to internal ones in code and then feeds the existing construction/dedupe/categorize stages, which is the
+shape the PayPal statement import already has (`routers/import_export/paypal_statement.py`).
 Bigger than tier 1: a new parser *plus* a new UX path *plus* a change to dedupe.
 
 - **Parser.** OFX 1.x is SGML (unclosed tags, not valid XML) and 2.x is XML, both behind a header block,

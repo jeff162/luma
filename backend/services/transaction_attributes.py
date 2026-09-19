@@ -99,6 +99,18 @@ ATTRIBUTES: tuple[Attribute, ...] = (
         ),
     ),
     Attribute(
+        key="refund",
+        # Both sides of the pairing, as `reimbursable` covers both sides of its own: the row marks each
+        # with the same link glyph, and someone looking for refunds wants the payment beside the money
+        # that came back on it. See services/refund_links.py.
+        label="Refunded",
+        description="A payment money came back on, or the refund that returned it.",
+        sql=(
+            "EXISTS (SELECT 1 FROM txn_link_member m JOIN txn_link l ON l.id = m.link_id "
+            "        WHERE m.txn_id = t.id AND l.kind = 'refund')"
+        ),
+    ),
+    Attribute(
         key="split",
         label="Split",
         description="Divided across more than one category.",

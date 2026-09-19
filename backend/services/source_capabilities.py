@@ -15,7 +15,7 @@ Zero-amount rows
 ----------------
 
 A source may publish a transaction with **no amount**. Whether that row is worth keeping is not a
-universal fact — it depends on what a $0 row *means* coming from that particular source, and the four
+universal fact — it depends on what a $0 row *means* coming from that particular source, and the five
 sources answer for three different reasons. A source keeps its $0 rows if **either** is true:
 
   1. **The row is reachable later.** A pending charge is often published before it carries an amount
@@ -54,6 +54,7 @@ ZERO_AMOUNT_REJECTION_REASON = "Zero amount"
 # themselves (`ProviderAdapter`); these have nowhere to put it.
 SOURCE_CSV = "csv"
 SOURCE_AMAZON = "amazon"
+SOURCE_PAYPAL_STATEMENT = "paypal_statement"
 
 _NON_ADAPTER_SOURCE_POLICY: dict[str, ZeroAmountPolicy] = {
     # Reason 1 does not apply: a CSV carries no identity between files, so a later file's settled row is
@@ -65,6 +66,9 @@ _NON_ADAPTER_SOURCE_POLICY: dict[str, ZeroAmountPolicy] = {
     # promotional, or a return that nets to zero — not a placeholder awaiting an amount. Reconciliation
     # depends on seeing them; a $0 order that vanished would read as an order with no charge found.
     SOURCE_AMAZON: KEEP_ZERO_AMOUNT,
+    # Neither reason applies to a PayPal monthly statement: it is a closed month's finished record that
+    # nothing revises, and a $0 line in it moved no money — an authorization or a hold, not a purchase.
+    SOURCE_PAYPAL_STATEMENT: REJECT_ZERO_AMOUNT,
 }
 
 

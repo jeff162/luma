@@ -883,7 +883,7 @@ export default function Recurring() {
 
   const saveCategory = useCallback((txnId, catId, catObj) => {
     const cat = catObj || categories.find(c => c.id === catId) || null
-    applyCategoryChange(txnId, cat, patch => applyCategoryToRow(txnId, patch))
+    applyCategoryChange(txnId, cat, (patch, id) => applyCategoryToRow(id, patch))
   }, [categories, applyCategoryToRow])
 
   // load/scan/filter-toggle rebuild the layout snapshot; in-place card updates deliberately do not. The

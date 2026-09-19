@@ -56,6 +56,7 @@ from backend.services.documents import (
     sweep_unreferenced_files,
 )
 from backend.services.purchase_links import purchase_for_txn, purchase_map_for
+from backend.services.refund_links import following_refund_ids, refund_map_for
 from backend.services.reimbursements import (
     receivable_amounts,
     receivable_parts,
@@ -1187,6 +1188,9 @@ def list_transactions(
         # row can be part of several — two friends' shares of one charge, a deposit repaying both — so a
         # singular field would name one and hide the rest. See services/reimbursements.py.
         reimbursements_by_txn = reimbursement_map_for(conn, txn_ids) if rows else {}
+        # The refund pairing each row is on either side of, for the same link marker the purchase uses:
+        # who the other side is, so the marker can name it and open it. See services/refund_links.py.
+        refunds_by_txn = refund_map_for(conn, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
@@ -1199,6 +1203,7 @@ def list_transactions(
             txn["document_count"] = len(docs)
             txn["purchase"] = purchases_by_txn.get(txn["id"])
             txn["reimbursements"] = reimbursements_by_txn.get(txn["id"], [])
+            txn["refund_link"] = refunds_by_txn.get(txn["id"])
 
     return {
         "total": total,
@@ -1514,7 +1519,10 @@ def override_category(txn_id: str, body: CategoryOverride):
         if body.category_id != txn["category_id"]:
             rescan_edited_transactions(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
-    return {"ok": True, **resolved}
+        followed_ids = following_refund_ids(conn, [txn_id])
+    # `followed_ids`: the refunds that moved with this row's category (services/refund_links.py), which
+    # the client refetches — its patch covers only the row it edited.
+    return {"ok": True, **resolved, "followed_ids": followed_ids}
 
 
 # --- Splits -----------------------------------------------------------------------------------
@@ -1851,7 +1859,8 @@ def clear_override(txn_id: str):
         if had_category:
             rescan_edited_transactions(conn, [txn_id])
         resolved = _resolved_tags_response(conn, txn_id)
-    return {"ok": True, **resolved}
+        followed_ids = following_refund_ids(conn, [txn_id])
+    return {"ok": True, **resolved, "followed_ids": followed_ids}
 
 
 # Soft-delete (trash) mirrors the account-trash pattern in routers/accounts.py: stamp `trashed_at`
@@ -2107,10 +2116,13 @@ def bulk_update_transactions(body: BulkUpdateRequest):
         # filters by payee, so a per-row call would repeat that load for every row selected.
         if touches_recurring:
             rescan_edited_transactions(conn, target_ids, prior_payee_keys=prior_keys)
+        followed_ids = following_refund_ids(conn, target_ids) if "set_category" in kinds else []
     # `skipped_splits` counts rows a set_category action left alone because they are split. Reported
     # rather than folded into the total: "updated 40" when 3 of them kept their old categorization is
-    # a number the user would act on wrongly.
-    return {"updated_count": len(target_ids), "skipped_splits": skipped_splits}
+    # a number the user would act on wrongly. `followed_ids` are the refunds that moved with a
+    # recategorized payment (services/refund_links.py) — not counted as updated, since the user did not
+    # select them, but named so the client can refresh them.
+    return {"updated_count": len(target_ids), "skipped_splits": skipped_splits, "followed_ids": followed_ids}
 
 
 @router.post("/{txn_id}/restore")

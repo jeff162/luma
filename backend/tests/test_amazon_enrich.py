@@ -687,7 +687,7 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             first = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
                                       filename="2016-items.csv", file_hashes=items_hashes)
-            self.assertEqual(first["counts"]["items_discarded"], 1)   # parked, shown as "no match" on its card
+            self.assertEqual(first["counts"]["items_discarded"], 1)   # parked, shown as "no matching order" on its card
             self.assertEqual([b["filename"] for b in first["batches"]], ["2016-items.csv"])
             self.assertEqual(_imported_amazon_file_hashes(conn), set())   # items file stays re-importable
             self.assertEqual(conn.execute(
@@ -1846,7 +1846,7 @@ class AmazonOrdersTests(unittest.TestCase):
     # ---- reconciliation attention count is cached and invalidated by charge edits ------------------
 
     def _recon_epoch(self):
-        from backend.routers.import_export.amazon import _recon_epoch
+        from backend.services.reconciliation_attention import recon_epoch as _recon_epoch
         with self._use_db_path(), get_db() as conn:
             return _recon_epoch(conn)
 
@@ -1872,6 +1872,17 @@ class AmazonOrdersTests(unittest.TestCase):
             conn.execute("UPDATE import_batch SET recon_attention_count = 999 WHERE id = ?", (batch_id,))
         with self._use_db_path(), get_db() as conn:
             self.assertEqual(reconciliation_attention_count(conn, batch_id), 999, "a clean read serves the cache, not a recompute")
+
+    def test_a_restart_invalidates_the_cache(self):
+        # A cached value is stamped only with the data it came from, so one written by earlier code must not
+        # outlive a start: new code may compute it differently.
+        batch_id, _dup = self._batch_with_a_duplicate()
+        with self._use_db_path(), get_db() as conn:
+            reconciliation_attention_count(conn, batch_id)
+            conn.execute("UPDATE import_batch SET recon_attention_count = 999 WHERE id = ?", (batch_id,))
+        init_db(str(self.db_path))
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
 
     def test_a_charge_edit_invalidates_the_cache(self):
         batch_id, dup = self._batch_with_a_duplicate()

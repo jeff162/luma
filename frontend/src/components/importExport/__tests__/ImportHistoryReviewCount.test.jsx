@@ -104,6 +104,30 @@ describe('a collapsed data-source row', () => {
     expect(screen.getByRole('button', { name: '2 duplicates' })).toBeTruthy()
   })
 
+  it('totals what its cards\' PayPal reconciliations need, counting a row listed by two cards once', async () => {
+    const setExpanded = vi.fn()
+    render(
+      <ImportHistorySection
+        dataSourceRows={[connectionRow([
+          { ...card('August 2026', 0), paypal_recon_rows: 4, paypal_recon_attention_ids: ['p1', 'bank1'] },
+          { ...card('September 2026', 0), paypal_recon_rows: 2, paypal_recon_attention_ids: ['bank1'] },
+        ])]}
+        profiles={[]}
+        expandedSourceRows={{}}
+        buildBatchImportedCategoryChoices={() => []}
+        setExpandedSourceRows={setExpanded}
+        totalSystemCategoryWorkspaceCount={0}
+        pendingSystemCategoryCount={0}
+        hasSystemRuleSuggestionWork={false}
+        pendingSystemRuleSuggestionCount={0}
+        getSourceNameEditKey={() => ''}
+        openReconciliationViewer={vi.fn()}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '⚠ 2 to resolve' }))
+    expect(setExpanded.mock.calls[0][0]({})).toEqual({ 'connection:c1': true })
+  })
+
   it('points its review count at the connection\'s cards rather than at imported files', () => {
     renderSection([connectionRow([card('August 2026', 2)])])
     expect(screen.getByRole('button', { name: '2 to review' }).getAttribute('title'))

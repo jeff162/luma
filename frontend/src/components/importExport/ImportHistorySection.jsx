@@ -61,6 +61,7 @@ export function ImportHistorySection({
   onReviewMoneyMovement,
   openRejectedRowsViewer,
   openUnifiedDuplicatesViewer,
+  openReconciliationViewer,
 }) {
   return (
         <>
@@ -196,6 +197,11 @@ export function ImportHistorySection({
                     (sum, b) => sum + Math.max(0, Number(b?.needs_review_count || 0)),
                     0,
                   )
+                  // And for the PayPal reconciliation. Counted by row rather than summed: a bank charge with
+                  // no PayPal record is listed by every card whose dates cover it.
+                  const paypalAttentionCount = openReconciliationViewer
+                    ? new Set(row.batches.flatMap(b => b?.paypal_recon_attention_ids || [])).size
+                    : 0
 
                   return (
                     <div key={row.key}>
@@ -401,6 +407,33 @@ export function ImportHistorySection({
                                       {needsReviewCount} to review
                                     </button>
                                   ) : null}
+                                  {paypalAttentionCount > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedSourceRows(prev => {
+                                        const nextState = prev && typeof prev === 'object' ? prev : {}
+                                        return { ...nextState, [row.key]: true }
+                                      })}
+                                      title={`${paypalAttentionCount} PayPal reconciliation item${paypalAttentionCount === 1 ? '' : 's'} across ${rowScopeNoun} need${paypalAttentionCount === 1 ? 's' : ''} a look — expand to open the per-${isConnection ? 'card' : 'file'} reconciliation`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 4,
+                                        marginLeft: 4,
+                                        padding: '1px 7px',
+                                        borderRadius: 99,
+                                        background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+                                        color: 'var(--warning)',
+                                        border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        lineHeight: 1.5,
+                                      }}
+                                    >
+                                      ⚠ {paypalAttentionCount} to resolve
+                                    </button>
+                                  ) : null}
                                 </>
                               ) : null}
                             </div>
@@ -453,6 +486,11 @@ export function ImportHistorySection({
                             const suspectDuplicates = Number(b.suspect_duplicate_count || 0)
                             const settledDuplicates = summary.dedupedCount + Number(b.removed_duplicate_count || 0)
                             const duplicateTotal = settledDuplicates + suspectDuplicates
+                            // The card's share of the PayPal reconciliation (a PayPal file, or a sync that
+                            // includes a PayPal account), offered only when it lists something and tinted
+                            // when something in it needs a look.
+                            const hasPaypalRecon = Number(b.paypal_recon_rows || 0) > 0 && !!openReconciliationViewer
+                            const paypalAttention = (b.paypal_recon_attention_ids || []).length
                             const batchImportedCategoryChoices = buildBatchImportedCategoryChoices(b)
                             const batchImportedCategorySummary = summarizeImportedCategorySettings(
                               extractImportedCategorySettings(b),
@@ -612,7 +650,7 @@ export function ImportHistorySection({
                                     ) : null}
                                   </div>
                                 </div>
-                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) && (
+                                {(b.accounts?.length > 0 || hasPaypalRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) && (
                                   <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                                     {/* Descriptive account chips (how many rows came from each account) wrap on
                                         their own row; the clickable action pills are split out into the labeled
@@ -631,13 +669,35 @@ export function ImportHistorySection({
                                     ))}
                                       </div>
                                     ) : null}
-                                    {(summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) ? (
+                                    {(hasPaypalRecon || summary.rejectedCount > 0 || duplicateTotal > 0 || Number(b.needs_review_count || 0) > 0) ? (
                                       <div style={{
                                         marginTop: b.accounts?.length > 0 ? 8 : 0,
                                         display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                                         border: '1px dashed color-mix(in srgb, var(--border) 80%, transparent)',
                                         borderRadius: 10, padding: '6px 10px',
                                       }}>
+                                    {hasPaypalRecon ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openReconciliationViewer({ vendor: 'paypal', batchId: b.id, title: b.filename })}
+                                        title={paypalAttention > 0
+                                          ? `${paypalAttention} PayPal reconciliation item${paypalAttention === 1 ? '' : 's'} in ${batchNoun} need${paypalAttention === 1 ? 's' : ''} a look — open the PayPal reconciliation`
+                                          : `How the PayPal transactions in ${batchNoun} match card and bank transactions`}
+                                        style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                                          fontSize: 11, padding: '2px 7px', borderRadius: 99, cursor: 'pointer',
+                                          fontWeight: paypalAttention > 0 ? 600 : 400,
+                                          background: paypalAttention > 0 ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))' : 'var(--surface2)',
+                                          color: paypalAttention > 0 ? 'var(--warning)' : 'var(--muted)',
+                                          border: paypalAttention > 0
+                                            ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))'
+                                            : '1px solid var(--border)',
+                                        }}
+                                      >
+                                        <span>{paypalAttention > 0 ? `⚠ ${paypalAttention} to resolve` : 'Reconciliation'}</span>
+                                        <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
+                                      </button>
+                                    ) : null}
                                     {summary.rejectedCount > 0 ? (
                                       <button
                                         type="button"

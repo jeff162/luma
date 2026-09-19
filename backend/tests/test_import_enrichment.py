@@ -34,32 +34,32 @@ from backend.services.import_enrichment import (
 
 # A PayPal-style incoming payment leg: the counterparty and the item title the stored row lacks.
 INCOMING_EVIDENCE = {
-    "description": {"header": "Name", "value": "Clinton Moon"},
-    "extra_text_fields": [{"header": "Item Title", "value": "Pats tix"}],
+    "description": {"header": "Name", "value": "Robin Vale"},
+    "extra_text_fields": [{"header": "Item Title", "value": "Concert tix"}],
 }
 
 
 class DeltaTests(unittest.TestCase):
     def test_delta_keeps_only_novel_values(self):
-        existing_evidence = {"description": {"header": "Merchant", "value": "Payment to Clinton Moon"}}
-        delta = compute_enrichment_delta(existing_evidence, ("Payment to Clinton Moon", None, None), INCOMING_EVIDENCE)
+        existing_evidence = {"description": {"header": "Merchant", "value": "Payment to Robin Vale"}}
+        delta = compute_enrichment_delta(existing_evidence, ("Payment to Robin Vale", None, None), INCOMING_EVIDENCE)
         values = {f["value"] for f in delta}
-        self.assertIn("Pats tix", values)       # genuinely new detail
-        self.assertIn("Clinton Moon", values)   # differs from the stored "Payment to Clinton Moon"
+        self.assertIn("Concert tix", values)       # genuinely new detail
+        self.assertIn("Robin Vale", values)   # differs from the stored "Payment to Robin Vale"
 
     def test_delta_skips_values_already_present(self):
         # The row already carries both the counterparty and the item title → nothing new to add.
         existing_evidence = {
-            "description": {"header": "Merchant", "value": "Clinton Moon"},
-            "extra_text_fields": [{"header": "Memo", "value": "Pats tix"}],
+            "description": {"header": "Merchant", "value": "Robin Vale"},
+            "extra_text_fields": [{"header": "Memo", "value": "Concert tix"}],
         }
-        delta = compute_enrichment_delta(existing_evidence, ("Clinton Moon", None, None), INCOMING_EVIDENCE)
+        delta = compute_enrichment_delta(existing_evidence, ("Robin Vale", None, None), INCOMING_EVIDENCE)
         self.assertEqual(delta, [])
 
     def test_delta_matches_against_the_rows_names_too(self):
         # A value equal to the display/merchant/raw name is not novel even if absent from evidence.
-        delta = compute_enrichment_delta({}, ("Clinton Moon", "CLINTON MOON", None), INCOMING_EVIDENCE)
-        self.assertEqual({f["value"] for f in delta}, {"Pats tix"})
+        delta = compute_enrichment_delta({}, ("Robin Vale", "ROBIN VALE", None), INCOMING_EVIDENCE)
+        self.assertEqual({f["value"] for f in delta}, {"Concert tix"})
 
 
 class EngineTests(unittest.TestCase):
@@ -87,13 +87,13 @@ class EngineTests(unittest.TestCase):
         finally:
             reset_current_db_path(token)
 
-    def _txn(self, *, merchant="Payment to Clinton Moon", evidence=None):
+    def _txn(self, *, merchant="Payment to Robin Vale", evidence=None):
         txn_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,
                                     date, is_pending, import_evidence_json)
-                   VALUES (?, 'acct', ?, 4130.0, ?, ?, ?, '2024-03-27', 0, ?)""",
+                   VALUES (?, 'acct', ?, 1275.0, ?, ?, ?, '2024-05-14', 0, ?)""",
                 (txn_id, SHARED_OWNER_ID, merchant, merchant, merchant,
                  json.dumps(evidence) if evidence is not None else None),
             )
@@ -105,15 +105,15 @@ class EngineTests(unittest.TestCase):
         return json.loads(raw) if raw else None
 
     def test_enrich_appends_novel_fields(self):
-        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Clinton Moon"}})
+        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Robin Vale"}})
         with self._use_db_path(), get_db() as conn:
             delta = enrich_transaction(conn, txn_id, INCOMING_EVIDENCE)
-        self.assertEqual({f["value"] for f in delta}, {"Clinton Moon", "Pats tix"})
+        self.assertEqual({f["value"] for f in delta}, {"Robin Vale", "Concert tix"})
         extras = self._evidence(txn_id)["extra_text_fields"]
-        self.assertIn({"header": "Item Title", "value": "Pats tix"}, extras)
+        self.assertIn({"header": "Item Title", "value": "Concert tix"}, extras)
 
     def test_enrich_is_idempotent(self):
-        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Clinton Moon"}})
+        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Robin Vale"}})
         with self._use_db_path(), get_db() as conn:
             enrich_transaction(conn, txn_id, INCOMING_EVIDENCE)
             second = enrich_transaction(conn, txn_id, INCOMING_EVIDENCE)  # re-run adds nothing
@@ -124,10 +124,10 @@ class EngineTests(unittest.TestCase):
         txn_id = self._txn(evidence=None)  # e.g. a hand-created or synced row
         with self._use_db_path(), get_db() as conn:
             enrich_transaction(conn, txn_id, INCOMING_EVIDENCE)
-        self.assertEqual({f["value"] for f in self._evidence(txn_id)["extra_text_fields"]}, {"Clinton Moon", "Pats tix"})
+        self.assertEqual({f["value"] for f in self._evidence(txn_id)["extra_text_fields"]}, {"Robin Vale", "Concert tix"})
 
     def test_undo_removes_exactly_what_was_added(self):
-        original = {"description": {"header": "Merchant", "value": "Payment to Clinton Moon"},
+        original = {"description": {"header": "Merchant", "value": "Payment to Robin Vale"},
                     "extra_text_fields": [{"header": "Memo", "value": "wire"}]}
         txn_id = self._txn(evidence=dict(original))
         with self._use_db_path(), get_db() as conn:
@@ -137,7 +137,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self._evidence(txn_id)["extra_text_fields"], [{"header": "Memo", "value": "wire"}])
 
     def test_duplicate_record_enrich_and_undo_cycle(self):
-        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Clinton Moon"}})
+        txn_id = self._txn(evidence={"description": {"header": "Merchant", "value": "Payment to Robin Vale"}})
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """INSERT INTO import_batch_duplicate (batch_id, row_number, reason, txn_payload_json)
@@ -145,7 +145,7 @@ class EngineTests(unittest.TestCase):
                 (self.batch_id, json.dumps({"import_evidence": INCOMING_EVIDENCE})),
             )
             delta = enrich_duplicate_row(conn, self.batch_id, 7, txn_id)
-        self.assertEqual({f["value"] for f in delta}, {"Clinton Moon", "Pats tix"})
+        self.assertEqual({f["value"] for f in delta}, {"Robin Vale", "Concert tix"})
 
         with self._use_db_path(), get_db() as conn:
             rec = conn.execute(
@@ -188,10 +188,10 @@ class EndpointTests(unittest.TestCase):
             conn.execute(
                 """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,
                                     date, is_pending, import_evidence_json)
-                   VALUES (?, 'acct', ?, 4130.0, 'Payment to Clinton Moon', 'Payment to Clinton Moon',
-                           'Payment to Clinton Moon', '2024-03-27', 0, ?)""",
+                   VALUES (?, 'acct', ?, 1275.0, 'Payment to Robin Vale', 'Payment to Robin Vale',
+                           'Payment to Robin Vale', '2024-05-14', 0, ?)""",
                 (self.txn_id, SHARED_OWNER_ID,
-                 json.dumps({"description": {"header": "Merchant", "value": "Payment to Clinton Moon"}})),
+                 json.dumps({"description": {"header": "Merchant", "value": "Payment to Robin Vale"}})),
             )
 
     def tearDown(self):
@@ -223,11 +223,11 @@ class EndpointTests(unittest.TestCase):
         with self._use_db_path():
             result = enrich_batch_duplicates(self.batch_id, BatchDuplicateEnrichRequest(row_numbers=[7, 8, 9]))
         self.assertEqual([e["row"] for e in result["enriched"]], [7])
-        self.assertIn("Pats tix", {f["value"] for f in result["enriched"][0]["added"]})
+        self.assertIn("Concert tix", {f["value"] for f in result["enriched"][0]["added"]})
         self.assertEqual({s["row"] for s in result["skipped"]}, {8, 9})
         with self._use_db_path(), get_db() as conn:
             evidence = json.loads(conn.execute("SELECT import_evidence_json FROM txn WHERE id = ?", (self.txn_id,)).fetchone()[0])
-        self.assertIn("Pats tix", {f["value"] for f in evidence["extra_text_fields"]})
+        self.assertIn("Concert tix", {f["value"] for f in evidence["extra_text_fields"]})
 
     def test_enrich_endpoint_never_folds_detail_into_a_transfer_counterpart(self):
         # The coverage lookup names the other leg of a movement to explain a rejected funding deposit, and

@@ -102,8 +102,8 @@ export default function PeriodDetail({
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
-    applyCategoryChange(txnId, cat, patch => setTransactions(prev => prev.map(t => (
-      t.id === txnId ? { ...t, ...patch } : t
+    applyCategoryChange(txnId, cat, (patch, id) => setTransactions(prev => prev.map(t => (
+      t.id === id ? { ...t, ...patch } : t
     ))))
   }
 

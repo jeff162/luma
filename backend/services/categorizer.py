@@ -19,6 +19,16 @@ from backend.services.transaction_tags import (
     would_sync_rule_tags_change,
 )
 
+# The category sources a feature owns — set by that feature, put back by it, and never taken by an
+# automatic pass: `enrichment` (a leg or charge moved into an excluded category by a link that can restore
+# it), `split` (the allocations are the categorization) and `refund` (a refund following the payment it
+# returns — services/refund_links.py). See docs/data-model.md → How an existing transaction's category
+# can change.
+FEATURE_OWNED_CATEGORY_SOURCES = ("enrichment", "split", "refund")
+_NOT_FEATURE_OWNED_SQL = "COALESCE(category_source, '') NOT IN ({})".format(
+    ", ".join(f"'{source}'" for source in FEATURE_OWNED_CATEGORY_SOURCES)
+)
+
 
 def rule_scope_account_sql(alias: str = "") -> str:
     """The `account_id` projection every SELECT that loads a rule **for matching** must use.
@@ -471,7 +481,8 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     **trusted `import`** rows — so a manual edit (and a split, which is locked too) is left alone, along
     with feature-owned `enrichment` rows: an excluded Amazon funding charge or a suppressed wallet leg that
     a feature moved into an excluded category and stashed a prior for; letting a rule reclaim or clear one
-    would un-exclude it and double-count the spend.
+    would un-exclude it and double-count the spend. A `refund` row is left alone too: its category is
+    the payment's it returns, and follows that payment rather than any rule.
 
     Trusted-import rows are included because a file's categories rank *below* the rules: at import a rule
     beats the file's label, so a rule created after the import must beat it too, or the outcome would
@@ -498,13 +509,11 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     `txn_ids` restricts the pass to a specific row set (for the scoped reconcile); `None` is the whole
     ledger. A row already at its correct category matches identically either way — retain vs. reconcile
     only differ on the no-match case."""
-    # 'split' joins 'enrichment' as a feature-owned source. A split row also carries
-    # category_overridden = 1, so the lock bit alone would exclude it today — the guard is stated by
-    # source anyway because that is the actual invariant ("automatic categorization never touches a
-    # split's category"), and a guard that only holds via a second field's current value is one
-    # refactor away from being wrong.
-    where = ["category_overridden = 0", "category_source IS NOT 'enrichment'",
-             "category_source IS NOT 'split'"]
+    # A split row also carries category_overridden = 1, so the lock bit alone would exclude it today —
+    # the guard is stated by source anyway because that is the actual invariant ("automatic
+    # categorization never touches a split's category"), and a guard that only holds via a second
+    # field's current value is one refactor away from being wrong.
+    where = ["category_overridden = 0", _NOT_FEATURE_OWNED_SQL]
     params: list = []
     if txn_ids is not None:
         if not txn_ids:
@@ -630,7 +639,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     # likely next action, so the preview must mirror the same override-skipping,
     # enrichment-skipping, and rule-matching contract as the real recategorize pass.
     txns = conn.execute(
-        """SELECT
+        f"""SELECT
                t.id,
                t.merchant_name,
                t.display_name,
@@ -647,8 +656,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
            JOIN   account a ON a.id = t.account_id
            LEFT   JOIN account p ON p.id = a.parent_account_id
            WHERE  category_overridden = 0
-             AND  category_source IS NOT 'enrichment'
-             AND  category_source IS NOT 'split'"""
+             AND  {_NOT_FEATURE_OWNED_SQL}"""
     ).fetchall()
 
     rules = load_categorization_rules(conn)

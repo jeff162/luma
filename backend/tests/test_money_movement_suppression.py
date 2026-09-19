@@ -141,9 +141,9 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_paired_leg_suppressed_and_linked_others_untouched(self):
         csv = "\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",  # purchase
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",  # purchase
             "2024-01-11,,Bank Deposit to PP Account,10.00",                # funding leg
-            "2024-01-13,Tsun Au Yeung,General Payment,35.00",              # genuine inbound payment (money in, named)
+            "2024-01-13,Sam Okafor,General Payment,35.00",              # genuine inbound payment (money in, named)
         ])
         result = await self._run_import(csv)
         self.assertEqual(result["money_movement_suppressed_count"], 1)
@@ -157,9 +157,9 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(leg["category_source"], "enrichment")
 
         # The purchase stays real spending; the inbound payment stays untouched (never suppressed).
-        purchase = self._txn_by_name("RANDONNEURS USA")
+        purchase = self._txn_by_name("LONGRIDERS USA")
         self.assertIsNone(purchase["category_id"])
-        inbound = self._txn_by_name("Tsun Au Yeung")
+        inbound = self._txn_by_name("Sam Okafor")
         self.assertIsNone(inbound["category_id"])
 
         # Exactly one wallet_funding link, tying the leg (role leg) to the purchase (role purchase).
@@ -195,7 +195,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
         # nothing is suppressed (a safe miss).
         csv = "\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-01-11,Other Merchant,Express Checkout Payment,-10.00",
             "2024-01-11,,Bank Deposit to PP Account,10.00",
         ])
@@ -208,7 +208,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_reverse_restores_prior_category_and_removes_link(self):
         csv = "\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-01-11,,Bank Deposit to PP Account,10.00",
         ])
         result = await self._run_import(csv)
@@ -227,7 +227,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_undo_batch_removes_links(self):
         csv = "\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-01-11,,Bank Deposit to PP Account,10.00",
         ])
         result = await self._run_import(csv)
@@ -242,7 +242,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
         # apply_money_movement_rules triggers) must not clear it back out of the excluded category.
         csv = "\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-01-11,,Bank Deposit to PP Account,10.00",
         ])
         result = await self._run_import(csv)
@@ -260,7 +260,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_reimport_replace_reverses_then_repairs(self):
         first = await self._run_import("\n".join([
             "Date,Name,Type,Amount",
-            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-01-11,,Bank Deposit to PP Account,10.00",
         ]))
         self.assertEqual(len(self._links()), 1)
@@ -269,7 +269,7 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
         # against the replaced batch's coverage). The old link must be reversed, leaving exactly one.
         second = await self._run_import("\n".join([
             "Date,Name,Type,Amount",
-            "2024-02-20,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-02-20,LONGRIDERS USA,Express Checkout Payment,-10.00",
             "2024-02-20,,Bank Deposit to PP Account,10.00",
         ]), replace_batch_id=first["batch_id"])
         self.assertEqual(second["money_movement_suppressed_count"], 1)

@@ -200,9 +200,11 @@ export function useBulkTransactionEditing({
         // every other action here it cannot be patched from the action itself. The per-row endpoint
         // answers with the resolved set; the bulk one cannot (one response, many rows), so the loaded
         // rows it touched are refetched by id instead. Only for set_category: the other actions already
-        // patch exactly, and a refetch would cost a request per bulk edit for nothing.
+        // patch exactly, and a refetch would cost a request per bulk edit for nothing. The refunds that
+        // followed a recategorized payment (`followed_ids`) moved too without being selected, so they
+        // ride the same refetch.
         if (setRows && actions.some(action => action.type === 'set_category')) {
-          await reconcileRowsAfterRuleApply(rows, [...affectedIds], setRows)
+          await reconcileRowsAfterRuleApply(rows, [...affectedIds, ...(result.followed_ids || [])], setRows)
         }
       }
     } catch (error) {

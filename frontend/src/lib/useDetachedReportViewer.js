@@ -4,7 +4,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 
 // The shared state machine behind an app-level "detached report viewer" — a report dialog hoisted
-// out of the page tree (see UnifiedDuplicatesViewerContext, AmazonReconciliationViewerContext) so it
+// out of the page tree (see UnifiedDuplicatesViewerContext, ReconciliationViewerContext) so it
 // survives route changes, can be minimized to a nav-bar pill, and restored with its loaded data
 // intact. It owns the envelope { params, data, loading, error, minimized } and the open / reload /
 // close / minimize / restore transitions; everything report-specific — how data is fetched, its shape,

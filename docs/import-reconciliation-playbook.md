@@ -252,7 +252,7 @@ that paid for it (several, if it was split) and link them. A mismatched sum warn
 ### I imported the Amazon items file before its orders file
 
 The items had no orders to attach to yet, so their per-item detail is **parked** (kept, keyed by order
-id) rather than discarded — the items file gets its own card with a **no match** pill, and the
+id) rather than discarded — the items file gets its own card with a **no matching order** pill, and the
 import-detail report lists exactly which order ids are waiting and from which file. Just import the
 orders file whenever you have it: the parked detail **attaches automatically** to the new order rows —
 no need to re-import the items file. Once every parked item has attached, the items-only card **folds into
@@ -270,6 +270,64 @@ frees its files to be imported again. Use the file
 card's outcome pills (orders / items matched / discarded / duplicates / payments) to open the
 import-detail report and see what any import actually did, including which file each row came from.
 
+### PayPal history from monthly statements (PDF)
+
+PayPal's monthly statements are the easy way to get its history: one PDF per month, or a zip of them.
+Drop them on the importer like any file. Each statement is read, and its PayPal account (the PayPal
+Account ID printed on it) is given an account here — a PayPal account, or a new one. After that, that
+PayPal account's statements always go into the same account, and that account takes no other PayPal
+account's statements, so one person's statements cannot land in another's PayPal account.
+
+Each statement becomes its own card under the PayPal data source, beside any activity CSVs. A statement
+row already in the ledger — from a data connection or an earlier CSV — is recognized as a duplicate and
+given the statement's detail. A statement imported before is skipped, and so is a month with no activity.
+A payment in another currency is not imported, and neither is the card deposit that paid for it, so the
+card charge stays the record of that purchase. The statement lacks the activity CSV's item title; where
+that matters, the CSV is still the richer file.
+
+A statement also says which payment each refund returns, so a refund is **paired with its payment** and
+takes the payment's category: categorize the purchase and the refund moves with it, so the two cancel out
+in that category. This works across statements, in whichever order they are imported, and with a payment
+imported from the activity CSV. Setting the refund's own category by hand ends the pairing's hold on it.
+Both rows carry the 🔗 link marker, which names the other one and opens it. When the refund went straight back out to
+the card or bank it came from, that withdrawal moves to *Money movement* with it. A deposit or withdrawal
+has no name of its own; the ledger shows what kind of transaction it was ("General Credit Card
+Withdrawal") in its place.
+
+### A PayPal purchase shows up on the card or bank as well
+
+When a PayPal account is tracked, its rows are the record of what was bought or received — money can sit
+in a PayPal balance, and then the PayPal row is the only record there is. What PayPal took from a card or
+bank, or sent back to one, also appears on that card or bank account as a "PAYPAL…" row, and counting
+both would count the purchase twice. So after every import and every sync, each PayPal row is **matched**
+with the card or bank row on the other side of the same money, and the money counts once:
+
+- a **payment** a card or bank paid directly counts on the PayPal side, and the card or bank row moves
+  to *Money movement* — unless the PayPal row was already filed as a transfer, in which case the card
+  row is the one counted and nothing changes;
+- a **transfer** — money added to PayPal from a bank or card, or withdrawn from PayPal to one — is money
+  moving on both sides, so both rows move to *Money movement*.
+
+A match is made only when it is unambiguous: one matching amount within a few days, on an account
+belonging to the same person (or a shared one). The **PayPal reconciliation** lists what was matched and
+what was not — open it from the **Reconciliation** pill on an import or sync card whose PayPal rows have
+something to show (a collapsed data source or connection says **⚠ N to resolve** when one of its cards
+needs a look), or from the Tasks entry for the whole ledger:
+
+- **Several possible matches** — more than one card or bank row could be the other side. **Pick…** the right one,
+  or **None of these**.
+- **Matching transaction not found** — a PayPal deposit or withdrawal with nothing found on the other side. **Link…** one by
+  hand (the picker lists nearby PayPal rows on other accounts, whatever the amount), or **Mark
+  reviewed** when that account isn't tracked here.
+- **No PayPal record** — a "PAYPAL…" row on an account that pays into PayPal, within the PayPal history,
+  that no PayPal row accounts for. It still counts as it is; **Mark reviewed** once checked. A row like
+  this is often a gap in the PayPal history, or a PayPal row recorded in another currency.
+- **Matched** — the matches. **Unlink** puts back whatever the match changed, and the same match is never
+  made again.
+
+Undoing an import that brought either side of a pair in undoes the pair too. A category chosen by hand
+after pairing is kept when a pair is undone.
+
 ## Tags (cross-cutting reporting)
 
 Accounts have owners; **categories/groups do not**. The dimensions you report by — personal/shared,
@@ -283,7 +341,7 @@ The situations above are surfaced inside the app through the Help/FeatureExplain
 (`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help and contextual explainers* for
 the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
 pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
-reconciliation and import-detail report headers, the amount-convention picker, the Group Imported
+reconciliation and import-detail report headers, the PayPal reconciliation header, the amount-convention picker, the Group Imported
 Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search and
 removed-as-duplicates line), and a context-triggered
 "explain this" tip that appears only when the app recognizes the situation (cross-account matches,

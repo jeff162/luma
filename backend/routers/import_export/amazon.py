@@ -45,6 +45,8 @@ from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
+from backend.services.reconciliation_attention import batch_attention
+from backend.services.txn_summaries import txn_summaries
 from backend.services.amazon_import import (
     AmazonItem,
     AmazonOrder,
@@ -1062,46 +1064,7 @@ _SPLIT_SUGGESTION_TOLERANCE = 0.02
 
 
 def _txn_summary(conn: sqlite3.Connection, txn_id: str) -> Optional[dict]:
-    row = conn.execute(
-        """SELECT t.id, t.date, t.amount, t.display_name, t.merchant_name, t.raw_name, t.account_id,
-                  t.category_source, t.category_id, t.is_split, t.imported_category, t.import_evidence_json,
-                  a.display_name AS account_name,
-                  t.import_batch_id           AS source_batch_id,
-                  ib.filename                 AS source_filename,
-                  ib.imported_at              AS source_imported_at
-           FROM   txn t
-           JOIN   account a ON a.id = t.account_id
-           LEFT   JOIN import_batch ib ON ib.id = t.import_batch_id
-           WHERE  t.id = ?""",
-        (txn_id,),
-    ).fetchone()
-    if not row:
-        return None
-    # Provenance: where this charge came from, so the reconciliation report can show "from <file>" on
-    # hover (and, with a drill-through handler, open that file's ledger). Absent for non-imported rows.
-    source = None
-    if row["source_filename"]:
-        source = {
-            "batchId": row["source_batch_id"],
-            "filename": row["source_filename"],
-            "importedAt": row["source_imported_at"],
-        }
-    return {
-        "id": row["id"], "date": row["date"], "amount": row["amount"],
-        "name": row["display_name"] or row["merchant_name"],
-        "account_id": row["account_id"], "account": row["account_name"],
-        "source": source,
-        # Full origin fields, keyed as the ledger's origin-fields hover card (importSourceFields.js) expects,
-        # so the report can render the same rich "where did this come from" detail on hover.
-        "display_name": row["display_name"],
-        "merchant_name": row["merchant_name"],
-        "raw_name": row["raw_name"],
-        "category_source": row["category_source"],
-        "imported_category": row["imported_category"],
-        "import_evidence_json": row["import_evidence_json"],
-        "import_batch_filename": row["source_filename"],
-        "import_batch_imported_at": row["source_imported_at"],
-    }
+    return txn_summaries(conn, [txn_id]).get(txn_id)
 
 
 def _charge_accounts(conn: sqlite3.Connection, seed_accounts) -> set:
@@ -1510,38 +1473,10 @@ def _compute_reconciliation_attention(conn: sqlite3.Connection, batch_id: str) -
             + sum(1 for c in recon["payment_unmatched"] if not c.get("reviewed")))
 
 
-def _recon_epoch(conn: sqlite3.Connection) -> int:
-    """The current global reconciliation epoch (db_meta 'recon_epoch'), bumped by a trigger on every write
-    to a table the reconciliation reads (see `database._create_recon_epoch_triggers`). Absent = 0 (no
-    charge-affecting write has happened yet)."""
-    row = conn.execute("SELECT value FROM db_meta WHERE key = 'recon_epoch'").fetchone()
-    try:
-        return int(row["value"]) if row else 0
-    except (TypeError, ValueError):
-        return 0
-
-
 def reconciliation_attention_count(conn: sqlite3.Connection, batch_id: str) -> int:
     """The batch's actionable-reconciliation count, powering the import card's warning tint and the Tasks
-    nag — both hit on every history load / task poll. Cached on the batch and recomputed lazily only when
-    stale: a batch whose stored `recon_epoch` matches the current global epoch returns its cached
-    `recon_attention_count`; otherwise the value is recomputed once and the cache refreshed. Any
-    charge-affecting write bumps the epoch (via trigger), so a stale count is impossible while a clean read
-    is a single indexed lookup. The cache write targets import_batch (no trigger), so it never invalidates
-    itself."""
-    epoch = _recon_epoch(conn)
-    row = conn.execute(
-        "SELECT recon_attention_count, recon_epoch FROM import_batch WHERE id = ?", (batch_id,)
-    ).fetchone()
-    if row and row["recon_epoch"] is not None and int(row["recon_epoch"]) == epoch \
-            and row["recon_attention_count"] is not None:
-        return int(row["recon_attention_count"])
-    count = _compute_reconciliation_attention(conn, batch_id)
-    conn.execute(
-        "UPDATE import_batch SET recon_attention_count = ?, recon_epoch = ? WHERE id = ?",
-        (count, epoch, batch_id),
-    )
-    return count
+    nag — cached against the reconciliation epoch (see services/reconciliation_attention.py)."""
+    return batch_attention(conn, batch_id, _compute_reconciliation_attention)
 
 
 @router.get("/amazon/reconciliation/{batch_id}")
@@ -2341,7 +2276,7 @@ async def amazon_merge_duplicate_charges_endpoint(body: MergeDuplicateChargesReq
 def unmatched_parked_order_count(conn: sqlite3.Connection, import_summary: Optional[dict]) -> int:
     """How many of an orphan (items-before-orders) batch's discarded orders are *still* waiting — their order
     id has no Amazon order in the ledger yet. Derived live from the ledger rather than the static snapshot
-    count, so the card's "no match" resolves to zero once a later orders import attaches the items (and
+    count, so the card's "no matching order" resolves to zero once a later orders import attaches the items (and
     re-flags if that import is undone). Zero for a batch that discarded nothing."""
     discarded = (import_summary or {}).get("discarded_items") or []
     order_ids = list({d.get("order_id") for d in discarded if isinstance(d, dict) and d.get("order_id")})

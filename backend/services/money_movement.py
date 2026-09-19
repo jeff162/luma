@@ -20,6 +20,13 @@ Deliberately conservative, because suppression must never swallow a genuine inbo
     *to* the user carries a merchant name and has no offsetting same-day purchase, so it can never match.
   * **Only an unambiguous 1:1 pair acts.** If two rows share the same date and magnitude on either side,
     the pairing is ambiguous and the whole group is left untouched (a safe miss, resolvable by hand).
+  * **A stated reference outranks the structure.** A PayPal statement names, on each funding deposit, the
+    payment it paid for (its ``Ref ID`` is that payment's ``Transaction ID``), so such a pair is taken as
+    stated — even when the deposit carries a name, which the structural signal would read as a real
+    inflow. Only a deposit ``Type`` can be a leg this way: a refund also refers to its payment, and is
+    real money back. The same statement shows a refund's return trip too: the refund lands in the
+    balance and a withdrawal carries it straight back to the card or bank, both naming the refunded
+    payment. That withdrawal is the refund's leg — money movement, linked to the refund.
   * **``Type`` is corroborating, not required** (see ``docs/backlog/paypal-amazon-enrichment.md``). PayPal's
     ``Type`` ("Bank Deposit to PP Account", "General Card Deposit", …) is captured as evidence and, when
     present, confirms the leg — but the pass still works when it wasn't captured. Its value is recorded on
@@ -57,6 +64,7 @@ _MONEY_MOVEMENT_TYPES = frozenset({
     "general withdrawal",
     "add money from a bank account",
     "general credit card deposit",
+    "general credit card withdrawal",
 })
 
 
@@ -78,8 +86,13 @@ def _resolved_name(row) -> str:
     return ""
 
 
-def _leg_type(evidence_json: Optional[str]) -> Optional[str]:
-    """The captured ``Type`` value from a row's import evidence, or None. Read from ``extra_text_fields``
+def captured_type(evidence_json: Optional[str]) -> Optional[str]:
+    """The captured ``Type`` value from a row's import evidence, or None."""
+    return captured_field(evidence_json, "type")
+
+
+def captured_field(evidence_json: Optional[str], header: str) -> Optional[str]:
+    """A captured field's value from a row's import evidence, or None. Read from ``extra_text_fields``
     (where the categorical capture lands), matched case-insensitively on the header."""
     if not evidence_json:
         return None
@@ -90,10 +103,16 @@ def _leg_type(evidence_json: Optional[str]) -> Optional[str]:
     if not isinstance(evidence, dict):
         return None
     for field in evidence.get("extra_text_fields") or []:
-        if isinstance(field, dict) and str(field.get("header") or "").strip().casefold() == "type":
+        if isinstance(field, dict) and str(field.get("header") or "").strip().casefold() == header.casefold():
             value = str(field.get("value") or "").strip()
             return value or None
     return None
+
+
+def captured_reference(evidence_json: Optional[str]) -> Optional[str]:
+    """The Transaction ID of the row a row refers to, as its source stated it: a statement's ``Ref ID``, or
+    the activity CSV's optional ``Reference Txn ID`` column where it was captured."""
+    return captured_field(evidence_json, "ref id") or captured_field(evidence_json, "reference txn id")
 
 
 # --- Type-based money-movement categorization (user-approved rules) --------------------------------
@@ -102,6 +121,8 @@ def _leg_type(evidence_json: Optional[str]) -> Optional[str]:
 # user's review — the user decides which types actually become rules. See docs/data-model.md ->
 # "PayPal source recognition + `Type`-based money-movement categorization".
 _MONEY_MOVEMENT_TYPE_FRAGMENTS = ("deposit", "withdrawal", "currency conversion", "hold")
+# The `Type`s that put money into the wallet from outside — a bank or card funding it.
+_WALLET_FUNDING_TYPE_FRAGMENTS = ("deposit", "add money")
 
 
 def is_money_movement_type(type_value: Optional[str]) -> bool:
@@ -111,6 +132,24 @@ def is_money_movement_type(type_value: Optional[str]) -> bool:
     if not t:
         return False
     return t in _MONEY_MOVEMENT_TYPES or any(fragment in t for fragment in _MONEY_MOVEMENT_TYPE_FRAGMENTS)
+
+
+def is_wallet_funding_type(type_value: Optional[str]) -> bool:
+    """Whether a PayPal `Type` says money came into the wallet from a bank or card."""
+    t = str(type_value or "").casefold()
+    return any(fragment in t for fragment in _WALLET_FUNDING_TYPE_FRAGMENTS)
+
+
+def is_wallet_withdrawal_type(type_value: Optional[str]) -> bool:
+    """Whether a PayPal `Type` says money left the wallet for a bank or card."""
+    return "withdrawal" in str(type_value or "").casefold()
+
+
+def is_refund_type(type_value: Optional[str]) -> bool:
+    """Whether a PayPal `Type` returns a payment — a refund, or a reversal of a payment received. A hold's
+    reversal is money movement, not a returned payment."""
+    t = str(type_value or "").casefold()
+    return ("refund" in t or "reversal" in t) and not is_money_movement_type(type_value)
 
 
 def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
@@ -217,7 +256,7 @@ def _type_row_counts_for_accounts(conn: sqlite3.Connection, account_ids: list[st
     ).fetchall()
     counts: dict[str, dict] = {}
     for r in rows:
-        type_value = _leg_type(r["import_evidence_json"])
+        type_value = captured_type(r["import_evidence_json"])
         if not type_value:
             continue
         bucket = counts.setdefault(type_value.strip().lower(), {"affected": 0, "extra": 0})
@@ -232,7 +271,7 @@ def _proposals_from_evidence(evidence_rows, ruled: set[str], type_counts: dict[s
     first, then by total row count."""
     seen: dict[str, str] = {}   # lowercased Type -> first-seen original casing
     for row in evidence_rows:
-        type_value = _leg_type(row["import_evidence_json"])
+        type_value = captured_type(row["import_evidence_json"])
         if type_value:
             seen.setdefault(type_value.strip().lower(), type_value)
     proposals = [
@@ -330,11 +369,12 @@ def delete_money_movement_rules(conn: sqlite3.Connection, type_values) -> int:
 
 def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict:
     """Pair and suppress the batch's wallet funding legs. Returns
-    ``{"suppressed": [ {leg_id, purchase_id, amount, date, leg_type, recognized_type}, … ],
+    ``{"suppressed": [ {leg_id, counterpart_id, amount, date, leg_type, recognized_type}, … ],
        "unrecognized_types": [sorted str]}`` — the count is ``len(suppressed)``.
 
     Each suppressed leg is recategorized into the excluded "Money movement" category and linked to its
-    purchase; the leg's prior categorization is stashed in the link metadata for reversal."""
+    purchase (or, for a refund's withdrawal, its refund); the leg's prior categorization is stashed in the
+    link metadata for reversal."""
     rows = conn.execute(
         """SELECT id, account_id, date, amount, display_name, merchant_name, raw_name, import_evidence_json,
                   category_id, category_source, category_overridden
@@ -343,11 +383,14 @@ def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict
         (batch_id,),
     ).fetchall()
 
-    # Group by the pairing key: same account, same date, same magnitude. A funding leg and its purchase
-    # share all three; anything ambiguous within a group is left alone.
+    pairs = _referenced_pairs(rows)
+    paired = {row["id"] for leg, counterpart, _role in pairs for row in (leg, counterpart)}
+
+    # Group the rest by the pairing key: same account, same date, same magnitude. A funding leg and its
+    # purchase share all three; anything ambiguous within a group is left alone.
     groups: dict[tuple, dict[str, list]] = {}
     for row in rows:
-        if row["amount"] is None:
+        if row["amount"] is None or row["id"] in paired:
             continue
         key = (row["account_id"], row["date"], round(abs(float(row["amount"])), 2))
         bucket = groups.setdefault(key, {"legs": [], "purchases": []})
@@ -357,17 +400,15 @@ def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict
             bucket["legs"].append(row)
         elif amount > 0 and named:            # named debit → a real purchase
             bucket["purchases"].append(row)
+    # Only an unambiguous 1:1 pair is safe to act on.
+    pairs += [(bucket["legs"][0], bucket["purchases"][0], "purchase") for bucket in groups.values()
+              if len(bucket["legs"]) == 1 and len(bucket["purchases"]) == 1]
 
     suppressed: list[dict] = []
     unrecognized: set[str] = set()
     category_id: Optional[str] = None
-
-    for bucket in groups.values():
-        # Only an unambiguous 1:1 pair is safe to act on.
-        if len(bucket["legs"]) != 1 or len(bucket["purchases"]) != 1:
-            continue
-        leg, purchase = bucket["legs"][0], bucket["purchases"][0]
-        leg_type = _leg_type(leg["import_evidence_json"])
+    for leg, counterpart, role in pairs:
+        leg_type = captured_type(leg["import_evidence_json"])
         recognized = bool(leg_type) and leg_type.casefold() in _MONEY_MOVEMENT_TYPES
         if leg_type and not recognized:
             unrecognized.add(leg_type)
@@ -385,12 +426,12 @@ def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict
         )
         txn_links.create_link(
             conn, LINK_KIND,
-            [(leg["id"], "leg"), (purchase["id"], "purchase")],
+            [(leg["id"], "leg"), (counterpart["id"], role)],
             metadata={"leg_prior": leg_prior, "leg_type": leg_type},
         )
         suppressed.append({
             "leg_id": leg["id"],
-            "purchase_id": purchase["id"],
+            "counterpart_id": counterpart["id"],
             "amount": round(abs(float(leg["amount"])), 2),
             "date": leg["date"],
             "leg_type": leg_type,
@@ -398,6 +439,54 @@ def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict
         })
 
     return {"suppressed": suppressed, "unrecognized_types": sorted(unrecognized)}
+
+
+def _referenced_pairs(rows) -> list[tuple]:
+    """The ``(leg, counterpart, role)`` pairs the source states outright, each counterpart taking one leg:
+
+      * a funding deposit whose ``Ref ID`` is the ``Transaction ID`` of the equal-and-opposite payment it
+        paid for (role ``purchase``);
+      * a withdrawal carrying a refund back out to the card or bank — its ``Ref ID`` names the refund, or
+        the payment both refer to, which is how a statement writes it — equal and opposite to that refund
+        (role ``refund``).
+
+    Both rows of a pair are on the same account."""
+    by_transaction_id, refunds_by_reference = {}, {}
+    for row in rows:
+        evidence = row["import_evidence_json"]
+        transaction_id = captured_field(evidence, "transaction id")
+        if transaction_id:
+            by_transaction_id[transaction_id] = row
+        reference = captured_reference(evidence)
+        if reference and is_refund_type(captured_type(evidence)):
+            refunds_by_reference.setdefault(reference, []).append(row)
+
+    pairs, taken = [], set()
+    for leg in rows:
+        ref = captured_reference(leg["import_evidence_json"])
+        if not ref or leg["amount"] is None:
+            continue
+        leg_type = captured_type(leg["import_evidence_json"])
+        if is_wallet_funding_type(leg_type):
+            role, candidates = "purchase", [by_transaction_id.get(ref)]
+        elif is_wallet_withdrawal_type(leg_type):
+            role, candidates = "refund", [by_transaction_id.get(ref), *refunds_by_reference.get(ref, [])]
+        else:
+            continue
+        for counterpart in candidates:
+            if (counterpart is None or counterpart["id"] in taken or counterpart["id"] == leg["id"]
+                    or counterpart["amount"] is None or counterpart["account_id"] != leg["account_id"]):
+                continue
+            if role == "refund" and not is_refund_type(captured_type(counterpart["import_evidence_json"])):
+                continue
+            # A deposit comes in (negative, as the ledger signs it) against money going out; a withdrawal
+            # goes out against a refund coming in.
+            leg_cents, counterpart_cents = round(float(leg["amount"]) * 100), round(float(counterpart["amount"]) * 100)
+            if leg_cents and leg_cents == -counterpart_cents and (leg_cents < 0) == (role == "purchase"):
+                pairs.append((leg, counterpart, role))
+                taken.add(counterpart["id"])
+                break
+    return pairs
 
 
 def reverse_batch_money_movement_links(conn: sqlite3.Connection, batch_id: str) -> int:

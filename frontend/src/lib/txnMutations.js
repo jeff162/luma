@@ -168,15 +168,23 @@ export function categoryReconcilePatch(cat, resolved = null) {
  *
  * Phase one paints the caller's optimistic patch — the picker has to feel immediate, and the category
  * itself is known client-side. Phase two applies the same patch again once the write answers, this time
- * carrying the tags the server resolved for the new category. `applyPatch` is called twice with a patch
- * to merge into the row (both phases carry the category, so a caller that only handles one still shows
- * the right category); `write` names the mutation, since "clear the override" and "set the category to
- * nothing" are different intents that answer the same way.
+ * carrying the tags the server resolved for the new category. `applyPatch(patch, id)` merges a patch into
+ * the row with that id; it is called twice for the edited row (both phases carry the category, so a
+ * caller that only handles one still shows the right category), and once more for each row the write
+ * moved as well — a refund follows the category of the payment it returns (services/refund_links.py),
+ * and the write names those rows so they are refetched rather than left showing the old category. A
+ * surface not showing one simply matches nothing. `write` names the mutation, since "clear the override"
+ * and "set the category to nothing" are different intents that answer the same way.
  */
 export async function applyCategoryChange(txnId, cat, applyPatch, write = null) {
-  applyPatch(categoryReconcilePatch(cat))
+  applyPatch(categoryReconcilePatch(cat), txnId)
   const resolved = await (write ? write() : txnMutations.setCategory(txnId, cat?.id ?? null))
-  applyPatch(categoryReconcilePatch(cat, resolved))
+  applyPatch(categoryReconcilePatch(cat, resolved), txnId)
+  const followedIds = resolved?.followed_ids || []
+  if (followedIds.length) {
+    const resp = await api.getTransactions({ ids: followedIds.join(','), limit: followedIds.length })
+    for (const row of resp?.transactions || []) applyPatch(row, row.id)
+  }
   return resolved
 }
 

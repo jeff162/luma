@@ -33,10 +33,10 @@ import {
   MinimizedDuplicatesNavItem,
 } from './contexts/UnifiedDuplicatesViewerContext.jsx'
 import {
-  AmazonReconciliationViewerProvider,
-  AmazonReconciliationViewerRenderer,
-  MinimizedAmazonReconciliationNavItem,
-} from './contexts/AmazonReconciliationViewerContext.jsx'
+  ReconciliationViewerProvider,
+  ReconciliationViewerRenderer,
+  MinimizedReconciliationNavItem,
+} from './contexts/ReconciliationViewerContext.jsx'
 import {
   AmazonImportDetailViewerProvider,
   AmazonImportDetailViewerRenderer,
@@ -1761,14 +1761,14 @@ export default function App() {
             <PanelStackProvider>
               <TransactionShareProvider>
                 <UnifiedDuplicatesViewerProvider>
-                  <AmazonReconciliationViewerProvider>
+                  <ReconciliationViewerProvider>
                     <AmazonImportDetailViewerProvider>
                       <ImportedCategoryWorkspaceProvider>
                         <VaultGateProvider>
                           <SyncStatusProvider>
                             <ThemeController />
                             <UnifiedDuplicatesViewerRenderer />
-                            <AmazonReconciliationViewerRenderer />
+                            <ReconciliationViewerRenderer />
                             <AmazonImportDetailViewerRenderer />
                             <ImportedCategoryWorkspaceRenderer />
                             <SyncStatusRenderer />
@@ -1848,7 +1848,7 @@ export default function App() {
                             pills below it — see components/SyncNavItem.jsx. */}
                                 <SyncNavItem style={s.link} activeStyle={activeStyle} />
                                 <MinimizedDuplicatesNavItem />
-                                <MinimizedAmazonReconciliationNavItem />
+                                <MinimizedReconciliationNavItem />
                                 <MinimizedAmazonImportDetailNavItem />
                                 <MinimizedImportedCategoryWorkspaceNavItem />
                                 <div style={s.navFooter}>
@@ -2051,7 +2051,7 @@ export default function App() {
                         </VaultGateProvider>
                       </ImportedCategoryWorkspaceProvider>
                     </AmazonImportDetailViewerProvider>
-                  </AmazonReconciliationViewerProvider>
+                  </ReconciliationViewerProvider>
                 </UnifiedDuplicatesViewerProvider>
               </TransactionShareProvider>
             </PanelStackProvider>

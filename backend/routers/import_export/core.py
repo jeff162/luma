@@ -38,7 +38,7 @@ import sqlite3
 import uuid
 import re
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -55,6 +55,7 @@ from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services.categorizer import (
+    FEATURE_OWNED_CATEGORY_SOURCES,
     categorize_transaction,
     category_lock_for,
     extract_source_match_text,
@@ -99,6 +100,9 @@ from backend.services.source_capabilities import (
     zero_amount_policy_for_source,
 )
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
+from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
+from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
+from backend.services.paypal_funding import card_counts as paypal_card_counts
 from backend.services.money_movement import (
     suppress_batch_funding_legs,
     reverse_batch_money_movement_links,
@@ -480,15 +484,23 @@ def _classify_evidence_column_role(values: list[str]) -> str:
 
 # PayPal Activity CSV recognition. The export header is stable and distinctive across years — no
 # bank/card/Amazon CSV carries this combination — so a header-only sniff identifies it. A recognized
-# PayPal file force-captures `Type`/`Item Title` (see `_forced_evidence_headers`) and is stamped
+# PayPal file force-captures `Type`/`Item Title`/`Transaction ID` (see `_forced_evidence_headers`) and is stamped
 # `source_kind = 'source:paypal'`. See docs/data-model.md -> "PayPal source recognition +
 # `Type`-based money-movement categorization".
 _PAYPAL_HEADER_MARKERS = frozenset({"timezone", "type", "status", "currency", "receipt id", "transaction id"})
 PAYPAL_SOURCE_KIND = "source:paypal"
+STATEMENT_SNAPSHOT_KEY = "statement"
 # Fields always worth keeping from a PayPal export regardless of what the user mapped/checked: `Type`
-# drives money-movement categorization; `Item Title` is the richest enrichment detail. Matched on header,
+# drives money-movement categorization; `Item Title` is the richest enrichment detail; `Transaction ID` is
+# the one identifier the activity CSV shares with a monthly statement, which is what lets a statement's
+# refund find a payment only a CSV brought in (services/refund_links.py). Matched on header,
 # case-insensitively.
-_PAYPAL_FORCED_EVIDENCE = ("type", "item title")
+_PAYPAL_FORCED_EVIDENCE = ("type", "item title", "transaction id")
+# Forced columns whose role is declared rather than measured. A Transaction ID differs on every row, so
+# cardinality would call it descriptive text and feed it to duplicate matching — but an opaque identifier
+# names nothing two sources would both write, which is what the categorical role is for (see
+# services/import_evidence.py). The statement declares the same column the same way.
+_PAYPAL_FORCED_CATEGORICAL = frozenset({"transaction id"})
 
 
 def _clean_header_key(header) -> str:
@@ -503,10 +515,11 @@ def sniff_paypal_activity(headers) -> bool:
     return _PAYPAL_HEADER_MARKERS.issubset(cols)
 
 
-def _forced_evidence_headers(headers: list[str]) -> list[str]:
+def _forced_evidence_headers(headers: list[str], is_paypal: bool) -> list[str]:
     """Headers to capture into evidence regardless of the user's mapping/selection, for a recognized
-    source. Today: PayPal's `Type` + `Item Title`. Empty for any other file, so nothing else changes."""
-    if not sniff_paypal_activity(headers):
+    source. Today: PayPal's `Type`, `Item Title` and `Transaction ID`. Empty for any other file, so nothing
+    else changes."""
+    if not is_paypal:
         return []
     forced = []
     for header in headers:
@@ -522,12 +535,21 @@ def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: 
     data source (visible, renamable, auto-matches future PayPal files by fingerprint), except it can't be
     deleted. Name defaults to "PayPal", disambiguated ("PayPal 2", …) if the user already has that name.
     `account_id` is left NULL — PayPal files carry no account column, so the target account is picked per
-    import (a source can span accounts, like any CSV source)."""
+    import (a source can span accounts, like any CSV source).
+
+    A source first created by a statement import has no header to match files by (a PDF has none), so
+    the first activity CSV to arrive gives it that CSV's header and mapping."""
     existing = conn.execute(
-        "SELECT id FROM csv_import_profile WHERE source_kind = ? ORDER BY created_at LIMIT 1",
+        "SELECT id, header_fingerprint FROM csv_import_profile WHERE source_kind = ? ORDER BY created_at LIMIT 1",
         (PAYPAL_SOURCE_KIND,),
     ).fetchone()
     if existing:
+        if header_fingerprint and not existing["header_fingerprint"]:
+            conn.execute(
+                """UPDATE csv_import_profile SET header_fingerprint = ?, column_map = ?, date_format = ?,
+                          amount_convention = ? WHERE id = ?""",
+                (header_fingerprint, json.dumps(column_map), date_format, amount_convention, existing["id"]),
+            )
         return existing["id"]
     name, suffix = "PayPal", 1
     while conn.execute("SELECT 1 FROM csv_import_profile WHERE LOWER(name) = LOWER(?)", (name,)).fetchone():
@@ -548,7 +570,8 @@ def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: 
     return profile_id
 
 
-def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: ColumnMap) -> list[tuple[str, str]]:
+def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: ColumnMap, *,
+                                is_paypal: bool, declared_roles: Optional[dict] = None) -> list[tuple[str, str]]:
     """Decide which non-mapped columns to capture into import evidence and each one's role.
 
     Role is inferred from the column's cardinality across the file so the duplicate text-matcher can
@@ -561,14 +584,18 @@ def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: 
     it is None (a saved profile with no capture config, or an API caller), we fall back to the zero-
     effort keyword auto-detect, capped so an unmapped file can't flood evidence.
 
-    A recognized source's **forced** columns (PayPal `Type`/`Item Title`) are always captured on top of
-    either path — the user can't accidentally drop the fields money-movement categorization + enrichment
-    depend on. They don't count against the keyword cap.
+    A recognized source's **forced** columns (PayPal `Type`/`Item Title`/`Transaction ID`) are always
+    captured on top of either path — the user can't accidentally drop the fields money-movement
+    categorization, enrichment and refund pairing depend on. They don't count against the keyword cap.
     """
     reserved = _import_evidence_reserved_headers(col)
-    forced = {name for name in _forced_evidence_headers(headers) if name not in reserved}
+    forced = {name for name in _forced_evidence_headers(headers, is_paypal) if name not in reserved}
 
     def column_role(header: str) -> str:
+        if declared_roles and header in declared_roles:
+            return declared_roles[header]
+        if header in forced and _clean_header_key(header) in _PAYPAL_FORCED_CATEGORICAL:
+            return EVIDENCE_ROLE_CATEGORICAL
         return _classify_evidence_column_role([str(row.get(header, "") or "").strip() for row in data_rows])
 
     plan: list[tuple[str, str]] = []
@@ -2181,6 +2208,60 @@ def _detect_header_row_index(text: str) -> int:
     return header_row_index
 
 
+@dataclass(frozen=True)
+class ParsedFile:
+    """What a format's front end hands the format-agnostic import: the parse seam (see
+    docs/building-a-connector.md → Adding a file importer). Everything downstream reads this and never
+    learns what the file was.
+
+    `source` names the source for what it declares about its rows (`services/source_capabilities.py`).
+    `headers` are the non-empty column names the rows are keyed by; `header_cells` is every header cell
+    as the file has it, which only the preview reads (a saved source's fingerprint is built from it).
+    `content_hash` recognizes a file imported before, so a format with no text defines it over what it
+    parsed. `first_row_number` is the number shown for `rows[0]` wherever a row is reported, and `lines`
+    are the text the file viewer shows around a bad row — none for a format with no text to show.
+    `source_kind` is a recognized source (PayPal), decided by the front end that can see the file.
+    `evidence_roles` states a captured column's role for a format that cannot measure it from the file;
+    anything not named is classified by cardinality, as a CSV's columns are. `currency_refusals` are
+    rows the front end knows belong to another currency though they carry none of their own (a PayPal
+    card deposit that paid for a foreign-currency payment), by index into `rows`, with the reason shown."""
+    headers: list[str]
+    rows: list[dict]
+    content_hash: str
+    source: str
+    header_cells: list[str] = field(default_factory=list)
+    first_row_number: int = 1
+    lines: list[str] = field(default_factory=list)
+    source_kind: Optional[str] = None
+    evidence_roles: dict[str, str] = field(default_factory=dict)
+    currency_refusals: dict[int, str] = field(default_factory=dict)
+
+    @property
+    def fingerprint(self) -> str:
+        return "|".join(self.headers)
+
+
+def parse_csv_text(text: str) -> ParsedFile:
+    """The CSV front end: detect the header line below any preamble, then read the rows under it. Shared
+    by the preview and the import, so the preview reads exactly the rows the import will."""
+    all_lines = text.splitlines()
+    header_row_index = _detect_header_row_index(text)
+    reader = csv.DictReader(io.StringIO("\n".join(all_lines[header_row_index:])))
+    header_cells = [str(header or "").strip() for header in (reader.fieldnames or [])]
+    headers = [header for header in header_cells if header]
+    rows = [{k.strip(): v for k, v in row.items() if k} for row in reader]
+    return ParsedFile(
+        headers=headers,
+        rows=rows,
+        content_hash=make_import_file_hash(text),
+        source=SOURCE_CSV,
+        header_cells=header_cells,
+        first_row_number=header_row_index + 2,
+        lines=all_lines,
+        source_kind=PAYPAL_SOURCE_KIND if sniff_paypal_activity(headers) else None,
+    )
+
+
 def normalize_import_category(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
@@ -2517,9 +2598,10 @@ def _adopt_batch_file_labels(conn, batch_id: str, txn_ids: Optional[list[str]] =
         # only a bootstrap fallback for rows nothing else owns; `cleared` is a distinct source from NULL
         # precisely so this re-grab can tell "user discarded this" apart from "ordinary uncategorized"
         # (which it still fills). A feature-owned row is skipped for the reason every automatic pass
-        # skips it: an `enrichment` row's excluded category is reversible link state, and a `split` row's
-        # category is only the pre-split value its allocations replaced.
-        if row["category_source"] in ("manual", "rule", "cleared", "enrichment", "split"):
+        # skips it: an `enrichment` row's excluded category is reversible link state, a `split` row's
+        # category is only the pre-split value its allocations replaced, and a `refund` row follows its
+        # payment.
+        if row["category_source"] in ("manual", "rule", "cleared", *FEATURE_OWNED_CATEGORY_SOURCES):
             continue
         scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
             _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
@@ -2741,32 +2823,24 @@ async def run_import(
 
 
 def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
-    """Core import logic, independent of HTTP/multipart. Given the raw file text and a config dict, it
-    parses rows, creates/resolves accounts, inserts + dedupes + categorizes transactions, writes the
-    batch and its account-coverage rows, runs the post-import suspect sweep, and returns the result
-    summary. The /run endpoint is a thin wrapper around this. A caller may pass its own `conn` to run
-    inside an existing transaction (the demo loader does, so its owners/accounts/profiles are visible to
-    the import and everything commits together); when omitted, the core opens and commits its own."""
-    # The parse seam: everything from here to `headers`/`rows` is CSV-specific, and everything after it
-    # is format-agnostic. It is inlined here and again in `preview.py::preview_csv`, so the two agree by
-    # construction today and would agree only by discipline once a second format exists -- see
-    # docs/building-a-connector.md -> Adding a file importer, which also names the four CSV assumptions
-    # buried in it.
-    file_content_hash = make_import_file_hash(text)
-    all_lines = text.splitlines()
+    """Import a CSV's text: the CSV front end, then the format-agnostic import (`run_import_parsed`)."""
+    return run_import_parsed(parse_csv_text(text), cfg, filename=filename, conn=conn)
 
-    header_row_index = _detect_header_row_index(text)
-    data_text = "\n".join(all_lines[header_row_index:])
 
-    reader   = csv.DictReader(io.StringIO(data_text))
-    raw_hdrs = reader.fieldnames or []
-    headers = [str(header or "").strip() for header in raw_hdrs if str(header or "").strip()]
-    all_rows = []
-    for row in reader:
-        all_rows.append({k.strip(): v for k, v in row.items() if k})
+def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
+    """Core import logic, independent of HTTP/multipart and of the file's format. Given what a front end
+    parsed and a config dict, it creates/resolves accounts, inserts + dedupes + categorizes
+    transactions, writes the batch and its account-coverage rows, runs the post-import suspect sweep,
+    and returns the result summary. A caller may pass its own `conn` to run inside an existing
+    transaction (the demo loader does, so its owners/accounts/profiles are visible to the import and
+    everything commits together); when omitted, the core opens and commits its own."""
+    file_content_hash = parsed.content_hash
+    all_lines = parsed.lines
+    headers = parsed.headers
+    is_paypal = parsed.source_kind == PAYPAL_SOURCE_KIND
 
     skip_rows = int(cfg.get("skip_rows", 0))
-    data_rows = all_rows[skip_rows:]
+    data_rows = parsed.rows[skip_rows:]
 
     cm_dict       = cfg.get("column_map", {})
     col = ColumnMap(
@@ -2817,7 +2891,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     currency_rows = []
     # Resolved once per import rather than per row: the policy is a property of the source, and reading it
     # inside the loop would invite a future edit that varies it by row.
-    reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(SOURCE_CSV))
+    reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(parsed.source))
     validation_error_rows = []
     duplicate_rows = []
     skip_set = set(skip_accounts_cfg)
@@ -2834,10 +2908,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         # imports share one header + one money-movement review. With no source picked, get-or-create it;
         # with a source picked (a hand-created PayPal source), *adopt* it — tag it `source:paypal` so it
         # gets the same treatment (non-deletable, money-movement review) as an auto-created one.
-        if not replace_batch_id and sniff_paypal_activity(headers):
+        if not replace_batch_id and is_paypal:
             if profile_id is None:
                 profile_id = _get_or_create_paypal_profile(
-                    conn, header_fingerprint="|".join(headers), column_map=cm_dict,
+                    conn, header_fingerprint=parsed.fingerprint, column_map=cm_dict,
                     date_format=date_format, amount_convention=amount_convention,
                 )
             else:
@@ -2873,7 +2947,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             # A new account created by a recognized PayPal import is a PayPal wallet — mark its type so the
             # account-type rule criterion (money movement, and any user rule) covers it. Only when the type
             # is generic, so an explicit non-generic choice is respected; existing accounts are never touched.
-            if sniff_paypal_activity(headers) and single_type in (None, "", "depository", "other"):
+            if is_paypal and single_type in (None, "", "depository", "other"):
                 single_type = "paypal"
             if single_name:
                 existing = conn.execute(
@@ -3098,6 +3172,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             },
             UNKNOWN_SOURCE_FALLBACK_KEY: False,
         }
+        # What a statement's front end read from the document's own header — the account it is for, the
+        # period it covers — kept so a later statement for the same account can be recognized.
+        if cfg.get(STATEMENT_SNAPSHOT_KEY):
+            config_snapshot[STATEMENT_SNAPSHOT_KEY] = cfg[STATEMENT_SNAPSHOT_KEY]
         # `account_duplicate_compare` is deliberately no longer written into the snapshot. It existed so
         # the client could restore the compare-only choice into a resumed draft; with that choice gone,
         # the only thing left in the dict is a group root, which is already durable on the account
@@ -3107,7 +3185,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
               (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, use_imported_categories, config_snapshot, source_kind)
             VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
         """, (batch_id, profile_id, filename, file_content_hash, 1 if use_imported_categories else 0, json.dumps(config_snapshot),
-              PAYPAL_SOURCE_KIND if sniff_paypal_activity(headers) else None))
+              PAYPAL_SOURCE_KIND if is_paypal else None))
 
         if not profile_id:
             previous_profileless_batches = conn.execute(
@@ -3188,9 +3266,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         _rule_effect_dates: dict = {}
         # Which columns to capture as evidence, and each one's role, is a file-level decision (roles come
         # from cardinality across the whole file) — compute once, then apply per row.
-        evidence_plan = _build_evidence_column_plan(data_rows, headers, col)
+        evidence_plan = _build_evidence_column_plan(
+            data_rows, headers, col, is_paypal=is_paypal, declared_roles=parsed.evidence_roles)
         for i, row in enumerate(data_rows):
-            row_num = header_row_index + skip_rows + i + 2
+            row_num = parsed.first_row_number + skip_rows + i
             skip_account_row = False
 
             if use_account_col:
@@ -3244,19 +3323,21 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             # The ledger holds one currency and stores a bare number, so a row the file says is in another
             # is refused rather than added into every total at face value — the rule a sync applies too
             # (see `services/ledger_currency.py`). A blank cell states nothing and reads as the ledger's.
-            if col.currency:
-                row_currency = str(row.get(col.currency, "")).strip()
-                if row_currency and not currency_matches(ledger_currency, row_currency):
-                    skipped += 1
-                    currency_rows.append({
-                        "row": row_num,
-                        "kind": CURRENCY_REJECTION_KIND,
-                        "reason": f"In {row_currency} — every amount in {app_name()} is {ledger_currency}",
-                        "values": _normalize_import_row_values(row, headers),
-                    })
-                    row_results.append({"row": row_num, "status": "currency"})
-                    reset_footer_detection()
-                    continue
+            row_currency = str(row.get(col.currency, "")).strip() if col.currency else ""
+            currency_refusal = parsed.currency_refusals.get(skip_rows + i)
+            if currency_refusal is None and row_currency and not currency_matches(ledger_currency, row_currency):
+                currency_refusal = f"In {row_currency} — every amount in {app_name()} is {ledger_currency}"
+            if currency_refusal:
+                skipped += 1
+                currency_rows.append({
+                    "row": row_num,
+                    "kind": CURRENCY_REJECTION_KIND,
+                    "reason": currency_refusal,
+                    "values": _normalize_import_row_values(row, headers),
+                })
+                row_results.append({"row": row_num, "status": "currency"})
+                reset_footer_detection()
+                continue
             # Declared rather than decided here: a $0 row means different things from different sources,
             # and the rule (plus what goes wrong either way) lives in `services/source_capabilities.py`.
             # For a CSV it is a pending charge published before it settled, and nothing can ever revise it
@@ -3448,7 +3529,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
 
         if errors:
             first_error_row = min((err.get("row") for err in errors if err.get("row")), default=None)
-            if first_error_row is not None:
+            # A file with no text (a PDF) has nothing for the file viewer to show.
+            if first_error_row is not None and all_lines:
                 invalid_rows_suspected = True
                 error_line_idx = max(0, first_error_row - 1)
                 start_idx = max(0, error_line_idx - 4)
@@ -3569,6 +3651,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     if batch_id:
         with (nullcontext(caller_conn) if caller_conn is not None else get_db()) as sweep_conn:
             sweep_import_suspects(sweep_conn, batch_id)
+        pair_refunds_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
+        pair_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
 
     trailing_non_transaction_message = None
     if trailing_non_transaction_suspected:
@@ -3592,7 +3676,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         "duplicate_count":      deduped,
         "enriched_count":       enriched_count,
         "money_movement_suppressed_count": money_movement_suppressed_count,
-        "is_paypal":            sniff_paypal_activity(headers),
+        "is_paypal":            is_paypal,
         "profile_id":           profile_id,
         "import_summary":       import_summary,
         "new_accounts_created": len(created_account_ids),
@@ -4088,6 +4172,8 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
     if imported_ids:
         with get_db() as conn:
             mark_import_suspects(conn, batch_id, txn_ids=imported_ids, exclude_pairs=settled_pairs)
+        pair_refunds_after_ingest(get_db())
+        pair_after_ingest(get_db())
 
     return {
         "batch_id": batch_id,
@@ -4233,7 +4319,7 @@ def list_batches():
             if d.get("source_kind") == BATCH_SOURCE_KIND:
                 d["recon_attention_count"] = reconciliation_attention_count(conn, b["id"])
                 # Live "still waiting for its orders file" count for an items-before-orders card, so its
-                # "no match" pill resolves to zero once a later orders import attaches the parked items.
+                # "no matching order" pill resolves to zero once a later orders import attaches the parked items.
                 d["unmatched_item_count"] = unmatched_parked_order_count(conn, d.get("import_summary"))
                 # Newest transaction date the card covers, so the history can order marketplace cards by
                 # data recency (most recent first) rather than import time — a multi-year historical drop
@@ -4248,6 +4334,17 @@ def list_batches():
                     newest = max(dates) if dates else None
                 d["newest_txn_date"] = newest
             result.append(d)
+
+        # A card with a share of the PayPal reconciliation — a PayPal file, or a sync of a connection that
+        # includes a PayPal account — carries how many rows that share lists and which of them need a look,
+        # so it can offer the review, and warn, without opening it; a data source's collapsed header totals
+        # the ids across its cards. A card with nothing to show gets neither.
+        paypal_cards = paypal_card_counts(conn)
+        for d in result:
+            card = paypal_cards.get(d["id"])
+            if card:
+                d["paypal_recon_rows"] = card["rows"]
+                d["paypal_recon_attention_ids"] = card["attention_ids"]
         return result
 
 
@@ -4838,7 +4935,9 @@ def undo_batches(conn, batch_ids) -> dict:
     from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
     for batch_id in ids:
         reverse_batch_enrichments(conn, batch_id)
+        reverse_batch_paypal_funding(conn, batch_id)
         reverse_batch_money_movement_links(conn, batch_id)
+        reverse_batch_refund_links(conn, batch_id)
         reverse_batch_amazon_links(conn, batch_id)
 
     restored = conn.execute(

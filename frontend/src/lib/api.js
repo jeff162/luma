@@ -930,6 +930,33 @@ export const api = {
       return res.json()
     })
   },
+  // PayPal monthly statements (PDFs, or zips of them): what the dropped files hold and which account each
+  // PayPal account's statements already go into, then the import itself — one card per statement under the
+  // PayPal data source. `assignments` maps each statement's PayPal Account ID to the account it goes into.
+  scanPaypalStatements: (files) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    return trackedFetch('/api/import-export/paypal-statements/scan', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      return res.json()
+    })
+  },
+  importPaypalStatements: (files, assignments) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    fd.append('assignments', JSON.stringify(assignments))
+    return trackedFetch('/api/import-export/paypal-statements/import', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      signalDataMutated()
+      return res.json()
+    })
+  },
   // Amazon funding-source → account map: which system account each Amazon payment instrument (card
   // last-4 + network) charges, so the importer can match + exclude the card charge. Global by default,
   // with an optional per-Amazon-account override (see docs/data-model.md -> Transaction links and
@@ -946,6 +973,13 @@ export const api = {
   mergeUnaccountedAmazonCharges: (body) => request('/import-export/amazon/merge-unaccounted-charges', { method: 'POST', body: JSON.stringify(body) }),
   markAmazonChargesNotDuplicates: (body) => request('/import-export/amazon/charges-not-duplicates', { method: 'POST', body: JSON.stringify(body) }),
   unlinkAmazonOrderCharges: (body) => request('/import-export/amazon/unlink-charges', { method: 'POST', body: JSON.stringify(body) }),
+  // The PayPal reconciliation (docs/data-model.md → PayPal funding pairs): the whole ledger, or one import's rows.
+  getPaypalFundingReport:     (batchId) => request(`/import-export/paypal-funding/report${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ''}`),
+  getPaypalFundingCandidates: (paypalTxnId) => request(`/import-export/paypal-funding/candidates/${paypalTxnId}`),
+  pairPaypalFunding:          (body) => request('/import-export/paypal-funding/pair', { method: 'POST', body: JSON.stringify(body) }),
+  unpairPaypalFunding:        (body) => request('/import-export/paypal-funding/unpair', { method: 'POST', body: JSON.stringify(body) }),
+  declinePaypalFunding:       (body) => request('/import-export/paypal-funding/decline', { method: 'POST', body: JSON.stringify(body) }),
+  markPaypalFundingReviewed:  (body) => request('/import-export/paypal-funding/mark-reviewed', { method: 'POST', body: JSON.stringify(body) }),
   // The ledger's currency — tenant-wide, not a per-user preference: everyone is reading the same numbers.
   // `setLedgerCurrency` answers 409 when the ledger already holds transactions and `confirm` was not sent;
   // the caller shows what the 409 says and retries verbatim with confirm: true.

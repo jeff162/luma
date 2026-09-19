@@ -131,6 +131,42 @@ test('trends averages drill from a group to its categories and open a category r
   await expect(page.getByRole('button', { name: /^Show the categories in / }).first()).toBeVisible()
 })
 
+// A drill switches the tab when the group's figures arrive, not before. Switching first drew the group's
+// title and its categories' report arrows over the rows still on screen — the groups — where a click
+// opened a "category" report for a group. The group's series is held here so that window is certain to
+// be observed instead of depending on timing.
+test('a trends drill waits for the group figures before switching the tab', async ({ page }) => {
+  let release
+  const held = new Promise(resolve => { release = resolve })
+  await page.route(/\/api\/transactions\/summary\/monthly-by-group\?.*group_id=/, async route => {
+    await held
+    await route.continue()
+  })
+  try {
+    await page.goto('/')
+    await page.getByRole('link', { name: 'Dashboard' }).click()
+    await page.getByRole('button', { name: 'Trends' }).click()
+    await page.getByRole('button', { name: 'Expenses' }).click()
+    const groupRow = page.getByRole('button', { name: /^Show the categories in / }).first()
+    await expect(groupRow).toBeVisible()
+    const groupName = (await groupRow.getAttribute('aria-label')).replace('Show the categories in ', '')
+    await groupRow.click()
+
+    // The picker answers the choice at once; the table and title still describe the groups.
+    const groupPicker = page.locator('select').filter({ has: page.locator('option', { hasText: 'All groups' }) })
+    await expect(groupPicker.locator('option:checked')).toHaveText(groupName)
+    await expect(page.getByText('Monthly averages by group')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Open the transactions behind / })).toHaveCount(0)
+
+    release()
+    await expect(page.getByText(`Monthly averages · ${groupName}`)).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Open the transactions behind / }).first()).toBeVisible()
+  } finally {
+    release()
+    await page.unroute(/\/api\/transactions\/summary\/monthly-by-group/)
+  }
+})
+
 // A tag report's right-click / ⋯ menu edits it in place: the unsaved custom report can have its tags
 // changed and be saved under a name, and a saved one can have its tags changed without losing its
 // identity. The builder has to open on the report's current tags each time, or "edit" is a rebuild.
@@ -185,8 +221,11 @@ test('tag report menu edits tags and saves the unsaved report under a name', asy
   await save.click()
   await expect(selected).toHaveText(name)
 
-  // Persisted, not just held in the page: after a reload the builder opens on the edited set.
+  // Persisted, not just held in the page: after a reload the builder opens on the edited set. A load at `/`
+  // lands on the remembered startup route, which the specs running beside this one keep moving, so return to
+  // the Dashboard by its link rather than trusting where the reload put the page.
   await page.reload()
+  await page.getByRole('link', { name: 'Dashboard' }).click()
   await expect(selected).toHaveText(name)
   await manage.click()
   await page.getByRole('menuitem', { name: 'Edit tags…' }).click()

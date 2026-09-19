@@ -15,12 +15,13 @@ import { applyCategoryChange, categoryReconcilePatch, txnMutations } from '../tx
 
 // Held as locals rather than reached through the mocked `api` object: the repo forbids touching the
 // wrapped category writes outside txnMutations, and a test is not the place to make an exception.
-const { overrideCategory, clearOverride } = vi.hoisted(() => ({
+const { overrideCategory, clearOverride, getTransactions } = vi.hoisted(() => ({
   overrideCategory: vi.fn(),
   clearOverride: vi.fn(),
+  getTransactions: vi.fn(),
 }))
 
-vi.mock('../api.js', () => ({ api: { overrideCategory, clearOverride } }))
+vi.mock('../api.js', () => ({ api: { overrideCategory, clearOverride, getTransactions } }))
 
 const DINING = { id: 'cat-dining', name: 'Dining' }
 const TREAT = { id: 'tag-treat', name: 'Treat', color: '#f59e0b', source: 'category' }
@@ -28,6 +29,7 @@ const TREAT = { id: 'tag-treat', name: 'Treat', color: '#f59e0b', source: 'categ
 beforeEach(() => {
   overrideCategory.mockReset()
   clearOverride.mockReset()
+  getTransactions.mockReset()
   overrideCategory.mockResolvedValue({ ok: true, tags: [TREAT], blocked_tags: [] })
 })
 
@@ -77,6 +79,18 @@ describe('applying a category change to a row', () => {
     await applyCategoryChange('t1', DINING, patch => patches.push(patch))
 
     expect('tags' in patches[1]).toBe(false)
+  })
+
+  it('refreshes the refunds that followed the payment, under their own ids', async () => {
+    // A refund paired with this payment moved with it on the server; the caller only patched the
+    // payment, so without this the refund beside it keeps showing its old category.
+    overrideCategory.mockResolvedValue({ ok: true, tags: [], blocked_tags: [], followed_ids: ['r1'] })
+    getTransactions.mockResolvedValue({ transactions: [{ id: 'r1', category_id: 'cat-dining' }] })
+    const applied = []
+    await applyCategoryChange('t1', DINING, (patch, id) => applied.push([id, patch.category_id]))
+
+    expect(getTransactions).toHaveBeenCalledWith({ ids: 'r1', limit: 1 })
+    expect(applied).toEqual([['t1', 'cat-dining'], ['t1', 'cat-dining'], ['r1', 'cat-dining']])
   })
 })
 

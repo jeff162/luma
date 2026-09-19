@@ -44,17 +44,17 @@ class FakeUploadFile:
 # name so it hard-rejects as a duplicate; the rich file additionally carries an Item Title).
 SPARSE_CSV = "\n".join([
     "Date,Name,Account,Amount",
-    "2026-03-24,Clinton Moon,Checking,4130.00",
+    "2026-03-24,Robin Vale,Checking,1275.00",
 ])
 RICH_CSV = "\n".join([
     "Date,Name,Account,Amount,Item Title",
-    "2026-03-24,Clinton Moon,Checking,4130.00,Pats Tix",
+    "2026-03-24,Robin Vale,Checking,1275.00,Concert Tix",
 ])
 # A second, distinct rich source (different file content -> not blocked as a re-import) carrying the
 # same transaction and the same Item Title, used to prove enrichment doesn't double-add.
 RICH_CSV_B = "\n".join([
     "Date,Name,Account,Amount,Item Title,Ref",
-    "2026-03-24,Clinton Moon,Checking,4130.00,Pats Tix,R1",
+    "2026-03-24,Robin Vale,Checking,1275.00,Concert Tix,R1",
 ])
 
 
@@ -117,20 +117,20 @@ class AutoEnrichImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rich_source_enriches_existing_duplicate_and_reports_count(self):
         await self._run_import(SPARSE_CSV)  # establishes the existing row, no Item Title
-        self.assertNotIn("Pats Tix", self._existing_evidence_values())
+        self.assertNotIn("Concert Tix", self._existing_evidence_values())
 
         result = await self._run_import(RICH_CSV, enrich_from_source=True, evidence_columns=["Item Title"])
 
         self.assertEqual(result["deduped"], 1, "the rich row is a duplicate, not a new import")
         self.assertEqual(result["enriched_count"], 1)
-        self.assertIn("Pats Tix", self._existing_evidence_values(), "novel detail folded into the existing row")
+        self.assertIn("Concert Tix", self._existing_evidence_values(), "novel detail folded into the existing row")
 
     async def test_flag_off_does_not_enrich(self):
         await self._run_import(SPARSE_CSV)
         result = await self._run_import(RICH_CSV, enrich_from_source=False, evidence_columns=["Item Title"])
         self.assertEqual(result["deduped"], 1)
         self.assertEqual(result["enriched_count"], 0)
-        self.assertNotIn("Pats Tix", self._existing_evidence_values())
+        self.assertNotIn("Concert Tix", self._existing_evidence_values())
 
     async def test_second_rich_source_with_same_detail_is_idempotent(self):
         await self._run_import(SPARSE_CSV)
@@ -140,17 +140,17 @@ class AutoEnrichImportTests(unittest.IsolatedAsyncioTestCase):
         # the detail is already present, so nothing new is folded in and it isn't stored twice.
         second = await self._run_import(RICH_CSV_B, enrich_from_source=True, evidence_columns=["Item Title"])
         self.assertEqual(second["enriched_count"], 0, "no new detail to add")
-        self.assertEqual(self._existing_evidence_values().count("Pats Tix"), 1, "not duplicated")
+        self.assertEqual(self._existing_evidence_values().count("Concert Tix"), 1, "not duplicated")
 
     async def test_undo_reverses_enrichment_on_the_existing_row(self):
         await self._run_import(SPARSE_CSV)
         result = await self._run_import(RICH_CSV, enrich_from_source=True, evidence_columns=["Item Title"])
-        self.assertIn("Pats Tix", self._existing_evidence_values())
+        self.assertIn("Concert Tix", self._existing_evidence_values())
 
         with self._use_db_path():
             undo_batch(result["batch_id"], force=True)
 
-        self.assertNotIn("Pats Tix", self._existing_evidence_values(),
+        self.assertNotIn("Concert Tix", self._existing_evidence_values(),
                          "undoing the batch must reverse the change it made to the pre-existing row")
 
     async def test_ambiguous_match_is_skipped(self):
@@ -170,7 +170,7 @@ class AutoEnrichImportTests(unittest.IsolatedAsyncioTestCase):
                     (
                         batch_id,
                         json.dumps({"candidates": [{"id": target}, {"id": str(uuid.uuid4())}]}),
-                        json.dumps({"import_evidence": {"extra_text_fields": [{"header": "Item Title", "value": "Pats Tix"}]}}),
+                        json.dumps({"import_evidence": {"extra_text_fields": [{"header": "Item Title", "value": "Concert Tix"}]}}),
                     ),
                 )
                 enriched, skipped = _enrich_duplicate_rows(conn, batch_id, [2])

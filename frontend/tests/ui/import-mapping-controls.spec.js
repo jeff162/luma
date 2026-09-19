@@ -171,7 +171,7 @@ test('a dropped file matching no saved source falls back to a temporary draft', 
   await page.goto('/import-export')
 
   // The default upload screen: a drop zone, no chooser, and the auto-detect affordance beside it.
-  await expect(page.getByText('Drop CSV file(s) here, or click to browse')).toBeVisible()
+  await expect(page.getByText('Drop file to import here, or click to browse')).toBeVisible()
   await expect(page.getByRole('button', { name: 'choose a data source' })).toBeVisible()
 
   await page.locator('#csv-file-input').setInputFiles(sampleCsvFile())
@@ -271,7 +271,7 @@ test('the explicit data source chooser opens on demand and can be dismissed', as
 
     // Back to the default drop-first screen, with detection still in charge.
     await expect(page.getByText('Available choices')).toHaveCount(0)
-    await expect(page.getByText('Drop CSV file(s) here, or click to browse')).toBeVisible()
+    await expect(page.getByText('Drop file to import here, or click to browse')).toBeVisible()
   } finally {
     await deleteImportProfile(request, profileId)
   }

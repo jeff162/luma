@@ -1,8 +1,9 @@
 # Marketplace purchase detail — eBay, and a shared review surface
 
-**Design, not started (2026-09-16).** Nothing here is built. The four product decisions the first draft
-left open were settled the same day and are written into the sections they affect; what is still open
-is under [Open](#open) at the end.
+**Design, not started (2026-09-16).** Nothing eBay-specific is built; the shared review shell this design
+called for exists, with Amazon and the PayPal reconciliation as its vendors (see *The review surface*).
+The four product decisions the first draft left open were settled the same day and are written into the
+sections they affect; what is still open is under [Open](#open) at the end.
 
 The feature: import a marketplace's purchase history and **add the item detail to the card charge that
 already paid for it**, so a charge reading only "eBay" says what was bought and is found by searching for
@@ -174,39 +175,30 @@ those exact fields.
 ### What already exists and is already shared
 
 - **`MatchReport`** — the "record ↔ matched record" table, windowed, with controlled sort and selection.
-  Both the duplicate report and the Amazon reconciliation report render through it.
-- **`useDetachedReportViewer`** — the floating, minimizable, navigation-surviving report seam.
+  Both the duplicate report and the reconciliation reports render through it.
+- **The reconciliation shell** — `ReconciliationReportDialog` with its viewer, `ReconciliationViewerContext`
+  (one viewer parameterized by vendor): the floating panel, the filter pills per bucket, the kind column,
+  the intersection bulk bar and the charge picker (`ChargePickerDialog` — candidates sorted by date
+  proximity, single- or multi-select, a running sum against the record's amount that warns without
+  blocking). A vendor supplies its buckets, columns and the call behind each action; Amazon and the PayPal
+  pairing review are its vendors (`components/importExport/reconciliation/`).
+- **The attention cache** — `services/reconciliation_attention.py`: a per-batch count cached on the batch
+  and a whole-ledger count cached in `db_meta`, both invalidated by the `recon_epoch` triggers.
 - **`MarketplaceImportHistory`** — the per-vendor import card, with a registry for a vendor's own per-file
   action pill.
 - **`reconciliation_attention_count`** — the cached per-batch attention count behind the file card's
   tint and the Tasks nag, invalidated by the `recon_epoch` triggers.
 
-What is Amazon-specific is everything between those pieces: `AmazonReconciliationDialog` (buckets, row
-actions, bulk bar, the `LinkChargesDialog` picker), its viewer context, the report builder and the Tasks
-entry.
+### What eBay still adds to the shared pieces
 
-### What becomes shared
-
-A **marketplace review shell**: the floating panel, the filter pills per bucket, the `MatchReport`
-table, the intersection bulk bar and the charge picker. A vendor supplies a config — the ordered buckets
-(label, stripe colour, whether it counts as attention), the columns, and the per-row and bulk actions it
-offers — and a report endpoint returning its buckets. One viewer context parameterized by vendor
-replaces a context per vendor, and the Tasks entry and the import card's pill read a per-vendor
-attention count through one registry.
-
-The **charge picker** generalizes `LinkChargesDialog`: candidates sorted by date proximity, single- or
-multi-select per vendor, and a running comparison against what the purchase implies (an exact total for
-Amazon, the tax band for eBay) that warns without blocking.
-
-**Amazon moves onto the shell in the same change.** Building the shell for eBay alone would make it a
-second copy of the Amazon dialog. Amazon's buckets and actions (duplicates, split-shipment suggestions,
-merge, the split editor) become its vendor config; none of its behavior changes. So the build order is:
-extract the shell with Amazon as its only client, proven by Amazon's existing tests staying green with no
-edits to their assertions; then add eBay as the second client.
+- **Backend.** A report endpoint returning its buckets, an attention compute function handed to the shared
+  cache, and its own Tasks entry and file-card annotation, as Amazon and PayPal each have.
+- **The charge picker's comparison** is an exact total today (Amazon). eBay's is the tax band: the
+  comparison becomes per vendor, still warning rather than blocking.
 
 **Split offers are a per-vendor capability.** eBay charges one item per charge, so its config offers no
 split. A vendor whose orders routinely hold several items — Amazon today, and a Target- or Walmart-style
-vendor later — declares one, and the shell renders the split action only for vendors that do.
+vendor later — renders the split action in its own columns, as Amazon's config does.
 
 ### eBay's buckets
 
@@ -214,14 +206,14 @@ vendor later — declares one, and the shell renders the split action only for v
 | --- | --- | --- | --- |
 | Matched | applied automatically or by the user | Unmatch | no |
 | Suggested | one best candidate, not applied | Accept, Reject | yes |
-| Needs a choice | several candidates, none preferred | Pick charge… | yes |
+| Several possible matches | several candidates, none preferred | Pick charge… | yes |
 | No charge found | no candidate, or a foreign currency | Pick charge…, Mark reviewed | until reviewed |
 | Charges with no purchase | vendor-looking charges no purchase accounts for (reverse scan) | Mark reviewed | until reviewed |
 
 **A rejected suggestion stays rejected.** The rejected purchase ↔ charge pair is persisted, so the same
 pair is never offered again, the way Amazon's *Not duplicates* assertion works.
 
-**Double-imported charges** show up as *needs a choice* with two identical candidates on different
+**Double-imported charges** show up as *several possible matches* with two identical candidates on different
 accounts. The review says so rather than making the user guess which one to pick, but it does not
 resolve the duplicate itself: which copy is wrong is a ledger question.
 

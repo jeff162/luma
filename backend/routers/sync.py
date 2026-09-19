@@ -42,6 +42,7 @@ from backend.services.providers.config import (
     set_sync_running, sync_outcome, unexplained_already_held,
 )
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
+from backend.services.paypal_funding import pair_after_ingest
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
     categorize_transaction,
@@ -1832,6 +1833,11 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     sweep_import_suspects(conn, card_id, txn_ids=card_added_ids.get(card_id, []))
         except Exception as e:
             log_error(f"[sync] duplicate sweep failed: {e}", exc_info=e)
+
+    # PayPal pairing: either side of a pair can arrive by sync, and a pending row that just posted becomes
+    # pairable, so rows advanced count as well as rows added (services/paypal_funding.py).
+    if cards_touched or touched_ids:
+        pair_after_ingest(get_db())
 
     # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
     # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger

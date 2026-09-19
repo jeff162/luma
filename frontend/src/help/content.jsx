@@ -2790,25 +2790,114 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'paypal-statements',
+    section: 'importing',
+    title: 'PayPal statements',
+    surfaces: ['Import / Export — dropping a PayPal statement PDF or zip'],
+    summary: 'PayPal’s monthly statement PDFs import like its activity CSV, each into the PayPal account it belongs to.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          PayPal&apos;s monthly statements are the easy way to get its history: one PDF per month, or a zip of
+          them, dropped on the importer like any file. Each statement names its PayPal account, and the first
+          time that PayPal account is seen it is given an account here &mdash; a PayPal account, or a new one.
+          From then on its statements always go into that account, and that account takes no other PayPal
+          account&apos;s statements.
+        </p>
+        <p>
+          Each statement becomes its own card under the PayPal data source. A transaction already in the
+          ledger &mdash; from a data connection or an earlier CSV &mdash; is recognized as a duplicate and given
+          the statement&apos;s detail. A statement imported before is skipped, as is a month with no activity.
+          A payment in another currency is not imported, nor the card deposit that paid for it, so the card
+          charge stays the record of that purchase. The activity CSV carries each purchase&apos;s item title,
+          which the statement lacks.
+        </p>
+        <p>
+          A statement also names the payment each refund returns, so the refund is paired with that payment
+          and takes its category: categorizing the purchase moves the refund with it, and the two cancel out
+          in that category. This holds across statements, imported in any order, and for a payment imported
+          from the activity CSV. A category set by hand on the refund itself ends the pairing&apos;s hold on
+          it. Both transactions carry the 🔗 link marker, which names the other one and opens it. A refund sent straight back to the card or
+          bank it came from leaves a withdrawal, which moves to <em>Money movement</em>. A deposit or
+          withdrawal has no name of its own, so the ledger shows what kind of transaction it was in its place.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'paypal-reconciliation',
+    section: 'importing',
+    title: 'PayPal reconciliation',
+    surfaces: ['Import history (Reconciliation pill)', 'Tasks'],
+    summary: 'A tracked PayPal account is matched with the card and bank transactions on the other side of the same money, so a purchase counts once.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A tracked PayPal account holds the record of what was bought or received &mdash; money can sit in a
+          PayPal balance, and then the PayPal transaction is the only record there is. What PayPal took from a
+          card or bank, or sent back to one, also appears on that account as a &ldquo;PAYPAL&hellip;&rdquo;
+          transaction. Counting both would count the purchase twice, so after every import and sync each PayPal
+          transaction is <strong>matched</strong> with the one on the other side, and the money counts once:
+        </p>
+        <ul>
+          <li>
+            A <strong>payment</strong> paid directly from a card or bank counts on the PayPal side, and the card
+            or bank transaction moves to <em>Money movement</em>. When the PayPal transaction was already filed as
+            a transfer, the card transaction is the one counted and nothing changes.
+          </li>
+          <li>
+            A <strong>transfer</strong> &mdash; money added to PayPal from a bank or card, or withdrawn to one
+            &mdash; is money moving on both sides, so both transactions move to <em>Money movement</em>.
+          </li>
+        </ul>
+        <p>
+          A match is made only when it is unambiguous: one matching amount within a few days, on an account
+          belonging to the same person or a shared one. The <strong>PayPal reconciliation</strong> shows the
+          result, for one import or sync from its card&apos;s <strong>Reconciliation</strong> pill (a collapsed
+          data source or connection shows <strong>&#9888; N to resolve</strong> when one of its cards needs a
+          look), or for the whole ledger from the Tasks entry:
+        </p>
+        <ul>
+          <li><strong>Several possible matches</strong> &mdash; more than one transaction could be the other side.
+            <strong> Pick&hellip;</strong> the right one, or <strong>None of these</strong>.</li>
+          <li><strong>Matching transaction not found</strong> &mdash; a PayPal deposit or withdrawal with nothing found on the other
+            side. <strong>Link&hellip;</strong> one by hand, or <strong>Mark reviewed</strong> when that account
+            isn&apos;t tracked.</li>
+          <li><strong>No PayPal record</strong> &mdash; a &ldquo;PAYPAL&hellip;&rdquo; transaction on an account
+            that pays into PayPal that no PayPal transaction accounts for &mdash; often a gap in the PayPal
+            history. It still counts as it is; <strong>Mark reviewed</strong> once checked.</li>
+          <li><strong>Matched</strong> &mdash; <strong>Unlink</strong> puts back whatever the match changed,
+            and the same match is never made again.</li>
+        </ul>
+        <p>
+          Undoing the import that brought either side in undoes the match. A category chosen by hand after
+          matching is kept when the match is undone.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'amazon-import-detail',
     section: 'importing',
     title: 'Amazon import detail report',
-    surfaces: ['Import history — outcome pills (orders / items matched / no match / …)'],
+    surfaces: ['Import history — outcome pills (orders / items matched / no matching order / …)'],
     summary: 'The outcome pills on an Amazon file card open a report of what that import actually did: the orders it created, items matched into orders, items with no matching order yet, duplicates, and payments.',
     body: () => (
       <>
         <p>
           Each Amazon file card carries outcome pills &mdash; <strong>orders</strong>, <strong>items
-            matched</strong>, <strong>already enriched</strong>, <strong>no match</strong>,{' '}
+            matched</strong>, <strong>already enriched</strong>, <strong>no matching order</strong>,{' '}
           <strong>duplicates</strong>, <strong>payments</strong>. Clicking one opens the{' '}
           <strong>import detail report</strong> on that view. Every row shows the <strong>source file</strong> it
           came from, which is what makes file mix-ups diagnosable:
         </p>
         <ul>
-          <li><strong>No match</strong> items had no order to attach to &mdash; usually the items file was
-            imported before its orders file. Their detail is <em>saved</em>, not lost: importing the matching
-            orders file later attaches it automatically (no need to re-import the items file), and the pill flips
-            to <strong>attached to orders</strong> once that happens.</li>
+          <li><strong>No matching order</strong> &mdash; the items had no order to attach to, usually because
+            the items file was imported before its orders file. Their detail is <em>saved</em>, not lost:
+            importing the matching orders file later attaches it automatically (no need to re-import the items
+            file), and the pill flips to <strong>attached to orders</strong> once that happens.</li>
           <li><strong>Duplicates</strong> are orders a previous import already brought in &mdash; the file added
             nothing new. <strong>Already enriched</strong> is the items-file flavor of the same thing.</li>
           <li><strong>Payments</strong> tallies the matched card charges by the account they landed on.</li>

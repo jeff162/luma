@@ -199,7 +199,7 @@ class ImportEvidenceCaptureTests(unittest.IsolatedAsyncioTestCase):
         account_id = self._insert_account("PayPal")
         csv_text = "\n".join([
             '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
-            '"2019-11-02","12:00:00","PST","VeloViewer Ltd","Website Payment","Completed","USD","-10.00","0.00","-10.00","","R1","100.00","T1","Bike subscription"',
+            '"2019-11-02","12:00:00","PST","Routeplot Ltd","Website Payment","Completed","USD","-10.00","0.00","-10.00","","R1","100.00","T1","Bike subscription"',
         ])
         config = {
             "filename": "Paypal-2019.csv",

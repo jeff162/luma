@@ -1729,8 +1729,8 @@ export default function Categories() {
     // list on demand with the Refresh button. Applying a rule still sweeps rows immediately — undoing
     // that is heavier (edit the rule, restore the other affected txns), so it does not wait.
     // (applyCategoryChange writes through txnMutations, which invalidates the derived counts for us.)
-    await applyCategoryChange(txnId, cat, patch => setPagedMatchingTxns(prev => prev.map(txn =>
-      txn.id === txnId ? { ...txn, ...patch } : txn
+    await applyCategoryChange(txnId, cat, (patch, id) => setPagedMatchingTxns(prev => prev.map(txn =>
+      txn.id === id ? { ...txn, ...patch } : txn
     )))
   }
 

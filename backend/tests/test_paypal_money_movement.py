@@ -52,8 +52,8 @@ PAYPAL_CSV = "\n".join([
     '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
     '"2019-12-25","1","PST","","Account Hold for Open Authorization","Completed","USD","-7.00","0","-7.00","","R1","0","T1",""',
     '"2019-12-20","1","PST","","General Currency Conversion","Completed","USD","-3.50","0","-3.50","","R2","0","T2",""',
-    '"2019-11-02","1","PST","VeloViewer Ltd","Website Payment","Completed","USD","-10.00","0","-10.00","","R3","0","T3","Bike sub"',
-    '"2019-11-05","1","PST","RANDONNEURS USA","General Payment","Completed","USD","-90.00","0","-90.00","","R4","0","T4",""',
+    '"2019-11-02","1","PST","Routeplot Ltd","Website Payment","Completed","USD","-10.00","0","-10.00","","R3","0","T3","Bike sub"',
+    '"2019-11-05","1","PST","LONGRIDERS USA","General Payment","Completed","USD","-90.00","0","-90.00","","R4","0","T4",""',
 ])
 
 
@@ -258,7 +258,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(batch["profile_id"], profile["id"])
 
         # A second, distinct PayPal import reuses the same source (not a second one).
-        second_csv = PAYPAL_CSV.replace("2019-11-02", "2020-11-02").replace("VeloViewer Ltd", "Strava Inc")
+        second_csv = PAYPAL_CSV.replace("2019-11-02", "2020-11-02").replace("Routeplot Ltd", "Strava Inc")
         await self._import(csv_text=second_csv, filename="Paypal-2020.csv")
         with self._use_db_path(), get_db() as conn:
             count = conn.execute("SELECT COUNT(*) c FROM csv_import_profile WHERE source_kind = ?", ("source:paypal",)).fetchone()["c"]

@@ -1229,7 +1229,7 @@ function CashFlowTrendsPanel({ rows, selectedYear, onYearChange, loading, onOpen
   )
 }
 
-function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
+function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pickedGroup = drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
   const lastBarClickRef = useRef({ key: null, time: 0 })
   const lastAreaClickRef = useRef({ idx: -1, time: 0 })
   // Sort state for the "Monthly averages by group" report at the bottom. Defaults to total
@@ -1430,8 +1430,11 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, onDr
 
   // The groups with transactions in the window, alphabetically. A drilled group with none there stays
   // listed, so changing the year leaves the picker naming what the charts show rather than going blank.
-  const pickerGroups = drillGroup && !groups.some(g => g.group_id === drillGroup.series_id)
-    ? [...groups, { group_id: drillGroup.series_id, group_name: drillGroup.series_name }]
+  // The picker shows `pickedGroup` — the drill asked for — while everything else shows `drillGroup`, the
+  // group whose figures are on screen: an input answers the choice at once, and the output changes when
+  // the figures do, rather than the select snapping back until they arrive.
+  const pickerGroups = pickedGroup && !groups.some(g => g.group_id === pickedGroup.series_id)
+    ? [...groups, { group_id: pickedGroup.series_id, group_name: pickedGroup.series_name }]
     : groups
   const groupOptions = [
     { value: '', label: 'All groups' },
@@ -1451,7 +1454,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, onDr
           {yearOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
         <select
-          value={drillGroup?.series_id || ''}
+          value={pickedGroup?.series_id || ''}
           onChange={e => {
             if (!e.target.value) { onClearDrill(); return }
             const g = groups.find(x => x.group_id === e.target.value)
@@ -2121,9 +2124,20 @@ export default function Dashboard() {
   // months have data, else the most recent year present) so a stale/imported dataset doesn't land on
   // an empty trailing window. An explicit pick from the dropdown overrides it.
   const [trendYear, setTrendYear] = useState(null)
+  // The group the user asked to drill into. It keys the fetch, and nothing on screen: the panel draws
+  // `shownTrendGroup` — the group the series on screen was fetched for — so a drill switches the title,
+  // the picker, the averages table and the charts in one frame, when the group's series arrives. Setting
+  // the group first and the rows later drew the group's title and category arrows over the previous
+  // rows, where a click opened a category report for a *group*. The Single period and Compare drills
+  // already wait for their data before switching level; this is the same rule.
   const [trendGroup, setTrendGroup] = useState(null)
   // null until the first series arrives, which TrendsPanel renders as nothing rather than as empty charts.
-  const [trendRows, setTrendRows] = useState(null)
+  const [trendSeries, setTrendSeries] = useState(null)
+  const trendRows = trendSeries?.rows ?? null
+  const shownTrendGroup = trendSeries?.group ?? null
+  // Only the newest request may land: drilling into one group and then another must not let the first
+  // group's slower answer overwrite the second's.
+  const trendSeriesRequestRef = useRef(0)
   const [cashFlowTrendRows, setCashFlowTrendRows] = useState([])
   const [trendGroups, setTrendGroups] = useState([])
   const [trendLoading, setTrendLoading] = useState(false)
@@ -2350,8 +2364,10 @@ export default function Dashboard() {
   const loadTrendSeries = useCallback(async () => {
     // Fetch the full visible history (20-year bound) so the year picker and Annual totals can reach
     // every year in the data; the per-window monthly charts then slice this down via the year picker.
-    const rows = await api.getMonthlyByGroup(240, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
-    setTrendRows(rows)
+    const request = ++trendSeriesRequestRef.current
+    const group = trendGroup
+    const rows = await api.getMonthlyByGroup(240, accountId || undefined, group?.series_id || undefined, tagIds, ownerIds, summaryFilters)
+    if (request === trendSeriesRequestRef.current) setTrendSeries({ group, rows })
   }, [accountId, trendGroup, tagIds, ownerIds, summaryFilters])
 
   // The cash-flow trends form reads its own endpoint rather than the by-group series: its bars are the
@@ -2432,10 +2448,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (mode !== 'trends') return
+    // Only the load this effect run started may clear the flag: a superseded one finishing first would
+    // otherwise drop the refreshing state while the drill the user just made is still on its way.
+    let current = true
     setTrendLoading(true)
     const load = viewIsCashFlow ? loadCashFlowTrend : loadTrendSeries
     // A failed first load settles on empty — the panel's own "no data" state — instead of staying blank.
-    load().catch(() => { if (!viewIsCashFlow) setTrendRows(prev => prev ?? []) }).then(() => setTrendLoading(false))
+    load()
+      .catch(() => { if (!viewIsCashFlow) setTrendSeries(prev => prev ?? { group: null, rows: [] }) })
+      .then(() => { if (current) setTrendLoading(false) })
+    return () => { current = false }
   }, [mode, viewIsCashFlow, loadTrendSeries, loadCashFlowTrend])
 
   useEffect(() => {
@@ -2494,7 +2516,7 @@ export default function Dashboard() {
     const start = `${month}-01`
     const end = `${month}-${String(lastDay).padStart(2, '0')}`
     pinDateFromChart({ start, end, preset: monthLabel(month) })
-    if (trendGroup?.series_id) setPendingSingleDrill(trendGroup.series_id)
+    if (shownTrendGroup?.series_id) setPendingSingleDrill(shownTrendGroup.series_id)
     setMode('single')
   }
 
@@ -3112,8 +3134,8 @@ export default function Dashboard() {
                                 {...selectedCatBulk.tableProps}
                                 onCategorySave={(txnId, catId, catObj) => {
                                   const cat = catObj || categories.find(c => c.id === catId)
-                                  applyCategoryChange(txnId, cat, patch => setTxnData(prev => prev.map(
-                                    x => x.id === txnId ? { ...x, ...patch } : x)))
+                                  applyCategoryChange(txnId, cat, (patch, id) => setTxnData(prev => prev.map(
+                                    x => x.id === id ? { ...x, ...patch } : x)))
                                 }}
                                 onRowsChange={setTxnData}
                                 onTransactionOpenDetail={openTransactionDetail}
@@ -3376,8 +3398,8 @@ export default function Dashboard() {
                       {...selectedGroupBulk.tableProps}
                       onCategorySave={(txnId, catId, catObj) => {
                         const cat = catObj || categories.find(c => c.id === catId)
-                        applyCategoryChange(txnId, cat, patch => setGroupTxnData(prev => prev.map(
-                          x => x.id === txnId ? { ...x, ...patch } : x)))
+                        applyCategoryChange(txnId, cat, (patch, id) => setGroupTxnData(prev => prev.map(
+                          x => x.id === id ? { ...x, ...patch } : x)))
                       }}
                       onRowsChange={setGroupTxnData}
                       onTransactionOpenDetail={openTransactionDetail}
@@ -3411,15 +3433,16 @@ export default function Dashboard() {
                 trendWindow={trendWindow}
                 groups={trendGroups}
                 onYearChange={setTrendYear}
-                drillGroup={trendGroup}
+                drillGroup={shownTrendGroup}
+                pickedGroup={trendGroup}
                 onDrillGroup={g => setTrendGroup(g)}
                 onClearDrill={() => setTrendGroup(null)}
                 loading={trendLoading}
                 viewIsIncome={viewIsIncome}
                 // With a group drilled the month bars are that group's totals, so a month's report is
                 // scoped to the group as well.
-                onOpenMonth={month => openMonthDetail(month, activeFrame, trendGroup
-                  ? { kind: 'group', id: trendGroup.series_id, name: trendGroup.series_name }
+                onOpenMonth={month => openMonthDetail(month, activeFrame, shownTrendGroup
+                  ? { kind: 'group', id: shownTrendGroup.series_id, name: shownTrendGroup.series_name }
                   : null)}
                 onOpenReport={(range, scope) => openPeriodDetail(range, activeFrame, scope)}
                 onOpenSinglePeriod={openSinglePeriodForMonth}

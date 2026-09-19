@@ -286,7 +286,7 @@ export function ImportUploadStage({
                   font: 'inherit', fontSize: 15, fontWeight: 600, color: 'inherit', cursor: 'inherit',
                 }}
               >
-                {demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE : 'Drop CSV file(s) here, or click to browse'}
+                {demoLoaded ? DEMO_IMPORT_DISABLED_MESSAGE : 'Drop file to import here, or click to browse'}
               </button>
             )}
             {!chooserOpen && !hasSelectedSource && !demoLoaded ? (
@@ -313,7 +313,7 @@ export function ImportUploadStage({
               ref={fileInputRef}
               id="csv-file-input"
               type="file"
-              accept=".csv"
+              accept=".csv,.pdf,.zip"
               multiple
               style={{ display: 'none' }}
               onChange={e => {

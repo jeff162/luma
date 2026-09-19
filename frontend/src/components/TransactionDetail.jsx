@@ -8,7 +8,7 @@ import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, applyCate
 import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, AppNoticeDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
-import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import { CategoryCell, NamelessMerchant, getTxnMerchantLabel, getTxnName } from './TransactionRow.jsx'
 import SplitEditorDialog from './SplitEditorDialog.jsx'
 import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
@@ -66,7 +66,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   const navigate = useNavigate()
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
-  const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
+  const [displayName, setDisplayName]   = useState(getTxnName(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
   const [rulePrompt, setRulePrompt]     = useState(null)
@@ -284,9 +284,9 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     const resolvedCat = catObj || detailCategories.find(c => c.id === catId) || null
     // Both phases go to both places: the panel's own copy and the host's row (e.g. the Transactions
     // list) — otherwise the change lives only in the panel and the page behind it stays stale.
-    await applyCategoryChange(txnId, resolvedCat, patch => {
-      handleCatSaved(txnId, patch)
-      onReconcile?.(txnId, patch)
+    await applyCategoryChange(txnId, resolvedCat, (patch, id) => {
+      if (id === txnId) handleCatSaved(id, patch)
+      onReconcile?.(id, patch)
     })
   }
 
@@ -306,8 +306,8 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   })
 
   useEffect(() => {
-    if (!editingName) setDisplayName(getTxnMerchantLabel(detailTxn))
-    // Listing the three fields getTxnMerchantLabel reads (not detailTxn itself) is
+    if (!editingName) setDisplayName(getTxnName(detailTxn))
+    // Listing the three fields getTxnName reads (not detailTxn itself) is
     // deliberate: notes/tags edits patch detailTxn too and we don't want them to
     // reset displayName mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -419,7 +419,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
         </div>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
+          <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName || <NamelessMerchant txn={detailTxn} />}</div>
           <button
             onClick={() => beginEditingName(displayName)}
             title="Edit merchant name"
@@ -743,7 +743,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
       {trashConfirmOpen && (
         <AppConfirmDialog
           title="Send transaction to trash?"
-          description={`Send "${displayName}" (${detailTxn.date}) to the trash? You can restore it later from Settings → Trash.`}
+          description={`Send "${getTxnMerchantLabel(detailTxn)}" (${detailTxn.date}) to the trash? You can restore it later from Settings → Trash.`}
           confirmLabel="Send to trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"

@@ -19,9 +19,10 @@ import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFloatingPanelSurfaceStyle } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
-import { hasFileOriginDetail } from '../lib/importSourceFields.js'
+import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
 import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
+import { refundLinkTooltip } from '../lib/refundLinks.js'
 import { reimbursementMarkerTooltip, reimbursementStatus } from '../lib/reimbursements.js'
 import { isSplitPartRow, splitPartLabel, splitPartSummary } from '../lib/splitRows.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -70,8 +71,24 @@ const detailButtonStyle = {
   borderRadius: 6,
 }
 
+// The name a row goes by, or '' when it has none — a wallet's funding deposit or withdrawal has no
+// counterparty to name. Editors start from this rather than from the label, so a nameless row opens its
+// rename field empty instead of pre-filled with a placeholder.
+export function getTxnName(txn) {
+  return txn.display_name || txn.merchant_name || txn.raw_name || ''
+}
+
 export function getTxnMerchantLabel(txn) {
-  return txn.display_name || txn.merchant_name || txn.raw_name || '—'
+  return getTxnName(txn) || '—'
+}
+
+// What a nameless row shows where the name would be: the kind of transaction its source recorded,
+// muted so it does not read as a counterparty, or "—" where the source recorded nothing. Display only —
+// never written as the name, since namelessness is what marks a funding leg (services/money_movement.py).
+export function NamelessMerchant({ txn }) {
+  const sourceType = getTxnSourceType(txn)
+  if (!sourceType) return '—'
+  return <span style={{ color: 'var(--muted)', fontStyle: 'italic', fontWeight: 400 }}>{sourceType}</span>
 }
 
 function getTxnImportedMerchantLabel(txn) {
@@ -252,7 +269,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
 }
 
 export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true }) {
-  const [name, setName] = useState(getTxnMerchantLabel(txn))
+  const [name, setName] = useState(getTxnName(txn))
   const labelRef = useRef(null)
   const [nameTruncated, setNameTruncated] = useState(false)
   const importedName = getTxnImportedMerchantLabel(txn)
@@ -275,8 +292,8 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
   })
 
   useEffect(() => {
-    if (!editing) setName(getTxnMerchantLabel(txn))
-    // Listing the three fields getTxnMerchantLabel reads (not txn itself) is deliberate:
+    if (!editing) setName(getTxnName(txn))
+    // Listing the three fields getTxnName reads (not txn itself) is deliberate:
     // tag/note edits patch txn too and we don't want them to reset the inline name mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txn.display_name, txn.merchant_name, txn.raw_name, editing])
@@ -349,7 +366,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
         ...(matchedHiddenText ? { textDecoration: 'underline dotted var(--accent)', textUnderlineOffset: 3 } : null),
       }}
     >
-      {name}
+      {name || <NamelessMerchant txn={txn} />}
     </span>
   )
   // Hover the merchant name to reveal the captured import-source detail (full name when truncated,
@@ -686,7 +703,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, onUpdateDocuments, onMarkReviewed, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpdatePurchase, onUpdateReimbursements, onUpdateDocuments, onMarkReviewed, onOpenDetail, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -695,6 +712,17 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
   const [showDocuments, setShowDocuments] = useState(false)
   const [viewingDocument, setViewingDocument] = useState(null)
   const [editingPurchase, setEditingPurchase] = useState(false)
+  const linkedRefund = Boolean(txn.refund_link?.others?.length)
+  // A purchase always opens (its editor lives here); a refund pairing opens the other transaction only
+  // where the host can show one.
+  const linkMarkerOpens = Boolean(txn.purchase) || (linkedRefund && Boolean(onOpenDetail))
+  // The row carries only enough of the other side to name it, so the whole transaction is fetched to open
+  // it — the detail panel needs a real row, as it does from every other way in.
+  async function openLinkedTransaction(otherId) {
+    const resp = await api.getTransactions({ ids: otherId, limit: 1 })
+    const other = resp?.transactions?.[0]
+    if (other) onOpenDetail?.(other)
+  }
   // Which reimbursement's editor is open, by link id — a row may have a share in several, so a boolean
   // could not say which one the click was about.
   const [editingReimbursement, setEditingReimbursement] = useState(null)
@@ -798,28 +826,46 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
             </span>
           </RowTooltip>
         ) : null}
-        {txn.purchase ? (
-          /* One payment of a multi-payment purchase — a deposit and a balance, an instalment plan.
-             It opens the purchase, like every other interactive marker in this strip opens what it
-             stands for: the note glyph, the tag chips and the document marker all do, and this repo has twice
-             reversed a marker left inert on the reasoning that another route already existed. The
-             editor it opens is the same dialog the detail panel's purchase summary opens, so a
-             mis-linked payment is repaired from wherever it was noticed. */
+        {txn.purchase || linkedRefund ? (
+          /* The row belongs with other transactions: one payment of a multi-payment purchase — a
+             deposit and a balance, an instalment plan — or one side of a refund and the payment it
+             returns. One glyph for both rather than a marker each, since the strip is already crowded
+             and both say the same thing: this row has partners. It opens what it stands for, like every
+             other interactive marker here (this repo has twice reversed a marker left inert on the
+             reasoning that another route already existed): a purchase opens its editor — the same
+             dialog the detail panel's purchase summary opens, so a mis-linked payment is repaired from
+             wherever it was noticed — and a refund pairing, which has nothing to edit, opens the
+             transaction on the other side. A row that is both opens the purchase, the one that can be
+             edited; its hover names both. */
           <RowTooltip
-            content={<span>{purchaseMarkerTooltip(txn.purchase)} — click to open</span>}
+            content={(
+              <span>
+                {[txn.purchase ? purchaseMarkerTooltip(txn.purchase) : null, linkedRefund ? refundLinkTooltip(txn.refund_link) : null]
+                  .filter(Boolean)
+                  .map(line => <span key={line} style={{ display: 'block' }}>{line}</span>)}
+                {linkMarkerOpens ? <span style={{ display: 'block' }}>Click to open</span> : null}
+              </span>
+            )}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
-            <button
-              type="button"
-              onClick={event => {
-                event.stopPropagation()
-                setEditingPurchase(true)
-              }}
-              aria-label={`${purchaseMarkerTooltip(txn.purchase)} — open this purchase`}
-              style={{ ...iconButtonStyle, fontSize: 11 }}
-            >
-              🔗
-            </button>
+            {linkMarkerOpens ? (
+              <button
+                type="button"
+                onClick={event => {
+                  event.stopPropagation()
+                  if (txn.purchase) setEditingPurchase(true)
+                  else openLinkedTransaction(txn.refund_link.others[0].id)
+                }}
+                aria-label={txn.purchase
+                  ? `${purchaseMarkerTooltip(txn.purchase)} — open this purchase`
+                  : `${refundLinkTooltip(txn.refund_link)} — open it`}
+                style={{ ...iconButtonStyle, fontSize: 11 }}
+              >
+                🔗
+              </button>
+            ) : (
+              <span aria-label={refundLinkTooltip(txn.refund_link)} style={{ ...iconButtonStyle, fontSize: 11, cursor: 'default' }}>🔗</span>
+            )}
           </RowTooltip>
         ) : null}
         {(txn.reimbursements || []).length ? (

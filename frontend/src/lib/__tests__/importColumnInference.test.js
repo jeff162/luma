@@ -113,7 +113,7 @@ describe('evidence-column capture inference', () => {
         Name: { 'Party 0': 1, 'Party 1': 1 },
         Type: { 'General Payment': 8, 'Bank Deposit': 7, 'Express Checkout': 6, Refund: 5, 'Card Deposit': 5, Withdrawal: 4, Fee: 4 },
         Status: { Completed: 30, Pending: 9 },
-        'Item Title': { 'Pats Tix': 1, 'Ho please resend': 1, Burlington: 1 },
+        'Item Title': { 'Concert Tix': 1, 'Thanks for dinner': 1, Lakeside: 1 },
         Time: { '05:04:19': 1, '08:11:25': 1, '13:27:49': 1, '21:05:00': 1 },
       },
       column_distinct_meta: {
