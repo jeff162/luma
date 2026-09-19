@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, PasswordInput, PasswordManagerUsername, AppDialog, Tooltip } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { passphraseLimits, passphraseMeetsFloor, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
 import { hasUsableVaultPasskey } from '../lib/vaultPasskey.js'
 import { useVaultPasskeyUnlock } from '../lib/useVaultPasskeyUnlock.js'
@@ -255,6 +255,10 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose, onUnlockedByPas
         <PasswordInput ref={passphraseRef} value={passphrase} onChange={setPassphrase}
           placeholder={changing ? 'New passphrase' : 'Vault passphrase'} autoFocus={!changing}
           onKeyDown={setting ? advanceOnEnter(confirmRef) : onEnter(() => { if (!blocked) submit() })}
+          {...(setting ? {
+            onSuggest: () => { setConfirm(''); confirmRef.current?.focus() },
+            suggestionFits: value => passphraseMeetsFloor(value, limits),
+          } : {})}
           {...(setting ? NEW_SECRET_PROPS : EXISTING_SECRET_PROPS)} />
         {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
         {shortfall ? (

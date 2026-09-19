@@ -388,6 +388,7 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
   const [label, setLabel] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [confirmPassphrase, setConfirmPassphrase] = useState('')
+  const confirmRef = useRef(null)
   const [generating, setGenerating] = useState(false)
   const [generated, setGenerated] = useState(null)
   // 'pending' until the private key leaves the dialog, then 'adding' → 'added', or 'failed' with a retry.
@@ -520,10 +521,12 @@ function GenerateKeypairDialog({ existingNames, onAdded, onClose }) {
               onChange={setPassphrase}
               placeholder="Passphrase for the key file (optional)"
               aria-label="Passphrase for the generated key file"
+              onSuggest={() => { setConfirmPassphrase(''); confirmRef.current?.focus() }}
               {...NEW_SECRET_PROPS}
             />
             {passphrase ? (
               <PasswordInput
+                ref={confirmRef}
                 value={confirmPassphrase}
                 onChange={setConfirmPassphrase}
                 placeholder="Confirm passphrase"

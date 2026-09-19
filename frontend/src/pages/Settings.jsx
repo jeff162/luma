@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../lib/sensitiveFields.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { APP_NAME, APP_VERSION, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
+import { APP_NAME, APP_VERSION, CC_BY_4_URL, EFF_WORDLIST_URL, LICENSE_CANONICAL_URL, PROJECT_URL } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FieldIssue, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -3083,6 +3083,24 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable }) {
             label="Instance ID"
             value={dbInstanceId || 'Unavailable'}
             help="Unique identifier for the database. Used to warn when restoring a backup from a different database."
+          />
+          {/* The attribution CC BY 4.0 asks for wherever the list is conveyed: creator, license with a link,
+              where the material came from, and that it was modified. The same notice heads the file itself
+              (lib/effLargeWordlist.txt), which is what travels in the source and the built bundle. */}
+          <AboutRow
+            label="Passphrase word list"
+            value={(
+              <a href={EFF_WORDLIST_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+                EFF Large Wordlist for Passphrases
+              </a>
+            )}
+            help={(
+              <>
+                By the Electronic Frontier Foundation, licensed under{' '}
+                <a href={CC_BY_4_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>CC BY 4.0</a>.
+                Used for suggested passphrases, with the dice-roll numbers removed.
+              </>
+            )}
           />
         </div>
 

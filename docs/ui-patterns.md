@@ -978,6 +978,15 @@ holds rather than trying to keep managers away:
   passphrase from the vault passphrase, which is how a key passphrase came to be offered at unlock. A
   distinct name labels the entry; it does not stop a manager listing it on another password field.
 
+**A field that chooses a passphrase can suggest one** (`PasswordInput`'s `onSuggest`): the vault
+passphrase wherever it is chosen (set, change, request access, both recovery rungs) and a generated backup
+key's passphrase. It is six words drawn from the EFF large word list (`lib/passphraseGenerator.js`, about
+77 bits), filled into the field and shown, while the confirm field is emptied and focused rather than
+filled — typing the words back is what shows they were taken down, the same save-before-it-counts rule a
+generated key follows. Words rather than random characters because the case it serves is someone without
+a password manager, who has to type the passphrase at every unlock. The field keeps `new-password`, so a
+manager can still offer its own.
+
 **A field that chooses a secret is checked as it is typed, and its button is greyed for a stated reason.**
 The vault passphrase dialog set the shape and every app-password form follows it — enabling sign-in, the
 first account, a forced change at sign-in, adding and editing users. What is still wrong appears under the

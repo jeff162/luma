@@ -37,7 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppDialog, Button, Input, InsetPanel, PasswordInput, PasswordManagerUsername, SectionEyebrow, Spinner } from './ui.jsx'
 import { NEW_SECRET_PROPS, NO_AUTOFILL_PROPS, VAULT_PASSWORD_MANAGER_USERNAME } from '../lib/sensitiveFields.js'
-import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { passphraseLimits, passphraseMeetsFloor, passphraseShortfall } from '../lib/vaultPassphrase.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { advanceOnEnter, onEnter } from '../lib/formKeys.js'
 import { api } from '../lib/api.js'
@@ -136,6 +136,7 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
   const [outcome, setOutcome] = useState(null)
 
   const limits = passphraseLimits(session?.currentUser)
+  const fitsFloor = value => passphraseMeetsFloor(value, limits)
   const shortfall = passphraseShortfall(passphrase, limits)
   // Named once because two things now gate on it — the button and the Enter handler — and a second copy
   // is how Enter comes to accept something the button refuses.
@@ -351,6 +352,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                   <PasswordInput
                     value={reenrolPassphrase} onChange={setReenrolPassphrase}
                     placeholder="New passphrase"
+                    onSuggest={() => { setReenrolConfirm(''); reenrolConfirmRef.current?.focus() }}
+                    suggestionFits={fitsFloor}
                     onKeyDown={advanceOnEnter(reenrolConfirmRef)} {...NEW_SECRET_PROPS}
                   />
                   {reenrolShortfall ? (
@@ -393,6 +396,8 @@ export function VaultRecoveryDialog({ onClose, onRecovered, onReset }) {
                 ref={recoveryPassphraseRef}
                 value={passphrase} onChange={setPassphrase}
                 placeholder="New vault passphrase"
+                onSuggest={() => { setConfirmPassphrase(''); recoveryConfirmRef.current?.focus() }}
+                suggestionFits={fitsFloor}
                 onKeyDown={advanceOnEnter(recoveryConfirmRef)} {...NEW_SECRET_PROPS}
               />
               <PasswordInput

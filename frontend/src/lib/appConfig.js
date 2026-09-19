@@ -10,6 +10,9 @@ export const PROJECT_URL = 'https://github.com/jeff162/luma'
 // deliberately not this project's copy of the text: a fork edits a repository URL as easily as it edits
 // a file, so pointing at the canonical source is the only outward link that means anything.
 export const LICENSE_CANONICAL_URL = 'https://www.gnu.org/licenses/agpl-3.0.txt'
+// Third-party material the app carries, credited on the About page as its license asks.
+export const EFF_WORDLIST_URL = 'https://www.eff.org/dice'
+export const CC_BY_4_URL = 'https://creativecommons.org/licenses/by/4.0/'
 
 export const IMPORT_CATEGORY_USAGE_MODE_ALL = 'all'
 export const IMPORT_CATEGORY_USAGE_MODE_NONE = 'none'

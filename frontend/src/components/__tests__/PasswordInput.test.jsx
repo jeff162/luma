@@ -8,10 +8,12 @@
 //     dialogs move focus through that ref (their fields carry no id to query), and the sign-in screen
 //     renders `TransientTextInput` through `as`.
 //   * A field set arrives as attributes, with no id left for the browser to key form history on.
+//   * A suggested passphrase lands in the field shown, and the host hears of it only once it has — the
+//     vault dialogs empty and focus their confirm field then, which the user types the words back into.
 
 import { createRef, useState } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PasswordInput } from '../ui.jsx'
 import TransientTextInput from '../TransientTextInput.jsx'
@@ -72,5 +74,17 @@ describe('PasswordInput', () => {
     expect(field.getAttribute('autocomplete')).toBe('current-password')
     expect(field.hasAttribute('id')).toBe(false)
     expect(field.hasAttribute('suppressautofillid')).toBe(false)
+  })
+
+  it('fills in a suggested passphrase, shows it, then tells the host', async () => {
+    const suggested = []
+    render(<Controlled onSuggest={value => suggested.push(value)} />)
+    const field = screen.getByPlaceholderText('Secret')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest a passphrase' }))
+    await waitFor(() => expect(suggested).toHaveLength(1))
+    expect(field.value).toBe(suggested[0])
+    expect(field.value.split('-').length).toBeGreaterThanOrEqual(6)
+    expect(field.type).toBe('text')
   })
 })
