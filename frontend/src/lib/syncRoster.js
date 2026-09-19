@@ -109,3 +109,13 @@ export function rosterRequests(entry) {
   return entry.requests + (entry.live?.requests || 0)
 }
 
+
+// Whether a finished run may have changed the ledger, which is what decides if the pages showing
+// transactions reload. Only response totals can say that nothing changed: a connection this tab watched
+// rather than drove has no more than `observed`, which misses a short call entirely, so it counts as a
+// change, and so does a run with no roster at all. Removals count as well, since they trash rows a page
+// may be showing.
+export function rosterMayHaveChangedLedger(roster) {
+  if (!roster.length) return true
+  return roster.some(e => !e.fromResponse || e.added > 0 || e.updated > 0 || e.removed > 0)
+}

@@ -25,6 +25,7 @@ import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
@@ -457,6 +458,10 @@ export default function Transactions() {
       isFirstLoad.current = false
     })
   }, [load])
+
+  // A sync lands rows on the server, where no mutation signal on this page can see them. The same in-place
+  // re-query as the refresh button, so edited rows left in place for correction drop out here as they do there.
+  useAfterLedgerSync(() => { load({ append: false }).catch(() => {}) })
 
   const bulk = useBulkTransactionEditing({
     rows: data.transactions,

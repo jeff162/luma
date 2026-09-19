@@ -38,7 +38,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api } from '../lib/api.js'
 import { useDetachedReportViewer } from '../lib/useDetachedReportViewer.js'
 import { SyncStatusPanel } from '../components/SyncStatusPanel.jsx'
-import { addToRoster, foldLiveProgress, foldResponse } from '../lib/syncRoster.js'
+import { addToRoster, foldLiveProgress, foldResponse, rosterMayHaveChangedLedger } from '../lib/syncRoster.js'
 
 // ~3 min at the cadence below — comfortably covers a cursor provider's historical backfill.
 const MAX_POLLS = 45
@@ -62,6 +62,23 @@ export function useSyncStatus() {
   const ctx = useContext(SyncStatusContext)
   if (!ctx) throw new Error('useSyncStatus must be used inside <SyncStatusProvider>')
   return ctx
+}
+
+// Runs `onSync` after each sync that may have changed transactions, wherever it was started — the navigation
+// pane, a connection card, another tab. For a page holding its own copy of transaction-derived data, which
+// no mutation signal reaches because a sync writes on the server. Keyed to the count seen at mount, so
+// arriving on a page after earlier syncs does not repeat the load the mount just did; `onSync` is read
+// through a ref, so a caller need not keep it stable.
+export function useAfterLedgerSync(onSync) {
+  const { ledgerRunsFinished } = useSyncStatus()
+  const handledRef = useRef(ledgerRunsFinished)
+  const onSyncRef = useRef(onSync)
+  onSyncRef.current = onSync
+  useEffect(() => {
+    if (ledgerRunsFinished === handledRef.current) return
+    handledRef.current = ledgerRunsFinished
+    onSyncRef.current()
+  }, [ledgerRunsFinished])
 }
 
 // The providers listing, which is this context's one source for "what connections exist and what are they
@@ -131,6 +148,8 @@ export function SyncStatusProvider({ children }) {
   viewerRef.current = viewer
   const syncStateRef = useRef(syncState)
   syncStateRef.current = syncState
+  const runConnectionsRef = useRef(runConnections)
+  runConnectionsRef.current = runConnections
   // Identifies the run a seed belongs to. The seed is a round trip, so a second run started while the
   // first one's listing is still in flight would otherwise have that listing's connections appended to it.
   const runTokenRef = useRef(0)
@@ -202,13 +221,19 @@ export function SyncStatusProvider({ children }) {
   // otherwise stayed at whatever the page last loaded, mid-sync or before it, until something unrelated
   // reloaded them. A counter rather than a callback so a page can simply watch it while mounted, however
   // the run was started (its own panel, the navigation pane, another tab). 0 means no run has ended.
+  //
+  // `ledgerRunsFinished` counts only the endings that may have changed transactions, for the pages that
+  // show them (see `useAfterLedgerSync`). Those reload a list the user may be scrolled into or editing, so
+  // a sync that brought nothing in leaves them alone; `rosterMayHaveChangedLedger` says when that is known.
   const wasBusyRef = useRef(false)
   const [runsFinished, setRunsFinished] = useState(0)
+  const [ledgerRunsFinished, setLedgerRunsFinished] = useState(0)
   useEffect(() => {
     const busy = anyDriving || watching
     if (wasBusyRef.current && !busy) {
       readConnections().catch(() => {})
       setRunsFinished(n => n + 1)
+      if (rosterMayHaveChangedLedger(runConnectionsRef.current)) setLedgerRunsFinished(n => n + 1)
     }
     wasBusyRef.current = busy
   }, [anyDriving, watching, readConnections])
@@ -329,9 +354,9 @@ export function SyncStatusProvider({ children }) {
 
   const value = useMemo(
     () => ({ providers, syncState, setSyncState, runProviders, runConnections, watching, runsFinished,
-              runSync, runSyncAll, viewer, open, close, minimize, restore }),
-    [providers, syncState, runProviders, runConnections, watching, runsFinished, runSync, runSyncAll,
-      viewer, open, close, minimize, restore],
+              ledgerRunsFinished, runSync, runSyncAll, viewer, open, close, minimize, restore }),
+    [providers, syncState, runProviders, runConnections, watching, runsFinished, ledgerRunsFinished, runSync,
+      runSyncAll, viewer, open, close, minimize, restore],
   )
   return <SyncStatusContext.Provider value={value}>{children}</SyncStatusContext.Provider>
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addToRoster, foldLiveProgress, foldResponse, rosterAdded, rosterRequests,
+  addToRoster, foldLiveProgress, foldResponse, rosterAdded, rosterMayHaveChangedLedger, rosterRequests,
 } from '../syncRoster.js'
 
 const seed = (...ids) => addToRoster([], ids.map(id => ({
@@ -104,5 +104,22 @@ describe('the run roster', () => {
     const roster = foldResponse(seed('a', 'b'), response('a', 5), 'acme')
     expect(rosterAdded(roster[1])).toBe(0)
     expect(roster[1].fromResponse).toBe(false)
+  })
+})
+
+// The pages showing transactions reload on a run this says may have changed them, so a wrong "no" leaves
+// them stale — the case it has to get right — while a wrong "yes" only costs a reload.
+describe('whether a run may have changed the ledger', () => {
+  it('says no only when every connection answered with nothing added, updated or removed', () => {
+    const quiet = foldResponse(seed('a', 'b'), [...response('a', 0), ...response('b', 0)], 'acme')
+    expect(rosterMayHaveChangedLedger(quiet)).toBe(false)
+    expect(rosterMayHaveChangedLedger(foldResponse(quiet, response('b', 0, { removed: 1 }), 'acme'))).toBe(true)
+    expect(rosterMayHaveChangedLedger(foldResponse(quiet, response('a', 0, { updated: 2 }), 'acme'))).toBe(true)
+  })
+
+  it('says yes when it cannot know: a connection only watched, or no roster at all', () => {
+    const watched = foldResponse(seed('a', 'b'), response('a', 0), 'acme')
+    expect(rosterMayHaveChangedLedger(watched)).toBe(true)
+    expect(rosterMayHaveChangedLedger([])).toBe(true)
   })
 })

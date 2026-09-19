@@ -17,6 +17,7 @@ import { ActionMenu } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters, describeDateFilter } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
 import { shiftMonth, isYearToDateRange, computeTrendBuckets, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey } from '../lib/trendBuckets.js'
 import { periodReportKey } from '../lib/periodReportScope.js'
@@ -2403,37 +2404,39 @@ export default function Dashboard() {
   }, [mode, loadSingleTotals, dateResolving])
 
   // Recategorizing (here or from a detail panel) changes the aggregates, so refresh the breakdown/trend
-  // and the open group's category totals in place — otherwise a moved transaction lingers in the list.
-  useEffect(() => {
-    function onTxnChange() {
-      if (mode === 'single') {
-        loadSingleTotals()
-        if (selectedGroup?.group_id) {
-          api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
-            .then(setCatRows)
-        }
-        // The tag report is a separate data path from the group/category totals above, so refresh its
-        // buckets too — otherwise recategorizing a transaction out of a tagged category (e.g. from the
-        // TagDetail panel) leaves the wedges stale.
-        if (activeTagReport) {
-          loadTagSignatureBuckets().then(setTagSignatureBuckets).catch(() => { })
-        }
-      } else if (mode === 'compare') {
-        loadCompareTotals()
-        if (cmpGroup?.group_id) {
-          Promise.all([
-            fetchPeriodCatTotals(periodA, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
-            fetchPeriodCatTotals(periodB, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
-          ]).then(([a, b]) => { setCmpCatsA(a); setCmpCatsB(b) })
-        }
-      } else if (mode === 'trends') {
-        if (viewIsCashFlow) loadCashFlowTrend()
-        else { loadTrendSeries(); loadTrendGroups() }
+  // and the open group's category totals in place — otherwise a moved transaction lingers in the list. A
+  // sync that brought rows in changes them the same way.
+  const refreshTotalsInPlace = useCallback(() => {
+    if (mode === 'single') {
+      loadSingleTotals()
+      if (selectedGroup?.group_id) {
+        api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
+          .then(setCatRows)
       }
+      // The tag report is a separate data path from the group/category totals above, so refresh its
+      // buckets too — otherwise recategorizing a transaction out of a tagged category (e.g. from the
+      // TagDetail panel) leaves the wedges stale.
+      if (activeTagReport) {
+        loadTagSignatureBuckets().then(setTagSignatureBuckets).catch(() => { })
+      }
+    } else if (mode === 'compare') {
+      loadCompareTotals()
+      if (cmpGroup?.group_id) {
+        Promise.all([
+          fetchPeriodCatTotals(periodA, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
+          fetchPeriodCatTotals(periodB, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
+        ]).then(([a, b]) => { setCmpCatsA(a); setCmpCatsB(b) })
+      }
+    } else if (mode === 'trends') {
+      if (viewIsCashFlow) loadCashFlowTrend()
+      else { loadTrendSeries(); loadTrendGroups() }
     }
-    window.addEventListener('luma:transactions-changed', onTxnChange)
-    return () => window.removeEventListener('luma:transactions-changed', onTxnChange)
   }, [mode, viewIsCashFlow, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadCashFlowTrend, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets])
+  useEffect(() => {
+    window.addEventListener('luma:transactions-changed', refreshTotalsInPlace)
+    return () => window.removeEventListener('luma:transactions-changed', refreshTotalsInPlace)
+  }, [refreshTotalsInPlace])
+  useAfterLedgerSync(refreshTotalsInPlace)
 
   useEffect(() => {
     api.getCategories().then(setCategories)

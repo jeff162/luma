@@ -30,16 +30,18 @@ function deferred() {
 }
 
 function Probe() {
-  const { runsFinished, runSync } = useSyncStatus()
+  const { runsFinished, ledgerRunsFinished, runSync } = useSyncStatus()
   return (
     <>
       <span data-testid="finished">{runsFinished}</span>
+      <span data-testid="ledger">{ledgerRunsFinished}</span>
       <button type="button" onClick={() => runSync('plaid', { days: 0 }).catch(() => {})}>sync</button>
     </>
   )
 }
 
 const finished = () => screen.getByTestId('finished').textContent
+const ledger = () => screen.getByTestId('ledger').textContent
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 
@@ -77,5 +79,26 @@ describe('runsFinished', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'sync' }))
     await waitFor(() => expect(finished()).toBe('1'))
+  })
+})
+
+// The pages showing transactions reload on this one, so a sync that brought nothing in must leave them be.
+describe('ledgerRunsFinished', () => {
+  it('moves only for a run that brought something in', async () => {
+    api.getProviders.mockResolvedValue(PROVIDERS)
+    const answer = added => ({
+      historical_complete: true,
+      connections: [{ connection_id: 'c1', institution: 'Northgate', added, updated: 0, removed: 0, skipped: 0, error: null }],
+    })
+    api.runSync.mockResolvedValueOnce(answer(0)).mockResolvedValueOnce(answer(3))
+    render(<SyncStatusProvider><Probe /></SyncStatusProvider>)
+
+    await userEvent.click(screen.getByRole('button', { name: 'sync' }))
+    await waitFor(() => expect(finished()).toBe('1'))
+    expect(ledger()).toBe('0')
+
+    await userEvent.click(screen.getByRole('button', { name: 'sync' }))
+    await waitFor(() => expect(finished()).toBe('2'))
+    expect(ledger()).toBe('1')
   })
 })
