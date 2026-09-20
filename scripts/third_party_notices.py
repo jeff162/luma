@@ -59,6 +59,17 @@ _PYTHON_TREES = tuple(sorted({
     for name in ("stdlib", "platstdlib", "purelib", "platlib")
 }))
 
+# The interpreter's own shared library, which is Python rather than something Python links against — it is
+# credited by the runtime's entry (`python_runtime_license`) like the rest of the interpreter. Matched by
+# name because a relocatable Python keeps it in the installation's `lib/`, one level above every tree
+# above, where the check there misses it and no package manager can name a Python that was unpacked rather
+# than installed. That is exactly the build CI makes, and it stopped there.
+_PYTHON_RUNTIME_LIBRARIES = frozenset(
+    Path(name).name
+    for name in (sysconfig.get_config_var(var) for var in ("INSTSONAME", "LDLIBRARY", "PY3LIBRARY"))
+    if name
+)
+
 
 def _read_requirements(path: Path) -> list[Requirement]:
     lines = []
@@ -152,6 +163,8 @@ def _system_library_paths(binaries) -> list[Path]:
     for entry in binaries:
         source = Path(str(entry[1])).resolve()
         if any(str(source).startswith(tree) for tree in _PYTHON_TREES):
+            continue
+        if source.name in _PYTHON_RUNTIME_LIBRARIES:
             continue
         if source.suffix == ".so" or ".so." in source.name or source.suffix in {".dylib", ".dll"}:
             paths.append(source)

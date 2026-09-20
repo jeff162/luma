@@ -9,6 +9,7 @@ is going to diff.
 
 import importlib.util
 import sys
+import sysconfig
 from pathlib import Path
 from unittest import mock
 
@@ -78,13 +79,30 @@ def test_the_combined_file_keeps_both_halves():
 # --- the shared libraries a Linux build copies off the machine that made it -------------------------
 
 BINARY = ("libz.so.1", "/usr/lib/x86_64-linux-gnu/libz.so.1.2.11", "BINARY")
-EXTENSION = ("_ssl.cpython-312-x86_64-linux-gnu.so", "/usr/lib/python3.12/lib-dynload/_ssl.so", "EXTENSION")
+# Built from the *running* interpreter's standard library, because that is what "inside the Python
+# installation" means to the code under test. A literal path is only that on a distribution's own Python;
+# CI runs one unpacked under /opt, where a hard-coded /usr/lib/python3.12 reads as a system library.
+EXTENSION = (
+    "_ssl.cpython-312-x86_64-linux-gnu.so",
+    str(Path(sysconfig.get_paths()["stdlib"]) / "lib-dynload" / "_ssl.so"),
+    "EXTENSION",
+)
+
+# The interpreter's own shared library where a relocatable Python keeps it: outside every tree the
+# installation is identified by, and part of no package the build machine could name. The layout CI builds
+# on, which is where this last escaped and stopped a release build.
+RUNTIME = (
+    "libpython",
+    f"/opt/python/3.12/lib/{Path(sysconfig.get_config_var('INSTSONAME') or 'libpython3.so').name}",
+    "BINARY",
+)
 
 
 def test_only_libraries_from_outside_the_python_installation_count():
     """An extension module shipped with Python or inside a wheel is already covered by that entry; what
-    needs attributing is what came from the system, which nothing else in the kit accounts for."""
-    found = notices._system_library_paths([BINARY, EXTENSION])
+    needs attributing is what came from the system, which nothing else in the kit accounts for. The
+    interpreter's own library is Python too, wherever the installation happens to keep it."""
+    found = notices._system_library_paths([BINARY, EXTENSION, RUNTIME])
     assert [p.name for p in found] == ["libz.so.1.2.11"]
 
 

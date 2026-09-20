@@ -87,9 +87,12 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
   what it copied off the build machine, which is why the file is written from inside the spec rather than
   before it. OpenSSL, SQLite, zlib and about nine others arrive that way, from neither PyPI nor
   python.org. Each is traced to the package that installed it (`dpkg-query`, or `rpm` on a Fedora build)
-  and credited with that package's own copyright file, one entry per package. macOS links the system's
-  frameworks instead of copying them and Windows takes its libraries from a Python whose `LICENSE.txt`
-  lists them, so the section is empty there and left out.
+  and credited with that package's own copyright file, one entry per package. The interpreter's own
+  `libpython` is skipped rather than traced: it is Python, already carried by the runtime entry above, and
+  a relocatable Python — the kind CI builds on — keeps it in the installation's `lib/`, where neither the
+  package manager nor the standard-library paths that identify the installation can account for it. macOS
+  links the system's frameworks instead of copying them and Windows takes its libraries from a Python
+  whose `LICENSE.txt` lists them, so the section is empty there and left out.
 
   **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
   from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose

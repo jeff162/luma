@@ -1288,15 +1288,16 @@ export default function ImportProfilesManager({
             </div>
           ))}
           {!showAdd ? (
-            <div
+            <button
               onClick={() => setShowAdd(true)}
               style={{
+                display: 'block', width: '100%', background: 'none', border: 'none',
                 padding: '10px 16px', textAlign: 'center', cursor: 'pointer',
                 fontSize: 13, color: 'var(--muted)', borderTop: '1px solid var(--border)',
               }}
             >
               + New data source
-            </div>
+            </button>
           ) : null}
         </>
       )}
