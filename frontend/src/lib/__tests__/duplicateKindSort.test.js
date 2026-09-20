@@ -8,12 +8,17 @@ import { KIND_STATES, kindMeta, kindRank } from '../duplicateKinds.js'
 
 // One representative entry per state, in the table's own order (most urgent first).
 const SAMPLES = [
-  { label: 'Review',            entry: { kind: 'soft_flag' } },
-  { label: 'Rejected · review', entry: { kind: 'hard_reject', review_substate: 'no_match', incoming: { row_number: 1 } } },
-  { label: 'Resolved',          entry: { kind: 'hard_reject', incoming: { txn_id: 't1' } } },
-  { label: 'Matched',           entry: { kind: 'hard_reject', enriched: true, incoming: { row_number: 2 } } },
-  { label: 'Reviewed',          entry: { kind: 'hard_reject', reviewed: true, matched: { covered: true }, incoming: { row_number: 3 } } },
-  { label: 'Rejected',          entry: { kind: 'hard_reject', incoming: { row_number: 4 } } },
+  { label: 'Review',                 entry: { kind: 'soft_flag' } },
+  { label: 'Rejected · review',      entry: { kind: 'hard_reject', review_substate: 'no_match', incoming: { row_number: 1 } } },
+  { label: 'Matched · review',       entry: { kind: 'hard_reject', review_substate: 'matched_near_date', incoming: { row_number: 2 } } },
+  { label: 'Resolved',               entry: { kind: 'hard_reject', incoming: { txn_id: 't1' } } },
+  { label: 'Matched another account', entry: { kind: 'hard_reject', incoming: { row_number: 3 },
+                                               matched: { covered: true, candidates: [{ id: 'a', cross_account: true, payment_match: true }] } } },
+  { label: 'Matched transfer',       entry: { kind: 'hard_reject', incoming: { row_number: 4 },
+                                               matched: { covered: true, candidates: [{ id: 'b', cross_account: true }] } } },
+  { label: 'Matched',                entry: { kind: 'hard_reject', enriched: true, incoming: { row_number: 5 } } },
+  { label: 'Reviewed',               entry: { kind: 'hard_reject', reviewed: true, matched: { covered: true }, incoming: { row_number: 6 } } },
+  { label: 'Rejected',               entry: { kind: 'hard_reject', incoming: { row_number: 7 } } },
 ]
 
 describe('duplicate-report Kind column', () => {
@@ -52,5 +57,17 @@ describe('duplicate-report Kind column', () => {
       const count = sortedLabels.filter(l => l === label).length
       expect(lastIndex[label] - firstIndex[label] + 1).toBe(count)   // contiguous block, no interleaving
     }
+  })
+
+  it('keeps the coverage outcome when a row is also enriched or acknowledged', () => {
+    // Enriching a near-date reject does not settle it — the pair is still the thing to confirm, so the
+    // row must not read as a plain green "Matched" the way it did when `advisory` was one flat state.
+    expect(kindMeta({ kind: 'hard_reject', review_substate: 'matched_near_date', enriched: true,
+                      incoming: { row_number: 1 } }).label).toBe('Matched · review')
+    // Mark reviewed clears the backend sub-state, but what the row *is* has not changed: a settled
+    // cross-account outcome keeps its own label instead of collapsing into the generic "Reviewed".
+    expect(kindMeta({ kind: 'hard_reject', reviewed: true, incoming: { row_number: 2 },
+                      matched: { covered: true, candidates: [{ id: 'b', cross_account: true }] } }).label)
+      .toBe('Matched transfer')
   })
 })

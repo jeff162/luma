@@ -46,14 +46,18 @@ needs Keep both / Discard new / Replace existing. **Importing then
 merging** and **merging then importing** reach the same state. **Detaching** an account later reverses
 the merge's auto-confirmations (your explicit Reject/Replace decisions are preserved).
 
-### A covered-range row is off by a day or two, matches a transfer, or has no match
+### A covered-range row is off by a day or two, matched elsewhere, or has no match
 
 When an earlier import already covered a date range, every transaction in that range is expected to
 already be in the ledger, so a new row landing inside it is rejected as a presumed duplicate and paired
 against the existing data by date and amount — the exact date first, then ±1 day, then outward a day at a
-time to a week, then a cross-account transfer twin. Three of the pairing outcomes are surfaced for review:
+time to a week, then across other accounts. Re-importing a file, or importing a second export that
+overlaps the first, puts every overlapping row through this, and most of them pair cleanly. The report's
+**Kind** column names the outcome; only two of them ask for anything.
 
-- **Matched nearby date** — a same-account counterpart turned up only after the window widened past the
+**Worth a look:**
+
+- **Matched · review** — a same-account counterpart turned up only after the window widened past the
   exact day; each row states the gap. The window reaches `CROSS_ACCOUNT_DATE_WINDOW_DAYS` (7), sized from
   settlement skew measured on a real ledger, and is ordered closest-day-first so a nearer candidate is
   never displaced. The further apart a pair sits, the more it is worth a glance before clearing.
@@ -62,29 +66,43 @@ time to a week, then a cross-account transfer twin. Three of the pairing outcome
   days apart in two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears
   it from the needs-attention list. If a pair is *not* the same transaction, select the rows and
   **import both**.
-- **Possible transfer match** — nothing matched on this account, but a same-amount transaction that
-  *names this account* sits on another account within a few days. That is the wallet-funding signature:
-  importing a PayPal/Venmo account's activity, its "Bank Deposit" / funding legs have no twin on the
-  wallet itself — their money-movement twin is the funding charge on the bank or card that paid it
-  (named "PAYPAL…"), already in the ledger. So the leg is correctly not re-imported: **Mark reviewed**
-  to confirm, or **Import anyway** if they're genuinely separate. The match is by amount + date + the
-  account name, searched across both the cleaned merchant name **and** the captured source text (e.g.
-  Mint's `Original Description`) — the bank's clean descriptor often drops "PayPal" while the raw
-  statement keeps it, so searching only the name misses most of these. A soft signal (opposite-signed,
-  cross-account), surfaced for confirmation, never applied automatically.
-- **No specific match** — the date is covered but nothing paired at all, anywhere in the window or across
-  accounts. **A *named* payment that reaches this point is auto-rescued:** the importer checks whether
-  the same payment already sits in the ledger as a charge elsewhere (a `PAYPAL <merchant>` card charge,
-  matched by a distinctive merchant token + amount within ±14 days). If none does, the payment is
+- **Rejected · review** (no specific match) — the date is covered but nothing paired at all, anywhere in
+  the window or across accounts. **A *named* payment that reaches this point is auto-rescued:** the
+  importer checks whether the same payment already sits in the ledger as a charge elsewhere (matched by a
+  distinctive merchant token + the same signed amount within ±14 days). If none does, the payment is
   genuinely new — a balance-funded subscription or P2P send the covering aggregator never saw, since it
-  never hit a card/bank — and it **imports** instead of being buried here; if a corroborating charge
-  *does* exist, it stays rejected and that charge is shown as the match. So this bucket is now mostly
-  **nameless money-movement** (deposits, withdrawals, currency conversions, holds) — genuinely no
+  never hit a card or bank — and it **imports** instead of being buried here; if a corroborating charge
+  *does* exist, the row stays rejected and reads *Matched another account* below. So this bucket is
+  mostly **nameless money-movement** (deposits, withdrawals, currency conversions, holds) — genuinely no
   counterparty, correctly held back — plus any payment whose new-vs-duplicate status the token match
   couldn't settle; **Import anyway** for anything real that remains.
 
-A covered row that pairs cleanly on the exact date or ±1 day stays rejected without being flagged — only
-the three cases above need a look.
+**Settled — named so a rejection can be audited, but needing nothing:**
+
+- **Matched** — paired on the exact date or ±1 day. Where the row had detail its match lacked, that
+  detail was folded in and the row reads green.
+- **Matched another account** — the same charge, in the same direction, already sits on another account
+  within a couple of weeks, matched on a distinctive part of the name. One payment recorded twice by two
+  sources: an aggregator's export and a card's own download both carry the charge behind a wallet
+  purchase. The money left once, so the second copy is not a new transaction. Common where two exports
+  overlap.
+- **Matched transfer** — an equal-and-opposite row *naming this account* sits on another one within a few
+  days. That is the wallet-funding signature: importing a PayPal/Venmo account's activity, its "Bank
+  Deposit" / funding legs have no twin on the wallet itself — their twin is the funding charge on the
+  bank or card that paid it (named "PAYPAL…"), already in the ledger. Two legs of one movement, so this
+  one is correctly not re-imported. The match is by amount + date + the account name, searched across
+  both the cleaned merchant name **and** the captured source text (e.g. Mint's `Original Description`) —
+  the bank's clean descriptor often drops "PayPal" while the raw statement keeps it, so searching only
+  the name misses most of these. Because the twin is the *other* leg rather than the same transaction, it
+  is never an enrich target.
+
+Neither settled outcome is a duplicate *verdict* of its own: the coverage rule had already rejected the
+row, and the cross-account probes run afterwards only so the report can name something rather than report
+"no specific match". Both are counted in the file card's duplicates total and neither appears in the
+needs-attention pills. **Import anyway** stays available on both for the rare row that really is separate.
+
+A stored verdict names the accounts as they stood on import day. Merging two accounts afterwards does not
+revisit it, so an old report can describe a split that has since been healed.
 
 ### A source duplicates rows *within a single file*
 

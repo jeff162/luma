@@ -2915,7 +2915,7 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
     surfaces: ['Import / Export (file ↗ report)', 'Duplicate-detection report'],
-    summary: `When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision, and the only category counted as pending work (the file's "to review" count and the Tasks warning). Rejected · review (Matched nearby date, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn't have been rejected, or Mark reviewed. Hover over a pill for a short explanation.`,
+    summary: `When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision, and the only category counted as pending work (the file's "to review" count and the Tasks warning). Matched · review and Rejected · review are already rejected and advisory: examine one, Import anyway if it shouldn't have been rejected, or Mark reviewed. Everything else is settled. Hover over a pill for a short explanation.`,
     body: () => (
       <>
         <p>
@@ -2931,14 +2931,17 @@ export const HELP_TOPICS = [
             category that counts as <strong>pending work</strong>: it drives the file's
             "to review" count and the "Possible duplicate transactions" item on the
             Tasks page.</li>
-          <li><strong>Rejected &middot; review</strong> &mdash; <strong>Matched nearby date</strong> and
-            <strong> No specific match</strong>. These were already rejected at import and are
-            <em> advisory</em> &mdash; they do <strong>not</strong> count as pending work. Examine them to
-            confirm the rejection was right; a row that should <em>not</em> have been rejected can be retained
-            with <strong>Import anyway</strong>, and the rest can be left alone or cleared from the pills
-            with <strong>Mark reviewed</strong> (in bulk). Often a <strong> No specific match</strong> transaction
-            can be matched to a transaction further out (search by the amount) than the pairing window reaches, but sometimes it really is a
-            transaction which should be included. See{' '}
+          <li><strong>Matched &middot; review</strong> and <strong>Rejected &middot; review</strong> &mdash;
+            the <strong>Matched nearby date</strong> and <strong>No specific match</strong> outcomes of a
+            covered range. These were already rejected at import and are <em>advisory</em> &mdash; they do
+            <strong> not</strong> count as pending work. Examine them to confirm the rejection was right; a row
+            that should <em>not</em> have been rejected can be retained with <strong>Import anyway</strong>,
+            and the rest can be left alone or cleared from the pills with <strong>Mark reviewed</strong> (in
+            bulk). Often a <strong>No specific match</strong> transaction can be matched to a transaction
+            further out (search by the amount) than the pairing window reaches, but sometimes it really is a
+            transaction which should be included. The remaining covered-range outcomes &mdash;{' '}
+            <strong>Matched another account</strong> and <strong>Matched transfer</strong> &mdash; are settled
+            and ask for nothing; they carry their own filters beside <strong>Removed later</strong>. See{' '}
             <HelpLink to="/help/covered-range-review">covered-range review</HelpLink>.</li>
         </ul>
         <p>
@@ -2955,8 +2958,10 @@ export const HELP_TOPICS = [
           whole file at once &mdash; at any time, since rejected rows keep their full detail &mdash; and a
           data source can opt in permanently on its mapping screen so future imports enrich automatically.
           Once a row has enriched its match, its Kind reads <strong>Matched</strong> (green) rather than
-          "Rejected": it was recognized as one you already had and contributed its detail, not
-          discarded. The additional information becomes part of the hover text displayed when hovering
+          "Rejected": it was recognized as one already held and contributed its detail, not
+          discarded. A row whose covered-range outcome has a name of its own keeps that name instead &mdash;
+          enriching a <strong>Matched &middot; review</strong> row does not settle the question the review is
+          asking. The additional information becomes part of the hover text displayed when hovering
           over the merchant name and is available for use in rules and when searching for
           transactions.
         </p>
@@ -3019,47 +3024,70 @@ export const HELP_TOPICS = [
   {
     id: 'covered-range-review',
     section: 'duplicates',
-    title: 'Reviewing covered-range duplicates (nearby date / transfer / no match)',
+    title: 'Reviewing covered-range duplicates',
     surfaces: ['Duplicate-detection report'],
-    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each transaction being loaded is paired against the existing data by date and amount (the exact date first, then ±1 day, then outward to a week, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched nearby date (a same-account counterpart turned up only after widening the window, and the row shows how many days apart), Possible transfer match (a same-amount row naming this account sits on another account: a wallet funding leg whose twin is already on the books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
+    summary: 'A row landing inside a date range an earlier import already covered is rejected as a presumed duplicate, and is then paired against the ledger to name what it duplicates \u2014 the exact day first, then \u00b11, then outward to a week, then across other accounts. Most outcomes are settled and need nothing. Two ask for a look: Matched \u00b7 review (the counterpart sits several days off) and Rejected \u00b7 review (nothing paired at all, so the row may be genuinely missing).',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
-          An import is allowed to be missing transactions at the edges but it is assumed that after seeing
+          An import is allowed to be missing transactions at the edges, but it is assumed that after seeing
           a transaction from a given source, the import contains all the transactions from that source up
           to the end of the time period covered by the import (again, allowing for fuzziness at the edges).
-          If a subsequent import is found to contain a transaction landing inside this range it is rejected as a presumed
-          duplicate and {APP_NAME} tries to find the existing match by date and amount &mdash; the exact date first, then
-          &plusmn;1 day, then outward a day at a time to a week, and finally a cross-account transfer twin.
+          A later import landing inside that range is therefore rejected as a presumed duplicate, and{' '}
+          {APP_NAME} looks for the transaction it duplicates: by date and amount on the same account
+          &mdash; the exact day, then &plusmn;1, then outward a day at a time to a week &mdash; and, failing
+          that, on other accounts.
         </p>
         <p>
-          Three of the pairing outcomes are surfaced for review:
+          Re-importing a file, or importing a second export that overlaps the first, puts every overlapping
+          row through this. Most of them pair cleanly and are settled where they stand. The report&apos;s{' '}
+          <strong>Kind</strong> column names the outcome.
         </p>
 
+        <p><strong>Worth a look</strong> &mdash; these two carry the amber pills:</p>
         <ul>
-          <li><strong>Matched nearby date</strong> &mdash; a counterpart turned up only after the date
+          <li><strong>Matched &middot; review</strong> &mdash; a counterpart turned up only after the date
             window widened past the exact day; each row states how far apart the two are. Posting dates drift
             between sources for several reasons &mdash; pending vs. posted timing, weekend or holiday
             settlement, and time-zone differences on foreign charges &mdash; so the same transaction can sit
             several days apart in two sources, and the further apart the pair sits the more it is worth a
-            glance before clearing. Once the pair
-            looks right, <strong>Mark reviewed</strong> clears it from the
-            needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the rows
-            and import both.</li>
-          <li><strong>Possible transfer match</strong> &mdash; nothing matched on this account, but a
-            same-amount transaction naming this account sits on <em>another</em> one, a few days apart. That
-            is the signature of a wallet funding/deposit leg (a PayPal/Venmo "Bank Deposit" row)
-            whose money-movement twin is the funding charge on your bank or card &mdash; already on your
-            books, so the leg is correctly not re-imported. <strong>Mark reviewed</strong> to confirm, or
-            <strong> Import anyway</strong> if they really are separate.</li>
-          <li><strong>No specific match</strong> &mdash; the date is covered but nothing paired with it at
-            all, anywhere in the window or across accounts. That makes it the row to actually investigate: it
-            is usually present in one source and genuinely missing from the other, in which case
-            <strong> Import anyway</strong> keeps it.</li>
+            glance before clearing. Once the pair looks right, <strong>Mark reviewed</strong> clears it from
+            the needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the
+            rows and import both.</li>
+          <li><strong>Rejected &middot; review</strong> &mdash; the date is covered but nothing paired with
+            it at all, anywhere in the window or across accounts. That makes it the row to actually
+            investigate: it is usually present in one source and genuinely missing from the other, in which
+            case <strong>Import anyway</strong> keeps it.</li>
+        </ul>
+
+        <p>
+          <strong>Settled</strong> &mdash; named so a rejection can be audited, but asking for nothing. Each
+          has its own filter beside <strong>Removed later</strong>:
+        </p>
+        <ul>
+          <li><strong>Matched</strong> &mdash; paired on the exact date or &plusmn;1 day. Where the row
+            carried detail its match lacked, that detail was folded in and the row reads green.</li>
+          <li><strong>Matched another account</strong> &mdash; the same charge, in the same direction,
+            already sits on another account within a couple of weeks, matched on a distinctive part of the
+            name. One payment recorded twice by two sources: an aggregator&apos;s export and a card&apos;s own
+            download both carry the card charge behind a wallet purchase. The money left once, so the second
+            copy is not a new transaction. This is the ordinary outcome when two exports overlap.</li>
+          <li><strong>Matched transfer</strong> &mdash; an equal-and-opposite row naming this account sits on
+            another one, a few days apart: a wallet deposit whose funding charge is already recorded. Two
+            legs of one movement, and the other leg is on the books, so this one is correctly not
+            re-imported. Because the twin is the <em>other</em> leg rather than the same transaction, its
+            detail is never folded into it.</li>
         </ul>
         <p>
-          A covered row that paired cleanly on the exact date or &plusmn;1 day stays rejected without being
-          flagged.
+          Neither settled outcome is a verdict of its own: the coverage rule had already rejected the row,
+          and the cross-account lookups run afterwards only so the report can name something rather than
+          report nothing. Both are counted in the file card&apos;s duplicates total.{' '}
+          <strong>Import anyway</strong> stays available on both, for the rare row that really is separate.
+        </p>
+        <p>
+          A stored verdict names the accounts as they stood on import day. Merging two accounts afterwards
+          does not revisit it, so an old report can describe a split that has since been healed.
         </p>
         <p>
           See also: <HelpLink to="/help/duplicate-report">reading the duplicate-detection report</HelpLink>.

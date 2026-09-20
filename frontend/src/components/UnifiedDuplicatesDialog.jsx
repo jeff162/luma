@@ -46,7 +46,7 @@ import {
   useDetailPanelChrome,
   useRestorablePanelGeometry,
 } from './detailShared.jsx'
-import { kindMeta, kindRank } from '../lib/duplicateKinds.js'
+import { isMatchedElsewhere, isMatchedTransfer, kindMeta, kindRank } from '../lib/duplicateKinds.js'
 import { UndoToast } from './CategoryTreePrimitives.jsx'
 import { summarizeBulkOutcome } from '../lib/bulkRequestOutcome.js'
 import { AccountIdentityPrompt } from './importExport/AccountIdentityPrompt.jsx'
@@ -66,23 +66,43 @@ const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
 const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 
-// The two "needs attention" kinds get their own quick-filter pills so the user can isolate them and
-// bulk-select (filter → header select-all). The resolved/plain-rejected kinds get none — they need no
-// action. Mirrors the Kind-cell label precedence below (soft flag → Review; a coverage hard-reject
-// with no specific match and not yet resolved → Rejected · review). Returns null for the rest.
+// The "needs attention" kinds get their own quick-filter pills so the user can isolate them and
+// bulk-select (filter → header select-all). Membership is the same question the Kind cell answers with
+// amber: is anything being asked of the reader?
 const REVIEW_KIND_PILLS = [
   { key: 'review', label: 'Review', topic: 'cross-account-duplicates' },
   { key: 'matched_near_date', label: 'Matched nearby date', topic: 'covered-range-review' },
-  { key: 'transfer_match', label: 'Possible transfer match', topic: 'covered-range-review' },
   { key: 'no_match', label: 'No specific match', topic: 'covered-range-review' },
 ]
 
-// Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected,
-// never imported) carry a backend `review_substate`: 'matched_near_date' (a same-amount twin was found
-// only on a nearby day, not the exact one — the row itself shows how many days) or 'no_match' (no
-// twin anywhere). The backend clears the
-// substate once the row is acknowledged (`reviewed`), so a reviewed row returns null here and
-// drops out of the needs-attention pills.
+// Settled counterparts, rendered with 'Removed later' in the neutral group rather than beside the amber
+// pills above. The coverage rule had already rejected these rows; the cross-account probes that named
+// their match ran afterwards and changed no verdict, so there is nothing to accept, reject or confirm —
+// only a population worth isolating when auditing what a file's rejections actually were.
+const SETTLED_KIND_PILLS = [
+  { key: 'matched_elsewhere', label: 'Matched another account', topic: 'covered-range-review' },
+  { key: 'matched_transfer', label: 'Matched transfer', topic: 'covered-range-review' },
+]
+
+// Every settled filter shares one tone — the rule pills' blue rather than the review amber — so the group
+// reads as "nothing is being asked of you" before any label is read.
+const settledPillStyle = active => ({
+  fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
+  background: active ? 'var(--accent2)' : 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
+  color: active ? 'white' : 'var(--accent2)',
+  border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
+  fontWeight: active ? 600 : 500,
+})
+
+// Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected, never
+// imported) carry a backend `review_substate`: 'matched_near_date' (a same-amount twin was found only on
+// a nearby day, not the exact one — the row itself shows how many days) or 'no_match' (no twin anywhere).
+// The backend clears the substate once the row is acknowledged (`reviewed`), so a reviewed row returns
+// null for those two and drops out of the needs-attention pills.
+//
+// The settled cross-account kinds are read off the candidates instead (`isMatchedElsewhere` /
+// `isMatchedTransfer`), for the same reason the Kind cell does: they describe what the row *is*, which an
+// acknowledgement does not change, so they keep their filter after Mark reviewed.
 // Whether an entry belongs to the active kind filter. 'removed' is the settled counterpart of the pills
 // above: rows that landed in the ledger and were taken out later by a decision (Replace, Reject, a merge).
 // They need no action, but they are what a file ledger's "Removed as duplicates" line sends the user to
@@ -95,8 +115,9 @@ function matchesKindFilter(entry, key) {
 function reviewKindOf(entry) {
   if (entry.kind === 'soft_flag') return 'review'
   if (entry.review_substate === 'matched_near_date') return 'matched_near_date'
-  if (entry.review_substate === 'transfer_match') return 'transfer_match'
   if (entry.review_substate === 'no_match') return 'no_match'
+  if (entry.kind === 'hard_reject' && isMatchedElsewhere(entry)) return 'matched_elsewhere'
+  if (entry.kind === 'hard_reject' && isMatchedTransfer(entry)) return 'matched_transfer'
   return null
 }
 
@@ -290,13 +311,15 @@ export default function UnifiedDuplicatesDialog({
   const scopedRemovedCount = useMemo(() => scopedEntries.filter(e => e.removed).length, [scopedEntries])
 
   const reviewKindBreakdown = useMemo(() => {
-    const counts = { review: 0, matched_near_date: 0, transfer_match: 0, no_match: 0 }
+    const counts = { review: 0, matched_near_date: 0, no_match: 0, matched_elsewhere: 0, matched_transfer: 0 }
     for (const e of scopedEntries) {
       const k = reviewKindOf(e)
       if (k) counts[k] += 1
     }
     return counts
   }, [scopedEntries])
+
+  const settledKindTotal = SETTLED_KIND_PILLS.reduce((sum, k) => sum + (reviewKindBreakdown[k.key] || 0), 0)
 
   const visibleEntries = useMemo(() => {
     const filtered = activeKindFilter
@@ -526,9 +549,13 @@ export default function UnifiedDuplicatesDialog({
         dateStart:  covered.start_date,
         dateEnd:    covered.end_date,
       } : null
-      // Cross-account transfer twin (a funding/deposit leg matched to its counterpart on the funding
-      // account): its own marker, since it's not a same-account match and reads differently.
-      const isTransferMatch = candidates.length > 0 && candidates.every(c => c.cross_account)
+      // A match found on another account gets its own marker, since it is not a same-account match and
+      // the two flavours read differently: the same charge recorded elsewhere, or the opposite leg of one
+      // movement. Asked through the shared predicates (wrapped as an entry) so the marker and the Kind
+      // cell can never disagree about which one a row is.
+      const crossAccountLabel = isMatchedElsewhere({ matched }) ? 'MATCHED ANOTHER ACCOUNT'
+        : isMatchedTransfer({ matched }) ? 'MATCHED TRANSFER'
+        : null
       const markerStyle = {
         display: 'inline-flex', alignItems: 'center', padding: '0 5px',
         borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.02em',
@@ -547,17 +574,18 @@ export default function UnifiedDuplicatesDialog({
         color: 'var(--muted)',
         border: '1px solid var(--border)',
       }
-      const transferMarker = (
+      // Settled, so it takes the neutral blue rather than NO SPECIFIC MATCH's amber.
+      const crossAccountMarker = crossAccountLabel ? (
         <span style={{
           ...markerStyle,
           background: 'color-mix(in srgb, var(--accent2) 14%, var(--surface2))',
           color: 'var(--accent2)', border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
-        }}>POSSIBLE TRANSFER MATCH</span>
-      )
+        }}>{crossAccountLabel}</span>
+      ) : null
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.3 }}>
           <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-            {candidates.length === 0 ? noMatchMarker : isTransferMatch ? transferMarker : null}
+            {candidates.length === 0 ? noMatchMarker : crossAccountMarker}
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{range ? `Range: ${range}` : ''}</span>
           </div>
           {/* Render the coverage-source link only when there are no candidates. With
@@ -606,9 +634,11 @@ export default function UnifiedDuplicatesDialog({
             <div style={{ color: 'var(--muted)', fontSize: 10.5, fontStyle: 'italic' }}>
               The date is in the covered range of the earlier import above, but no row on this account matches by date+amount. Open the source file to investigate.
             </div>
-          ) : isTransferMatch ? (
+          ) : crossAccountLabel ? (
             <div style={{ color: 'var(--muted)', fontSize: 10.5, fontStyle: 'italic' }}>
-              A same-amount transaction naming this account sits on another account — likely the funding leg of this transfer, already on your books. Mark reviewed to confirm, or Import anyway if they&apos;re separate.
+              {isMatchedElsewhere({ matched })
+                ? 'The same charge, in the same direction, is already recorded on another account, so this copy was not imported. Import anyway if the two are genuinely separate.'
+                : 'An equal-and-opposite row naming this account sits on another one — the other leg of this movement, already in the ledger, so this leg was not re-imported. Import anyway if the two are genuinely separate.'}
             </div>
           ) : null}
         </div>
@@ -750,7 +780,7 @@ export default function UnifiedDuplicatesDialog({
           persistentButton={false}
           style={{ margin: '10px 16px 4px' }}
         />
-        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
+        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.no_match || settledKindTotal > 0 || scopedRemovedCount > 0) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
             <button
@@ -791,16 +821,16 @@ export default function UnifiedDuplicatesDialog({
                 </button>
               )
             })}
-            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
+            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.no_match) ? (
               <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
             ) : null}
             {REVIEW_KIND_PILLS.map(k => {
               const count = reviewKindBreakdown[k.key]
               if (!count) return null
               const active = activeKindFilter === k.key
-              // Amber = needs attention (matches the Kind-cell styling); the transfer-match pill uses
-              // accent2 to tie to its blue POSSIBLE TRANSFER MATCH badge in the matched-existing cell.
-              const accent = k.key === 'transfer_match' ? 'var(--accent2)' : 'var(--warning)'
+              // Amber throughout: every pill in this group is a needs-attention kind, and the tone matches
+              // the Kind cell's. The settled kinds render below in the neutral group instead.
+              const accent = 'var(--warning)'
               return (
                 <HelpHoverCard key={k.key} topic={k.topic}>
                   <button
@@ -819,26 +849,35 @@ export default function UnifiedDuplicatesDialog({
                 </HelpHoverCard>
               )
             })}
-            {scopedRemovedCount > 0 ? (
-              <>
-                <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
-                <HelpHoverCard topic="removed-as-duplicates">
+            {(settledKindTotal > 0 || scopedRemovedCount > 0) ? (
+              <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
+            ) : null}
+            {SETTLED_KIND_PILLS.map(k => {
+              const count = reviewKindBreakdown[k.key]
+              if (!count) return null
+              const active = activeKindFilter === k.key
+              return (
+                <HelpHoverCard key={k.key} topic={k.topic}>
                   <button
                     type="button"
-                    onClick={() => { setActiveKindFilter(activeKindFilter === 'removed' ? null : 'removed'); setActiveRuleFilter(null) }}
-                    style={{
-                      fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-                      // Settled, not needing attention — the rule pills' blue rather than the review amber.
-                      background: activeKindFilter === 'removed' ? 'var(--accent2)' : 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-                      color: activeKindFilter === 'removed' ? 'white' : 'var(--accent2)',
-                      border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
-                      fontWeight: activeKindFilter === 'removed' ? 600 : 500,
-                    }}
+                    onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
+                    style={settledPillStyle(active)}
                   >
-                    Removed later ({scopedRemovedCount})
+                    {k.label} ({count})
                   </button>
                 </HelpHoverCard>
-              </>
+              )
+            })}
+            {scopedRemovedCount > 0 ? (
+              <HelpHoverCard topic="removed-as-duplicates">
+                <button
+                  type="button"
+                  onClick={() => { setActiveKindFilter(activeKindFilter === 'removed' ? null : 'removed'); setActiveRuleFilter(null) }}
+                  style={settledPillStyle(activeKindFilter === 'removed')}
+                >
+                  Removed later ({scopedRemovedCount})
+                </button>
+              </HelpHoverCard>
             ) : null}
             </div>
           </div>
