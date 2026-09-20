@@ -246,23 +246,69 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
         _, matched = self._stored(1)
         self.assertEqual([c["id"] for c in matched["candidates"]], ["covering-1"])
 
-    def test_it_does_not_re_run_the_cross_account_transfer_fallback(self):
-        # That fallback issues a query PER unexplained entry and was the whole cost of this pass (~250ms
-        # on a 60k-row ledger, versus ~22ms without). Re-running it is near-pure waste: an entry only
-        # reaches here by having found nothing at import time, when the fallback already ran on the same
-        # question with its own ±3 window. Disabled by passing the lookup no connection — a future change
-        # that hands it one would silently restore the cost, so this pins it.
+    def test_the_transfer_fallback_runs_only_on_what_is_still_unexplained(self):
+        # This asserted the fallback never ran at all until 2026-09-20. It issues a query PER entry and
+        # was the whole cost of this pass (~250ms on a 60k-row ledger, versus ~22ms without), and an entry
+        # only reaches here by having found nothing at import — when the fallback already ran on the same
+        # question with the same ±3 window. That reasoning holds for the ledger as it *was* and not for
+        # the ledger as it *is*: a twin imported a week after the verdict was stored is invisible to the
+        # import and plainly visible now, which is the premise of this whole function.
+        #
+        # What keeps the cost honest is where it sits. It is a last resort inside the loop, on whatever
+        # the same-account and linked-group reach could not explain — so an entry the cheap path settles
+        # never pays for it. Hand it to the lookup instead (a connection on the context) and it fires for
+        # every pending entry before any of them has been explained, which is the cost this pins against.
         self._existing("covering-1", "2023-08-20", -4.28, "Corner Doughnuts")
-        self._rejected(1, "2023-08-17", -4.28)
-        self._rejected(2, "2023-09-02", -99.99)  # finds nothing → would trigger the fallback
+        self._rejected(1, "2023-08-17", -4.28)   # explained by the widened reach → never reaches it
+        self._rejected(2, "2023-09-02", -99.99)  # nothing on the account → the last resort
 
-        with mock.patch.object(duplicate_detection, "find_cross_account_transfer_candidates") as fallback:
+        with mock.patch.object(duplicate_detection, "find_cross_account_transfer_candidates",
+                               return_value=[]) as fallback:
             self._refresh()
-        fallback.assert_not_called()
+        self.assertEqual([call.args[1:] for call in fallback.call_args_list],
+                         [(self.ACCOUNT, "2023-09-02", -99.99)])
+
+    def test_a_transfer_twin_that_arrived_after_the_verdict_is_picked_up(self):
+        # The gap this closes, taken from a real ledger: a wallet funding leg was rejected as covered and
+        # could name nothing, because the bank side of the same movement was imported a week later. The
+        # import cannot see a row that does not exist yet; re-opening the report can, and that is the only
+        # reason this pass exists.
+        #
+        # It is also the card-payment shape the name test is often said to miss — it misses it only when
+        # the account's name is not what the other institution prints. Here it is.
+        self._unrelated_account()
+        self._existing("bank-side", "2023-08-19", 150.00, "AUTOPAY REWARDS CARD PMT", account="acct-unrelated")
+        self._rejected(1, "2023-08-17", -150.00)
+
+        self.assertEqual(self._refresh(), 1)
+        _, matched = self._stored(1)
+        self.assertEqual([c["id"] for c in matched["candidates"]], ["bank-side"])
+        self.assertTrue(matched["candidates"][0]["cross_account"])
+
+    def test_the_sub_state_follows_a_twin_found_across_accounts(self):
+        # Settled once it can name the other leg, so it drops out of the card's "to review" count — the
+        # same rule as any other explanation, and the reason the sub-state is restated on every rewrite.
+        self._unrelated_account()
+        self._existing("bank-side", "2023-08-19", 150.00, "AUTOPAY REWARDS CARD PMT", account="acct-unrelated")
+        self._rejected(1, "2023-08-17", -150.00)
+        self.assertEqual(self._stored(1)[0]["review_substate"], "no_match")
+
+        self._refresh()
+
+        self.assertEqual(self._stored(1)[0]["review_substate"], "transfer_match")
 
     # ---- the linked group ----------------------------------------------
 
     IN_SCOPE_REASON = "Falls within the fully covered date range from an earlier import in this account scope"
+
+    def _unrelated_account(self):
+        """An account in no relation to the rejected row's — what "elsewhere in the ledger" now means,
+        since both coverage rules search the linked group and a sibling is no longer elsewhere."""
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO account (id, name, display_name, type, owner_id)"
+                " VALUES ('acct-unrelated','Unrelated','Unrelated','credit',?)", (SHARED_OWNER_ID,),
+            )
 
     def _sibling_account(self):
         with self._db() as conn:
@@ -284,13 +330,17 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
         _, matched = self._stored(1)
         self.assertEqual([c["id"] for c in matched["candidates"]], ["sib-1"])
 
-    def test_a_same_source_reject_still_ignores_the_sibling(self):
-        # Rule 1's claim covers one account, not the group, so its explanation must stay there too.
+    def test_a_same_source_reject_reaches_the_sibling_too(self):
+        # Inverted with the rule itself (2026-09-20): rule 1 searches the linked group now, so the refresh
+        # that re-explains its rejections has to search the same ground. Leaving it account-only would
+        # make a re-opened report answer differently from the import that produced it.
         self._sibling_account()
         self._existing("sib-1", "2023-08-17", -4.28, "Corner Doughnuts", account="acct-sibling")
         self._rejected(1, "2023-08-17", -4.28)  # same-source reason
 
-        self.assertEqual(self._refresh(), 0)
+        self.assertEqual(self._refresh(), 1)
+        _, matched = self._stored(1)
+        self.assertEqual([c["id"] for c in matched["candidates"]], ["sib-1"])
 
     # ---- the ledger probe, for entries the tiering leaves with nothing ----
 
@@ -301,15 +351,17 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
         # descriptor, was never looked at. This is NOT in tension with the sibling test above: that one
         # pins which rows count as *scope* candidates for a rule whose claim covers one account. This is
         # the separate, merchant-corroborated question the import path asks of the whole ledger, on the
-        # entries where a coincidence in the list stopped it being asked.
-        self._sibling_account()
+        # entries where a coincidence in the list stopped it being asked. The twin sits on an UNRELATED
+        # account: once both coverage rules search the linked group, a sibling's copy is found by the
+        # scope lookup and never reaches this probe at all.
+        self._unrelated_account()
         self._existing("decoy", "2023-08-20", -4.28, "Riverside Hardware")
-        self._existing("sib-twin", "2023-08-17", -4.28, "Northgate Annual Fee", account="acct-sibling")
+        self._existing("far-twin", "2023-08-17", -4.28, "Northgate Annual Fee", account="acct-unrelated")
         self._rejected(1, "2023-08-17", -4.28, name="Northgate Annual Fee")
 
         self.assertEqual(self._refresh(), 1)
         _, matched = self._stored(1)
-        self.assertEqual([c["id"] for c in matched["candidates"]], ["sib-twin"])
+        self.assertEqual([c["id"] for c in matched["candidates"]], ["far-twin"])
         self.assertTrue(matched["candidates"][0]["cross_account"],
                         "an off-account explanation has to read as one, not as a same-account match")
 
@@ -326,9 +378,14 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
     def test_an_unrelated_charge_of_the_same_amount_does_not_become_the_explanation(self):
         # The probe corroborates on a distinctive merchant token, not on amount alone. Without that it
         # would hand back exactly the coincidences the tiering exists to remove, one account over.
+        #
+        # Both decoys sit outside the exact/±1 band on purpose. Inside it the tiering keeps a candidate
+        # regardless of wording — the deliberate exemption for two sources describing one charge in
+        # different words — so a same-day sibling row would be accepted as the explanation and this would
+        # be testing that exemption rather than the probe.
         self._sibling_account()
         self._existing("decoy", "2023-08-20", -4.28, "Riverside Hardware")
-        self._existing("sib-other", "2023-08-17", -4.28, "Lakeshore Cleaners", account="acct-sibling")
+        self._existing("sib-other", "2023-08-13", -4.28, "Lakeshore Cleaners", account="acct-sibling")
         self._rejected(1, "2023-08-17", -4.28, name="Northgate Annual Fee")
 
         self.assertEqual(self._refresh(), 0)

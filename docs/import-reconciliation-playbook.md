@@ -90,11 +90,16 @@ overlaps the first, puts every overlapping row through this, and most of them pa
   days. That is the wallet-funding signature: importing a PayPal/Venmo account's activity, its "Bank
   Deposit" / funding legs have no twin on the wallet itself — their twin is the funding charge on the
   bank or card that paid it (named "PAYPAL…"), already in the ledger. Two legs of one movement, so this
-  one is correctly not re-imported. The match is by amount + date + the account name, searched across
-  both the cleaned merchant name **and** the captured source text (e.g. Mint's `Original Description`) —
-  the bank's clean descriptor often drops "PayPal" while the raw statement keeps it, so searching only
-  the name misses most of these. Because the twin is the *other* leg rather than the same transaction, it
-  is never an enrich target.
+  one is correctly not re-imported. The match is by amount + date + the account name, searched across the
+  cleaned merchant name, the **raw statement name**, and the captured source text (e.g. Mint's
+  `Original Description`) — the bank's clean descriptor often drops "PayPal" while the raw statement keeps
+  it, so searching only the name misses most of these. All three are read, which is what makes **renaming
+  safe**: a rename rule writes the clean name and leaves the raw one alone, so cleaning up a cryptic
+  descriptor can only add a name to search for, never take one away. Renaming a bank's `CRD AUTOPAY` row
+  to name the card it pays off is the useful case — it introduces the card's own name and lets a card
+  payment pair the way a wallet's funding leg already does. (A rename never revisits a rejection already
+  recorded; it changes what later imports, and a re-opened report, can find.) Because the twin is the
+  *other* leg rather than the same transaction, it is never an enrich target.
 
 Neither settled outcome is a duplicate *verdict* of its own: the coverage rule had already rejected the
 row, and the cross-account probes run afterwards only so the report can name something rather than report

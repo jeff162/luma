@@ -930,7 +930,7 @@ def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: i
     return conn.execute(
         f"""SELECT t.id, t.date, t.amount, t.account_id,
                   COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
-                  t.import_evidence_json, t.import_batch_id,
+                  t.raw_name, t.import_evidence_json, t.import_batch_id,
                   {_account_label_sql('a')} AS account_name
            FROM   txn t JOIN account a ON a.id = t.account_id
            WHERE  ROUND(t.amount, 2) = ROUND(?, 2)
@@ -942,11 +942,26 @@ def _amount_window_rows(conn, receiving_account_id: str, on_date, window_days: i
 
 
 def _row_text_haystack(row) -> str:
-    """A row's resolved name plus its captured source text, normalized and space-stripped — the same
-    haystack `match_source_text` rules search. The cleaned name frequently omits a token ("PayPal")
-    that the raw statement carries, so searching only the name misses most of these."""
+    """A row's resolved name, its **raw** name, and its captured source text, normalized and
+    space-stripped — the same haystack `match_source_text` rules search. The cleaned name frequently
+    omits a token ("PayPal") that the raw statement carries, so searching only the name misses most of
+    these.
+
+    **`raw_name` is read alongside the resolved name, not beneath it.** The resolved name comes through a
+    COALESCE that puts `raw_name` last, so naming a row — a merchant-rename rule writes `merchant_name`,
+    and a manual cleanup `display_name` — used to *displace* the statement text this searches, and a
+    pairing that worked before the rename stopped working after it. Measured on a real ledger: 7 of 119
+    checkable transfer pairings hung on raw text alone, all of them wallet legs whose clean name is the
+    merchant rather than the wallet. Reading both means renaming can only ever add a token, never remove
+    one, which is what makes cleaning up a cryptic bank descriptor safe to want: renaming a
+    `CRD AUTOPAY` row to `Rewards Card Payment` introduces the card's own name and starts a pairing that
+    could not happen before.
+
+    Both callers are fed by `_amount_window_rows`, which is where the column comes from.
+    """
     return normalize_evidence_text(
-        f"{row['merchant_name'] or ''} {source_match_text_from_json(row['import_evidence_json'])}"
+        f"{row['merchant_name'] or ''} {row['raw_name'] or ''} "
+        f"{source_match_text_from_json(row['import_evidence_json'])}"
     ).replace(" ", "")
 
 
@@ -3089,15 +3104,11 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         amount = (payload or {}).get("amount")
         if not account_id or not parsed_date or amount is None:
             continue  # a row whose payload can't place it is not something to guess about
-        rule_key, _ = _classify_hard_reject_reason(row["reason"])
-        # Rule 2 folded in the linked group; Rule 1 did not. Recompute the same shape the original
-        # verdict used, so the explanation matches the rule that produced it. The scope is re-derived
-        # from the account rather than stored on the entry — a group the account joined after the
-        # import is the case this refresh most wants to see.
-        scope_id = None
-        if rule_key == "coverage_in_scope":
-            effective_row = get_effective_account_row(conn, account_id)
-            scope_id = str(effective_row["id"]) if effective_row else account_id
+        # Both coverage rules fold in the linked group, so the explanation does too, whichever produced
+        # the verdict. The scope is re-derived from the account rather than stored on the entry — a group
+        # the account joined after the import is the case this refresh most wants to see.
+        effective_row = get_effective_account_row(conn, account_id)
+        scope_id = str(effective_row["id"]) if effective_row else account_id
         pending.append({
             "row_number": row["row_number"],
             "matched": matched,
@@ -3137,17 +3148,19 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     # Filtering on the rejected row's own account alone would rebuild the very blind spot this refresh
     # is meant to close: the twin a second source filed under a sibling is off-account by definition.
     scope_clause = f" OR COALESCE(a.parent_account_id, a.id) IN ({_placeholders(scope_ids)})" if scope_ids else ""
-    # `conn=None` deliberately: it disables the cross-account transfer fallback inside the lookup.
-    # That fallback issues a query per unexplained entry — the dominant cost by far — and re-running it
-    # here is near-pure waste, because an entry only reaches this function by having found nothing at
-    # import time, when the fallback already ran on the same question with the same ±3 window. What
-    # this refresh exists to add is the widened same-account and linked-group reach, neither of which
-    # needs a connection — both read the indexes built just below.
+    # `conn=None` deliberately: it disables the cross-account transfer fallback *inside* the lookup,
+    # which would fire it for every pending entry before the tiering has had a chance to explain any of
+    # them — a query each, and the dominant cost of this pass. Both ledger probes are called directly in
+    # the loop below instead, as a last resort on whatever is still unexplained, which is both cheaper
+    # and the position they hold at import time.
     #
-    # The ledger payment probe below is the one connection-dependent step this reasoning does NOT cover,
-    # and it is called directly rather than through the context for exactly that reason: it is gated on
-    # the *displayable* list at import time, so a coincidental same-amount neighbour occupying the
-    # candidate list is enough to mean it never ran on this row at all.
+    # Re-running them at all was once judged near-pure waste, on the reasoning that an entry only reaches
+    # here by having found nothing at import, when the same probes already ran on the same question. That
+    # holds for the ledger as it *was*; it does not hold for the ledger as it *is*. A twin imported a week
+    # after the verdict was stored is invisible to the import and plainly visible now — which is the whole
+    # premise of this function, and there is no reason the two cross-account probes should be the one part
+    # of the lookup excluded from it. What made this affordable is that the population is now known: the
+    # unexplained entries are exactly the stored `no_match` rows, counted and indexed since v61.
     context = DedupeContext(conn=None)
     for r in conn.execute(
         f"""SELECT t.id, t.account_id, t.date, t.posted_date, t.raw_name, t.merchant_name,
@@ -3193,10 +3206,19 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         candidates = _display_candidates(_candidate_summary_rows_for_coverage(
             context, p["account_id"], p["parsed_date"], p["amount"], p["scope_id"], p["incoming_texts"],
         ))
+        if not candidates:
+            # Nothing on the account or in its group, so look across accounts — in the order the import
+            # uses, transfer twin first. One difference, and it favours the row: at import the transfer
+            # probe is gated on the *raw* candidate list being empty, so a coincidental same-amount
+            # neighbour that the tiering then discarded was enough to stop it running. Here it is gated on
+            # what survived the tiering, which is the question the report actually wanted answered.
+            candidates = find_cross_account_transfer_candidates(
+                conn, p["account_id"], p["parsed_date"], p["amount"],
+            )
         if not candidates and p["merchant"]:
-            # Nothing on the account or in its group explains the row, so ask the wider ledger whether a
-            # corroborating charge exists — the same question `_coverage_reject_verdict` asks, on the
-            # entries where a coincidence in the candidate list stopped it being asked.
+            # Still nothing, so ask the wider ledger whether a corroborating charge exists — the same
+            # question `_coverage_reject_verdict` asks, on the entries where a coincidence in the
+            # candidate list stopped it being asked.
             payment_match = find_ledger_payment_match(
                 conn, p["account_id"], p["parsed_date"], p["amount"], p["merchant"],
             )

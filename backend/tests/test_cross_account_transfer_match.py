@@ -55,7 +55,9 @@ class _WalletLedgerFixture(unittest.TestCase):
         finally:
             reset_current_db_path(token)
 
-    def _txn(self, account_id, amount, date, name, *, original_description=None):
+    def _txn(self, account_id, amount, date, name, *, original_description=None, raw=None):
+        """`raw` splits the statement text from the displayed name — the shape a merchant-rename rule
+        leaves behind, since it writes `merchant_name` and leaves `raw_name` as the bank wrote it."""
         tid = str(uuid.uuid4())
         evidence = None
         if original_description is not None:
@@ -64,7 +66,8 @@ class _WalletLedgerFixture(unittest.TestCase):
             conn.execute(
                 """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending, import_evidence_json)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
-                (tid, account_id, SHARED_OWNER_ID, amount, name, name, name, date, evidence),
+                (tid, account_id, SHARED_OWNER_ID, amount, name, name, raw if raw is not None else name,
+                 date, evidence),
             )
         return tid
 
@@ -82,6 +85,14 @@ class CrossAccountTransferMatchTests(_WalletLedgerFixture):
         self.assertEqual([c["id"] for c in out], [fund])
         self.assertTrue(out[0]["cross_account"])
         self.assertEqual(out[0]["account_name"], "Everyday Checking")
+
+    def test_a_renamed_counterpart_still_pairs(self):
+        # Cleaning up "PAYPAL NORTHGATE OUTFITTERS" to the merchant it was really for is a reasonable
+        # thing to want, and it used to cost the pairing: the rename writes `merchant_name`, which sits
+        # above `raw_name` in the lookup's COALESCE, so the wallet's own name left the searched text.
+        # Both are read now, so a rename can add a token but never take one away.
+        fund = self._txn("checking", 40.0, "2026-05-02", "Northgate Outfitters", raw="PAYPAL NORTHGATE OUTFITTERS")
+        self.assertEqual([c["id"] for c in self._find("2026-05-01", -40.0)], [fund])
 
     def test_matches_a_wallet_token_embedded_in_a_longer_name(self):
         fund = self._txn("checking", 2251.67, "2026-03-12", "WDRL-ACH PAYPAL INSTANT TRANSFER - INST XFER")
