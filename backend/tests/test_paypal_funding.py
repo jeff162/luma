@@ -20,6 +20,7 @@ from pathlib import Path
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import list_batches, run_import
 from backend.routers.import_export.core import undo_batch
+from backend.routers.import_export.paypal_funding import PairRequest, paypal_funding_pair_endpoint
 from backend.services import paypal_funding as pf
 from backend.services.money_movement import money_movement_category_id_if_exists
 
@@ -275,6 +276,32 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         with self._db() as conn:
             pf.pair_rows(conn, payments[0], charge)
         self.assertEqual((self._report()["choice"], self._pass()["paired"]), ([], 0))
+
+    async def test_a_decision_pairs_what_it_leaves_unambiguous(self):
+        # Two payments cornered on one charge — the shortage the pass will not settle — beside a third that
+        # could take that charge or a later one. Picking for the first leaves the third with one candidate
+        # nothing else wants, and the decision pairs it rather than waiting for the next import.
+        first = self._txn(self.paypal, "2026-05-05", 60.0, "Bridge Fund")
+        second = self._txn(self.paypal, "2026-05-05", 60.0, "Sidecar Fund")
+        third = self._txn(self.paypal, "2026-05-07", 60.0, "Lamplight Fund")
+        near = self._txn(self.checking, "2026-05-06", 60.0, "PAYPAL INST XFER")
+        far = self._txn(self.checking, "2026-05-10", 60.0, "PAYPAL INST XFER")
+        self.assertEqual(self._pass()["paired"], 0)
+        self.assertEqual({c["paypal"]["id"] for c in self._report()["choice"]}, {first, second, third})
+
+        token = set_current_db_path(str(self.db_path))
+        try:
+            answer = await paypal_funding_pair_endpoint(
+                PairRequest(paypal_txn_id=first, counterpart_txn_id=near))
+        finally:
+            reset_current_db_path(token)
+
+        self.assertEqual(answer["also_paired"], 1)
+        # The second row is left with nothing to pair with, which is what a balance-funded payment looks
+        # like, so nothing is asked about it either.
+        self.assertEqual(self._report()["choice"], [])
+        self.assertEqual({(m["paypal"]["id"], m["counterpart"]["id"]) for m in self._report()["matched"]},
+                         {(first, near), (third, far)})
 
     def test_another_members_bank_row_never_pairs_but_a_shared_account_does(self):
         self._txn(self.paypal, "2026-06-01", 120.0, "Guitar Lessons")

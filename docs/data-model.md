@@ -1394,8 +1394,17 @@ another account (a deposit or withdrawal) with no candidate — a payment with n
 balance-funded payment has no counterpart to find; and a PayPal-looking bank or card row nothing pairs
 with, looked for only on accounts already paired with a PayPal account and only within the dates that
 PayPal account's rows cover, since a PayPal-looking charge elsewhere belongs to a PayPal account the ledger
-does not track, where it is the only record. The report is read-only; the pairing runs after ingestion,
-never from a report `GET`.
+does not track, where it is the only record. The report is read-only; the pairing runs after ingestion and
+after each **decision** that changes what is there to pair — `pair_after_decision`, on the pair / unpair /
+decline endpoints — never from a report `GET`. A decision is not only about its own row: taking a
+transaction settles what everything cornered on it could have been, and declining one releases it, so a row
+the decision just made unambiguous would otherwise drop out of the review (nothing is left to ask about it)
+while nothing paired it, its bank row counting on beside the PayPal row until the next import happened to
+run the pass. Claiming reaches that state from more decisions than the old rule did, since settling one row
+now cascades through the rows it was cornered against. It is best-effort and runs after the decision's own
+write, which stands whatever the pass then finds; acknowledging a row runs nothing, since a review state is
+not consulted by the matching. The whole pass is ~80 ms over an 18k-row ledger, one more than the report
+already runs on each reload.
 
 **Decisions are links of their own kinds**: unpairing records the pair as declined
 (`paypal_funding_declined`), so the pass never makes it again; "none of these" declines each candidate

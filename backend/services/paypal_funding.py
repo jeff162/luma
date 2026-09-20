@@ -53,7 +53,8 @@ claimed. Anything else is left for the user to choose.
 
 **What the user decides is kept, as links of their own kinds.** Unpairing records the pair as declined,
 so the pass never offers it again; "none of these" declines each candidate shown; and acknowledging a row
-with nothing to pair records it as reviewed. Storing these as `txn_link` kinds rather than tables means
+with nothing to pair records it as reviewed. A decision that changes what is there to pair runs the pass
+again (`pair_after_decision`), since settling one row can leave another with a single candidate. Storing these as `txn_link` kinds rather than tables means
 they ride in backups, cascade with their rows, and invalidate the reconciliation attention cache through
 the triggers that already watch `txn_link`.
 
@@ -450,6 +451,26 @@ def pair_paypal_funding(conn: sqlite3.Connection) -> dict:
     for paypal_id, other_id in analysis["auto"]:
         _attach(conn, ledger.paypal_by_id[paypal_id], ledger.other_by_id[other_id], matched_by="auto")
     return {"paired": len(analysis["auto"]), "healed": healed}
+
+
+def pair_after_decision(conn: sqlite3.Connection) -> int:
+    """Run the pass again once a decision in the review has changed what is there to pair.
+
+    A decision is never only about its own row: taking a transaction settles what every row cornered on it
+    could have been, and declining one releases it. The pass otherwise runs only after an import or a sync,
+    so a row that a decision had just made unambiguous dropped out of the review — there is nothing left to
+    ask about it — while nothing actually paired it, and its bank row went on counting beside the PayPal row
+    until the next ingest happened to run the pass. Claiming makes that reachable from more decisions than
+    it used to be, since settling one row can now cascade through the rows it was cornered against.
+
+    Best-effort and deliberately *after* the decision's own write: the decision is what the user asked for
+    and stands whatever this finds, so a failure here is logged rather than allowed to undo it.
+    """
+    try:
+        return pair_paypal_funding(conn)["paired"]
+    except Exception as e:
+        log_error(f"[paypal-funding] pairing after a review decision failed: {e}", exc_info=e)
+        return 0
 
 
 def pair_after_ingest(connection) -> None:

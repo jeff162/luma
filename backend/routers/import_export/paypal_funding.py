@@ -3,7 +3,11 @@
 
 """The PayPal reconciliation's HTTP surface: the report (for the whole ledger, or one import's rows) and
 the decisions the user makes in it. The pairing and every rule it follows live in
-`services/paypal_funding.py`; this module only carries requests to it."""
+`services/paypal_funding.py`; this module only carries requests to it.
+
+Every decision that changes what is available to pair runs the pass again before answering, so a row the
+decision just made unambiguous is paired then and there rather than at the next import. The report itself
+stays a read-only GET."""
 
 from __future__ import annotations
 
@@ -47,7 +51,7 @@ async def paypal_funding_pair_endpoint(body: PairRequest):
             link_id = paypal_funding.pair_rows(conn, body.paypal_txn_id, body.counterpart_txn_id)
         except paypal_funding.PairingError as e:
             raise HTTPException(status_code=409, detail=str(e))
-        return {"link_id": link_id}
+        return {"link_id": link_id, "also_paired": paypal_funding.pair_after_decision(conn)}
 
 
 class UnpairRequest(BaseModel):
@@ -58,7 +62,8 @@ class UnpairRequest(BaseModel):
 async def paypal_funding_unpair_endpoint(body: UnpairRequest):
     """Undo pairings; each pair is remembered as declined so it is not made again."""
     with get_db() as conn:
-        return {"unpaired": paypal_funding.unpair(conn, body.link_ids)}
+        unpaired = paypal_funding.unpair(conn, body.link_ids)
+        return {"unpaired": unpaired, "also_paired": paypal_funding.pair_after_decision(conn)}
 
 
 class DeclineRequest(BaseModel):
@@ -70,7 +75,8 @@ class DeclineRequest(BaseModel):
 async def paypal_funding_decline_endpoint(body: DeclineRequest):
     """"None of these": no offered candidate is this PayPal row's counterpart."""
     with get_db() as conn:
-        return {"declined": paypal_funding.decline(conn, body.paypal_txn_id, body.counterpart_txn_ids)}
+        declined = paypal_funding.decline(conn, body.paypal_txn_id, body.counterpart_txn_ids)
+        return {"declined": declined, "also_paired": paypal_funding.pair_after_decision(conn)}
 
 
 class ReviewedRequest(BaseModel):
@@ -80,6 +86,7 @@ class ReviewedRequest(BaseModel):
 
 @router.post("/paypal-funding/mark-reviewed")
 async def paypal_funding_mark_reviewed_endpoint(body: ReviewedRequest):
-    """Acknowledge rows with nothing to pair, or take the acknowledgement back."""
+    """Acknowledge rows with nothing to pair, or take the acknowledgement back. No pass follows: a row
+    being acknowledged changes nothing about what could pair with what."""
     with get_db() as conn:
         return {"updated": paypal_funding.set_reviewed(conn, body.txn_ids, reviewed=body.reviewed)}
