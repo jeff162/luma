@@ -26,7 +26,10 @@ from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.services import duplicate_detection
-from backend.services.duplicate_detection import refresh_unexplained_coverage_candidates
+from backend.services.duplicate_detection import (
+    coverage_review_substate,
+    refresh_unexplained_coverage_candidates,
+)
 
 COVERED_REASON = "Falls within the fully covered date range from an earlier import for this source account"
 
@@ -75,7 +78,8 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
 
     def _rejected(self, row_number, day, amount, *, reason=COVERED_REASON, candidates=None,
                   account=None, batch="b-incoming", name=None):
-        """A stored coverage rejection, as `save_batch_duplicate_rows` writes one."""
+        """A stored coverage rejection, as `save_batch_duplicate_rows` writes one — sub-state included,
+        since that column is written at import rather than derived when the report is read."""
         matched = {
             "covered": {"start_date": "2017-02-10", "end_date": "2023-12-19", "source_batch_id": "b-covering"},
             "candidates": candidates or [],
@@ -88,8 +92,9 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
         with self._db() as conn:
             conn.execute(
                 "INSERT INTO import_batch_duplicate (batch_id, row_number, reason, values_json,"
-                " matched_transaction_json, txn_payload_json) VALUES (?,?,?,?,?,?)",
-                (batch, row_number, reason, json.dumps({}), json.dumps(matched), json.dumps(payload)),
+                " matched_transaction_json, txn_payload_json, review_substate) VALUES (?,?,?,?,?,?,?)",
+                (batch, row_number, reason, json.dumps({}), json.dumps(matched), json.dumps(payload),
+                 coverage_review_substate(matched)),
             )
 
     def _stored(self, row_number, batch="b-incoming"):
@@ -118,6 +123,19 @@ class CoverageCandidateRefreshTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in matched["candidates"]], ["covering-1"])
         self.assertEqual(matched["candidate_count"], 1)
         self.assertEqual(matched["candidates"][0]["day_offset"], 3)
+
+    def test_the_sub_state_moves_with_the_candidate_list_it_is_classified_from(self):
+        # The sub-state is stored, not re-derived per read, so a refresh that names a twin has to restate
+        # it. Left behind, the row would keep reading "no specific match" and the file card would go on
+        # counting a rejection that now explains itself — the exact staleness storing it invites.
+        self._existing("covering-1", "2023-08-20", -4.28, "Corner Doughnuts")
+        self._rejected(1, "2023-08-17", -4.28)
+        self.assertEqual(self._stored(1)[0]["review_substate"], "no_match")
+
+        self._refresh()
+
+        # Three days out, so the pair is worth a glance rather than settled.
+        self.assertEqual(self._stored(1)[0]["review_substate"], "matched_near_date")
 
     def test_it_leaves_the_verdict_and_the_reason_exactly_as_they_were(self):
         # It explains a decision; it never revisits one.

@@ -146,9 +146,11 @@ def get_db(db_path: str | None = None):
 # sync that succeeded while importing nothing stops looking identical to one that had nothing to import.
 # v32 splits that log's `skipped` into the half that means data was lost and the half that is routine, and
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
-# running sync stays visible after the page that started it is navigated away from.
+# running sync stays visible after the page that started it is navigated away from. v61 stores each
+# rejected duplicate's advisory sub-state (`import_batch_duplicate.review_substate`) instead of re-deriving
+# it per read, so a file card can count the rejections still wanting a look.
 
-CURRENT_VERSION = 60
+CURRENT_VERSION = 61
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1820,6 +1822,44 @@ def _sync_log_records_every_connection_event(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started ON connection_sync_log(started_at)")
 
 
+@migration(61)
+def _duplicate_rows_carry_their_review_substate(conn):
+    # A coverage rejection's advisory sub-state was re-derived every time the duplicate report was read,
+    # which left a file card unable to say how many of its rejections still wanted a look without parsing
+    # every stored candidate list — tens of thousands of them on a real ledger. It is classified once at
+    # import now and stored here, so the card can count it with an indexed query.
+    #
+    # Backfilled rather than left NULL, because the count needs NULL to mean *settled*: an unclassified
+    # row would read as one asking for nothing. The re-derivation is exact — the same pure function the
+    # writer uses, over the same stored shape it was written from.
+    #
+    # Guarded like v56: the isolated per-migration tests hand-build minimal schemas and run the chain.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "import_batch_duplicate" not in tables:
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch_duplicate)")}
+    if "review_substate" not in columns:
+        conn.execute("ALTER TABLE import_batch_duplicate ADD COLUMN review_substate TEXT")
+    # Imported here rather than at module scope: `services.duplicate_detection` imports this module.
+    from backend.services.duplicate_detection import coverage_review_substate
+    updates = []
+    for row in conn.execute(
+        "SELECT batch_id, row_number, matched_transaction_json FROM import_batch_duplicate"
+    ).fetchall():
+        try:
+            matched = json.loads(row["matched_transaction_json"]) if row["matched_transaction_json"] else {}
+        except (TypeError, ValueError):
+            matched = {}
+        substate = coverage_review_substate(matched)
+        if substate:
+            updates.append((substate, row["batch_id"], row["row_number"]))
+    if updates:
+        conn.executemany(
+            "UPDATE import_batch_duplicate SET review_substate = ? WHERE batch_id = ? AND row_number = ?",
+            updates,
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2719,6 +2759,10 @@ def init_db(db_path: str | None = None):
                 enriched_txn_id           TEXT,
                 enriched_delta_json       TEXT,
                 enriched_at               TEXT,
+                -- Which advisory sub-state this rejection amounts to (see migration 61 and
+                -- `services/duplicate_detection.coverage_review_substate`). NULL = a settled rejection,
+                -- not an unclassified one: the writer sets it on every row.
+                review_substate           TEXT,
                 PRIMARY KEY (batch_id, row_number)
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);
@@ -2956,6 +3000,14 @@ def init_db(db_path: str | None = None):
         # list, and the indicator the ledger draws — and deliberately *not* unique, since a transaction
         # may carry several.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_document_txn ON document(txn_id)")
+        # Same deferral as the indexes above: import_batch_duplicate.review_substate is only added by
+        # migration v61 on an existing database. Partial, because the card's count asks only for the rows
+        # still wanting a look — a handful against a table that reaches tens of thousands of settled
+        # rejections on a real ledger.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_review"
+            " ON import_batch_duplicate(batch_id) WHERE review_substate IS NOT NULL AND reviewed_at IS NULL"
+        )
         _create_recon_epoch_triggers(conn)
         _bump_recon_epoch(conn)
         _create_purchase_link_prune_trigger(conn)

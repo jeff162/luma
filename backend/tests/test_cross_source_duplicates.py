@@ -728,10 +728,18 @@ class InScopeCoverageExplanationTests(_LedgerTestCase):
                          "a same-amount row sharing no wording is not an explanation")
         self.assertEqual(verdict.matched["candidate_count"], 0)
 
-    def test_same_source_coverage_still_does_not_reach_the_group(self):
-        # Rule 1's premise is narrower — THIS source already covered this range for this account — so it
-        # keeps its same-account-only lookup. Widening it would let a sibling's row explain a rejection
-        # the sibling had no part in.
+    def test_same_source_coverage_reaches_the_group_too(self):
+        # This asserted the opposite until 2026-09-19: rule 1's premise is narrower (THIS source covered
+        # this range for this account), so it kept a same-account-only lookup on the reasoning that a
+        # sibling's row should not explain a rejection the sibling had no part in.
+        #
+        # Two things retired that. The premise governs the coverage CLAIM, while the lookup only decides
+        # which row may be NAMED as the match — and here the sibling holds the same charge from a second
+        # source, which is the answer the report wanted. And "no candidate" is not inert: it feeds the
+        # escape hatch in `_coverage_reject_verdict`, so a named payment already on a sibling was told
+        # nothing matched and imported a second copy of itself. The residual risk the old stance guarded
+        # against is real but narrow, and `_display_candidates` is what holds it: past ±1 day a candidate
+        # must also agree textually, so an unrelated same-amount sibling row cannot stand in as the match.
         self._sync_card("card-a", "conn-a")
         self._row("sibling", "card-a", label=LABEL_A, date=self.IN_COVERAGE, amount=-95.0,
                   text="ANNUAL MEMBERSHIP FEE", account_id=self.CHILD)
@@ -750,7 +758,7 @@ class InScopeCoverageExplanationTests(_LedgerTestCase):
             )
         self.assertTrue(verdict.hard_reject)
         self.assertIn("this source account", verdict.reason)
-        self.assertEqual(verdict.matched["candidates"], [])
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["sibling"])
 
 
 if __name__ == "__main__":

@@ -484,6 +484,13 @@ export function ImportHistorySection({
                             // decision (Replace, Reject, a merge), and suspects still awaiting one. One total,
                             // since all three open the same report; only the suspects need action.
                             const suspectDuplicates = Number(b.suspect_duplicate_count || 0)
+                            // Rejected rows the report still flags amber — a covered date that paired with
+                            // nothing, or paired only two days out. They never entered the ledger, so they
+                            // are counted in the duplicates pill's "to review" rather than given a pill of
+                            // their own; without this the card said nothing at all about them and they sat
+                            // unreviewed forever behind a muted total. They stay out of the Tasks page,
+                            // which counts only what is in the ledger awaiting a decision.
+                            const advisoryReview = Number(b.advisory_review_count || 0)
                             const settledDuplicates = summary.dedupedCount + Number(b.removed_duplicate_count || 0)
                             const duplicateTotal = settledDuplicates + suspectDuplicates
                             // The card's share of the PayPal reconciliation (a PayPal file, or a sync that
@@ -730,7 +737,14 @@ export function ImportHistorySection({
                                       const soft = suspectDuplicates
                                       const total = duplicateTotal
                                       if (total <= 0) return null
-                                      const hasSoft = soft > 0
+                                      // Warm for anything still wanting a look, advisory rejects included.
+                                      // They are the milder half — a row that never landed, against a soft
+                                      // flag sitting IN the ledger awaiting Keep/Discard/Replace — but a
+                                      // muted count is one nobody reads, and the whole reason for surfacing
+                                      // them was that they had been accruing unseen. Warming is the only
+                                      // thing on the card that asks for the click.
+                                      const toReview = soft + advisoryReview
+                                      const hasSoft = toReview > 0
                                       return (
                                         <button
                                           type="button"
@@ -738,7 +752,9 @@ export function ImportHistorySection({
                                             source: b,
                                             title: b.filename,
                                           })}
-                                          title={`View duplicate rows from ${batchNoun}`}
+                                          title={toReview > 0
+                                            ? `View duplicate rows from ${batchNoun} — ${toReview} still to review`
+                                            : `View duplicate rows from ${batchNoun}`}
                                           style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -759,7 +775,7 @@ export function ImportHistorySection({
                                         >
                                           <span>
                                             {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
-                                            {hasSoft ? ` (${soft} to review)` : ''}
+                                            {toReview > 0 ? ` (${toReview} to review)` : ''}
                                           </span>
                                           <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
                                         </button>

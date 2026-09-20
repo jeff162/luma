@@ -1019,6 +1019,37 @@ def find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str,
     return None
 
 
+def coverage_review_substate(matched: Optional[dict]) -> Optional[str]:
+    """Which advisory sub-state a coverage reject's candidate list amounts to, or None when the rejection
+    is settled and asks nothing of anyone.
+
+    Pure, and defined over the stored `matched_transaction_json` shape, so the write path and the report
+    agree by construction rather than by two copies of the rule staying in step. The verdict itself is
+    already made when this runs — a sub-state only decides whether the row is worth a human's attention.
+
+      - `no_match`        — covered date, nothing paired at all: the one genuinely worth investigating.
+      - `transfer_match`  — every candidate sits on another account. Two findings share this: the other
+                            leg of one movement, and the same payment already recorded elsewhere (that
+                            one's candidate carries `payment_match`). Both settled; the report tells them
+                            apart on that flag.
+      - `matched_near_date` — the only twin turned up two or more days out, so the pair is worth a glance.
+
+    **It says nothing about `reviewed_at` on purpose.** Acknowledging a row does not change what the row
+    IS, and folding that in would mean rewriting the stored value on every Mark reviewed and every
+    un-review. The report nulls an acknowledged row's sub-state at read time instead.
+    """
+    if not isinstance(matched, dict) or "covered" not in matched:
+        return None
+    candidates = [c for c in (matched.get("candidates") or []) if isinstance(c, dict)]
+    if not candidates:
+        return "no_match"
+    if all(c.get("cross_account") for c in candidates):
+        return "transfer_match"
+    if min(abs(c.get("day_offset", 0)) for c in candidates) >= 2:
+        return "matched_near_date"
+    return None
+
+
 def get_effective_account_row(conn, account_id: Optional[str]):
     """Walk `parent_account_id` to the top-level account row — the linked group's identity. Returns
     None for an unknown id or a cycle."""
@@ -1167,11 +1198,14 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     replacement can't be named is precisely what makes auditing the rejections hard.
 
     The lookup re-uses the per-account amount index that text-strategy already populates, so the
-    cost is dict lookups, not extra queries. `scope_id` (the row's linked-group root, passed only by
-    the in-scope coverage rule) additionally folds in candidates from sibling accounts in that group,
-    since that rule's premise is that the prior import covered the whole effective-account scope. It
-    names ONE scope on purpose: the index holds a map per scope in the pass, and reaching into all of
-    them would let an unrelated account group in the same import supply a candidate.
+    cost is dict lookups, not extra queries. `scope_id` (the row's linked-group root) additionally folds
+    in candidates from sibling accounts in that group, because a second source routinely files one charge
+    under a sibling and the row being explained is then an account-hop away. **Both** coverage rules pass
+    it: naming the match is a different question from what the rule claims coverage of, and a rule that
+    looked only at the receiving account made the outcome depend on whether the accounts were merged
+    before or after the import. It names ONE scope on purpose: the index holds a map per scope in the
+    pass, and reaching into all of them would let an unrelated account group in the same import supply a
+    candidate.
 
     `incoming_texts` (the incoming row's `row_match_texts`) tiers each hit against the incoming
     descriptor with `classify_source_text_relation`, recording the result on `text_relation`. This
@@ -1440,6 +1474,15 @@ def evaluate_duplicate(
     # fires we ALSO look for actual candidate rows by (receiving_account, date, amount) so the
     # report can show what we think the row matched (or flag "no specific match" if nothing
     # plausible exists). The lookup is free — we already index existing rows by amount-key.
+    #
+    # **The lookup takes the linked group, like rule 2 does.** It used to pass `scope_id=None`, on the
+    # reasoning that this rule's premise is narrower — a prior import of *this source's account*, not of
+    # the whole scope. But that is a statement about the coverage CLAIM, and `scope_id` governs only
+    # which rows may be named as the match: widening it cannot widen the claim. Leaving it out made the
+    # same import diverge depending on how the user got to one account — mapping a source at a merged
+    # account found the row, mapping it at a sibling and merging afterwards did not — and the two are
+    # meant to reach the same state. It also fed the escape hatch below a false "nothing matched", so a
+    # named payment already sitting on a sibling imported a second copy of itself.
     if context.coverage_strategy_enabled:
         cov = next(
             (entry for entry in context.import_coverage_by_csv_value.get(csv_value, [])
@@ -1450,7 +1493,7 @@ def evaluate_duplicate(
         if cov:
             verdict = _coverage_reject_verdict(
                 context, cov, receiving_account_id, parsed_date, amount,
-                scope_id=None, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
+                scope_id=scope_id, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
                 reason="Falls within the fully covered date range from an earlier import for this source account",
             )
             if verdict is not None:
@@ -3153,9 +3196,7 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         if not candidates and p["merchant"]:
             # Nothing on the account or in its group explains the row, so ask the wider ledger whether a
             # corroborating charge exists — the same question `_coverage_reject_verdict` asks, on the
-            # entries where a coincidence in the candidate list stopped it being asked. Same-source
-            # entries need this most: their lookup never folds in the linked group, so a twin a second
-            # source filed under a sibling account is invisible to everything above.
+            # entries where a coincidence in the candidate list stopped it being asked.
             payment_match = find_ledger_payment_match(
                 conn, p["account_id"], p["parsed_date"], p["amount"], p["merchant"],
             )
@@ -3166,9 +3207,14 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         matched = dict(p["matched"])
         matched["candidates"] = candidates
         matched["candidate_count"] = len(candidates)
+        # The sub-state is classified from the candidate list, so it has to move with it. Every entry
+        # reaching here was stored as `no_match` — that is what qualified it — and naming a twin settles
+        # it or re-files it as a near-date pair. Left behind, the row would keep its old sub-state and the
+        # file card would go on counting a rejection that now explains itself.
         conn.execute(
-            "UPDATE import_batch_duplicate SET matched_transaction_json = ? WHERE batch_id = ? AND row_number = ?",
-            (json.dumps(matched), batch_id, p["row_number"]),
+            "UPDATE import_batch_duplicate SET matched_transaction_json = ?, review_substate = ?"
+            " WHERE batch_id = ? AND row_number = ?",
+            (json.dumps(matched), coverage_review_substate(matched), batch_id, p["row_number"]),
         )
         updated += 1
     return updated
@@ -3324,7 +3370,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     duplicate_rows = conn.execute(
         """
         SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json, reviewed_at,
-               enriched_at, enriched_delta_json
+               review_substate, enriched_at, enriched_delta_json
         FROM   import_batch_duplicate
         WHERE  batch_id = ?
         ORDER  BY row_number
@@ -3428,27 +3474,13 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                     enrich_with_source(enriched_matched, enriched_matched.get("import_batch_id"))
                 )
 
-        # Advisory-review sub-state, only meaningful for coverage-window rejects (the rule that can
-        # fire without a specific matching row). `reviewed_at` set → the user has acknowledged it,
-        # so it leaves the review bucket regardless. Otherwise: a coverage reject whose only
-        # candidates sit two or more days out is `matched_near_date` — the report shows the actual
-        # offset per candidate, so the bucket says "look at this" without asserting a fixed distance;
-        # one with no candidate at all is `no_match` (the genuinely-needs-a-look case); a coverage
-        # reject that DID match at exact/±1 is a settled rejection with no sub-state.
+        # Advisory-review sub-state, classified once at import by `coverage_review_substate` and stored
+        # on the row, so the card can count what needs attention without reading every candidate list.
+        # Read rather than re-derived: every pre-existing row was backfilled when the column landed, and
+        # `save_batch_duplicate_rows` is the one writer. `reviewed_at` set → the user has acknowledged
+        # it, so it leaves the review bucket regardless of what it is.
         reviewed = bool(row["reviewed_at"])
-        review_substate = None
-        if isinstance(enriched_matched, dict) and "covered" in enriched_matched and not reviewed:
-            candidates = enriched_matched.get("candidates") or []
-            if not candidates:
-                review_substate = "no_match"
-            elif all(c.get("cross_account") for c in candidates):
-                # A funding/deposit leg whose only twin is the cross-account transfer counterpart —
-                # surfaced to confirm (correctly not re-imported) or reject (separate → import anyway).
-                # The cross-account fallback only runs when no same-account candidate exists, so a
-                # candidate set is never a mix of the two.
-                review_substate = "transfer_match"
-            elif min(abs(c.get("day_offset", 0)) for c in candidates) >= 2:
-                review_substate = "matched_near_date"
+        review_substate = None if reviewed else row["review_substate"]
 
         entries.append({
             "kind": "hard_reject",

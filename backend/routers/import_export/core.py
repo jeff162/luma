@@ -76,6 +76,7 @@ from backend.services.duplicate_detection import (
     build_dedupe_context,
     DEFAULT_TERMINAL_WINDOW_DAYS,
     compute_import_coverage_window,
+    coverage_review_substate,
     evaluate_duplicate,
     get_effective_account_row,
     list_unified_batch_duplicates,
@@ -797,8 +798,9 @@ def save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -
     conn.executemany(
         """
         INSERT OR REPLACE INTO import_batch_duplicate
-          (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json)
-        VALUES (?, ?, ?, ?, ?, ?)
+          (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json,
+           review_substate)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -808,6 +810,10 @@ def save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -
                 json.dumps(entry.get("values") or {}),
                 json.dumps(entry.get("matched_transaction") or {}),
                 json.dumps(entry.get("txn_payload")) if isinstance(entry.get("txn_payload"), dict) else None,
+                # Classified here rather than when the report is read, so a card can count what still needs
+                # a look without opening every candidate list. NULL means settled, not unclassified — the
+                # migration that added the column backfilled every row that predates it.
+                coverage_review_substate(entry.get("matched_transaction") or {}),
             )
             for entry in duplicate_rows
         ],
@@ -4295,6 +4301,17 @@ def list_batches():
             """, (b["id"],)).fetchone()
             d["duplicate_row_count"] = int(dup_counts["total"] or 0)
             d["enriched_duplicate_count"] = int(dup_counts["enriched"] or 0)
+            # Rejected rows still wanting a look, for the card's "to review" suffix. Only the two
+            # sub-states that ask something: a cross-account match is settled (the coverage rule made the
+            # verdict and the probe only named what it matched), so counting it here would bury the
+            # handful that matter under thousands that do not.
+            d["advisory_review_count"] = int(conn.execute("""
+                SELECT COUNT(*) AS n
+                FROM   import_batch_duplicate
+                WHERE  batch_id = ?
+                  AND  reviewed_at IS NULL
+                  AND  review_substate IN ('no_match', 'matched_near_date')
+            """, (b["id"],)).fetchone()["n"] or 0)
             # Settled like an import-time reject, so the card's duplicates pill counts it with those: it is
             # what makes the report — and its Restore — reachable from a card whose only duplicates were
             # decided after the import.

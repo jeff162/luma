@@ -123,6 +123,60 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         # No fake amount echoed into matched (that was the bug we're guarding against).
         self.assertNotIn("amount", verdict.matched)
 
+    # ---- the same-source coverage rule sees the linked group -----------
+    # A second source files the same charge under a sibling account, so the row it duplicates is one
+    # account-hop away. The rule used to look only at the receiving account: the sibling was invisible,
+    # and the row reported "no specific match" — or, if it was a named payment, took the escape hatch and
+    # imported a copy of a charge already in the group. Both rules ask the same question of the ledger.
+
+    def _sibling_group_context(self, **overrides):
+        """Coverage from this csv_value, and the only matching row on a SIBLING account in the group."""
+        return _empty_context(
+            import_coverage_by_csv_value={
+                "Checking": [{
+                    "start_date": "2025-10-01", "end_date": "2025-10-31",
+                    "csv_value": "Checking", "account_id": "ACCT-1", "batch_id": "BATCH-A",
+                }],
+            },
+            existing_rows_by_effective_account_amount={
+                "GROUP-ROOT": {
+                    _duplicate_amount_key("2025-10-15", -50.00): [{
+                        "id": "TXN-ON-SIBLING",
+                        "date": "2025-10-15",
+                        "merchant_name": "WHOLEFDS",
+                        "amount": -50.00,
+                        "account_id": "ACCT-2",
+                        "import_batch_id": "BATCH-A",
+                    }],
+                },
+            },
+            **overrides,
+        )
+
+    def _eval_in_group(self, context, merchant="WHOLE FOODS"):
+        return evaluate_duplicate(
+            context=context, receiving_account_id="ACCT-1", csv_value="Checking",
+            content_hash="unique-hash", parsed_date="2025-10-15", amount=-50.00,
+            scope_id="GROUP-ROOT", txn_payload={"merchant_name": merchant, "display_name": merchant},
+        )
+
+    def test_same_source_coverage_names_a_sibling_account_row(self):
+        verdict = self._eval_in_group(self._sibling_group_context())
+        self.assertTrue(verdict.hard_reject)
+        self.assertEqual(verdict.matched["candidate_count"], 1)
+        self.assertEqual(verdict.matched["candidates"][0]["id"], "TXN-ON-SIBLING")
+
+    def test_the_escape_hatch_does_not_fire_when_the_group_explains_the_row(self):
+        # The rescue exists for a payment nothing in the ledger corroborates. A sibling holding the same
+        # charge IS that corroboration, so the row stays rejected and the ledger probe is never reached —
+        # asserted directly, since "did not import" alone would also pass if the probe had answered.
+        with mock.patch.object(duplicate_detection, "find_ledger_payment_match") as probe:
+            verdict = self._eval_in_group(self._sibling_group_context(conn=object()))
+        probe.assert_not_called()
+        self.assertTrue(verdict.hard_reject)
+        self.assertFalse(verdict.passthrough)
+        self.assertEqual(verdict.matched["candidates"][0]["id"], "TXN-ON-SIBLING")
+
     # ---- coverage rescue of genuinely-new named payments ---------------
     # A named payment (not a nameless money-movement leg) that coverage would reject with no
     # same-account/transfer candidate is only a duplicate when a corroborating charge exists elsewhere

@@ -994,8 +994,16 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
 
     def _insert_coverage_reject(self, *, batch_id: str, filename: str, row_number: int, candidates: list[dict]):
         """Insert an import_batch_duplicate row shaped like a coverage-window hard-reject. `candidates`
-        carry `day_offset` like the real candidate lookup, so we can drive the substate logic."""
+        carry `day_offset` like the real candidate lookup, so we can drive the substate logic.
+
+        The sub-state is classified here exactly as `save_batch_duplicate_rows` does, because it is stored
+        on the row now rather than re-derived per read — a fixture that left the column NULL would be
+        writing a row the one writer cannot produce. The assertions still name their expected value
+        literally, so a misclassification fails them."""
         import json
+        from backend.services.duplicate_detection import coverage_review_substate
+        matched = {"covered": {"start_date": "2023-01-01", "end_date": "2023-12-31"},
+                   "candidates": candidates, "candidate_count": len(candidates)}
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute("INSERT OR IGNORE INTO import_batch (id, filename, status) VALUES (?, ?, 'completed')",
@@ -1003,14 +1011,15 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
                 conn.execute(
                     """
                     INSERT INTO import_batch_duplicate
-                      (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json)
-                    VALUES (?, ?, ?, '{}', ?, ?)
+                      (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json,
+                       review_substate)
+                    VALUES (?, ?, ?, '{}', ?, ?, ?)
                     """,
                     (batch_id, row_number,
                      "Falls within the fully covered date range from an earlier import in this account scope",
-                     json.dumps({"covered": {"start_date": "2023-01-01", "end_date": "2023-12-31"},
-                                 "candidates": candidates, "candidate_count": len(candidates)}),
-                     json.dumps({"date": "2023-08-11", "amount": 20.22, "merchant_name": "TOLL CO"})),
+                     json.dumps(matched),
+                     json.dumps({"date": "2023-08-11", "amount": 20.22, "merchant_name": "TOLL CO"}),
+                     coverage_review_substate(matched)),
                 )
 
     def _entry_for_row(self, batch_id: str, row_number: int):

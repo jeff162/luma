@@ -2928,9 +2928,9 @@ export const HELP_TOPICS = [
         <ul>
           <li><strong>Review</strong> &mdash; an undecided match that <em>needs a decision</em>, usually a{' '}
             <HelpLink to="/help/cross-account-duplicates">cross-account duplicate</HelpLink>. This is the
-            category that counts as <strong>pending work</strong>: it drives the file's
-            "to review" count and the "Possible duplicate transactions" item on the
-            Tasks page.</li>
+            category that counts as <strong>pending work</strong>: it drives the "Possible duplicate
+            transactions" item on the Tasks page. The file card's own "to review" count is wider &mdash; it
+            adds the advisory rejects below, which want a look but never reach the Tasks page.</li>
           <li><strong>Matched &middot; review</strong> and <strong>Rejected &middot; review</strong> &mdash;
             the <strong>Matched nearby date</strong> and <strong>No specific match</strong> outcomes of a
             covered range. These were already rejected at import and are <em>advisory</em> &mdash; they do
