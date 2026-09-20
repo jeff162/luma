@@ -4,6 +4,7 @@ This is the seam the demo loader uses to build real batches, so it pins that a d
 artifacts the file cards read — the batch, per-account coverage rows, and imported-category creation —
 and that a cross-account duplicate across two batches gets flagged by the post-import sweep."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -165,10 +166,18 @@ class RunImportCoreTests(unittest.TestCase):
         summary = result["import_summary"]
         self.assertEqual(summary["zero_amount_count"], 1)
         self.assertEqual(summary["rejected_count"], 1)
-        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["zero_amount"])
-        self.assertEqual(summary["rejected_rows"][0]["reason"], "Zero amount")
+        self.assertEqual([r["kind"] for r in result["rejected_rows"]], ["zero_amount"])
+        self.assertEqual(result["rejected_rows"][0]["reason"], "Zero amount")
         with get_db(str(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0], 1)
+            # The file is gone once the upload ends, so the refusal is only visible later if the row
+            # itself was kept — the count alone cannot say which line was dropped.
+            stored = conn.execute(
+                "SELECT kind, reason, description, amount FROM import_batch_rejected_row WHERE batch_id = ?",
+                (result["batch_id"],),
+            ).fetchall()
+        self.assertEqual([(r["kind"], r["reason"], r["description"], r["amount"]) for r in stored],
+                         [("zero_amount", "Zero amount", "Pending Authorization", 0.0)])
 
     def test_a_row_in_another_currency_is_refused_and_reported(self):
         # A wallet export can hold one foreign charge among dollar ones. The ledger stores bare amounts, so
@@ -190,8 +199,17 @@ class RunImportCoreTests(unittest.TestCase):
         summary = result["import_summary"]
         self.assertEqual(summary["currency_rejected_count"], 1)
         self.assertEqual(summary["rejected_count"], 1)
-        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["currency"])
-        self.assertIn("GBP", summary["rejected_rows"][0]["reason"])
+        self.assertEqual([r["kind"] for r in result["rejected_rows"]], ["currency"])
+        self.assertIn("GBP", result["rejected_rows"][0]["reason"])
+        with get_db(str(self.db_path)) as conn:
+            stored = conn.execute(
+                "SELECT kind, values_json FROM import_batch_rejected_row WHERE batch_id = ?",
+                (result["batch_id"],),
+            ).fetchall()
+        self.assertEqual([r["kind"] for r in stored], ["currency"])
+        # The whole row as written, not just the cells the mapping used: what makes a refused row
+        # diagnosable is usually the column nobody mapped.
+        self.assertEqual(json.loads(stored[0]["values_json"])["Currency"], "GBP")
         with get_db(str(self.db_path)) as conn:
             amounts = sorted(r[0] for r in conn.execute("SELECT raw_name FROM txn"))
         self.assertEqual(amounts, ["Card top-up", "Coffee"])

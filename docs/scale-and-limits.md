@@ -115,6 +115,15 @@ batch on each call and worsen lock contention.
 hides rows with no way to reach them would simply recreate the lossy cap under a new name. The archive
 UX is deferred — see *Open*.
 
+**The rows a file left behind are capped per batch, and the cap is visible rather than silent** — the
+distinction the paragraph above turns on. `import_batch_rejected_row` keeps what an import refused
+(`MAX_STORED_REJECTED_ROWS`, `import_export/core.py`), which a badly mapped file can make as large as
+the file itself: one wrong column choice refuses every row, and nothing about that is worth a permanent
+per-row record. What makes a cap acceptable here and not there is that the exact counts survive it — the
+report compares the rows it holds against the batch's own totals and says plainly that it is showing a
+slice. Which rows survive is chosen by kind, not by position, so the diagnostic ones outlast a deliberate
+account skip; see `data-model.md` → *Import batches and profiles*.
+
 ## Bulk operations must not accumulate
 
 Export and restore were both written to assemble the whole payload in memory, and both scaled with the

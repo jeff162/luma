@@ -3099,6 +3099,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     }
   }
 
+  // The live import's own rejected rows, on the done screen, where the file is still staged and the
+  // raw-file hand-off below is therefore still possible. A *saved* batch's rows are not shown here —
+  // they are a tab on the file's report (`ImportBatchNotImported`), which holds every class of
+  // refusal rather than the three this summary carries, and outlives the session.
   function openRejectedRowsViewer({
     source,
     title,
@@ -3738,14 +3742,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                   value: colPending,
                   setValue: setColPending,
                 }),
-                buildMappingFieldConfig({
-                  key: 'currency',
-                  label: 'Currency',
-                  candidateHeaders: columnAnalysis.currencyCandidates,
-                  value: colCurrency,
-                  setValue: setColCurrency,
-                  hint: 'Only needed when a file mixes currencies. Rows in any currency other than the ledger’s are not imported and appear with the rejected rows.',
-                }),
                 amtConv === 'two_column'
                   ? buildMappingFieldConfig({
                     key: 'credit',
@@ -3806,6 +3802,17 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                   candidateHeaders: columnAnalysis.notesCandidates,
                   value: colNotes,
                   setValue: setColNotes,
+                }),
+                // Last, with Notes, because it is the rarest column a file carries. No hint: what it had
+                // to explain — a row in another currency is not imported — is already in the Import /
+                // Export help topic and in `single-currency`, and a sentence long enough to say it
+                // overflows a mapping cell.
+                buildMappingFieldConfig({
+                  key: 'currency',
+                  label: 'Currency',
+                  candidateHeaders: columnAnalysis.currencyCandidates,
+                  value: colCurrency,
+                  setValue: setColCurrency,
                 }),
               ]}
               accountField={{
@@ -4610,7 +4617,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
           openBatchDetail={openBatchDetail}
           markBatchReviewed={markBatchReviewed}
           handleUndoClick={openUndo}
-          openRejectedRowsViewer={openRejectedRowsViewer}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}
           openReconciliationViewer={reconciliationViewer.open}
         />

@@ -120,6 +120,22 @@ source-quality problem to fix *before* import.
   window / cross-account scope. Tiny fixed-amount recurring items (vending, parking meters) are
   acceptable false positives — they don't move totals.
 
+### A file held more rows than the import brought in
+
+Open that file's report from the **↗** beside its name and switch to **Not imported**. Every row the
+file offered and the import did not take is listed there with the reason it was left out — a date or
+amount that could not be read, a currency the ledger does not hold, a zero amount, an account set to
+Skip, and the trailing text at the end of an export. The list sorts and searches, and the pills at the
+top narrow it to one reason. The **N rejected** pill on the file's card opens the same place.
+
+Rows held as possible duplicates are counted there but reviewed in the duplicate report, which is where
+they can be imported anyway or restored.
+
+Two limits are worth knowing. Only a few hundred rows are kept per file — a file whose columns were
+mapped wrongly can refuse every row, so the report says when it is showing a slice of a larger count.
+And a file imported before this record existed keeps only the small sample its card recorded at the
+time.
+
 ### A file uses one amount column + a separate debit/credit "type" column
 
 Pick the **"Single column + a debit/credit type column"** amount convention and map the type column
@@ -129,8 +145,8 @@ column, or separate debit/credit columns.
 ### A file mixes currencies (a wallet export with the odd foreign charge)
 
 Map the file's **Currency** column — the mapper suggests it when the header says so. Rows in any currency
-other than the ledger's are then not imported and are listed with the file's rejected rows, since an amount
-in pounds would otherwise count as dollars in every total. A row with the currency cell left blank imports
+other than the ledger's are then not imported and are listed under **Not imported** on the file's report,
+since an amount in pounds would otherwise count as dollars in every total. A row with the currency cell left blank imports
 as the ledger's currency, and a file with no currency column needs nothing.
 
 ### An imported file is under "unknown data source" or "temporary draft"
@@ -373,8 +389,8 @@ The situations above are surfaced inside the app through the Help/FeatureExplain
 the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
 pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
 reconciliation and import-detail report headers, the PayPal reconciliation header, the amount-convention picker, the Group Imported
-Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search and
-removed-as-duplicates line), and a context-triggered
+Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search, the
+not-imported view and the removed-as-duplicates line), and a context-triggered
 "explain this" tip that appears only when the app recognizes the situation (cross-account matches,
 covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
 

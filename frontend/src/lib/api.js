@@ -1020,6 +1020,7 @@ export const api = {
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
   getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),
   getBatchRemovedDuplicates: (id) => request(`/import-export/batches/${id}/removed-duplicates`),
+  getBatchNotImported: (id) => request(`/import-export/batches/${id}/not-imported`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
   getBatchRuleSuggestions: (id, ownerIds = []) => {
     const q = new URLSearchParams(csvParam('owner_ids', ownerIds))

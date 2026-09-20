@@ -33,7 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { makeRowReconciler, applyCategoryChange } from '../lib/txnMutations.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
-import { Button, RefreshButton, SearchInput, Spinner } from './ui.jsx'
+import { Button, RefreshButton, SearchInput, SegmentedToggle, Spinner } from './ui.jsx'
 import AttributeFilterControl from './AttributeFilterControl.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -42,6 +42,8 @@ import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransac
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './detailShared.jsx'
+import ImportBatchNotImported from './importExport/ImportBatchNotImported.jsx'
+import { summarizeImportOutcome } from '../lib/importExport/importOutcome.js'
 
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
 
@@ -102,6 +104,18 @@ export default function ImportBatchDetail({
     reportReviewCount()
     onClose?.()
   }, [reportReviewCount, onClose])
+
+  // The file's two halves — what it brought in, and what it did not. The second tab exists only when the
+  // file left something out, so a clean import looks exactly as it did before there were tabs. Which one
+  // opens travels on the payload (`_view`/`_rejectedKind`) like every other opener instruction here, so a
+  // card's "N rejected" pill lands on those rows with their reason already selected.
+  const notImportedSummary = summarizeImportOutcome(batch)
+  const notImportedCount = notImportedSummary.rejectedCount
+    + notImportedSummary.accountSkippedCount
+    + notImportedSummary.trailingNonTransactionCount
+  const seedView = batch?._view === 'not-imported' && notImportedCount > 0 ? 'not-imported' : 'imported'
+  const [view, setView] = useState(seedView)
+  useEffect(() => { setView(seedView) }, [seedView, batch])
 
   // Seeded from the payload rather than held by the opener, like `_dateFilter`. Re-applied when the payload
   // changes, because re-opening an open report replaces its entry: the pill turning the filter on, or the ↗
@@ -293,6 +307,27 @@ export default function ImportBatchDetail({
         isTopmost={isTopmost}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+          {notImportedCount > 0 ? (
+            <div style={{ flex: '0 0 auto', display: 'flex' }}>
+              <SegmentedToggle
+                value={view}
+                onChange={setView}
+                ariaLabel="Which of this file's rows to show"
+                options={[
+                  { value: 'imported', label: 'Imported' },
+                  { value: 'not-imported', label: 'Not imported', badge: notImportedCount },
+                ]}
+              />
+            </div>
+          ) : null}
+          {view === 'not-imported' ? (
+            <ImportBatchNotImported
+              batchId={batch.id}
+              seedKind={batch?._rejectedKind || null}
+              onOpenDuplicates={() => duplicatesViewer.open({ batchId: batch.id, title: batch.filename })}
+            />
+          ) : (
+          <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <SearchInput
               value={filterInput}
@@ -356,6 +391,8 @@ export default function ImportBatchDetail({
               onSort={onSort}
               emptyMessage={isSyncCard ? 'No synced transactions remain on this card.' : 'No imported transactions remain for this file.'}
             />
+          )}
+          </>
           )}
         </div>
       </DetailPanelShell>

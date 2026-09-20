@@ -80,7 +80,7 @@ export default defineConfig({
   projects: [
     {
       name: 'app',
-      testIgnore: /(a11y-.*|import-mapping-controls|reconciliation-report|paypal-statement-import)\.spec\.js/,
+      testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|reconciliation-report|paypal-statement-import)\.spec\.js/,
     },
     {
       name: 'demo-cleared',
@@ -92,12 +92,18 @@ export default defineConfig({
       testMatch: /import-mapping-controls\.spec\.js/,
       dependencies: ['demo-cleared'],
     },
-    // Chained behind `import` for the same reason as `a11y`: it adds accounts and import batches to the
-    // empty tenant, which the mapping specs assume holds none. Each spec removes its own when it finishes.
+    // Chained behind `import` for the same reason as `a11y`: these add accounts and import batches to
+    // the empty tenant, which the mapping specs assume holds none. Each spec removes its own when it
+    // finishes.
+    {
+      name: 'import-report',
+      testMatch: /import-not-imported-rows\.spec\.js/,
+      dependencies: ['import'],
+    },
     {
       name: 'marketplace',
       testMatch: /(reconciliation-report|paypal-statement-import)\.spec\.js/,
-      dependencies: ['import'],
+      dependencies: ['import-report'],
     },
     {
       name: 'a11y',

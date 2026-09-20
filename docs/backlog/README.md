@@ -74,6 +74,13 @@ scale — rather than by feature.
   funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
   ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
   from stored raw values, and the deferred column-centric mapping-screen rework.
+- [watched-import-folders.md](watched-import-folders.md) — **design, not started (2026-09-20).** A data
+  source names a directory; files dropped there import themselves on the next app load. Directory per
+  source, never create an account unattended (park it and raise a Task instead), opt-in purge defaulting
+  to never, polling rather than OS file events, and no background scheduler — the triggers copy the
+  recurring-detection catch-up. Blocked on persisting a source's account map, which is worth doing on its
+  own. Also carries the restore rule: same instance keeps its paths, a different one has watching
+  switched off.
 - [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
   (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
   it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers

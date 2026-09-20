@@ -42,6 +42,7 @@ export const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRo
 export const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
 export const AMAZON_IMPORT_ACCOUNT_PREF_KEY = 'import.amazonAccountId'
 export const DUPLICATE_ROWS_COLUMNS_PREF_KEY = 'ui.import.duplicateRows.columns'
+export const NOT_IMPORTED_ROWS_COLUMNS_PREF_KEY = 'ui.import.notImportedRows.columns'
 // One key per MatchReport-hosted report: the three share a table shell but not a column set, so they
 // each remember their own geometry.
 export const DUPLICATE_REPORT_COLUMNS_PREF_KEY = 'ui.import.duplicateReport.columns'

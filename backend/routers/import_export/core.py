@@ -121,6 +121,27 @@ from backend.services.money_movement import (
 router = APIRouter()
 
 MAX_DISTINCT_VALUES_PER_COLUMN = 500
+
+# What a file offered and the import did not take, kept per row so the file's report can show it after
+# the upload is gone (`import_batch_rejected_row`). Duplicates are not here — they have their own table
+# and their own review.
+VALIDATION_ERROR_KIND = "validation_error"
+ACCOUNT_SKIPPED_KIND = "account_skipped"
+TRAILING_TEXT_KIND = "trailing_text"
+# How many of a batch's rejected rows are kept. A misconfigured mapping can reject an entire large file,
+# and this is a diagnostic record rather than a second copy of the ledger; the exact totals live in the
+# batch's `import_summary` regardless, so a partial set is reported as partial rather than mistaken for
+# the whole. When it binds, rows are kept in this order — an account the user chose to skip is the least
+# informative thing that could crowd out a parse failure.
+MAX_STORED_REJECTED_ROWS = 500
+REJECTED_ROW_KIND_PRIORITY = (
+    TRAILING_TEXT_KIND,
+    VALIDATION_ERROR_KIND,
+    CURRENCY_REJECTION_KIND,
+    ZERO_AMOUNT_REJECTION_KIND,
+    ACCOUNT_SKIPPED_KIND,
+)
+
 RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
 RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
 # Id formats a review's partitions are minted with, and read back only by _assign_rule_suggestion_review_groups.
@@ -428,6 +449,24 @@ def _normalize_import_row_values(row: dict, headers: list[str]) -> dict:
     for header in headers:
         normalized[header] = str(row.get(header, "") or "")
     return normalized
+
+
+def _rejected_row_entry(row_num, kind, reason, row, headers, col, *, date=None, amount=None) -> dict:
+    """One row the import refused, in the shape both the response and `import_batch_rejected_row` take.
+
+    `date` and `amount` are passed when the import got far enough to parse them; otherwise the file's own
+    cells stand in, so the report's columns show the text that was rejected rather than going blank on
+    exactly the rows a reader opened it for."""
+    values = _normalize_import_row_values(row, headers)
+    return {
+        "row": row_num,
+        "kind": kind,
+        "reason": reason,
+        "values": values,
+        "date": date or (str(row.get(col.date, "") or "").strip() if col.date else None) or None,
+        "description": (str(row.get(col.description, "") or "").strip() if col.description else None) or None,
+        "amount": amount,
+    }
 
 
 
@@ -816,6 +855,53 @@ def save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -
                 coverage_review_substate(entry.get("matched_transaction") or {}),
             )
             for entry in duplicate_rows
+        ],
+    )
+
+
+def select_stored_rejected_rows(entries: list[dict]) -> list[dict]:
+    """Which of a batch's rejected rows are kept, when there are more than `MAX_STORED_REJECTED_ROWS`.
+
+    Kept by kind priority, then by position in the file, so a file whose every row was skipped as an
+    unwanted account still keeps the handful that failed to parse — the reverse fills the cap with the
+    one outcome the user already knows about. Under the cap this is just the rows in file order."""
+    if len(entries) <= MAX_STORED_REJECTED_ROWS:
+        return sorted(entries, key=lambda entry: int(entry.get("row") or 0))
+    priority = {kind: index for index, kind in enumerate(REJECTED_ROW_KIND_PRIORITY)}
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            priority.get(entry.get("kind"), len(priority)),
+            int(entry.get("row") or 0),
+        ),
+    )[:MAX_STORED_REJECTED_ROWS]
+    return sorted(ranked, key=lambda entry: int(entry.get("row") or 0))
+
+
+def save_batch_rejected_rows(conn, batch_id: str, entries: list[dict]) -> None:
+    """The one writer for a batch's not-imported rows (duplicates excepted — `save_batch_duplicate_rows`
+    owns those)."""
+    kept = select_stored_rejected_rows(entries)
+    if not kept:
+        return
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO import_batch_rejected_row
+          (batch_id, row_number, kind, reason, values_json, row_date, description, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                batch_id,
+                int(entry.get("row") or 0),
+                str(entry.get("kind") or VALIDATION_ERROR_KIND),
+                str(entry.get("reason") or ""),
+                json.dumps(entry.get("values") or {}),
+                entry.get("date"),
+                entry.get("description"),
+                entry.get("amount"),
+            )
+            for entry in kept
         ],
     )
 
@@ -2899,6 +2985,7 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
     # inside the loop would invite a future edit that varies it by row.
     reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(parsed.source))
     validation_error_rows = []
+    account_skipped_rows = []
     duplicate_rows = []
     skip_set = set(skip_accounts_cfg)
 
@@ -3250,12 +3337,9 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
                 footer_error_start_row = row_num
             consecutive_error_rows += 1
             errors.append({"row": row_num, "reason": reason})
-            validation_error_rows.append({
-                "row": row_num,
-                "kind": "validation_error",
-                "reason": reason,
-                "values": _normalize_import_row_values(row, headers),
-            })
+            validation_error_rows.append(
+                _rejected_row_entry(row_num, VALIDATION_ERROR_KIND, reason, row, headers, col)
+            )
             row_results.append({"row": row_num, "status": "error", "reason": reason})
             skipped += 1
             if consecutive_error_rows >= 5:
@@ -3335,12 +3419,10 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
                 currency_refusal = f"In {row_currency} — every amount in {app_name()} is {ledger_currency}"
             if currency_refusal:
                 skipped += 1
-                currency_rows.append({
-                    "row": row_num,
-                    "kind": CURRENCY_REJECTION_KIND,
-                    "reason": currency_refusal,
-                    "values": _normalize_import_row_values(row, headers),
-                })
+                currency_rows.append(_rejected_row_entry(
+                    row_num, CURRENCY_REJECTION_KIND, currency_refusal, row, headers, col,
+                    date=parsed_date, amount=amount,
+                ))
                 row_results.append({"row": row_num, "status": "currency"})
                 reset_footer_detection()
                 continue
@@ -3352,12 +3434,10 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             # detection. Refused, and reported on the card rather than silently discarded.
             if reject_zero_amount_rows and amount == 0:
                 skipped += 1
-                zero_amount_rows.append({
-                    "row": row_num,
-                    "kind": ZERO_AMOUNT_REJECTION_KIND,
-                    "reason": ZERO_AMOUNT_REJECTION_REASON,
-                    "values": _normalize_import_row_values(row, headers),
-                })
+                zero_amount_rows.append(_rejected_row_entry(
+                    row_num, ZERO_AMOUNT_REJECTION_KIND, ZERO_AMOUNT_REJECTION_REASON, row, headers, col,
+                    date=parsed_date, amount=amount,
+                ))
                 row_results.append({"row": row_num, "status": "zero_amount"})
                 reset_footer_detection()
                 continue
@@ -3366,6 +3446,14 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             if skip_account_row:
                 skipped += 1
                 skip_counts[csv_val] = skip_counts.get(csv_val, 0) + 1
+                # Captured only up to what can be stored: skipping an account in a large file drops
+                # thousands of rows, and building a cell dict for each one to discard it at the cap
+                # would be the one class of rejection able to cost real memory.
+                if len(account_skipped_rows) < MAX_STORED_REJECTED_ROWS:
+                    account_skipped_rows.append(_rejected_row_entry(
+                        row_num, ACCOUNT_SKIPPED_KIND, f"Skipped account '{csv_val}'", row, headers, col,
+                        date=parsed_date, amount=amount,
+                    ))
                 row_results.append({"row": row_num, "status": "skipped_account"})
                 reset_footer_detection()
                 continue
@@ -3566,6 +3654,29 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             zero_amount_rows + currency_rows + validation_error_rows,
             key=lambda row: row.get("row") or 0,
         )[:20]
+        # What the file's report shows under "Not imported", stored per row because the file itself is
+        # gone the moment the upload ends. A suspected footer contributes one row standing for the whole
+        # tail: its rows were excluded as a block, on one judgement, and listing them individually would
+        # bury the parse failures that are the reason to open the list at all.
+        stored_rejected_entries = (
+            zero_amount_rows + currency_rows + validation_error_rows + account_skipped_rows
+        )
+        if footer_error_start_row is not None and trailing_non_transaction_count > 0:
+            last_row = footer_error_start_row + trailing_non_transaction_count - 1
+            stored_rejected_entries.append({
+                "row": footer_error_start_row,
+                "kind": TRAILING_TEXT_KIND,
+                "reason": (
+                    f"Rows {footer_error_start_row}–{last_row} read as trailing text rather than "
+                    "transactions, and the import stopped there"
+                    if last_row > footer_error_start_row
+                    else f"Row {footer_error_start_row} read as trailing text rather than a transaction"
+                ),
+                "values": {},
+                "date": None,
+                "description": None,
+                "amount": None,
+            })
         import_summary = {
             "total_rows": imported + skipped + deduped,
             "imported_count": imported,
@@ -3577,8 +3688,11 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             "validation_error_count": validation_error_count,
             "trailing_non_transaction_count": trailing_non_transaction_count,
             "rejected_count": zero_amount_count + currency_rejected_count + validation_error_count,
+            # The file's column order, for rendering a stored row's cells. The rows themselves are not
+            # kept here: `import_batch_rejected_row` holds them, uncapped by what fits comfortably in a
+            # snapshot and complete enough to be worth sorting. Batches imported before that table keep
+            # whatever rows their snapshot recorded, which is what the report falls back to.
             "rejected_headers": headers,
-            "rejected_rows": rejected_rows,
             "duplicate_headers": headers,
             "enriched_count": 0,
             "money_movement_suppressed_count": 0,
@@ -3594,6 +3708,7 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             batch_id = None
         else:
             save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
+            save_batch_rejected_rows(conn, batch_id, stored_rejected_entries)
             # Per-source auto-enrich: for a trusted source, fold each hard-rejected duplicate's novel
             # detail into the existing row it matched — silently, but reported. Only unambiguous rows are
             # touched and only a non-empty delta counts (so a re-import of the same file is a no-op).
@@ -3911,6 +4026,89 @@ def removed_duplicate_count(conn, batch_id: str) -> int:
 def get_batch_removed_duplicates(batch_id: str):
     with get_db() as conn:
         return {"batch_id": batch_id, "count": removed_duplicate_count(conn, batch_id)}
+
+
+@router.get("/batches/{batch_id}/not-imported")
+def get_batch_not_imported(batch_id: str):
+    """The rows this file offered and the import did not take, for the file report's *Not imported* view.
+
+    `stored` is what `import_batch_rejected_row` kept (see `MAX_STORED_REJECTED_ROWS`); `totals` is what
+    the import actually counted, so a reader can tell a complete list from a capped one. Duplicates are
+    counted but not listed: they are reviewable rather than merely dropped, and the duplicate report is
+    where that happens.
+
+    A batch imported before the table existed falls back to whatever rows its snapshot recorded — up to
+    twenty, with no account-skipped rows among them — rather than claiming the file dropped nothing."""
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, filename, config_snapshot, deduped_count FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Import batch not found")
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        raw_summary = snapshot.get(IMPORT_SUMMARY_KEY)
+        summary = raw_summary if isinstance(raw_summary, dict) else {}
+        # Which of the file's columns the mapping already reads. The report gives date, description and
+        # amount their own columns — parsed where the row got that far, the file's text where it did not
+        # — so naming those same headers again would show each of them twice; every other column is
+        # where the reason a row was refused usually is, and those are shown as the file wrote them.
+        column_map = snapshot.get("column_map")
+        mapped = {
+            str(column_map.get(field) or "")
+            for field in ("date", "description", "amount", "debit", "credit")
+        } if isinstance(column_map, dict) else set()
+        rows = [
+            {
+                "row": row["row_number"],
+                "kind": row["kind"],
+                "reason": row["reason"],
+                "values": safe_json_dict(row["values_json"]),
+                "date": row["row_date"],
+                "description": row["description"],
+                "amount": row["amount"],
+            }
+            for row in conn.execute(
+                """
+                SELECT row_number, kind, reason, values_json, row_date, description, amount
+                FROM   import_batch_rejected_row
+                WHERE  batch_id = ?
+                ORDER  BY row_number
+                """,
+                (batch_id,),
+            ).fetchall()
+        ]
+        if not rows:
+            rows = [
+                {
+                    "row": entry.get("row"),
+                    "kind": entry.get("kind") or VALIDATION_ERROR_KIND,
+                    "reason": entry.get("reason") or "",
+                    "values": entry.get("values") or {},
+                    "date": entry.get("date"),
+                    "description": entry.get("description"),
+                    "amount": entry.get("amount"),
+                }
+                for entry in (summary.get("rejected_rows") or [])
+                if isinstance(entry, dict)
+            ]
+        totals = {
+            VALIDATION_ERROR_KIND: int(summary.get("validation_error_count") or 0),
+            CURRENCY_REJECTION_KIND: int(summary.get("currency_rejected_count") or 0),
+            ZERO_AMOUNT_REJECTION_KIND: int(summary.get("zero_amount_count") or 0),
+            ACCOUNT_SKIPPED_KIND: int(summary.get("account_skipped_count") or 0),
+            TRAILING_TEXT_KIND: int(summary.get("trailing_non_transaction_count") or 0),
+        }
+        headers = [str(header) for header in (summary.get("rejected_headers") or [])]
+        return {
+            "batch_id": batch_id,
+            "headers": headers,
+            "extra_headers": [header for header in headers if header not in mapped],
+            "rows": rows,
+            "totals": totals,
+            "total_count": sum(totals.values()),
+            "duplicate_count": int(batch["deduped_count"] or 0),
+        }
 
 
 @router.post("/batches/{batch_id}/duplicates/mark-reviewed")

@@ -591,6 +591,10 @@ BACKUP_SECTIONS = (
     ("import_batches", "import_batch", "SELECT * FROM import_batch ORDER BY rowid"),
     ("import_batch_accounts", "import_batch_account", "SELECT * FROM import_batch_account ORDER BY rowid"),
     ("import_batch_duplicates", "import_batch_duplicate", "SELECT * FROM import_batch_duplicate ORDER BY rowid"),
+    # What each file offered and the import did not take. It rides the backup for the same reason the
+    # duplicates do: a restored ledger that could no longer say why an account is short of the file it
+    # was fed would answer that question worse than the backup it came from.
+    ("import_batch_rejected_rows", "import_batch_rejected_row", "SELECT * FROM import_batch_rejected_row ORDER BY rowid"),
     ("import_workflow_states", "import_workflow_state", "SELECT * FROM import_workflow_state ORDER BY rowid"),
     # Detected/curated recurring series. txn.recurring_series_id is the membership link back into these;
     # recurring_membership_override carries the user's per-transaction pin/exclude corrections that
@@ -675,11 +679,11 @@ BACKUP_SECTION_NAMES = tuple(section for section, _table, _query in BACKUP_SECTI
 # a section is unchanged from 9, which is why the restore's per-section handling is shared with the
 # older versions rather than duplicated. Version 11 added the `txn_splits` section, 12 the
 # `documents` section plus the `documents/<id>` file members beside it, and 13 the
-# `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, and 15 the
-# `connections` section — all purely additive, which is why an older archive still restores through exactly
-# the same path with the new section simply absent.
-BACKUP_PAYLOAD_VERSION = 15
-RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15)
+# `recurring_signal_dismissals` section, 14 the `rule_overlap_dismissals` section, 15 the
+# `connections` section, and 16 the `import_batch_rejected_rows` section — all purely additive, which is
+# why an older archive still restores through exactly the same path with the new section simply absent.
+BACKUP_PAYLOAD_VERSION = 16
+RESTORABLE_PAYLOAD_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
 
 # How old a backup's resume points may be and still be handed back to a provider. Plaid documents a
 # `/transactions/sync` cursor as valid for at least a year after it was issued; past that nothing vouches
@@ -1150,6 +1154,7 @@ def _wipe_user_data_tables(conn):
     # (which recurring_series references).
     conn.execute("DELETE FROM recurring_series")
     conn.execute("DELETE FROM import_batch_duplicate")
+    conn.execute("DELETE FROM import_batch_rejected_row")
     conn.execute("DELETE FROM import_batch_account")
     conn.execute("DELETE FROM import_batch")
     conn.execute("DELETE FROM import_workflow_state")
@@ -1485,6 +1490,7 @@ _RESTORE_REQUIRE = (
     ("txn", "account_id", "account"),
     ("import_batch_account", "batch_id", "import_batch"),
     ("import_batch_duplicate", "batch_id", "import_batch"),
+    ("import_batch_rejected_row", "batch_id", "import_batch"),
     ("txn_tag", "txn_id", "txn"),
     ("txn_tag", "tag_id", "tag"),
     ("category_tag", "category_id", "category"),

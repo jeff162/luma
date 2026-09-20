@@ -148,9 +148,11 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from. v61 stores each
 # rejected duplicate's advisory sub-state (`import_batch_duplicate.review_substate`) instead of re-deriving
-# it per read, so a file card can count the rejections still wanting a look.
+# it per read, so a file card can count the rejections still wanting a look. v62 adds
+# `import_batch_rejected_row`, which keeps the rows an import refused rather than only counting them
+# — the uploaded file is unrecoverable, so a count was the whole record of what a file left behind.
 
-CURRENT_VERSION = 61
+CURRENT_VERSION = 62
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1860,6 +1862,30 @@ def _duplicate_rows_carry_their_review_substate(conn):
         )
 
 
+@migration(62)
+def _rows_an_import_refused(conn):
+    # See the baseline CREATE for what the table holds and why it is capped. Created here as well
+    # because an existing database never re-runs that script for a table it already has — and it has
+    # never seen this one. Nothing is backfilled: the rows are gone, and a batch that predates the
+    # table falls back to the up-to-twenty its snapshot recorded, which is why there is no data-init
+    # half registered for this version.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS import_batch_rejected_row (
+            batch_id    TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
+            row_number  INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            values_json TEXT,
+            row_date    TEXT,
+            description TEXT,
+            amount      REAL,
+            PRIMARY KEY (batch_id, row_number)
+        )
+        """
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2766,6 +2792,38 @@ def init_db(db_path: str | None = None):
                 PRIMARY KEY (batch_id, row_number)
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);
+
+            -- Rows a file offered that the import did not take, other than duplicates (those are
+            -- `import_batch_duplicate`, which carries a review state these rows have no use for). The
+            -- file is gone as soon as the upload ends, so without this the only record of what was
+            -- dropped is a count, and "why is this account short" has no answer a month later.
+            --
+            -- `kind` is why it was dropped: 'validation_error', 'currency', 'zero_amount',
+            -- 'account_skipped' (the user's own choice, so the least diagnostic), or 'trailing_text'
+            -- — one synthetic row standing for a whole suspected footer, whose `reason` names the
+            -- range, since a hundred rows of address block are one fact rather than a hundred.
+            --
+            -- **Capped per batch, and deliberately lossy** (`MAX_STORED_REJECTED_ROWS`): a
+            -- misconfigured mapping can reject every row of a large file, and this is a diagnostic
+            -- record rather than a second ledger. What is stored is filled by kind priority, so the
+            -- rows that indicate a problem survive a cap that a deliberate account skip would
+            -- otherwise fill. The true totals stay exact in the batch's `import_summary`, which is
+            -- what tells a reader the stored set is partial — there is no truncation flag to drift.
+            --
+            -- `row_date` / `description` / `amount` are the sortable columns, best-effort: a row that
+            -- failed to parse keeps whatever the file's cells said, so the column shows the text that
+            -- was rejected. `values_json` is always the whole row as written.
+            CREATE TABLE IF NOT EXISTS import_batch_rejected_row (
+                batch_id    TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
+                row_number  INTEGER NOT NULL,
+                kind        TEXT NOT NULL,
+                reason      TEXT NOT NULL,
+                values_json TEXT,
+                row_date    TEXT,
+                description TEXT,
+                amount      REAL,
+                PRIMARY KEY (batch_id, row_number)
+            );
 
             CREATE TABLE IF NOT EXISTS backup_recipient (
                 id          TEXT PRIMARY KEY,

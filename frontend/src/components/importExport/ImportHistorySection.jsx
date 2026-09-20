@@ -5,8 +5,8 @@
 // except mapping: the Manage-sources / Group-imported-categories / Generate-rules
 // header actions, and the per-source list with expandable recent-import file
 // rows (inline rename + description, imported-category usage toggle, assigning an
-// unsaved file — temporary draft or unknown — to a data source, per-file detail / rejected-rows / duplicates
-// drill-ins, and undo). Purely presentational — all state and callbacks live in
+// unsaved file — temporary draft or unknown — to a data source, per-file detail / not-imported /
+// duplicates drill-ins, and undo). Purely presentational — all state and callbacks live in
 // ImportTab and arrive as props.
 
 import TransientTextInput from '../TransientTextInput.jsx'
@@ -59,7 +59,6 @@ export function ImportHistorySection({
   markBatchReviewed,
   handleUndoClick,
   onReviewMoneyMovement,
-  openRejectedRowsViewer,
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
 }) {
@@ -708,11 +707,11 @@ export function ImportHistorySection({
                                     {summary.rejectedCount > 0 ? (
                                       <button
                                         type="button"
-                                        onClick={() => openRejectedRowsViewer({
-                                          source: b,
-                                          title: b.filename,
-                                        })}
-                                        title={`View rejected rows from ${batchNoun}`}
+                                        // The rows themselves live in the file's own report, beside the
+                                        // ones that did arrive — the pill is the count and the way in,
+                                        // not a second viewer.
+                                        onClick={() => openBatchDetail({ ...b, _view: 'not-imported' })}
+                                        title={`View the rows not imported from ${batchNoun}`}
                                         style={{
                                           display: 'inline-flex',
                                           alignItems: 'center',

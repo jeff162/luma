@@ -1101,7 +1101,7 @@ Important import-batch behavior:
 
 - duplicate detection only blocks rows that match transactions already in Luma before the import starts
 
-- **whether a $0.00 row is kept is declared by the source, not decided by the ingesting code.** A source often publishes a pending charge before it carries an amount, settling it later, so a $0 row is usually a placeholder rather than a transaction — but not always, and what it means differs by source. The policy lives on the source (`zero_amount_rows` on a `ProviderAdapter`; the registry in `services/source_capabilities.py` for the CSV and Amazon importers, which are data sources with no class to hold an attribute) and is honored through the single `rejects_zero_amount` predicate. **There is deliberately no default** — the reasoning does not generalize, so an undeclared source fails loudly rather than inheriting another's answer. A source keeps its $0 rows if **either** the row is reachable later (a revision lands on the row already held, keyed on the provider transaction id via a change feed or a pending→posted pointer — so dropping it would *discard* the charge rather than delay it, since a revision naming a row never inserted is ignored) **or** the zero is genuine (a finished record: a fully gift-carded order, a refund netting out). If neither holds it is unreachable dead weight — the real charge arrives as its own row, and duplicate detection cannot pair the two because the amounts differ. Hence: **Plaid keeps** (revises in place), **SimpleFIN rejects** (no change feed and no pending pointer, so nothing *guarantees* a revision can land: a settling charge is sometimes re-sent under its original id — observed on a live connection, and the reason the already-held branch of `_insert_added` re-stamps the row's provider fields rather than only clearing its pending flag — and sometimes arrives as a new id that strands the placeholder. Reachability that holds only some of the time cannot justify keeping a row whose whole defence is that the settlement will find it), **CSV/PayPal reject** (no identity carries between files), **Amazon keeps** (a $0 order is a real record; reconciliation would otherwise read it as an order with no charge found). A refusal is always **reported, never silent**: filed as kind `zero_amount` with reason "Zero amount", counted into the card's `rejected_count`, and listed in the rejected-rows dialog — on a sync card through an `import_summary` in `config_snapshot`, the same key and shape CSV import writes, so the existing card UI needs no changes. Those sync counts **accumulate** across syncs, because a monthly period card is added to all month and a summary that overwrote would report only the latest pull's refusals. The consequence accepted where a source keeps them is that a genuinely-zero row stays in the ledger forever; that is harmless (it joins no total and cannot move a report), and suppressing it from display is not worth doing, since no display rule can tell it apart from a placeholder that is still live. Rationale and the full connector checklist: `docs/building-a-connector.md`.
+- **whether a $0.00 row is kept is declared by the source, not decided by the ingesting code.** A source often publishes a pending charge before it carries an amount, settling it later, so a $0 row is usually a placeholder rather than a transaction — but not always, and what it means differs by source. The policy lives on the source (`zero_amount_rows` on a `ProviderAdapter`; the registry in `services/source_capabilities.py` for the CSV and Amazon importers, which are data sources with no class to hold an attribute) and is honored through the single `rejects_zero_amount` predicate. **There is deliberately no default** — the reasoning does not generalize, so an undeclared source fails loudly rather than inheriting another's answer. A source keeps its $0 rows if **either** the row is reachable later (a revision lands on the row already held, keyed on the provider transaction id via a change feed or a pending→posted pointer — so dropping it would *discard* the charge rather than delay it, since a revision naming a row never inserted is ignored) **or** the zero is genuine (a finished record: a fully gift-carded order, a refund netting out). If neither holds it is unreachable dead weight — the real charge arrives as its own row, and duplicate detection cannot pair the two because the amounts differ. Hence: **Plaid keeps** (revises in place), **SimpleFIN rejects** (no change feed and no pending pointer, so nothing *guarantees* a revision can land: a settling charge is sometimes re-sent under its original id — observed on a live connection, and the reason the already-held branch of `_insert_added` re-stamps the row's provider fields rather than only clearing its pending flag — and sometimes arrives as a new id that strands the placeholder. Reachability that holds only some of the time cannot justify keeping a row whose whole defence is that the settlement will find it), **CSV/PayPal reject** (no identity carries between files), **Amazon keeps** (a $0 order is a real record; reconciliation would otherwise read it as an order with no charge found). A refusal is always **reported, never silent**: filed as kind `zero_amount` with reason "Zero amount", counted into the card's `rejected_count`, and listed under *Not imported* on the file's report — on a sync card through an `import_summary` in `config_snapshot`, the same key and shape CSV import writes, so the existing card UI needs no changes. Those sync counts **accumulate** across syncs, because a monthly period card is added to all month and a summary that overwrote would report only the latest pull's refusals. The consequence accepted where a source keeps them is that a genuinely-zero row stays in the ledger forever; that is harmless (it joins no total and cannot move a report), and suppressing it from display is not worth doing, since no display rule can tell it apart from a placeholder that is still live. Rationale and the full connector checklist: `docs/building-a-connector.md`.
 
 - exact duplicate protection remains the highest-confidence rule; heuristic matching only considers existing transactions in the same effective account scope with the same date and signed amount, then compares stored import evidence/source text to decide whether the row should be reviewed as a possible duplicate. Confidence decides which signal is trusted enough to **hard-reject** (vs. soft-flag for review); it does **not** decide the report *label* when several hard-reject rules overlap. There the broadest reason wins: a row that both exactly matches an existing transaction and falls inside an already-covered date range is reported as a covered-range duplicate, not an exact match — so a re-imported range reads as one uniform reason instead of a scattered "exact match" subset (which rows happen to share an identical content hash is an incidental artifact of merchant-string formatting). The verdict is identical either way; only the displayed reason differs. See the ladder/ordering in `backend/services/duplicate_detection.py`
 
@@ -1285,7 +1285,51 @@ What owns a suggestion's rows differs by state, and every action above is a move
 
 **Bulk disposition.** The pending bulk menu settles a whole selection at once with one combined Undo entry: **Discard, keep categories** marks the suggestions discarded and leaves their rows `import` (status-only — the rows keep their category and stay reclaimable), and **Discard, clear categories** additionally clears the rows to `cleared`. There is deliberately no bare "remove" — keeping-as-imported is the honest default for "reviewed, don't build a rule." A stale tail outside the look-back window needs no special bulk control — existing controls already re-apply rules to it. Both dispositions leave the rows unlocked (`cleared` and `import` are both `category_overridden = 0`), so the page's global **Apply categorization rules** button — which runs `recategorize_all` — reclaims any row from either that now matches a rule the user has since created; a per-rule **apply to existing** reaches the same rows for that one rule.
 
-- batch summaries keep lightweight counts and small rejected-row samples
+- **What a file left out is a record of its own, not just a count** (`import_batch_rejected_row`, one row
+per refused line, holding the whole row as written plus the date, description and amount the import got
+as far as parsing). An uploaded file is unrecoverable — a browser upload carries no path, and in the
+networked topologies the file was never on the server's disk at all — so a count is the entire answer to
+"why is this account short of what I fed it" unless the rows themselves were kept. Four properties are
+load-bearing:
+
+  - **Every class of refusal is here, including the deliberate one.** A row skipped because its account
+    was set to Skip used to leave only a per-value tally on `import_batch_account`, which cannot say what
+    was in the part that was left out. Duplicates are the one exception, and they are excluded because
+    they are *reviewable* rather than merely dropped: they keep their own table, their own review state
+    and their own report, and a second read-only listing of them would be a list with nothing to do
+    about it.
+  - **The record is capped and the cap is filled by priority** (`MAX_STORED_REJECTED_ROWS`,
+    `REJECTED_ROW_KIND_PRIORITY` in `import_export/core.py`). A misconfigured mapping can refuse every
+    row of a large file, and this is a diagnostic record rather than a second ledger. Where it binds, a
+    parse failure outranks an account the user chose to skip — the reverse fills the record with the one
+    outcome already known.
+  - **The exact totals stay in `config_snapshot.import_summary`, which is what makes a partial record
+    safe.** The report compares what it holds against those counts and says so when they differ, so there
+    is no truncation flag to fall out of step with the rows.
+  - **A suspected footer collapses to one row naming the range.** The tail was excluded on a single
+    judgement, so it is a single fact; listing forty lines of address block would bury the handful of
+    rows a reader opened the report for. It is the one kind whose stored row count is deliberately not
+    its row total.
+
+  Batches imported before the table existed fall back to the up-to-twenty sample their snapshot recorded
+  (with no account-skipped rows among them), which is worth more than reporting that the file dropped
+  nothing.
+
+  **Two other ways to answer the same question were considered.** *Re-attaching the file on demand* —
+  the report offers a drop zone, verifies what is dropped against `file_content_hash`, and renders the
+  whole file with each row marked — needs no storage and works in every topology, and is the only one
+  of the three that shows a row the import never reached (a line the parser stopped at). It was not
+  built because it asks the person to still have the file, and the stored rows already answer the
+  question they would be opening it for; it stays the natural addition if "show me the literal file"
+  turns out to be a separate need. *Storing the source file* is the only one that still works weeks
+  later once the exports have been cleaned up, and a CSV is small enough that the cost is not the
+  bytes — it puts raw statements at rest, enlarges the data backup, and needs a retention policy of its
+  own, so it would have to be an opt-in per source rather than a default. Neither is foreclosed.
+
+  **No path is stored, and none can be.** A browser upload carries only a file name, and in the LAN and
+  container topologies the file is never on the server's disk at all. A directory that the server could
+  re-read is a property a *watched folder* would introduce, not something the import could have recorded
+  — see *Open*.
 - when later account cleanup deletes imported transactions, batch summaries and per-account import breakdowns should shrink to match the transactions that still remain from that batch
 
 - detailed duplicate-row review data is stored separately and loaded on demand so long-lived import history stays compact
@@ -2384,6 +2428,10 @@ decisions go*.
 - **Attachment tiers 2 and 3** — OCR, and itemized lines from a document. Tier 2 is also the named
   precondition for automatic multi-payment suggestion.
   → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
+- **A data source's account map is not persisted**, so a multi-account file's `csv_value → account_id`
+  mapping is reassembled in the mapping UI on every import and is nowhere editable. It is worth settling
+  on its own, and it is also the precondition for anything importing unattended.
+  → [`backlog/watched-import-folders.md`](backlog/watched-import-folders.md)
 - **Marketplace enrichment remainder**: AZAD ingestion ergonomics, enrich re-derive from stored raw
   values, and the column-centric mapping rework.
   → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)

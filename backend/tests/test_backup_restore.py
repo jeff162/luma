@@ -108,6 +108,7 @@ TABLE_TO_SECTION = {
     "import_batch": "import_batches",
     "import_batch_account": "import_batch_accounts",
     "import_batch_duplicate": "import_batch_duplicates",
+    "import_batch_rejected_row": "import_batch_rejected_rows",
     "import_workflow_state": "import_workflow_states",
     "txn": "transactions",
     "tag": "tags",
@@ -269,6 +270,11 @@ class BackupFixtureTestCase(unittest.TestCase):
                     (batch,),
                 )
                 conn.execute("INSERT INTO import_batch_duplicate (batch_id, row_number, reason) VALUES (?, 1, 'exact')", (batch,))
+                conn.execute(
+                    "INSERT INTO import_batch_rejected_row (batch_id, row_number, kind, reason, values_json, row_date, description, amount) "
+                    "VALUES (?, 2, 'validation_error', \"Invalid date: 'n/a'\", '{\"Date\": \"n/a\"}', 'n/a', 'Annual fee', 35.0)",
+                    (batch,),
+                )
                 unassigned = conn.execute("SELECT id FROM category WHERE system_key = 'unassigned'").fetchone()["id"]
                 conn.execute(
                     "INSERT INTO category (id, parent_id, name, sort_order, exclude_from_totals, import_source_batch_id, is_active) VALUES (?, ?, 'Imported Cat', 0, 0, ?, 1)",

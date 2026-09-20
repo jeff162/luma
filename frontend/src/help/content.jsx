@@ -3155,6 +3155,36 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'not-imported-rows',
+    section: 'importing',
+    title: 'Rows a file left behind',
+    surfaces: ['File ledger (↗)'],
+    summary: 'A file’s report has a Not imported view listing every row the import did not take, and the reason for each.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A file often holds more than the ledger takes from it. The report opened by the{' '}
+          <strong>↗</strong> beside a file name has a <strong>Not imported</strong> view listing
+          each row that was left out, with the reason beside it: a date or amount that could not be
+          read, a currency the ledger does not hold, a zero amount, an account set to <em>Skip</em>, or
+          the trailing text at the end of an export. The list sorts and searches like the imported one,
+          and the pills above it narrow it to a single reason. The <strong>rejected</strong> count on
+          the file&apos;s card opens the same view.
+        </p>
+        <p>
+          Rows held as possible duplicates are counted there rather than listed, because they are
+          reviewed &mdash; and can be imported anyway &mdash; on the{' '}
+          <HelpLink to="/help/duplicate-report">duplicate report</HelpLink>.
+        </p>
+        <p>
+          A few hundred rows are kept per file. A file mapped to the wrong columns can have every row
+          refused, so the view states the full count whenever it is showing part of one.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'removed-as-duplicates',
     section: 'duplicates',
     title: 'Where a removed duplicate went',
