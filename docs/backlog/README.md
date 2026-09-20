@@ -74,13 +74,6 @@ scale — rather than by feature.
   funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
   ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
   from stored raw values, and the deferred column-centric mapping-screen rework.
-- [watched-import-folders.md](watched-import-folders.md) — **design, not started (2026-09-20).** A data
-  source names a directory; files dropped there import themselves on the next app load. Directory per
-  source, never create an account unattended (park it and raise a Task instead), opt-in purge defaulting
-  to never, polling rather than OS file events, and no background scheduler — the triggers copy the
-  recurring-detection catch-up. Blocked on persisting a source's account map, which is worth doing on its
-  own. Also carries the restore rule: same instance keeps its paths, a different one has watching
-  switched off.
 - [marketplace-purchase-detail.md](marketplace-purchase-detail.md) — **design, not started
   (2026-09-16).** Import eBay's purchase history and add the item detail to the card charge that paid for
   it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers
@@ -301,6 +294,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/vault-passphrase-recovery.md` | 2026-09-03 | **A** (`security-model.md`) — the recovery ladder, reset as compromise response, the mint-a-method gate and both reversals (the two narrower rules that each miss a case; the other-member refusal that became a redirect). The one owed test moved to `test-coverage-gaps.md` | **No** — deleted, 674 lines. The A-slice was ingested 2026-09-02 but the file was never reduced; on re-reading, nothing survived the diff except that test, and the running test checklist is its natural owner |
 | `docs/backlog/import-rule-suggestion-review-model.md` | 2026-09-15 | data-model — the review's state lifecycle (what owns the rows, which rule, and what `source_row_ids` means in each state), the partition record and the rejected read-time normalization, undo's exactness and its reversal of an edit to a rule the review did not create, and the rejected raw review-write route; architecture — what a review scope carries and what may not branch on it | **No** — deleted. All four stages shipped and both questions stage 2 left were settled (undo now reverses an edit to a pre-existing rule; the three routes that had lost their only caller were removed). What remained past the fold was the stage-by-stage work log |
 
+| `docs/backlog/watched-import-folders.md` | 2026-09-20 | architecture — the mechanism as built (the module, the three triggers, the `(size, mtime)` watermark) and the three rejected shapes (OS file events, a scheduler thread, a `processed/` subdirectory); data-model — the field semantics and every refusal the scan must make, plus the corrected account-map note; **A** (`security-model.md`) — *Reading and deleting outside the data directory*, the one place the app touches a path it does not own; **B** (`operations.md`) — which machine the folder is on, per topology; **C** (`scale-and-limits.md`) — why a listing is cheap and a badge never scans; playbook + a help topic for the user-facing half | **No** — deleted. Both open questions were decided when the work was picked up (purge ships; a source proves itself with one hand import first), and the file's stated precondition was wrong: the account map *is* persisted, just invisibly, which became its own entry in data-model → *Open* |
 | `docs/backlog/passkey-app-login.md` | 2026-09-17 | **A** (`security-model.md`) — *Passkeys and the second factor*: why required user verification stands in for the TOTP step, why the convenience case is itself a security argument, why the password stays the floor, why the two passkey features must not merge, and the scoping of the vault's assertion-verification rejection; architecture — the mechanism as built (table, service, endpoints, session-held challenge, frontend modules) | **No** — deleted. Every open question in it was decided as the work landed: discoverable credentials required, the management surface beside the vault's passkeys but separately labelled, and a password mandatory per account |
 
 ### Checked, and found to owe nothing

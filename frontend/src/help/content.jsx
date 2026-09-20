@@ -2485,6 +2485,84 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'watched-folders',
+    section: 'importing',
+    title: 'Importing from a watched folder',
+    surfaces: ['Import / Export (Watched folders)', 'Manage data sources (Folder)'],
+    summary: 'A data source can watch a folder instead of waiting for a file to be dropped on the import page. Files placed there are imported on the next visit; anything the saved mapping cannot answer on its own is left for review rather than guessed at.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A monthly export usually follows the same route every time: download the file, open the import
+          page, pick the data source, import. A <strong>watched folder</strong> removes the middle of
+          that. The <strong>Folder</strong> button on a data source's row under <strong>Manage data
+          sources</strong> takes a directory; a CSV that appears in it is imported the next time the app
+          is opened, and arrives in the import history as an ordinary file card with the usual duplicate,
+          rejected-row and rule-suggestion review on it.
+        </p>
+        <p>
+          The folder is read on the machine that runs the application. On a desktop installation that is
+          the same machine the page is open on. On a server, or in a container, it is a folder there
+          &mdash; a container additionally needs it mounted, or the path names nothing.
+        </p>
+        <h4>Proving the setup first</h4>
+        <p>
+          A data source imports on its own only after one of its files has been imported by hand. The
+          mapping screen is where a source learns which account each value in the file belongs to, so
+          until one file has been through it there is nothing for an unattended import to apply. Set the
+          source up, import one export the usual way, then point it at the folder.
+        </p>
+        <h4>Files left for review</h4>
+        <p>
+          Anything the saved mapping cannot answer is listed under <strong>Watched folders</strong> on
+          Import / Export, with the reason beside it, and a task points at the same list.{' '}
+          <strong>Import&hellip;</strong> opens that file in the ordinary import flow with the data source
+          already applied, so the question gets answered once and the file imports.{' '}
+          <strong>Dismiss</strong> stops reporting a file without touching it, until the file itself
+          changes.
+        </p>
+        <p>
+          Every reason is the same kind of thing &mdash; a decision that belongs to a person rather than
+          to a scan:
+        </p>
+        <ul>
+          <li>an account value the data source has never been shown, or one whose account has since been
+            deleted or moved to the trash. A watched folder never creates an account and never matches one
+            by name: a wrong guess splits an account's history without saying so</li>
+          <li>a data source set up to create a new account as part of importing</li>
+          <li>a file whose columns are not the ones the data source expects, which usually means a file
+            from somewhere else landed in the folder</li>
+        </ul>
+        <p>
+          The fix is made wherever it belongs &mdash; mapping the missing account under <strong>Manage
+          data sources</strong>, for instance. The next check picks the file up on its own and the task
+          clears itself; the file does not need touching.
+        </p>
+        <h4>What happens to the files</h4>
+        <p>
+          Nothing, unless the data source says otherwise. <strong>Once a file is imported</strong> offers
+          keeping every file, deleting one a set number of days after it was imported, or deleting it as
+          soon as it is imported. Only a file whose contents still match what was imported from it is
+          ever deleted, so a file replaced under the same name is left in place and reported. A file that
+          cannot be deleted is reported too, rather than passed over quietly.
+        </p>
+        <h4>When the check happens</h4>
+        <p>
+          Folders are checked when the app is opened and when the Import / Export page is opened, at most
+          about once an hour, and <strong>Check now</strong> checks immediately. A file is left for the
+          following check the first time it is seen, so a download still being written is never read
+          half-finished.
+        </p>
+        <p>
+          Restoring a backup taken on a different machine switches watching off and keeps the paths, since
+          those paths belong to the other machine. Turning it back on is a decision about where the
+          folders are here.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'amount-conventions',
     section: 'importing',
     title: 'Specifying how amounts are represented',

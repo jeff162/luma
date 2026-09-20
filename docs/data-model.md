@@ -22,6 +22,8 @@ This document focuses on data semantics and invariants. For how these are expose
 
 - [Import batches and profiles](#import-batches-and-profiles)
 
+- [Watched import folders](#watched-import-folders)
+
 - [Transaction links and Amazon order import](#transaction-links-and-amazon-order-import)
 
 - [Backups](#backups)
@@ -1327,14 +1329,69 @@ load-bearing:
   own, so it would have to be an opt-in per source rather than a default. Neither is foreclosed.
 
   **No path is stored, and none can be.** A browser upload carries only a file name, and in the LAN and
-  container topologies the file is never on the server's disk at all. A directory that the server could
-  re-read is a property a *watched folder* would introduce, not something the import could have recorded
-  — see *Open*.
+  container topologies the file is never on the server's disk at all. A *watched* source is the one case
+  where the server does hold a directory it can re-read — see *Watched import folders* below — and even
+  there the path belongs to the source rather than to the batch, so a batch imported by hand still has
+  nothing to re-open.
 - when later account cleanup deletes imported transactions, batch summaries and per-account import breakdowns should shrink to match the transactions that still remain from that batch
 
 - detailed duplicate-row review data is stored separately and loaded on demand so long-lived import history stays compact
 
 - per-user preferences may also carry a default mode for whether categories present in the data should be used for new imports (`all`, `none`, or `per_source`); this does not override saved data-source settings or per-batch choices, but it seeds the initial import workflow before a source-specific decision exists
+
+## Watched import folders
+
+A data source may name a directory on the **server** (`csv_import_profile.watch_dir`), and a CSV that
+appears there is imported without anyone opening the Import page. The mechanism is in
+`architecture.md` → *Import / export*; what belongs here is what the fields mean and what the scan may
+never decide on its own.
+
+**The path and the switch are separate fields, and that is deliberate.** `watch_dir` is where to look;
+`watch_enabled` is whether to. A restore from another instance clears the switch and keeps the path
+(see *Backups*), so the person sees what the folder was set to on the machine the data came from rather
+than having to rediscover it. Clearing the path clears the switch with it, since there is nothing left
+to watch.
+
+**Never create or guess an account.** This is the whole safety rule, and every refusal follows from it:
+everything else an unattended import gets wrong is visible and reversible on the file's card, while an
+invented account quietly splits a ledger in a way nothing later surfaces. So a file is parked, not
+imported, when
+
+- any non-empty value in the account column is unmapped, maps to an account that no longer exists, or
+  maps to an account in the trash;
+- the source's map carries an `account_new` entry for a value present in the file, which is a standing
+  instruction to create an account;
+- the source has no account column and no `account_id`, or would create its single account;
+- the source's `header_fingerprint` disagrees with the file's, meaning the columns are not the ones this
+  source is set up for;
+- **the source has no completed batch yet.** A source imports unattended only once one file has been
+  imported by hand. For a multi-account source this is close to automatic, because the stored account map
+  exists only because an import wrote it; the rule is stated anyway, so a single-account source proves its
+  column map against a real file too.
+
+The interactive flow resolves a dead mapping by falling back to an exact **name** match and showing the
+result for approval. Unattended there is nobody to approve it, and a name match is precisely the guess
+that puts rows on the wrong account, so the same situation refuses here. A **blank** account cell is not
+an unmapped account: the import already refuses that row on its own and records it on the card, and
+parking a whole file for one would make every export with a footer line a Task.
+
+**`import_watch_file` is a cache, not a record.** It holds `(size, mtime)` per file so a scan can skip
+what it has already judged, plus the reason a file is waiting. The durable answer to "have we taken this
+exact file" stays `import_batch.file_content_hash`, which is why the table is deliberately left out of
+backups: it describes a filesystem the restoring machine does not have, and a target that rebuilds it
+from its own disk loses nothing.
+
+A **parked** file is retried on every scan, because its refusal is about the ledger and the fix happens
+somewhere else entirely — that is what lets the Task clear itself once the account is mapped. A file
+whose **import raised** is not retried: the cause is unknown by definition, and re-running an unknown
+failure on a timer is a loop with nobody watching. It waits for the file to change or for someone to open
+it by hand.
+
+**Purging only ever deletes a file it can still prove it imported.** Eligibility is never "everything
+older than N days in that folder": a row must name a file this app recorded as imported, and the stored
+content hash is re-checked against what is on disk immediately before the delete, so a file replaced
+under the same name is left alone and reported. What that capability costs, and why it is gated, is in
+`security-model.md` → *Reading and deleting outside the data directory*.
 
 ## Transaction links and Amazon order import
 
@@ -2428,10 +2485,12 @@ decisions go*.
 - **Attachment tiers 2 and 3** — OCR, and itemized lines from a document. Tier 2 is also the named
   precondition for automatic multi-payment suggestion.
   → [`backlog/transaction-attachments.md`](backlog/transaction-attachments.md)
-- **A data source's account map is not persisted**, so a multi-account file's `csv_value → account_id`
-  mapping is reassembled in the mapping UI on every import and is nowhere editable. It is worth settling
-  on its own, and it is also the precondition for anything importing unattended.
-  → [`backlog/watched-import-folders.md`](backlog/watched-import-folders.md)
+- **A data source's account map is invisible and uneditable.** It *is* persisted — `autoSaveProfile`
+  writes `account_assignments` / `account_skips` / `account_new` into the source's `column_map` after
+  every import, and the next import restores them — but only as a side effect of importing, so it can be
+  inspected and corrected nowhere. A watched folder now depends on it (see *Watched import folders*),
+  which makes a mapping nobody can see the thing standing between a parked file and a fixed one.
+  No backlog item — this section owns it.
 - **Marketplace enrichment remainder**: AZAD ingestion ergonomics, enrich re-derive from stored raw
   values, and the column-centric mapping rework.
   → [`backlog/paypal-amazon-enrichment.md`](backlog/paypal-amazon-enrichment.md)

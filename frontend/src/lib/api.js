@@ -1152,6 +1152,25 @@ export const api = {
   updateImportProfile:  (id, data) => request(`/import-export/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteImportProfile:  (id)    => request(`/import-export/profiles/${id}`, { method: 'DELETE' }),
   clearImportMemory:    ()      => request('/import-export/developer/import-memory', { method: 'DELETE' }),
+  // Watched import folders. `watchStatus` reads persisted state only — the filesystem is touched by the
+  // two scans, so nothing that renders on a schedule may call them.
+  getWatchStatus:       ()      => request('/import-export/watch/status'),
+  scanWatchedFolders:   (profileId) =>
+    request(`/import-export/watch/scan${profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ''}`, { method: 'POST' }),
+  autoScanWatchedFolders: ()    => request('/import-export/watch/auto-scan', { method: 'POST' }),
+  updateImportProfileWatch: (id, data) =>
+    request(`/import-export/profiles/${id}/watch`, { method: 'PATCH', body: JSON.stringify(data) }),
+  dismissWatchedFile:   (fileId) => request(`/import-export/watch/files/${fileId}`, { method: 'DELETE' }),
+  // A parked file's own text, so the ordinary import flow can be opened with it in hand — the file is on
+  // the server, and everything downstream of the drop zone works from a File.
+  getWatchedFileText:   (fileId) =>
+    trackedFetch(`${BASE}/import-export/watch/files/${fileId}/content`).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      return res.text()
+    }),
   exportTransactionsCsv: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     // Export flows hand callers a download URL because these endpoints are usually navigated to, not consumed as JSON.

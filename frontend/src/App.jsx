@@ -1327,6 +1327,11 @@ export default function App() {
     if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
     recurringAutoScanScopeRef.current = preferenceSubjectId
     api.autoScanRecurring().catch(() => { })
+    // Watched import folders, same shape and same watermark: a folder nobody has looked at since the
+    // interval passed is checked once the scope is live, so a file dropped there yesterday is in the
+    // ledger by the time the user opens anything. The nav badge reads a persisted count and never scans,
+    // which is why this is the only load-time trigger.
+    api.autoScanWatchedFolders().catch(() => { })
     // Same shape, different trigger: re-examine stored rows once when the duplicate matcher's rules have
     // changed since this database was last scanned. Version-gated rather than time-gated, so it is a
     // no-op on every load but the first after a rule change.

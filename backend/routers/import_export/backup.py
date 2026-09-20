@@ -103,6 +103,8 @@ from backend.routers.transactions import transaction_list_filters, transaction_l
 from backend.services.transaction_facets import TransactionFacets
 from backend.services.txn_splits import txn_effective_sql
 
+from .watch import disable_watching
+
 router = APIRouter()
 
 
@@ -1160,6 +1162,10 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM import_workflow_state")
     conn.execute("DELETE FROM category_rule")
     conn.execute("DELETE FROM merchant_rename")
+    # Named rather than left to its cascade from csv_import_profile: foreign keys are deferred for the
+    # whole wipe, and a watched folder's per-file watermark describes *this* machine's filesystem, so
+    # it must not outlive the sources it belongs to under any ordering.
+    conn.execute("DELETE FROM import_watch_file")
     conn.execute("DELETE FROM csv_import_profile")
     # Amazon funding-source → account map references account (ON DELETE CASCADE), so clear it before
     # account so it doesn't survive as an orphan / rely on cascade during the deferred-FK wipe.
@@ -1662,6 +1668,14 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
     rather than by the ledger: `accounts`, because its connection links are reconciled against the live
     `connection` table as a set, and `connection_accounts`, which is reconciled against the accounts.
     """
+    # Whether these are still this machine's watched folders has to be decided *before* anything is
+    # touched, because the restore adopts the backup's `instance_id` further down and the question is
+    # unanswerable afterwards. An empty target counts as a different instance: nothing about a fresh
+    # install says another machine's paths still mean what they meant there.
+    restoring_onto_another_instance = (
+        not _target_has_data(conn) or header.get("instance_id") != get_db_instance_id(conn)
+    )
+
     conn.execute("BEGIN")
     conn.execute("PRAGMA defer_foreign_keys = ON")
     _wipe_user_data_tables(conn)
@@ -1719,6 +1733,13 @@ def _restore_sections(conn, header: dict, section_rows, backup_version) -> dict:
             "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
             (str(backup_instance_id),),
         )
+
+    # A restored source carries the paths of the machine the backup came from, and a path that resolves
+    # here means something else — the installs in use include a source checkout and a portable build
+    # with their own layouts. Watching is switched off rather than repointed or guessed at, keeping the
+    # paths visible so the person can say what each folder should be on this machine.
+    if restoring_onto_another_instance:
+        disable_watching(conn, "Watching was switched off when this data was restored from another system.")
 
     # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
     # already current, so re-running migrations would be schema-only no-ops — what's missing is the

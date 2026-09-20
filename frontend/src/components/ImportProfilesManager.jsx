@@ -25,6 +25,7 @@ import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHe
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import WatchedFolderDialog from './importExport/WatchedFolderDialog.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 const AMOUNT_CONVENTIONS = [
@@ -850,6 +851,11 @@ export default function ImportProfilesManager({
   const [pendingDeleteProfile, setPendingDeleteProfile] = useState(null)
   const [deletingProfileId, setDeletingProfileId] = useState('')
   const [noticeDialog, setNoticeDialog] = useState(null)
+  const [watchProfile, setWatchProfile] = useState(null)
+  // Pointing a source at a server folder needs an admin once sign-in protection is on; everything else
+  // about a data source does not. Assumed allowed until the status says otherwise, so an admin never
+  // sees the refusal flash past on load — the server enforces it either way.
+  const [canSetWatchFolder, setCanSetWatchFolder] = useState(true)
   const activeFormKey = showAdd ? 'new' : (editId ? `edit:${editId}` : '')
 
   function clampFormPanelPosition(pos, size = { width: ADD_PANEL_WIDTH, height: 740 }) {
@@ -912,6 +918,12 @@ export default function ImportProfilesManager({
   useEffect(() => {
     refreshManagerData().finally(() => setLoading(false))
   }, [refreshManagerData])
+
+  useEffect(() => {
+    api.getAuthStatus()
+      .then(status => setCanSetWatchFolder(!status?.auth_enabled || status?.user?.role === 'admin'))
+      .catch(() => { })
+  }, [])
 
   useEffect(() => {
     onEditingChange?.(showAdd || !!editId)
@@ -1216,6 +1228,13 @@ export default function ImportProfilesManager({
                           {profile.filename_pattern ? <span>📁 {profile.filename_pattern} · </span> : null}
                           {profile.account_name ? <span>🏦 {profile.account_name}</span> : null}
                         </div>
+                        {profile.watch_dir ? (
+                          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, wordBreak: 'break-all' }}>
+                            {profile.watch_enabled ? '👁 Watching ' : '👁 Watching paused — '}
+                            <span style={{ color: 'var(--text)' }}>{profile.watch_dir}</span>
+                            {profile.watch_notice ? <span style={{ color: 'var(--danger)' }}> · {profile.watch_notice}</span> : null}
+                          </div>
+                        ) : null}
                       </div>
                       <div style={{ display: 'grid', gap: 2 }}>
                         <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Last used</span>
@@ -1228,6 +1247,16 @@ export default function ImportProfilesManager({
                         </span>
                       </div>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button
+                          onClick={() => setWatchProfile(profile)}
+                          style={{
+                            background: 'none', border: '1px solid var(--border)',
+                            borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
+                            fontSize: 12, padding: '3px 8px',
+                          }}
+                        >
+                          Folder
+                        </button>
                         <button
                           onClick={() => setEditId(profile.id)}
                           style={{
@@ -1271,6 +1300,15 @@ export default function ImportProfilesManager({
           ) : null}
         </>
       )}
+
+      {watchProfile ? (
+        <WatchedFolderDialog
+          profile={watchProfile}
+          canEdit={canSetWatchFolder}
+          onClose={() => setWatchProfile(null)}
+          onSaved={refreshManagerData}
+        />
+      ) : null}
 
       {pendingDeleteProfile ? (
         <OverlayBackdrop

@@ -370,6 +370,28 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "severity":    SEVERITY_WARNING,
             })
 
+        # Files a watched folder could not take on its own. The count is read from the persisted
+        # per-file record, never from the filesystem — a badge that scanned a network share would make
+        # every page load wait on it. Each of these is answered the same way, by opening the file in the
+        # ordinary import flow, so one task carries them all.
+        from backend.routers.import_export.watch import attention_counts
+        watch_attention = attention_counts(conn)
+        if watch_attention["total"]:
+            waiting = watch_attention["total"]
+            tasks.append({
+                "id":          "watched_import_files",
+                "title":       "Files waiting in a watched folder",
+                "description": f"{waiting} file{'s were' if waiting != 1 else ' was'} left for review rather "
+                               "than imported — an account the data source has not been shown, a layout it is "
+                               + ("not set up for, or a file that could not be deleted after import. "
+                                  if watch_attention["purge_failed"] else "not set up for, or an import that failed. ")
+                               + "Open each one in the import flow to finish it.",
+                "count":       waiting,
+                "link":        "/import-export",
+                "link_label":  "Open Import / Export",
+                "severity":    SEVERITY_WARNING,
+            })
+
         # The PayPal reconciliation is about the whole ledger rather than one file — matches are made after
         # syncs as well as imports — so it has one entry, and its link opens the review itself.
         from backend.services.paypal_funding import ledger_attention_count

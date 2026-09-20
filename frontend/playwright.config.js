@@ -80,7 +80,7 @@ export default defineConfig({
   projects: [
     {
       name: 'app',
-      testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|reconciliation-report|paypal-statement-import)\.spec\.js/,
+      testIgnore: /(a11y-.*|import-mapping-controls|import-not-imported-rows|watched-folders|reconciliation-report|paypal-statement-import)\.spec\.js/,
     },
     {
       name: 'demo-cleared',
@@ -100,10 +100,18 @@ export default defineConfig({
       testMatch: /import-not-imported-rows\.spec\.js/,
       dependencies: ['import'],
     },
+    // Its own lane rather than beside `import-report`: this one points the *server* at a temp folder and
+    // imports from it without a browser upload, so it must not be interleaved with a spec that is
+    // counting the cards in the same empty tenant.
+    {
+      name: 'watched-folders',
+      testMatch: /watched-folders\.spec\.js/,
+      dependencies: ['import-report'],
+    },
     {
       name: 'marketplace',
       testMatch: /(reconciliation-report|paypal-statement-import)\.spec\.js/,
-      dependencies: ['import-report'],
+      dependencies: ['watched-folders'],
     },
     {
       name: 'a11y',

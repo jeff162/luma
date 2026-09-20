@@ -15,7 +15,9 @@ anyone could be upgrading from, so the entry below describes what exists rather 
 ### Added
 
 - **Importing** — CSV files and connected data sources (SimpleFIN Bridge), plus Amazon order history
-  and PayPal activity for itemizing what a marketplace charge actually bought.
+  and PayPal activity for itemizing what a marketplace charge actually bought. A data source can also
+  watch a folder, so a downloaded export is in the ledger the next time the app is open; anything its
+  saved mapping cannot answer on its own is left for review rather than guessed at.
 - **Duplicate detection across every source**, so overlapping exports and a card arriving from two
   places do not double-count.
 - **Categorization that persists** — a category tree, rules that apply categories, merchant renames

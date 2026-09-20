@@ -51,6 +51,7 @@ import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
 import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
+import WatchedFoldersPanel from '../components/importExport/WatchedFoldersPanel.jsx'
 import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
 import { MoneyMovementTypeReportPanel } from '../components/importExport/MoneyMovementTypeReportPanel.jsx'
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
@@ -3433,6 +3434,15 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
           a lesser thing rather than a peer. Both were trimmed (the drop target's padding most of all —
           it had a screenful of blank space it did not need) so the side-by-side layout survives down to
           a fairly narrow pane, and the row wraps rather than squeezing once it genuinely cannot. */}
+      {/* Above the two ways data arrives by hand, because what it reports is work already waiting rather
+          than a third thing to start. Renders nothing at all until some source names a folder. */}
+      {stage === 'upload' && (
+        <WatchedFoldersPanel
+          onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
+          onImported={() => api.listBatches().then(setBatches).catch(() => { })}
+        />
+      )}
+
       {stage === 'upload' && (
         <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 20 }}>
         <div ref={uploadStageRef} style={{ flex: '1 1 340px', minWidth: 0 }}>

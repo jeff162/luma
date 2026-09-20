@@ -1,10 +1,12 @@
 """
-Restoring a backup, and changing the backup keys, need an admin once sign-in protection is on.
+The Import / Export operations that need an admin once sign-in protection is on.
 
 A restore is not a data edit: it replaces every row, the connections and the provider configuration at once.
 Before this, any signed-in member could run one — including the legacy credentials restore, which replaces
 global provider configuration that is otherwise an admin's alone to change. The backup keys are held to the
-same bar because they decide who can read a backup at all.
+same bar because they decide who can read a backup at all. Pointing a data source at a **watched folder**
+is here for a different reason of the same shape: it names a directory on the server's filesystem, which is
+global app configuration rather than ledger data, and the folder can be set to delete the files it imports.
 
 Checked over HTTP rather than by calling the router functions, because the guard is a route dependency and
 a direct call never passes through it. Each request is shaped to get past body validation, so a refusal
@@ -26,6 +28,7 @@ GUARDED = [
     ("post", "/api/import-export/backup/recipients", {"json": {"label": "Offsite", "public_key": "not a key"}}),
     ("patch", "/api/import-export/backup/recipients/missing", {"json": {"enabled": False}}),
     ("delete", "/api/import-export/backup/recipients/missing", {}),
+    ("patch", "/api/import-export/profiles/missing/watch", {"json": {"watch_dir": "/tmp/statements"}}),
 ]
 
 ADMIN_PASSWORD = "admin-password-123"

@@ -10,6 +10,7 @@ concerns are split out as leaf modules that depend on `core` (never the reverse)
 - `profiles` — saved data-source / import-profile CRUD
 - `backup`   — data/credentials backup + restore and CSV export
 - `preview`  — the CSV preview entry point
+- `watch`    — watched import folders: the unattended scan and the settings behind it
 - `rule_suggestion_actions` — the transactional Generate Rules review actions and their undo
 - `paypal_funding` — the PayPal reconciliation (the pairing itself is `services/paypal_funding.py`)
 - `paypal_statement` — PayPal statement (PDF) import, a front end over `core`'s import
@@ -22,7 +23,7 @@ and `router` is the combined router registered by `backend/main.py`.
 from fastapi import APIRouter
 
 # `amazon` imports from `core`, so it must be imported after it (core is listed first).
-from . import backup, core, preview, profiles, amazon, rule_suggestion_actions, paypal_funding, paypal_statement
+from . import backup, core, preview, profiles, amazon, rule_suggestion_actions, paypal_funding, paypal_statement, watch
 
 # Re-export the public surface so `from backend.routers.import_export import X` keeps working
 # for callers and tests exactly as it did when this was a single module.
@@ -35,6 +36,7 @@ from .core import (  # noqa: F401  (underscore-prefixed helpers exercised direct
 from .profiles import *  # noqa: F401,F403
 from .backup import *  # noqa: F401,F403
 from .preview import *  # noqa: F401,F403
+from .watch import *  # noqa: F401,F403
 from .rule_suggestion_actions import *  # noqa: F401,F403
 
 # Single combined router for main.py. Each module owns its own APIRouter; assembling them here
@@ -44,6 +46,7 @@ router.include_router(core.router)
 router.include_router(profiles.router)
 router.include_router(backup.router)
 router.include_router(preview.router)
+router.include_router(watch.router)
 router.include_router(amazon.router)
 router.include_router(rule_suggestion_actions.router)
 router.include_router(paypal_funding.router)

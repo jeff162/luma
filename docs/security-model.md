@@ -46,12 +46,46 @@ published to the internet does not.
   more than the ledger, though:** while a user is unlocked the DEK sits in process memory, on a sliding
   idle window sized for a working day, so an attacker on the box reaches the provider credentials too.
   Nothing here defends that, and no passphrase floor can.
+- **The app reads and writes only its own data directory, with one declared exception.** A watched import
+  folder is a directory an administrator names and the server reads on a trigger, and may delete from —
+  see *Reading and deleting outside the data directory*.
 - **The backend is assumed not to be public-internet facing.** If an operator exposes it, the app
   password becomes far more load-bearing than this model assumes. That is the operator's call, and the
   onboarding copy says so.
 
 The property the vault does buy is narrow and worth stating exactly: **a leaked database is not a leaked
 credential.** No live unlock secret ⇒ no KEK ⇒ nothing opens.
+
+## Reading and deleting outside the data directory
+
+Everything else the app touches on disk is its own: the two databases, the document store beside them,
+and whatever a browser uploads. **A watched import folder is the one exception** — a data source names a
+directory, and the server lists it, reads the CSVs in it and, if the source says so, deletes the ones it
+imported. That is a new capability class rather than a new feature of an old one, so what is and is not
+being defended is stated here rather than assumed.
+
+**What is defended.** Setting the path is admin-or-local
+(`PATCH /import-export/profiles/{id}/watch` behind `require_admin_or_local`), on the same line
+`authorization.py` already draws: a directory on the server is global app configuration, not ledger data
+that any member edits. The delete is the narrower capability of the two and is constrained accordingly —
+only a file this app recorded as importing is eligible, and its recorded content hash is re-checked
+against the bytes on disk immediately before the unlink, so a file swapped in under the same name is
+never removed. A failed delete is reported rather than swallowed. And a restore from another instance
+switches watching off rather than carrying another machine's paths onto this one, where a path that
+resolves means something else (`data-model.md` → *Watched import folders*).
+
+**What is not.** There is no allow-list of permissible directories and no confinement: an administrator
+may name any path the server process can reach, and the process runs as whoever started it. Nothing here
+defends an administrator against themselves, and nothing would — the premise this whole model rests on
+is an operator-controlled machine, and an operator who can name a directory can already read it. The
+consequences worth naming plainly rather than bounding: a CSV in a named folder is read into the ledger,
+and a purge setting deletes files from a folder outside the app's own data. Both are what the feature is
+for; neither is a path an *unprivileged* member can reach.
+
+**The condition to reopen this.** If the login perimeter ever admits an account class that is neither
+administrator nor trusted operator — a guest, a read-only sharer, an API token with narrowed scope —
+then "admin-or-local" stops being a sufficient description of who can point the server at a directory,
+and the delete in particular needs re-grading before that class exists.
 
 ## Why provider credentials are the only things encrypted
 

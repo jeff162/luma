@@ -80,6 +80,12 @@ EXCLUDED_TABLES |= {"document_fts", "document_fts_data", "document_fts_idx", "do
 # path that does not exist there. Being outside the wipe list is also what keeps it alive across the very
 # operation it tracks.
 EXCLUDED_TABLES |= {"restore_state"}
+# The watched-folder watermark: `(size, mtime)` per file in a directory on *this* machine. It describes a
+# filesystem the target does not have, and it is a cache rather than a record — `import_batch.file_content_hash`
+# is what durably answers "have we taken this file", so a target that rebuilds the watermark from its own
+# disk loses nothing. The folder settings themselves are columns of `csv_import_profile` and do travel, so
+# a restore can see what the paths were before deciding what they should be here.
+EXCLUDED_TABLES |= {"import_watch_file"}
 
 # Columns of a backed-up table that deliberately do not travel, per table, each with its reason. Empty on
 # purpose: a restore is meant to return the system to the state it was in when the backup was taken, so a
@@ -482,6 +488,49 @@ class BackupRestoreTests(BackupFixtureTestCase):
         after = self._contents(tables)
         for table in sorted(tables):
             self.assertEqual(after[table], before[table], f"{table}: restore did not return the backed-up rows")
+
+    def test_a_restore_from_this_same_system_leaves_watched_folders_running(self):
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE csv_import_profile SET watch_dir = '/srv/statements', watch_enabled = 1"
+                )
+            payload = self._export_payload()
+            restore_backup(RestoreRequest(data=payload))
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT watch_dir, watch_enabled FROM csv_import_profile WHERE watch_dir IS NOT NULL"
+                ).fetchall()
+        self.assertTrue(rows)
+        self.assertTrue(all(row["watch_enabled"] == 1 for row in rows))
+
+    def test_a_restore_from_another_system_stops_reading_its_folders_but_keeps_the_paths(self):
+        """A restored path is the *other* machine's, and one that happens to resolve here means something
+        else — so watching stops and the person says what each folder should be.
+
+        The verdict has to be taken before the wipe: a restore adopts the backup's `instance_id`, so by
+        the time the rows are in, both sides agree and the question can no longer be asked. This is the
+        case that would pass against a check written after the adoption while doing nothing at all.
+        """
+        self._seed_complete()
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE csv_import_profile SET watch_dir = '/srv/statements', watch_enabled = 1"
+                )
+            payload = self._export_payload()
+            payload["instance_id"] = "a-different-machine"
+            payload.pop(CONTENT_HASH_FIELD, None)
+            restore_backup(RestoreRequest(data=payload, force=True))
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT watch_dir, watch_enabled, watch_notice FROM csv_import_profile"
+                ).fetchall()
+        self.assertTrue(any(row["watch_dir"] == "/srv/statements" for row in rows),
+                        "the paths must survive so they can be corrected rather than rediscovered")
+        self.assertTrue(all(row["watch_enabled"] == 0 for row in rows))
+        self.assertTrue(all(row["watch_notice"] for row in rows if row["watch_dir"]))
 
     def test_restore_tolerates_since_removed_column(self):
         # A backup taken before a column was dropped (the real case: category_rule.priority, removed

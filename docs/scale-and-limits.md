@@ -124,6 +124,36 @@ report compares the rows it holds against the batch's own totals and says plainl
 slice. Which rows survive is chosen by kind, not by position, so the diagnostic ones outlast a deliberate
 account skip; see `data-model.md` → *Import batches and profiles*.
 
+## A watched folder is listed often and read rarely
+
+A watched import folder is scanned on every app load past the interval, on every visit to Import /
+Export, and whenever someone presses *Check now* — so the listing has to be cheap enough that nobody
+ever notices it, while the reading does not have to be.
+
+**`os.scandir` returns each entry's name, size and mtime for about the cost of the syscall**, so listing
+a folder with a few hundred files in it is immaterial. The expensive part is reading, hashing and
+parsing, and that is what the per-file `(size, mtime)` watermark in `import_watch_file` gates: only an
+entry that is new, or has moved since the last pass, is opened at all. A steady folder therefore costs
+one directory listing per trigger and nothing else.
+
+**Comparing a file *count* would be cheaper and wrong** — a replacement that keeps the count is missed,
+and a file edited in place is exactly the case a monthly re-export produces.
+
+**A file is read into memory whole**, as every import is, so an unattended path that picks its own files
+needs its own ceiling: `MAX_WATCHED_FILE_BYTES` parks anything larger rather than reading it. The
+interactive import needs no such cap because a person chose the file.
+
+**The nav badge and the Tasks list never scan.** Both read the persisted count in `import_watch_file`,
+which is a table read; a badge that stat-ed a network share on every page load would put the whole
+interface behind whatever that share was doing. The same reasoning as *The Tasks list is recomputed on
+every mutation* below, one step further out — the filesystem is slower and less predictable than the
+database, so it is kept off the poll entirely rather than merely made fast.
+
+**Unattended imports make the unwindowed import history worse**, because cards now accumulate with
+nobody present to notice. That does not change the cost of any single load — cardinality is still one
+row per imported file — but it removes the assumption the interim rests on, that the rate is bounded by
+how often someone sits down to import something. See *Import history: retention* above.
+
 ## Bulk operations must not accumulate
 
 Export and restore were both written to assemble the whole payload in memory, and both scaled with the

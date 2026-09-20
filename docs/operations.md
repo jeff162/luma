@@ -202,6 +202,19 @@ presents as total data loss.
 a distinct port each. The cookie name follows the control-database path on its own, so the two do not
 sign each other out.
 
+**A watched import folder is a directory on the server, not on the browser's machine.** A data source
+may name one, and the path is resolved by the backend process — so on Desktop it is the user's own
+machine and the distinction never arises, on a LAN server it is a folder on the server, and in a
+container it has to be a **mounted volume** or it names nothing. "The folder on my computer" is the
+natural reading and is wrong in two of the three topologies, which is why the in-app copy says so at the
+point the path is typed. The folder is the operator's to choose and lives wherever they want it; it is
+deliberately not inside the data directory, and nothing prunes it unless the source is set to.
+
+A restored backup carries the paths of the machine it came from. Restoring onto a *different* instance
+therefore switches every watched folder off while keeping its path visible, rather than letting the app
+start reading a path that resolves here and means something else — see *Restore is a destructive
+operation*.
+
 **A packaged copy resolves its data directory from how it was distributed, not from its OS** — portable
 keeps it beside the executable, installed uses the per-OS user-data directory. `releasing.md` covers
 which artifact is which; `architecture.md` → *Packaged builds* covers the mechanism. The consequence

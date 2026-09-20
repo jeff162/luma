@@ -151,8 +151,10 @@ def get_db(db_path: str | None = None):
 # it per read, so a file card can count the rejections still wanting a look. v62 adds
 # `import_batch_rejected_row`, which keeps the rows an import refused rather than only counting them
 # — the uploaded file is unrecoverable, so a count was the whole record of what a file left behind.
+# v63 lets a data source name a folder the server imports from unattended (`csv_import_profile.watch_*`
+# plus `import_watch_file`, the per-file `(size, mtime)` watermark that keeps a scan off the disk).
 
-CURRENT_VERSION = 62
+CURRENT_VERSION = 63
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1886,6 +1888,47 @@ def _rows_an_import_refused(conn):
     )
 
 
+@migration(63)
+def _add_watched_import_folders(conn):
+    # A data source may name a directory the server reads unattended (routers/import_export/watch.py).
+    # Fresh installs get the columns and the table from the baseline script; an existing database has
+    # never seen either. Nothing is backfilled and nothing is enabled: a folder is opt-in per source,
+    # which is also what makes this migration safe on the installs already in the wild.
+    #
+    # Guarded on the table existing: the per-migration unit tests hand-build a minimal schema and then run
+    # the whole chain, so a migration that assumes the full schema fails there rather than anywhere a real
+    # database reaches.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "csv_import_profile" not in tables:
+        return
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_dir TEXT")
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_enabled INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_purge_mode TEXT NOT NULL DEFAULT 'never'")
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_purge_days INTEGER NOT NULL DEFAULT 30")
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_notice TEXT")
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_last_scan_at TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS import_watch_file (
+            id           TEXT PRIMARY KEY,
+            profile_id   TEXT NOT NULL REFERENCES csv_import_profile(id) ON DELETE CASCADE,
+            filename     TEXT NOT NULL,
+            size         INTEGER NOT NULL,
+            mtime        REAL NOT NULL,
+            state        TEXT NOT NULL,
+            reason       TEXT,
+            content_hash TEXT,
+            batch_id     TEXT,
+            resolved_at  TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_import_watch_file_name ON import_watch_file(profile_id, filename)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_import_watch_file_state ON import_watch_file(state)")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2722,8 +2765,42 @@ def init_db(db_path: str | None = None):
                 -- day — is the opt-in for a first-party export (Amazon, PayPal) that publishes its own
                 -- records and has no lag. See duplicate_detection.DEFAULT_TERMINAL_WINDOW_DAYS.
                 terminal_window_days INTEGER NOT NULL DEFAULT 7,
+                -- Watched import folder (see routers/import_export/watch.py). The path is read by the
+                -- *server*, so on a LAN server or in a container it names a folder there rather than on
+                -- the browser's machine. `watch_enabled` is separate from the path on purpose: a restore
+                -- from another instance switches watching off while keeping the path, so the person can
+                -- see what it was set to before deciding what it should be here. `watch_notice` is the
+                -- source-level "this folder is not there right now", which is a notice rather than an
+                -- error because removable media and network shares come and go.
+                watch_dir            TEXT,
+                watch_enabled        INTEGER NOT NULL DEFAULT 0,
+                watch_purge_mode     TEXT NOT NULL DEFAULT 'never',
+                watch_purge_days     INTEGER NOT NULL DEFAULT 30,
+                watch_notice         TEXT,
+                watch_last_scan_at   TEXT,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            -- The per-file watermark behind a watched folder, and the record of what each file's scan
+            -- decided. `(size, mtime)` is what os.scandir hands back for the cost of the syscall, so an
+            -- entry that matches its row is never read, hashed or parsed again; anything else is. The
+            -- durable answer to "have we taken this exact file" stays import_batch.file_content_hash —
+            -- this table is a cache of the cheap half plus the reason a file is waiting on someone.
+            CREATE TABLE IF NOT EXISTS import_watch_file (
+                id           TEXT PRIMARY KEY,
+                profile_id   TEXT NOT NULL REFERENCES csv_import_profile(id) ON DELETE CASCADE,
+                filename     TEXT NOT NULL,
+                size         INTEGER NOT NULL,
+                mtime        REAL NOT NULL,
+                state        TEXT NOT NULL,
+                reason       TEXT,
+                content_hash TEXT,
+                batch_id     TEXT,
+                resolved_at  TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_import_watch_file_name
+                ON import_watch_file(profile_id, filename);
+            CREATE INDEX IF NOT EXISTS idx_import_watch_file_state ON import_watch_file(state);
 
             CREATE TABLE IF NOT EXISTS import_batch (
                 id               TEXT PRIMARY KEY,

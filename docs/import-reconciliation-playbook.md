@@ -157,6 +157,41 @@ draft card additionally keeps **Save as data source**, which builds the new sour
 snapshot (column/account mapping). Several file labels can also collapse onto one account during
 import by giving them the same target.
 
+### The same export gets downloaded every month and imported by hand
+
+A data source can watch a folder instead. **Folder**, on the source's row under **Manage data sources**,
+takes a directory path; a CSV that appears there is imported the next time the app is opened, and shows
+up in the history below as an ordinary file card with all the usual review on it.
+
+Two things about that folder are worth knowing before setting one. It is read on the machine running
+the app — the same machine only when the app runs on the desktop; on a server or in a container it is a
+folder there. And the files are left alone unless the source says otherwise: **Once a file is imported**
+offers deleting it after a number of days, or straight away, and only ever deletes a file whose contents
+still match what was imported from it.
+
+A source will not import on its own until one of its files has been imported by hand, so set the source
+up, import one export the usual way, then point it at the folder.
+
+### A watched folder left a file for review instead of importing it
+
+Files it could not take are listed under **Watched folders** on Import / Export, each with the reason,
+and a Task points at the same place. **Import…** opens the file in the ordinary import flow with
+everything already filled in, so the answer is to finish it there once; **Dismiss** stops reporting a
+file without touching it, until the file itself changes.
+
+The reasons are all the same kind — something only a person can decide:
+
+- an account in the file the data source has never been shown, or one whose account has since been
+  deleted or trashed. A watched folder never creates an account, and never matches one by name, because
+  a wrong guess splits an account's history quietly
+- a data source that is set up to create a new account when it imports
+- a file whose columns are not the ones the data source expects, which usually means the wrong file
+  landed in the folder
+- the first file from a source that has not imported anything by hand yet
+
+Fixing the reason is enough — mapping the account under **Manage data sources**, say. The next check
+picks the file up on its own, and the Task clears itself.
+
 ### An import keeps creating a category I don't want
 
 **Delete** it — from the **Delete…** action in **Group Imported Categories** (Import / Export) or the
@@ -390,7 +425,7 @@ the pattern. Each situation is a help topic, reachable three ways from that sing
 pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
 reconciliation and import-detail report headers, the PayPal reconciliation header, the amount-convention picker, the Group Imported
 Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search, the
-not-imported view and the removed-as-duplicates line), and a context-triggered
+not-imported view, the watched-folders panel and the removed-as-duplicates line), and a context-triggered
 "explain this" tip that appears only when the app recognizes the situation (cross-account matches,
 covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
 
