@@ -247,6 +247,35 @@ class PaypalFundingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({m["paypal"]["id"] for m in report["matched"]}, set(payments))
         self.assertEqual({m["counterpart"]["id"] for m in report["matched"]}, set(charges))
 
+    def test_a_cornered_row_claims_its_only_candidate_and_the_rest_pairs_itself(self):
+        # Two same-amount payments days apart: the earlier one's only bank row sits inside the later one's
+        # window too. Nothing about the earlier row is in doubt, so it takes it, which settles the later one.
+        early = self._txn(self.paypal, "2026-03-08", 10.0, "Rights Fund")
+        late = self._txn(self.paypal, "2026-03-12", 10.0, "Adblocker")
+        first = self._txn(self.checking, "2026-03-09", 10.0, "PAYPAL INST XFER")
+        second = self._txn(self.checking, "2026-03-13", 10.0, "PAYPAL INST XFER")
+        self.assertEqual(self._pass()["paired"], 2)
+        self.assertEqual(self._report()["choice"], [])
+        paired = {m["paypal"]["id"]: m["counterpart"]["id"] for m in self._report()["matched"]}
+        self.assertEqual(paired, {early: first, late: second})
+
+    def test_two_rows_cornered_on_one_transaction_are_left_for_the_user(self):
+        # A shortage, not an ambiguity: at most one of them can have it and which is not deducible, so
+        # neither claims it and both keep the one candidate they have.
+        payments = [self._txn(self.paypal, "2026-04-02", 40.0, f"Donation {i}") for i in range(2)]
+        charge = self._txn(self.checking, "2026-04-03", 40.0, "PAYPAL INST XFER")
+        self.assertEqual(self._pass()["paired"], 0)
+        choice = self._report()["choice"]
+        self.assertEqual({c["paypal"]["id"] for c in choice}, set(payments))
+        self.assertEqual([[x["id"] for x in c["candidates"]] for c in choice], [[charge], [charge]])
+        # One decision, not two: settling either one settles both, and the review lists them as one row.
+        with self._db() as conn:
+            self.assertEqual(pf.ledger_attention_count(conn), 1)
+        # Settling one of them leaves the other with nothing to pair with, rather than a second claim.
+        with self._db() as conn:
+            pf.pair_rows(conn, payments[0], charge)
+        self.assertEqual((self._report()["choice"], self._pass()["paired"]), ([], 0))
+
     def test_another_members_bank_row_never_pairs_but_a_shared_account_does(self):
         self._txn(self.paypal, "2026-06-01", 120.0, "Guitar Lessons")
         sams = self._txn(self.sams_checking, "2026-06-02", 120.0, "Transfer to paypal")

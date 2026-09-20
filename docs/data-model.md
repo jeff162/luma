@@ -1365,12 +1365,31 @@ two days before and four days after the PayPal row, and widening the window to s
 
 **Only an unambiguous pairing applies itself**: a PayPal row with exactly one candidate that no other PayPal
 row also wants, or a cluster of interchangeable rows (one amount on each side, every PayPal row wanting
-every candidate, as many of each) where every assignment has the same effect. On that ledger 15 rows were
-left for a person — mostly two same-amount donations on one day, and a bank deposit imported twice.
+every candidate, as many of each) where every assignment has the same effect. A row with a single candidate
+also **claims** it, taking it out of the lists of rows that have alternatives — that row can pair with that
+one or with nothing, so leaving it on offer elsewhere is what strands it. Two same-amount payments days
+apart do this on a real ledger: the earlier one's only bank row falls inside the later one's window too, and
+both were handed to the user although only the later one was ever in doubt. A claim often leaves another row
+with a single uncontested candidate in turn, so the rounds repeat until one claims nothing, and a row left
+with no candidate at all is treated as having none to find. The claim is made only where a **single** row is
+cornered: two rows cornered on one candidate is a *shortage* rather than an ambiguity (the other payment came
+from the balance, or its own bank row isn't in the ledger), at most one of them can have it, and which is not
+deducible — so nothing is taken from anyone and both go to the user. That shortage is most of what is left
+for a person: of the six clusters one ledger could not settle, five were two payments competing for one bank
+row, and a sixth was a bank deposit imported twice.
 
 **The review** (`paypal_funding_report`, shown as the *PayPal reconciliation* — the PayPal vendor of the
 reconciliation shell, where a pair reads as a *match*) lists the pairs and
-three kinds of work: a PayPal row with several candidates; a PayPal row stating that money crossed to
+three kinds of work: a PayPal row the pass could not settle — shown as *Several possible matches* where it
+has a choice of candidates, and, where its single candidate is one other rows are cornered on too, as *Two
+transactions, one match*: **one row carrying every rival**, each beside the button that gives the
+transaction to it. Listed a row apiece they showed the same lone transaction twice with no sign of the
+rivalry that was the whole difficulty, and a picker offering one candidate is not a choice. The split and
+the grouping are made in the vendor, off the candidate lists the report already sends, since it is one
+bucket's work and one bucket's data. Declining is the group's own action (*Neither*, in the Actions column,
+where the answer is about the group rather than one of its rows): it declines the contested row for every
+rival, which releases it to the unaccounted list, where it reads as a bank row no PayPal row accounts
+for — which is what it is; a PayPal row stating that money crossed to
 another account (a deposit or withdrawal) with no candidate — a payment with none is not listed, since a
 balance-funded payment has no counterpart to find; and a PayPal-looking bank or card row nothing pairs
 with, looked for only on accounts already paired with a PayPal account and only within the dates that
@@ -1399,7 +1418,10 @@ PayPal record is listed by every card whose dates cover it). The card is
 chosen by where its rows landed, not by what kind of file it was — a PayPal account's rows arrive by
 PayPal file, by an aggregator's export and by sync alike — and a card whose PayPal rows have no other side
 (payments from the balance, holds) is left out rather than offering an empty report. **Attention** —
-every row with several candidates, plus each unreviewed row of the other two kinds — tints the card and,
+every row with a choice of candidates, every contested bank or card row (**once**, named by that row: a
+shortage is one decision however many PayPal rows it settles, and naming it by the contested row also
+counts it once across cards when the rivals arrived with different files), plus each unreviewed row of the
+other two kinds — tints the card and,
 over the whole ledger, drives one Tasks entry, since pairs are made after syncs too. Both are cached in
 `db_meta` against the `recon_epoch` (`services/reconciliation_attention.py`), the per-card figures from
 one analysis of every card.

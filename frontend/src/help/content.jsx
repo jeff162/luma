@@ -2862,6 +2862,12 @@ export const HELP_TOPICS = [
         <ul>
           <li><strong>Several possible matches</strong> &mdash; more than one transaction could be the other side.
             <strong> Pick&hellip;</strong> the right one, or <strong>None of these</strong>.</li>
+          <li><strong>Two transactions, one match</strong> &mdash; one transaction that could equally be
+            the other side of either of two PayPal transactions, and only one of them can have it &mdash; usually
+            because the other payment came from the PayPal balance, or its own bank transaction isn&apos;t in the
+            ledger. Both are listed together against it; <strong>Pick this one</strong> beside the one it belongs
+            to settles the pair, and the other drops off the list with nothing to match. <strong>Neither</strong>
+            when it belongs to none of them.</li>
           <li><strong>Matching transaction not found</strong> &mdash; a PayPal deposit or withdrawal with nothing found on the other
             side. <strong>Link&hellip;</strong> one by hand, or <strong>Mark reviewed</strong> when that account
             isn&apos;t tracked.</li>

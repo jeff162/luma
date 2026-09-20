@@ -46,8 +46,10 @@ by hand, and a row an Amazon order or a wallet leg already claims is not offered
 
 **Only an unambiguous pairing applies itself.** A PayPal row with exactly one candidate that no other
 PayPal row also wants is paired. So is a cluster of interchangeable rows — the same amount on both sides,
-every PayPal row wanting every candidate, as many of each — where any assignment has the same effect.
-Anything else is left for the user to choose.
+every PayPal row wanting every candidate, as many of each — where any assignment has the same effect. A
+row with a single candidate also **claims** it, taking it out of the lists of rows that have alternatives
+— which often leaves one of those unambiguous in turn, so the rounds repeat until nothing more is
+claimed. Anything else is left for the user to choose.
 
 **What the user decides is kept, as links of their own kinds.** Unpairing records the pair as declined,
 so the pass never offers it again; "none of these" declines each candidate shown; and acknowledging a row
@@ -260,12 +262,51 @@ class _Ledger:
         return [r for r in self.paypal_rows if not r["is_pending"] and r["id"] not in self.paired_paypal]
 
 
+def _claim_cornered(wants: dict[str, list[str]]) -> list[str]:
+    """Let a PayPal row with one candidate claim it, and take it out of every other row's list.
+
+    A row with a single candidate can pair with that one or with nothing, so offering it to a row that
+    could equally take something else is what strands the first row. Two same-amount payments days apart
+    do this on a real ledger: the earlier one's only bank row falls inside the later one's window too, and
+    both are handed to the user although only one of them was ever in doubt. Claiming settles both — what
+    is left of the other row's list is then uncontested and pairs itself in the same pass — so the rounds
+    repeat until a round claims nothing.
+
+    The claim is made only where a **single** row is cornered. Two rows cornered on one candidate is a
+    real shortage rather than an ambiguity (one of the payments was funded some other way), at most one of
+    them can have it, and which is not deducible — so nothing is taken from anyone, and the rows go to the
+    user as they did before.
+
+    Mutates `wants`, and returns the rows it emptied — they wanted only what another row was cornered on,
+    so there is nothing left for them to pair with.
+    """
+    stranded: list[str] = []
+    while True:
+        cornered: dict[str, list[str]] = defaultdict(list)
+        for paypal_id, found in wants.items():
+            if len(found) == 1:
+                cornered[found[0]].append(paypal_id)
+        claims = {other_id: owners[0] for other_id, owners in cornered.items() if len(owners) == 1}
+        taken = False
+        for paypal_id, found in wants.items():
+            left = [c for c in found if claims.get(c, paypal_id) == paypal_id]
+            if len(left) != len(found):
+                wants[paypal_id] = left
+                taken = True
+        if not taken:
+            return stranded
+        for paypal_id in [p for p, found in wants.items() if not found]:
+            del wants[paypal_id]
+            stranded.append(paypal_id)
+
+
 def _analyze(ledger: _Ledger) -> dict:
     """Split the unpaired PayPal rows into what pairs itself and what needs a person.
 
     Returns ``{"auto": [(paypal_id, counterpart_id)], "choice": {paypal_id: [counterpart_id]},
     "unmatched": [paypal_id], "wanted": {counterpart_id}}`` — `unmatched` holds only the rows that state a
-    counterpart exists, and `wanted` every counterpart some open PayPal row could take."""
+    counterpart exists, and `wanted` every counterpart some open PayPal row could take (before any claim,
+    since a claimed row is accounted for by whoever claimed it)."""
     wants: dict[str, list[str]] = {}
     unmatched: list[str] = []
     for row in ledger.open_paypal_rows():
@@ -274,6 +315,9 @@ def _analyze(ledger: _Ledger) -> dict:
             wants[row["id"]] = found
         elif ledger.targets(row)[1]:
             unmatched.append(row["id"])
+
+    wanted = {other_id for found in wants.values() for other_id in found}
+    unmatched.extend(p for p in _claim_cornered(wants) if ledger.targets(ledger.paypal_by_id[p])[1])
 
     wanted_by: dict[str, list[str]] = defaultdict(list)
     for paypal_id, found in wants.items():
@@ -311,7 +355,7 @@ def _analyze(ledger: _Ledger) -> dict:
         else:
             for paypal_id in paypal_ids:
                 choice[paypal_id] = wants[paypal_id]
-    return {"auto": auto, "choice": choice, "unmatched": unmatched, "wanted": set(wanted_by)}
+    return {"auto": auto, "choice": choice, "unmatched": unmatched, "wanted": wanted}
 
 
 def _exclude(conn: sqlite3.Connection, row: dict) -> dict:
@@ -436,9 +480,17 @@ def _scoped(ledger: _Ledger, analysis: dict, batch_id: Optional[str]) -> dict:
 
 
 def _attention_ids(ledger: _Ledger, scoped: dict) -> list[str]:
-    """What needs the user, as the rows it is about: every choice (its PayPal row), and each unmatched or
-    unaccounted row not yet acknowledged."""
-    return ([*scoped["choice"]]
+    """What needs the user, as the rows it is about: a PayPal row with a choice of candidates, the one bank
+    or card row that several PayPal rows are cornered on, and each unmatched or unaccounted row not yet
+    acknowledged.
+
+    A shortage is **one** decision however many rows it settles — giving the transaction to one of them
+    leaves the rest with nothing to pair with — and the review shows it as one row, so counting each
+    cornered row would have the card promise twice the work it lists. Naming it by the contested row also
+    counts it once across cards when the rows cornered on it arrived with different files, the same way an
+    unaccounted row listed by several cards is counted once."""
+    choices = [paypal_id if len(cands) > 1 else cands[0] for paypal_id, cands in scoped["choice"].items()]
+    return (list(dict.fromkeys(choices))
             + [p for p in scoped["unmatched"] if p not in ledger.reviewed]
             + [c for c in scoped["unaccounted"] if c not in ledger.reviewed])
 

@@ -165,7 +165,9 @@ export function ReconciliationReportDialog({
     const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <span style={{ whiteSpace: 'nowrap', color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
+        {/* The label wraps: a bucket named for the shape of its problem outgrows this column, and holding
+            it on one line printed it under the next cell rather than clipping it. */}
+        <span style={{ color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
           {meta.label}
         </span>
         {handled ? (

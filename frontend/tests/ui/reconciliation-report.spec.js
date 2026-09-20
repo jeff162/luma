@@ -49,10 +49,64 @@ test('an Amazon import opens its reconciliation report, which minimizes, restore
   }
 })
 
+// Two payments of one amount, days apart, with a single card charge between them: each is cornered on it,
+// neither can be settled by the matcher, and the review has to show them as the one decision they are.
+const CONTESTED_CSV = [
+  '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
+  '"2026-08-25","10:00:00","EDT","Harbor Relief Fund","Website Payment","Completed","USD","-50.00","0.00","-50.00","","","0.00","SPEC1",""',
+  '"2026-08-27","10:00:00","EDT","Northgate Arts Fund","Website Payment","Completed","USD","-50.00","0.00","-50.00","","","0.00","SPEC2",""',
+].join('\n')
+
 const PAYPAL_CSV = [
   '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
   '"2026-08-25","10:00:00","EDT","Harbor Relief Fund","Website Payment","Completed","USD","-50.00","0.00","-50.00","","","0.00","SPEC1",""',
 ].join('\n')
+
+test('two PayPal transactions cornered on one card charge are one row, settled beside the one that owns it', async ({ page, request }) => {
+  const paypal = await (await request.post('/api/accounts', { data: { name: 'Spec PayPal', type: 'paypal' } })).json()
+  const card = await (await request.post('/api/accounts', { data: { name: 'Spec Card', type: 'credit' } })).json()
+  await request.post('/api/transactions', {
+    data: { account_id: card.id, date: '2026-08-26', amount: 50, payee: 'PAYPAL INST XFER' },
+  })
+  const imported = await request.post('/api/import-export/run', {
+    multipart: {
+      file: { name: 'spec-contested.csv', mimeType: 'text/csv', buffer: Buffer.from(CONTESTED_CSV, 'utf8') },
+      config: JSON.stringify({
+        filename: 'spec-contested.csv',
+        account_id: paypal.id,
+        account_map: {},
+        column_map: { date: 'Date', description: 'Name', amount: 'Amount', evidence_columns: ['Type'] },
+        date_format: '%Y-%m-%d',
+        amount_convention: 'single_signed',
+        apply_categorization: false,
+      }),
+    },
+  })
+  expect(imported.ok()).toBeTruthy()
+  const { batch_id: batchId } = await imported.json()
+
+  try {
+    await page.goto('/import-export?review=paypal')
+    await expect(page.getByText('PayPal reconciliation', { exact: true })).toBeVisible()
+    // One row, not two: both rivals are on it, each with the button that gives the charge to it.
+    await expect(page.getByRole('button', { name: 'Two transactions, one match (1)' })).toBeVisible()
+    await expect(page.getByText('Harbor Relief Fund')).toBeVisible()
+    await expect(page.getByText('Northgate Arts Fund')).toBeVisible()
+    const picks = page.getByRole('button', { name: 'Pick this one' })
+    await expect(picks).toHaveCount(2)
+    // One answer about the group, beside the two about its rows.
+    await expect(page.getByRole('button', { name: 'Neither', exact: true })).toHaveCount(1)
+
+    // Settling one settles both: the loser has nothing left to match and leaves the review with it.
+    await picks.nth(1).click()
+    await expect(page.getByRole('button', { name: 'Matched (1)' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Two transactions, one match/ })).toHaveCount(0)
+  } finally {
+    await request.delete(`/api/import-export/batches/${batchId}?force=true`)
+    await request.delete(`/api/accounts/${paypal.id}`)
+    await request.delete(`/api/accounts/${card.id}`)
+  }
+})
 
 test('a PayPal import pairs with the card charge, and the review opens from its deep link', async ({ page, request }) => {
   const paypal = await (await request.post('/api/accounts', { data: { name: 'Spec PayPal', type: 'paypal' } })).json()

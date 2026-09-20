@@ -339,6 +339,14 @@ needs a look), or from the Tasks entry for the whole ledger:
 
 - **Several possible matches** — more than one card or bank row could be the other side. **Pick…** the right one,
   or **None of these**.
+- **Two transactions, one match** — one card or bank row that could equally be the other side of either of
+  two PayPal rows, and only one of them can have it: usually the other payment came from the PayPal balance, or
+  its own card or bank row isn't in the ledger. Both PayPal rows are listed together on one line against that
+  single row; **Pick this one** beside the one it belongs to settles the pair, and the other drops off the list
+  with nothing to match, which is what a balance-funded payment looks like. **Neither** when it belongs to none
+  of them — it is then listed as *No PayPal record* on the account that funds PayPal. (A row whose *only*
+  candidate nothing else wants is never listed — it is matched automatically, and so is whatever that leaves
+  unambiguous.)
 - **Matching transaction not found** — a PayPal deposit or withdrawal with nothing found on the other side. **Link…** one by
   hand (the picker lists nearby PayPal rows on other accounts, whatever the amount), or **Mark
   reviewed** when that account isn't tracked here.
