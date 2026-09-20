@@ -275,7 +275,7 @@ export default function Transactions() {
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
   const categoryHeaderMenuRef = useRef(null)
-  const latestRequestKeyRef = useRef('')
+  const loadSeqRef = useRef(0)
   // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
   // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
   // load effect / localStorage — the setter persists straight through the context.
@@ -394,23 +394,19 @@ export default function Transactions() {
     const facetParams = selectionsToParams(filters.selections)
     const offset = append ? offsetOverride : 0
     const pageSize = getTransactionsPageSize(offset)
-    const requestKey = JSON.stringify({
-      // Derived from the resolved params rather than from a hand-listed set of facets, so a facet
-      // added to the registry participates in out-of-order protection without being named again here.
-      facetParams,
-      activeAttribute,
-      amountFilter,
-      dateStart: getRawDate()?.start || '',
-      dateEnd: getRawDate()?.end || '',
-      quickFilter: debouncedQuickFilter,
-      sortBy: sortState.key,
-      sortDir: sortState.dir,
-      offset,
-      pageSize,
-    })
-    // Filter/search requests can resolve out of order; keep only the newest one so
-    // the grid never snaps back to stale results after fast typing or toggling.
-    latestRequestKeyRef.current = requestKey
+    // Requests can resolve out of order; keep only the newest one so the grid never snaps back to stale
+    // results after fast typing or toggling.
+    //
+    // **The ticket counts calls, not queries, and that distinction is the whole rule.** This used to
+    // compare a key built from the resolved filter params, which answers "did the filters change while
+    // this was in flight" — and is blind to the case where they did not. Two loads for the *same* query
+    // can overlap (StrictMode runs the mount effect twice in dev; in production `useAfterLedgerSync`,
+    // the refresh button and `bulk.onReload` all re-load with unchanged filters), they produced an
+    // identical key, and so both committed: whichever response landed last won, by arrival order rather
+    // than recency. Against a ledger being written to at the same time the two answers differ, and the
+    // grid silently took the older one. A counter cannot collide, needs no knowledge of which facets
+    // exist, and subsumes what the key was for.
+    const seq = ++loadSeqRef.current
 
     if (append) setLoadingMore(true)
     else if (isFirstLoad.current) setInitialLoading(true)
@@ -428,7 +424,7 @@ export default function Transactions() {
       offset,
     })
 
-    if (latestRequestKeyRef.current !== requestKey) return
+    if (loadSeqRef.current !== seq) return
 
     setData(prev => {
       const transactions = append

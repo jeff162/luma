@@ -9,6 +9,11 @@ arrives when the failure next fires.
 durable an entry produced — a rule, an invariant, a lesson about how the system behaves — belongs in the
 topic doc that owns it before the entry is removed.
 
+**Each entry carries a last-seen date**, bumped whenever its failure fires again. Without one there is no
+way to tell a live failure from one that something else has already fixed — and for an entry whose fix has
+landed but was never reproduced on demand, the quiet time since that date is the only confirmation there
+is. Where the date is a bound rather than an observation, it says so.
+
 **Read this before re-running a red suite.** The rule it exists to serve is in
 [`agent-profile.md`](agent-profile.md) → *Verification And Tests*: a failure is investigated when it
 happens, before anything else, because a green re-run destroys the evidence. The gate writes every run
@@ -23,6 +28,9 @@ preserved log for the symptom rather than trusting the failing test's name**.
 ## 1. Two documents on one transaction list in the wrong order
 
 **Status: instrumented, waiting on a recurrence.**
+
+**Last seen: 2026-09-05** — the occurrence itself was not dated, so this is the day the entry was written
+and the latest it can have been.
 
 ### Symptom
 
@@ -64,52 +72,94 @@ say so directly: an inverted pair with ascending rowids is that, and nothing els
 
 ---
 
-## 2. A row marked reviewed comes back still needing review
+## 2. A row marked reviewed does not settle: the marker returns, or the row leaves the list
 
-**Status: seen once (2026-09-17), instrumented, waiting on a recurrence.**
+**Status: cause identified and fixed (2026-09-19). Kept until a clean run history confirms it, because
+the failure was never reproduced on demand — a recurrence now means the fix did not cover it.**
+
+**Last seen: 2026-09-19** — the fix landed the same day, so quiet time from here is what confirms it.
 
 ### Symptom
 
-`frontend/tests/ui/needs-review-marker.spec.js` fails on its first assertion after the click: the marker
-count is unchanged (23 where 22 was expected) for the full 20-second budget. The failure screenshot shows
-the clicked row — the first in the list — still carrying its **R** marker.
+`frontend/tests/ui/needs-review-marker.spec.js` fails somewhere after the click. Two tails were seen, and
+they are opposites:
 
-**Once in four full runs of the gate that day**, and the failing run was slow: 25.7s against the ~7s the
-passing runs take, which is the only other thing that distinguished it.
+- **2026-09-17 — the marker came back.** The marker count was unchanged (23 where 22 was expected) for the
+  full 20-second budget, and the failure screenshot showed the clicked row still carrying its **R**.
+- **2026-09-19 — the row left the list.** The marker assertion *passed* (the marker did clear), and the
+  count label then read `123 transactions` where `124` was expected.
 
-### Why it is strange
+Both failing runs were slow: 25.7s and 27.3s against the ~7s a passing run takes. Once in four full gate
+runs on the first day, once in two on the second.
 
-The click's own confirmation had already been asserted, so the sequence got as far as a successful write:
-`markReviewed` awaits the bulk update, *then* patches the row and raises the toast
-(`lib/useTransactionRowActions.jsx`). The toast was on screen and the patch was not — or was, and was
-then undone. Nothing on this page subscribes to the mutation events that could re-query it
-(`luma:transactions-changed` has no listener here, and `luma:data-mutated` refreshes the Tasks badge),
-which is what makes the surviving explanation a *stale response* rather than a deliberate reload.
+### The cause
 
-Two candidates remain, and they are opposites:
+**Two loads of the same query were both committing, and arrival order decided which one the grid kept.**
 
-- **The write never landed** — the bulk update answered but the row is still flagged on the server. That
-  would make the toast a lie and point at the endpoint, not the page.
-- **The patch was overwritten** — a list response already in flight when the click happened arrived
-  afterwards carrying the pre-click rows, restoring the marker the patch had cleared. Under a slow run
-  that window is exactly the one that widens.
+`load()` in `pages/Transactions.jsx` guarded against out-of-order responses by comparing a key built from
+the resolved filter params. That answers "did the filters change while this was in flight" and is blind to
+the case where they did not: two concurrent loads for one query produce an *identical* key, so both passed
+the check and both called `setData`. Whichever response landed last won.
 
-### What the next occurrence will say
+That single mechanism produces both tails, which is what identified it:
 
-The spec now reports, on that assertion only:
+- a duplicate load served **before** the write, settling **after** the row patch → `total=124`, row still
+  `needs_review=1` → the patch is overwritten and the marker comes back;
+- a duplicate load still in flight at click time, served **after** the write commits → `total=123`, row
+  absent → the count falls.
+
+Either needs a slow run to widen the gap between the two responses, which is the one property both
+failures shared. The count label reads `data.total` straight off the last list response and the row patch
+cannot touch it, so a count that moves is a response that *arrived* — that is what ruled out a local edit
+and pointed at the load.
+
+**Where the overlap came from here is React StrictMode, which double-invokes effects in development only**
+— the browser suite runs against the Vite dev server, so it sees two identical list requests about 1 ms
+apart on every load. That is StrictMode working as intended rather than a defect of its own, and a
+production build issues one. The defect it exposed is not dev-only: `useAfterLedgerSync`, the Refresh
+button and `bulk.onReload` all re-load with the filters unchanged and can overlap a load already in
+flight.
+
+### The fix
+
+The guard counts **calls** rather than queries: `loadSeqRef` is incremented per call and compared after
+the await, so any newer call wins whether or not the filters changed. It subsumes what the key was for and
+cannot collide. The durable version of the rule is in
+[`ui-patterns.md`](ui-patterns.md) → *An edited transaction lingers where it was found*; delete this entry
+and keep that.
+
+`src/pages/__tests__/TransactionsLoadRace.test.jsx` pins it deterministically: the page is rendered inside
+`StrictMode`, every load is held open, the newest resolves first and the older ones after, and the newest
+must still be what the grid shows. It fails against the old guard.
+
+### What a recurrence would say
+
+The fix missed something, and the instrumentation is still in the spec to say what.
+`instrumentTransactionFetches` wraps the page's own `fetch` through `addInitScript` — test-side only, so
+nothing production-side changes — and **all four post-click assertions** report, not just the first. (The
+2026-09-19 run lost every diagnostic because only the marker assertion was wrapped and the failure landed
+one line lower.) A failure carries:
 
 - **the clicked row's state on the server**, read back through the API by the payee the app's own
-  confirmation named. `needs_review: 0` is the overwrite; `1` is a write that did not land.
-- **every `/api/transactions*` request the page made**, in order, split at the click — so a list response
-  arriving after the write is visible as itself rather than inferred.
+  confirmation named. `needs_review: 0` is a write that landed; `1` is one that did not.
+- **every `/api/transactions` request the page made**, each with the time it was issued *and* the time it
+  settled, both relative to the click — so a response in flight across the click is visible as itself
+  rather than inferred.
+- **what came back**: `total`, the row count, and how many of those rows still need review. Matching a
+  moved count against the `total` of a specific response is what names the culprit response.
+- **what issued each one**: the JS stack at the call, which tells a React effect apart from an event
+  handler apart from a late timer.
 
-Those two together decide it without needing the failure to be reproducible.
+Times are `performance.now()` rather than `Date.now()`, deliberately: this host's wall clock steps
+backwards (entry 1 above), and every question here is a question about ordering.
 
 ---
 
 ## 3. A second sync of the same transaction reads as the first
 
-**Status: seen once (2026-09-19), instrumented, waiting on a recurrence.**
+**Status: seen once, instrumented, waiting on a recurrence.**
+
+**Last seen: 2026-09-19.**
 
 ### Symptom
 
