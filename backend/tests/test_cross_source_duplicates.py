@@ -583,6 +583,22 @@ class VersionGatedRescanTests(_LedgerTestCase):
         self.assertGreaterEqual(result["passes"], 2, "a settled run needs the pass that found nothing")
 
 
+class PunctuationFoldingTests(unittest.TestCase):
+    """Separators are the source's formatting, not the charge's description."""
+
+    def test_one_descriptor_punctuated_two_ways_is_a_near_miss(self):
+        # The measured pair: one bank ACH, two aggregators. Character similarity on the raw texts is
+        # 0.889 against a 0.90 floor, and the weak tier cannot save it either — "deposit" and "transfer"
+        # are generic, leaving "paypal" as the one distinctive token where two are required.
+        a = row_match_texts(None, "DEPOSIT - ACH PAYPAL TRANSFER - TRANSFER", None)
+        b = row_match_texts(None, "DEPOSIT PAYPAL TRANSFER TRANSFER", None)
+        self.assertEqual(classify_source_text_relation(a, b), "fuzzy")
+
+    def test_texts_of_pure_punctuation_agree_about_nothing(self):
+        # Both sides fold to the empty string, which would intersect and read as the top tier.
+        self.assertIsNone(classify_text_match({"***"}, {"---"}))
+
+
 class WeakTierTests(unittest.TestCase):
     """Shared distinctive tokens as the weakest review tier — and why the same evidence must not reach
     the hard-reject rung."""

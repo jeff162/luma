@@ -342,9 +342,37 @@ def _is_truncation_of(shorter: str, longer: str) -> bool:
     return cut_is_mid_word or len(shorter) >= _MIN_WORD_BOUNDARY_PREFIX
 
 
+# Punctuation is a source's formatting, not the charge's description: one bank's ACH descriptor reaches
+# the ledger as "DEPOSIT - ACH PAYPAL TRANSFER - TRANSFER" through one aggregator and
+# "DEPOSIT PAYPAL TRANSFER TRANSFER" through another, and on a real pair the separators alone cost enough
+# character similarity to sink it below the fuzzy floor (0.889 against 0.90) while the words agree
+# completely. The weak tier cannot save such a pair either, since what the two share after the generic
+# stoplist is one distinctive token where two are required.
+#
+# Collapsed for the COMPARISON only. The texts keep their punctuation everywhere else, because two things
+# downstream read it: `_processor_tag_stripped` needs the "SQ *" it strips, and the tokenizer splits on it.
+# `[\W_]` rather than a-z so an accented payee keeps its letters instead of being cut into fragments.
+_PUNCTUATION_RUN_RE = re.compile(r"[\W_]+")
+
+
+def _comparable_texts(texts: set[str]) -> set[str]:
+    """The texts as the tiers below compare them: punctuation runs folded to single spaces.
+
+    Empties are dropped rather than folded in — a text of pure punctuation would otherwise collapse to ""
+    on both sides and intersect, which is the exact tier claiming two rows agree about nothing.
+    """
+    out = set()
+    for text in texts:
+        collapsed = " ".join(_PUNCTUATION_RUN_RE.sub(" ", text).split())
+        if collapsed:
+            out.add(collapsed)
+    return out
+
+
 def classify_text_match(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
-    """How two rows' `source_match_texts` sets relate:
-        'exact' — some captured text is byte-identical across the two, or is the same text with one side
+    """How two rows' `source_match_texts` sets relate, comparing them with punctuation runs folded to
+    single spaces (`_comparable_texts`, and see the note above it):
+        'exact' — some captured text is identical across the two, or is the same text with one side
                   truncated (high confidence)
         'fuzzy' — no exact overlap, but a pair is >= CROSS_ACCOUNT_FUZZY_RATIO similar (near-miss)
         None    — neither.
@@ -357,6 +385,9 @@ def classify_text_match(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
     merged, and it is also the primary sort key when several candidates compete for the same row, so a
     clipped descriptor now binds to its twin ahead of a merely similar one.
     """
+    if not texts_a or not texts_b:
+        return None
+    texts_a, texts_b = _comparable_texts(texts_a), _comparable_texts(texts_b)
     if not texts_a or not texts_b:
         return None
     if texts_a & texts_b:
