@@ -3036,7 +3036,7 @@ function AboutRow({ label, value, help = '' }) {
 // which link to show; that cost an outbound request nobody asked for on every visit to this panel,
 // which contradicts the promise the README makes about network access. Both remaining links are plain
 // anchors: nothing is fetched from anywhere until the user clicks.
-function AboutSection({ dbInstanceId, bundledLicenseAvailable }) {
+function AboutSection({ dbInstanceId, bundledLicenseAvailable, thirdPartyNoticesScope }) {
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>
@@ -3084,9 +3084,33 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable }) {
             value={dbInstanceId || 'Unavailable'}
             help="Unique identifier for the database. Used to warn when restoring a backup from a different database."
           />
+          {/* Where the licenses of everything else this copy carries are. A packaged build has them all in
+              one file frozen in beside the LICENSE; elsewhere the generated list covers the web interface
+              alone, and the row says so rather than overstating what the link holds. It is left out
+              entirely where there is nothing to serve, which is a checkout whose frontend has never been
+              built — the one case where a link would lead nowhere. */}
+          {thirdPartyNoticesScope ? (
+            <AboutRow
+              label="Third-party licenses"
+              value={(
+                <a
+                  href="/api/app/third-party-licenses"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: 'var(--accent)' }}
+                >
+                  Included software
+                </a>
+              )}
+              help={thirdPartyNoticesScope === 'build'
+                ? 'Every package and component in this build, with the license text each one ships.'
+                : 'The packages in the web interface. The server\u2019s are installed alongside it, each with its own license.'}
+            />
+          ) : null}
           {/* The attribution CC BY 4.0 asks for wherever the list is conveyed: creator, license with a link,
               where the material came from, and that it was modified. The same notice heads the file itself
-              (lib/effLargeWordlist.txt), which is what travels in the source and the built bundle. */}
+              (lib/effLargeWordlist.txt), which is what travels in the source and the built bundle, and it
+              is reproduced in the list above. */}
           <AboutRow
             label="Passphrase word list"
             value={(
@@ -3270,6 +3294,7 @@ export default function Settings() {
     developerOptionsEnabled,
     dbInstanceId,
     bundledLicenseAvailable,
+    thirdPartyNoticesScope,
     activeLocalProfile,
     setSecurityProfile,
     setPasswordPolicy,
@@ -3487,7 +3512,11 @@ export default function Settings() {
             scrollContainerRef={settingsScrollRef}
             {...bindSection('about')}
           >
-            <AboutSection dbInstanceId={dbInstanceId} bundledLicenseAvailable={bundledLicenseAvailable} />
+            <AboutSection
+              dbInstanceId={dbInstanceId}
+              bundledLicenseAvailable={bundledLicenseAvailable}
+              thirdPartyNoticesScope={thirdPartyNoticesScope}
+            />
           </StickySection>
         </div>
       </div>

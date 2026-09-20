@@ -10,7 +10,9 @@ side — a capability that may or may not be there, reported in the status paylo
 decide whether a local fallback exists before it goes looking for one.
 """
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from backend.routers import app_control
@@ -82,3 +84,37 @@ class BundledLicenseTests(unittest.TestCase):
             with api_client() as (client, _):
                 self.assertFalse(client.get("/api/auth/status").json()["bundled_license_available"])
                 self.assertEqual(client.get("/api/app/license").status_code, 404)
+
+
+class ThirdPartyNoticesTests(unittest.TestCase):
+    """The licenses of the software a copy carries, and how much of the application they cover. Both are
+    the About page's question: whether to offer a link at all, and what to say it holds."""
+
+    def test_nothing_generated_means_no_link_rather_than_a_dead_one(self):
+        with mock.patch("backend.routers.app_control.third_party_notices", return_value=None):
+            with api_client() as (client, _):
+                self.assertIsNone(client.get("/api/auth/status").json()["third_party_notices_scope"])
+                self.assertEqual(client.get("/api/app/third-party-licenses").status_code, 404)
+
+    def test_a_packaged_build_serves_the_whole_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            notices = Path(tmp) / "THIRD-PARTY-LICENSES.txt"
+            notices.write_text("Third-party licenses\n\nPython 3.12\n", encoding="utf-8")
+            with mock.patch("backend.routers.app_control.third_party_notices", return_value=(notices, "build")):
+                with api_client() as (client, _):
+                    self.assertEqual(client.get("/api/auth/status").json()["third_party_notices_scope"], "build")
+                    resp = client.get("/api/app/third-party-licenses")
+                    self.assertEqual(resp.status_code, 200, resp.text)
+                    self.assertIn("Python 3.12", resp.text)
+                    self.assertTrue(resp.headers["content-type"].startswith("text/plain"))
+
+    def test_a_frontend_build_alone_serves_the_web_half_and_says_which(self):
+        """The case every checkout and the Docker image are in: the server's dependencies are installed
+        normally, each with its own license file, and only the bundled web packages need a generated list."""
+        with tempfile.TemporaryDirectory() as tmp:
+            notices = Path(tmp) / "third-party-licenses.txt"
+            notices.write_text("Third-party software in the Luma web interface\n\nreact 18.3.1\n", encoding="utf-8")
+            with mock.patch("backend.routers.app_control.third_party_notices", return_value=(notices, "web")):
+                with api_client() as (client, _):
+                    self.assertEqual(client.get("/api/auth/status").json()["third_party_notices_scope"], "web")
+                    self.assertIn("react 18.3.1", client.get("/api/app/third-party-licenses").text)

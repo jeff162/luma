@@ -140,6 +140,28 @@ def bundled_license_path() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+# The licenses of the third-party software a build carries, written by `scripts/build_desktop.py` and
+# placed at the bundle root beside the LICENSE. Named here because the build script, the PyInstaller spec
+# and the app all have to agree on the one filename.
+THIRD_PARTY_NOTICES_FILENAME = "THIRD-PARTY-LICENSES.txt"
+
+
+def third_party_notices() -> tuple[Path, str] | None:
+    """The third-party notices this copy can show, and how much of the application they cover.
+
+    A packaged build carries the whole set — its Python runtime, its dependencies and the web interface's
+    packages — written at build time from what that build actually froze in ("build"). Anywhere else the
+    only generated list is the one the frontend build leaves in `frontend/dist`, which covers the web
+    interface alone ("web"); the server's dependencies are installed normally there, each with its own
+    license file beside it. None at all is a real answer: a checkout that has never built the frontend
+    has nothing to serve, and the About page then offers no link rather than a dead one."""
+    packaged = bundle_root() / THIRD_PARTY_NOTICES_FILENAME
+    if packaged.is_file():
+        return packaged, "build"
+    web = bundle_root() / "frontend" / "dist" / "third-party-licenses.txt"
+    return (web, "web") if web.is_file() else None
+
+
 def install_root() -> Path:
     """Where the application *sits* — the directory a portable copy keeps its data and its `.env` beside.
 

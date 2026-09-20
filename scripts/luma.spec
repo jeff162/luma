@@ -37,6 +37,8 @@ ROOT = Path(SPECPATH).resolve().parent
 # that must agree on a literal are two files that can disagree about it, and the failure would be a
 # build whose declaration the application cannot read.
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import third_party_notices  # noqa: E402  (needs scripts/ on the path first)
 from backend import runtime_config  # noqa: E402  (needs ROOT on the path first)
 
 dist_form = (os.environ.get("LUMA_DIST_FORM") or runtime_config.DIST_FORM_PORTABLE).strip().lower()
@@ -62,6 +64,14 @@ if sys.platform == "darwin" and dist_form != runtime_config.DIST_FORM_INSTALLED:
 # icon belongs to the application bundle and is placed there by `scripts/build_desktop.py`.
 WINDOWS_ICON = ROOT / "assets" / "luma.ico"
 
+WEB_NOTICES = ROOT / "frontend" / "dist" / "third-party-licenses.txt"
+NOTICES_FILE = ROOT / "build" / "third-party" / runtime_config.THIRD_PARTY_NOTICES_FILENAME
+if not WEB_NOTICES.is_file():
+    raise SystemExit(
+        f"{WEB_NOTICES} is missing, so the licenses of the web interface's packages cannot be shipped. "
+        "Build the frontend first; scripts/build_desktop.py does it."
+    )
+
 form_marker = ROOT / "build" / "dist-form" / runtime_config.DIST_FORM_FILENAME
 form_marker.parent.mkdir(parents=True, exist_ok=True)
 form_marker.write_text(f"{dist_form}\n", encoding="utf-8")
@@ -85,10 +95,27 @@ analysis = Analysis(
     ),
     hookspath=[],
     runtime_hooks=[],
-    # Bundling the test suite would ship pytest and every fixture with the app.
-    excludes=["backend.tests", "pytest", "_pytest"],
+    # Bundling the test suite would ship pytest and every fixture with the app. `readline` is excluded for
+    # a different reason: nothing here reads a line from a terminal, and the module drags GNU readline —
+    # GPL-3.0-or-later, the one bundled library whose license asks for more than its notice — into the
+    # kit for a capability the app never uses.
+    excludes=["backend.tests", "pytest", "_pytest", "readline"],
     noarchive=False,
 )
+
+# The licenses of everything the build carries, written *here* because this is where the list of collected
+# shared libraries exists: `analysis.binaries` is PyInstaller's own answer to what it copied off this
+# machine, and deriving it any other way would be a second implementation that could disagree. The file
+# then rides into the bundle as data and is packaged beside the executable by `scripts/build_desktop.py`,
+# so the copy in the kit and the copy the About page serves are the same bytes.
+NOTICES_FILE.parent.mkdir(parents=True, exist_ok=True)
+NOTICES_FILE.write_text(
+    third_party_notices.combined_notices(
+        WEB_NOTICES.read_text(encoding="utf-8"), binaries=analysis.binaries,
+    ),
+    encoding="utf-8",
+)
+analysis.datas.append((runtime_config.THIRD_PARTY_NOTICES_FILENAME, str(NOTICES_FILE), "DATA"))
 
 pyz = PYZ(analysis.pure)
 

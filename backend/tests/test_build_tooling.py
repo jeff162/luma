@@ -81,7 +81,17 @@ def test_a_fresh_checkout_installs_before_it_builds(tmp_path, has_node_modules, 
     assert commands == expected
 
 
-def test_the_bundled_executable_keeps_its_date_and_its_compression(tmp_path):
+@pytest.fixture
+def notices(tmp_path):
+    """The third-party notices a kit carries. Written by the build before packaging, so packaging on its
+    own — which is what these tests exercise — needs one put in place."""
+    path = tmp_path / "THIRD-PARTY-LICENSES.txt"
+    path.write_text("Third-party licenses\n", encoding="utf-8")
+    with mock.patch.object(build_desktop, "THIRD_PARTY_NOTICES_FILE", path):
+        yield path
+
+
+def test_the_bundled_executable_keeps_its_date_and_its_compression(tmp_path, notices):
     """The executable needs a hand-built `ZipInfo` to carry its mode bits, and a hand-built one
     inherits nothing else from the archive — not the date, not the compression. Both defaults shipped:
     every kit went out with its binary dated 1980 and stored uncompressed. The date reads as a broken
@@ -120,7 +130,7 @@ def test_the_shipped_env_example_is_plain_ascii():
     assert text.isascii(), [line for line in text.decode("utf-8").splitlines() if not line.isascii()]
 
 
-def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
+def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path, notices):
     """`writestr` given a plain name supplies a mode of 0o600, so `README.txt` and `LICENSE` unpacked
     to something readable only by whoever ran the unzip — a kit extracted into a shared location, or
     by root, left the licence unreadable to the person meant to read it. They also carried the moment
@@ -136,15 +146,18 @@ def test_the_text_members_extract_readable_and_share_the_build_date(tmp_path):
     with zipfile.ZipFile(archive) as bundle:
         members = {info.filename: info for info in bundle.infolist()}
 
-    assert set(members) == {"luma/luma", "luma/README.txt", "luma/LICENSE", "luma/env_example.txt"}
-    for name in ("luma/README.txt", "luma/LICENSE", "luma/env_example.txt"):
+    assert set(members) == {
+        "luma/luma", "luma/README.txt", "luma/LICENSE", "luma/THIRD-PARTY-LICENSES.txt",
+        "luma/env_example.txt",
+    }
+    for name in ("luma/README.txt", "luma/LICENSE", "luma/THIRD-PARTY-LICENSES.txt", "luma/env_example.txt"):
         assert (members[name].external_attr >> 16) & 0o777 == 0o644, name
     # One build, one date across every member — so a reader cannot tell them apart by age.
     assert {info.date_time for info in members.values()} == {(2026, 3, 4, 5, 6, 8)}
 
 
 @pytest.mark.parametrize("is_windows, extension", [(True, ".zip"), (False, ".tar.gz")])
-def test_windows_ships_a_zip_and_linux_a_tar(tmp_path, is_windows, extension):
+def test_windows_ships_a_zip_and_linux_a_tar(tmp_path, notices, is_windows, extension):
     executable = tmp_path / "luma"
     executable.write_bytes(b"\0" * 100)
 
@@ -157,7 +170,7 @@ def test_windows_ships_a_zip_and_linux_a_tar(tmp_path, is_windows, extension):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows files carry no POSIX mode to extract into")
-def test_the_linux_kit_unpacks_runnable_and_readable(tmp_path):
+def test_the_linux_kit_unpacks_runnable_and_readable(tmp_path, notices):
     """Why Linux ships a tar: the 0.3.0 zips recorded 0o755 on the binary and still reached a Linux
     machine unrunnable, because most extractors ignore a zip's mode. So this unpacks the archive and
     asserts what a recipient finds on disk, rather than what the headers claim."""
@@ -174,9 +187,12 @@ def test_the_linux_kit_unpacks_runnable_and_readable(tmp_path):
         members = {member.name: member for member in bundle.getmembers()}
         bundle.extractall(unpacked, filter="data")
 
-    assert set(members) == {"luma", "luma/luma", "luma/README.txt", "luma/LICENSE", "luma/env_example.txt"}
+    assert set(members) == {
+        "luma", "luma/luma", "luma/README.txt", "luma/LICENSE", "luma/THIRD-PARTY-LICENSES.txt",
+        "luma/env_example.txt",
+    }
     assert (unpacked / "luma" / "luma").stat().st_mode & 0o777 == 0o755
-    for name in ("README.txt", "LICENSE", "env_example.txt"):
+    for name in ("README.txt", "LICENSE", "THIRD-PARTY-LICENSES.txt", "env_example.txt"):
         assert (unpacked / "luma" / name).stat().st_mode & 0o777 == 0o644, name
     assert {member.mtime for member in members.values()} == {int(built_at)}
     # The build machine's account stays out of the download.

@@ -106,7 +106,7 @@ The repo carries REUSE-style per-file SPDX headers (`SPDX-FileCopyrightText` plu
 
 - The tree is currently consistent with this: no test, script, or config file carries a header. Keep it that way — do not add one to a new test just because older code elsewhere has it
 
-- Third-party material keeps its own holder and license in its header, not the project's (`frontend/src/lib/effLargeWordlist.txt` is `CC-BY-4.0`), and material whose license asks for attribution is also credited in Settings → About
+- Third-party material keeps its own holder and license in its header, not the project's (`frontend/src/lib/effLargeWordlist.txt` is `CC-BY-4.0`). A build ships every such notice in a generated `THIRD-PARTY-LICENSES.txt` and the About page links it — see `docs/releasing.md` → *What the kit carries besides the program*
 
 ## Local Scratch Files
 

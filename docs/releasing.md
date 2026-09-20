@@ -60,6 +60,55 @@ The result lands in `dist/` as `luma-<version>-<platform>-<arch>` plus the platf
 not the platform's usual form. It runs on a machine with neither Python nor Node
 installed. Builds are unsigned, so Windows and macOS warn on first run.
 
+### What the kit carries besides the program
+
+A kit is a conveyed copy of *everything* inside it, so each container holds the executable, `README.txt`,
+`LICENSE`, `env_example.txt` and **`THIRD-PARTY-LICENSES.txt`** — and the same notices file is frozen into
+the bundle, where the About page links it (`/api/app/third-party-licenses`). Almost every dependency is
+licensed on the condition that its notice travels with each copy, and a frozen executable carries none of
+the files it was built from: minification strips the comments in the web bundle, and PyInstaller keeps no
+`dist-info`. The file is the only form that obligation can take here.
+
+It is **generated on every build, never committed**, because what it must list is whatever that build
+actually froze in — a dependency bump that did not reach it would leave it quietly wrong. Three sources
+meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *during* the PyInstaller run:
+
+- The **web interface's** packages come from the Vite build (`frontend/scripts/thirdPartyNotices.js`),
+  which walks the emitted bundle rather than `package.json`: a dev dependency reaches nobody, and a
+  runtime one pulls in packages no manifest here names. It writes `dist/third-party-licenses.txt`, which
+  is also what the Docker image serves and what `/api/app/third-party-licenses` falls back to outside a
+  packaged build — a checkout's server dependencies are installed normally, each with its own license
+  file, so only the bundled half needs generating there. The About row says which of the two it links.
+- The **server's** come from the installed metadata of the requirement closure walked from
+  `backend/requirements.txt`, with environment markers evaluated — so a dependency that only exists on one
+  platform, or only through an extra (`uvicorn[standard]`), is included exactly where it is installed.
+  The Python runtime's own `LICENSE.txt` heads the section.
+- The **shared libraries**, on Linux only, come from `analysis.binaries` — PyInstaller's own record of
+  what it copied off the build machine, which is why the file is written from inside the spec rather than
+  before it. OpenSSL, SQLite, zlib and about nine others arrive that way, from neither PyPI nor
+  python.org. Each is traced to the package that installed it (`dpkg-query`, or `rpm` on a Fedora build)
+  and credited with that package's own copyright file, one entry per package. macOS links the system's
+  frameworks instead of copying them and Windows takes its libraries from a Python whose `LICENSE.txt`
+  lists them, so the section is empty there and left out.
+
+  **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
+  from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose
+  license asks for more than its notice — for a capability the app never uses. Dropping it takes ncurses
+  with it.
+
+**A component with no license text stops the build**, wherever it came from. Most packages ship one; for the few
+that do not, put the upstream text in `scripts/license-texts/<name>.txt` (server) or
+`frontend/scripts/license-texts/<name>.txt` (web), with leading `#` lines saying where it was taken from —
+those lines are reproduced in the notice, so a reader can tell a supplied text from a shipped one.
+`nulltype` and `victory-vendor` are the current two. A shared library the package manager cannot name, or
+whose package ships no copyright file, stops the build the same way — a system library carries no metadata
+of its own, so one missed here leaves no trace in the finished kit. Third-party material carried in the source tree
+rather than installed (the passphrase word list) is listed alongside the packages, its notice read from
+the file's own header.
+
+Checking what a build would ship, without running one: `backend/venv/bin/python
+scripts/third_party_notices.py` prints the server half.
+
 ### Linux specifics
 
 Linux produces two portable kits, `luma-<version>-linux-x64.tar.gz` and

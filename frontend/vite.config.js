@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { thirdPartyNotices } from './scripts/thirdPartyNotices.js'
 
 function parseSimpleEnvFile(content) {
   const values = {}
@@ -65,7 +66,14 @@ export default defineConfig(({ mode }) => {
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8011}`
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      // The licenses of what the bundle carries, which minification would otherwise strip. The word list
+      // is listed by hand because it is third-party material in the source tree rather than a package.
+      thirdPartyNotices({
+        vendored: [{ file: path.join(process.cwd(), 'src/lib/effLargeWordlist.txt'), name: 'EFF Large Wordlist for Passphrases' }],
+      }),
+    ],
     // Vitest tests default to the Node environment (pure helpers in src/lib — decision logic with no
     // DOM). A test that needs the DOM (component/interaction coverage via @testing-library/react)
     // opts in per-file with a `// @vitest-environment jsdom` directive on the first line, so the

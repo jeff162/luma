@@ -83,7 +83,8 @@ Options:
 
 This build is unsigned, so the operating system may warn about it the first time it runs.
 
-Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one. The
+other software included in this build, and the license of each, is listed in THIRD-PARTY-LICENSES.txt.
 """
 
 READ_ME_INSTALLED = """Luma - installed build
@@ -104,7 +105,8 @@ Options:
 
 This build is unsigned, so the operating system will warn about it the first time it runs.
 
-Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one. The
+other software included in this build, and the license of each, is listed in THIRD-PARTY-LICENSES.txt.
 """
 
 # Gatekeeper is the reason this one is long. The gesture most people know for opening an unsigned
@@ -143,7 +145,8 @@ same thing from the browser.
 {DEFAULT_APP_NAME} runs no window of its own (the browser is its interface), so the Dock icon is the
 only thing on screen when it is running.
 
-Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one.
+Licensed under the GNU AGPL v3.0 or later. The full text is in the LICENSE file beside this one. The
+other software included in this build, and the license of each, is listed in THIRD-PARTY-LICENSES.txt.
 """
 
 
@@ -339,6 +342,13 @@ LICENSE_FILE = ROOT / "LICENSE"
 # the same in both places: Finder and most Linux file managers hide dot-files, so `.env_example` was
 # invisible in exactly the disk image meant to hand it over.
 ENV_EXAMPLE_FILE = ROOT / "env_example.txt"
+# The licenses of everything else the kit carries. Most of those licenses require their notice to travel
+# with every copy, and a frozen executable carries none of the files it was built from, so this file is
+# the only form that obligation can take here. `scripts/luma.spec` writes it during the PyInstaller run —
+# that is where the list of collected shared libraries exists — folding in the web interface's half from
+# the frontend build (`frontend/scripts/thirdPartyNotices.js`). The kit ships the same bytes the bundle
+# carries, so the copy beside the executable and the copy the About page serves cannot disagree.
+THIRD_PARTY_NOTICES_FILE = ROOT / "build" / "third-party" / runtime_config.THIRD_PARTY_NOTICES_FILENAME
 
 
 def _kit_members(executable: Path, form: str) -> list[tuple[str, bytes, int]]:
@@ -349,6 +359,11 @@ def _kit_members(executable: Path, form: str) -> list[tuple[str, bytes, int]]:
         (executable.name, executable.read_bytes(), 0o755),
         ("README.txt", read_me.encode("utf-8"), 0o644),
         ("LICENSE", LICENSE_FILE.read_text(encoding="utf-8").encode("utf-8"), 0o644),
+        (
+            THIRD_PARTY_NOTICES_FILE.name,
+            THIRD_PARTY_NOTICES_FILE.read_text(encoding="utf-8").encode("utf-8"),
+            0o644,
+        ),
         (ENV_EXAMPLE_FILE.name, ENV_EXAMPLE_FILE.read_text(encoding="utf-8").encode("utf-8"), 0o644),
     ]
 
@@ -438,6 +453,7 @@ def _package_disk_image(app: Path, form: str) -> Path:
         (staging / "Applications").symlink_to("/Applications")
         (staging / "README.txt").write_text(READ_ME_MACOS)
         shutil.copyfile(LICENSE_FILE, staging / "LICENSE")
+        shutil.copyfile(THIRD_PARTY_NOTICES_FILE, staging / THIRD_PARTY_NOTICES_FILE.name)
         shutil.copyfile(ENV_EXAMPLE_FILE, staging / ENV_EXAMPLE_FILE.name)
 
         _run(

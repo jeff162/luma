@@ -22,7 +22,7 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from backend.runtime_config import bundled_license_path
+from backend.runtime_config import bundled_license_path, third_party_notices
 
 router = APIRouter()
 
@@ -70,6 +70,27 @@ def bundled_license_available() -> bool:
     reason the shutdown capability is: the About page has to decide whether a fallback exists at all
     before it goes looking for one."""
     return bundled_license_path() is not None
+
+
+def third_party_notices_scope() -> str | None:
+    """How much of the application the notices this copy can serve cover — "build", "web", or nothing at
+    all. Reported in the status payload beside the license flag and for the same reason: the About page
+    has to know whether there is a link to offer, and what to say it covers."""
+    found = third_party_notices()
+    return found[1] if found else None
+
+
+@router.get("/third-party-licenses", response_class=PlainTextResponse)
+def read_third_party_notices():
+    """The licenses of the third-party software this copy carries.
+
+    A packaged build freezes its dependencies into one executable, so the license files they were built
+    from reach the recipient only here and in the copy beside the executable in the kit. Elsewhere this
+    serves the web interface's own list, which is the half that is bundled rather than installed."""
+    found = third_party_notices()
+    if found is None:
+        raise HTTPException(status_code=404, detail="This copy carries no generated third-party notices.")
+    return PlainTextResponse(found[0].read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
 
 
 @router.get("/license", response_class=PlainTextResponse)
