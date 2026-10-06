@@ -461,7 +461,8 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
     open_signals = [s for s in signals if s["key"] not in dismissed]
     dismissed_count = len(signals) - len(open_signals)
 
-    # Warnings first, then most recent — the order the review surface reads top to bottom.
+    # Warnings first, then by date ascending: oldest finding first in the review, soonest charge first
+    # in the Upcoming list, which reads the same array.
     #
     # The last two settle ties, which are ordinary rather than exotic: two series whose newest charge fell
     # on the same day produce two warnings the date cannot separate, and `_load_series` is unordered, so
