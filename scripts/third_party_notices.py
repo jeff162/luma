@@ -29,6 +29,7 @@ copying them, and the official Windows Python carries the licenses of what it bu
 `LICENSE.txt`, so both of those are already covered.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -50,14 +51,35 @@ LICENSE_FILE = re.compile(r"(^|/)(licen[cs]e|copying|notice|authors)([-._].*)?$"
 
 RULE = "-" * 78
 
-# Where a distribution's own files live, so a collected binary can be told from a system library: an
-# extension module under the standard library or in site-packages is already covered by Python's entry or
-# by its package's. Deliberately the specific library directories and not `sys.prefix`, which on a
-# system Python is `/usr` and would swallow every shared library on the machine.
-_PYTHON_TREES = tuple(sorted({
-    str(Path(sysconfig.get_paths()[name]).resolve())
-    for name in ("stdlib", "platstdlib", "purelib", "platlib")
-}))
+def _python_trees(platform: str = sys.platform) -> tuple[str, ...]:
+    """Where a distribution's own files live, so a collected binary can be told from a system library: an
+    extension module under the standard library or in site-packages is already covered by Python's entry
+    or by its package's. Deliberately the specific library directories and not `sys.prefix`, which on a
+    system Python is `/usr` and would swallow every shared library on the machine.
+
+    **Windows is the exception, and there the installation root itself is the tree.** Those four
+    directories are `Lib` and `Lib\\site-packages` there and nothing else, while the interpreter keeps its
+    DLLs outside both: `python3xx.dll` sits at the root and the OpenSSL, SQLite and libffi it links
+    against sit in `DLLs` beside it. All of them are the Python that gets frozen in, covered by the
+    runtime entry `python_runtime_license` writes — the official Windows installer's `LICENSE.txt` names
+    what the distribution bundles — and none of them is a system library any package manager could speak
+    for, so leaving them to the rule below stops every Windows build. The prefix that is too broad on Unix
+    is exactly right here: nothing but Python is installed under it. `VCRUNTIME140.dll`, which the
+    installer drops at that root too, is the one thing under it that is not CPython; Microsoft's
+    redistributable terms let an application carry it and ask for no notice in return.
+    """
+    trees = {Path(sysconfig.get_paths()[name]).resolve()
+             for name in ("stdlib", "platstdlib", "purelib", "platlib")}
+    if platform == "win32":
+        # Both, because a build run from a virtual environment takes its own site-packages from the first
+        # and the interpreter's DLLs from the second.
+        trees |= {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+    # Normalized because these are compared against paths PyInstaller reports, and on Windows the same
+    # directory can differ from this one in case and in separator without being a different directory.
+    return tuple(sorted(os.path.normcase(str(tree)) for tree in trees))
+
+
+_PYTHON_TREES = _python_trees()
 
 # The interpreter's own shared library, which is Python rather than something Python links against — it is
 # credited by the runtime's entry (`python_runtime_license`) like the rest of the interpreter. Matched by
@@ -162,7 +184,7 @@ def _system_library_paths(binaries) -> list[Path]:
     paths = []
     for entry in binaries:
         source = Path(str(entry[1])).resolve()
-        if any(str(source).startswith(tree) for tree in _PYTHON_TREES):
+        if any(os.path.normcase(str(source)).startswith(tree) for tree in _PYTHON_TREES):
             continue
         if source.name in _PYTHON_RUNTIME_LIBRARIES:
             continue

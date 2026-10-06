@@ -8,6 +8,7 @@ is going to diff.
 """
 
 import importlib.util
+import os
 import sys
 import sysconfig
 from pathlib import Path
@@ -104,6 +105,17 @@ def test_only_libraries_from_outside_the_python_installation_count():
     interpreter's own library is Python too, wherever the installation happens to keep it."""
     found = notices._system_library_paths([BINARY, EXTENSION, RUNTIME])
     assert [p.name for p in found] == ["libz.so.1.2.11"]
+
+
+def test_a_windows_build_counts_the_whole_python_installation_as_python():
+    """Asserted from any platform, because the build it protects only ever runs on one. Windows keeps
+    `python3xx.dll` and the OpenSSL, SQLite and libffi it links against at the installation root and in
+    `DLLs`, outside the four directories that identify the installation everywhere else — and with no
+    package manager to name them, every one of them stopped the Windows release build. The same prefix is
+    `/usr` on a system Python, which is why it is added there and nowhere else."""
+    installation = os.path.normcase(str(Path(sys.base_prefix).resolve()))
+    assert installation in notices._python_trees("win32")
+    assert installation not in notices._python_trees("linux")
 
 
 def test_each_library_is_credited_to_the_package_that_installed_it():

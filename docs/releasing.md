@@ -92,7 +92,11 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
   a relocatable Python — the kind CI builds on — keeps it in the installation's `lib/`, where neither the
   package manager nor the standard-library paths that identify the installation can account for it. macOS
   links the system's frameworks instead of copying them and Windows takes its libraries from a Python
-  whose `LICENSE.txt` lists them, so the section is empty there and left out.
+  whose `LICENSE.txt` lists them, so the section is empty there and left out. Empty on Windows takes one
+  extra rule: `python3xx.dll` sits at the installation root and OpenSSL, SQLite and libffi in the `DLLs`
+  directory beside it, outside the four directories that identify the installation everywhere else, so
+  the whole prefix counts as Python there — safe only because nothing else is installed under it, which
+  is not true of the `/usr` the same prefix names on Linux.
 
   **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
   from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose
