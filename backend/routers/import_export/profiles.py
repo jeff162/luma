@@ -129,10 +129,26 @@ def _assert_profile_name_available(conn, name: Optional[str], exclude_profile_id
     return normalized_name
 
 
+def _flag_defaulting_true(value) -> bool:
+    """A flag that means *on* unless something said otherwise, read from either side of this comparison.
+
+    The two sides spell a boolean differently and that is the whole hazard here: a profile's flag comes
+    out of SQLite as the integer 0 or 1, a batch's comes out of its JSON snapshot as a real `False` or
+    `True`. An identity test against the singleton (`value is not False`) therefore read every stored
+    0 as *on* — so a source with categorization switched off could match no historical file at all, and
+    matched the files that had it on. Absent still means on, which is what the identity test was for.
+    """
+    return True if value is None else bool(value)
+
+
 # Source "signature" comparison powers `compatible-batches`: a profile and a profileless batch are
 # compatible when their mapping/format/account setup agree closely enough that the profile could own
 # the historical file. The normalizer flattens both into the same shape; the comparator is
 # deliberately asymmetric in places (e.g. a single-account profile vs. a per-row-account batch).
+#
+# **Both sides reach it in different representations**, which is where its defects have been: a column
+# map is stored text on the profile and an already-parsed dict on the batch, and a flag is an integer on
+# one and a boolean on the other. Anything added here has to be read from both shapes.
 def _normalize_import_source_signature(source: dict) -> dict:
     column_map = safe_json_dict(source.get("column_map"))
     account_assignments = {
@@ -167,7 +183,7 @@ def _normalize_import_source_signature(source: dict) -> dict:
         "date_format": str(source.get("date_format") or "%m/%d/%Y").strip() or "%m/%d/%Y",
         "amount_convention": str(source.get("amount_convention") or "single_signed").strip() or "single_signed",
         "skip_rows": int(source.get("skip_rows") or 0),
-        "apply_categorization": bool(source.get("apply_categorization") is not False),
+        "apply_categorization": _flag_defaulting_true(source.get("apply_categorization")),
         "enrich_from_source": bool(source.get("enrich_from_source")),
         "account_id": str(source.get("account_id") or "").strip(),
         "column_map": {

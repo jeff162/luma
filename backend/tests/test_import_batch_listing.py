@@ -97,6 +97,66 @@ class ImportBatchListingTests(unittest.IsolatedAsyncioTestCase):
         # data source's fingerprint before adopting the batch.
         self.assertEqual(batches[0]["header_fingerprint"], "Date|Description|Account|Amount")
 
+    async def test_batch_listing_exposes_an_account_the_import_created(self):
+        """A file with no account column may create its account as it imports, and the client needs the
+        created account's *name* back: it is how an imported-category scope selection is keyed for an
+        account that had no id to be chosen by when the scope was set.
+
+        The field is nested inside the batch's parsed `config_snapshot`, and the helper that read it only
+        accepted stored text, so it came back `{}` — a shape indistinguishable from "this import created
+        no account", which is why nothing noticed.
+        """
+        config = {
+            "filename": "created.csv",
+            "profile_id": None,
+            "account_id": None,
+            "account_map": None,
+            "skip_accounts": None,
+            "new_accounts": [{"csv_value": "__single_account__", "name": "Harborline Savings", "type": "depository"}],
+            "single_account_new": {"name": "Harborline Savings", "type": "depository"},
+            "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        with self._use_db_path():
+            await run_import(
+                file=FakeUploadFile("created.csv", "Date,Description,Amount\n2026-01-02,Coffee,4.50"),
+                config=json.dumps(config),
+            )
+            batches = list_batches()
+
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0]["single_account_new"], {"name": "Harborline Savings", "type": "depository"})
+
+    async def test_a_batch_that_created_no_account_says_so(self):
+        """The control: the field has to be empty where no account was created, or the assertion above
+        would pass against a reader that simply echoes something for every batch."""
+        account_id = self._insert_account("Checking")
+        config = {
+            "filename": "plain.csv",
+            "profile_id": None,
+            "account_id": account_id,
+            "account_map": None,
+            "skip_accounts": None,
+            "new_accounts": None,
+            "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        with self._use_db_path():
+            await run_import(
+                file=FakeUploadFile("plain.csv", "Date,Description,Amount\n2026-01-02,Coffee,4.50"),
+                config=json.dumps(config),
+            )
+            batches = list_batches()
+        self.assertEqual(batches[0]["single_account_new"], {})
+
     def _insert_completed_batch(self, filename: str, imported_at: str) -> str:
         batch_id = str(uuid.uuid4())
         with self._use_db_path():

@@ -158,13 +158,6 @@ def _read_file_text(path: str) -> str:
         return content.decode("latin-1")
 
 
-def _as_dict(value) -> dict:
-    """`safe_json_dict` parses a *string*; feed it a dict and it returns `{}`. A profile's `column_map`
-    arrives as stored JSON, but every nested member of it is a real dict once that outer parse has
-    happened, so both shapes turn up in the same walk."""
-    return value if isinstance(value, dict) else safe_json_dict(value)
-
-
 def _live_account_ids(conn) -> set[str]:
     return {
         str(row["id"])
@@ -182,7 +175,7 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
     that no longer exists, a value the source has never been shown, or a `new account` entry, which is
     a standing instruction to create one and is exactly what must not happen with nobody watching.
     """
-    column_map = _as_dict(profile.get("column_map"))
+    column_map = safe_json_dict(profile.get("column_map"))
     account_column = str(column_map.get("account") or "").strip()
     live_account_ids = _live_account_ids(conn)
 
@@ -200,11 +193,11 @@ def build_watch_import_config(conn, profile: dict, parsed) -> tuple[Optional[dic
             return None, f'The file has no "{account_column}" column for this source to read accounts from.'
         assignments = {
             str(key): str(value)
-            for key, value in _as_dict(column_map.get("account_assignments")).items()
+            for key, value in safe_json_dict(column_map.get("account_assignments")).items()
             if key and value
         }
         skips = {str(value) for value in (column_map.get("account_skips") or []) if str(value or "").strip()}
-        new_accounts = _as_dict(column_map.get("account_new"))
+        new_accounts = safe_json_dict(column_map.get("account_new"))
         # A blank cell is not an unmapped account — it is a row the file does not place, and the
         # import already refuses it row by row and records it on the card. Parking the whole file for
         # one would make every trailing footer line a Task.

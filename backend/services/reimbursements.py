@@ -361,7 +361,7 @@ def _read_claims(metadata) -> dict[str, dict]:
     unreadable payload must not be able to silently absorb a transaction's whole receivable into a
     reimbursement nobody said it belonged to.
     """
-    data = metadata if isinstance(metadata, dict) else safe_json_dict(metadata)
+    data = safe_json_dict(metadata)
     raw = data.get("claims")
     if not isinstance(raw, dict):
         return {}
@@ -384,10 +384,11 @@ def _read_remind_on(metadata) -> Optional[str]:
     default*; the explicit string `""` means the user turned this record's reminder off, which is a
     different answer and has to survive as one — collapsing them would make "no reminder" revert to the
     default on the next save."""
-    # `get_link` hands back an already-parsed dict; `safe_json_dict` is the fallback for a raw payload.
-    # Mirrors `_read_claims` — reading only the string form here is what made every stored reminder read
-    # as absent, so a switched-off one quietly returned to following the default on the next save.
-    data = metadata if isinstance(metadata, dict) else safe_json_dict(metadata)
+    # `get_link` hands back an already-parsed dict, which `safe_json_dict` passes through — reading only
+    # the string form is what once made every stored reminder read as absent, so a switched-off one
+    # quietly returned to following the default on the next save. The tolerance lives in the helper now
+    # rather than in a guard here, because the same mistake was live in three other subsystems.
+    data = safe_json_dict(metadata)
     if "remind_on" not in data:
         return None
     value = data.get("remind_on")
