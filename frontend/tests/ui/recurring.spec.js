@@ -59,8 +59,15 @@ test('the review view reports the anomalies the demo data was built to raise', a
 
 test('an amount finding can exclude its charge from the series, and Undo puts it back', async ({ page, request }) => {
   // The unit test pins that the button hands back its finding; what only the page can show is the wiring
-  // behind it — the exclusion lands, the finding goes because its charge no longer belongs, and the
-  // prompt's Undo brings both back.
+  // behind it — the exclusion lands, the finding about *that charge* goes, and the prompt's Undo brings
+  // both back.
+  //
+  // Asserted about the one finding, by the key the server identifies it with, rather than about how many
+  // findings are left — which does not have to fall. On a series whose price is still climbing, dropping
+  // the newest charge makes the charge before it the newest, and *its* step is then reported for the
+  // first time (`data-model.md` → "Exclude from series"); the demo's seasonal gas bill is that series.
+  // Clicking whichever row rendered first therefore tested one of two different behaviors depending on
+  // how the two same-day findings happened to sort, and the cleanup below cleared the other one's charge.
   const response = await request.get('/api/recurring/signals')
   expect(response, `recurring signals failed (${response.status()})`).toBeOK()
   const finding = ((await response.json()).signals || []).find(s => s.kind === 'price_change')
@@ -69,17 +76,16 @@ test('an amount finding can exclude its charge from the series, and Undo puts it
   await page.goto('/recurring')
   await page.getByRole('button', { name: /Needs attention/ }).first().click()
   await page.getByRole('button', { name: /Amount changed/ }).click()
-  const excludeButtons = page.getByRole('button', { name: 'Exclude from series' })
-  const before = await excludeButtons.count()
-  expect(before).toBeGreaterThan(0)
+  const findingRow = page.locator(`[data-signal-key="${finding.key}"]`)
+  await expect(findingRow).toHaveCount(1)
 
   try {
-    await excludeButtons.first().click()
+    await findingRow.getByRole('button', { name: 'Exclude from series' }).click()
     await expect(page.getByText('Excluded from series')).toBeVisible()
-    await expect(excludeButtons).toHaveCount(before - 1)
+    await expect(findingRow).toHaveCount(0)
 
     await page.getByRole('button', { name: /Undo/ }).click()
-    await expect(excludeButtons).toHaveCount(before)
+    await expect(findingRow).toHaveCount(1)
   } finally {
     // Whatever happened above, leave the charge in its series for the specs that read the demo ledger.
     await request.post(`/api/recurring/${finding.series_id}/membership`, {

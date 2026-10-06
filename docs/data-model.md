@@ -840,6 +840,16 @@ Key invariants:
   list (rows read via the transactions filter `recurring_excluded_series_id`), each with an **Add back**.
   All three resolve to `state='clear'`, after which the row re-matches and rejoins.
 
+  **Excluding the charge an *Amount changed* finding names does not have to reduce the findings.** The
+  step is measured against the newest occurrence, and one the *previous* charge already made is not
+  reported twice — so on a series whose price is still climbing (the demo's seasonal gas bill), removing
+  the newest charge promotes the one before it, whose own step was never news while it had a newer charge
+  above it, and that step is raised in its place. This is deliberate: the earlier rise is a real finding
+  that was only ever hidden by a later one, and suppressing it would mean an exclusion could bury a step
+  the user has not seen. It does mean the action can read on screen as having done nothing, which is the
+  accepted cost. A test about the exclusion therefore asserts that *that finding* is gone, never that the
+  list got shorter (`frontend/tests/ui/recurring.spec.js`).
+
 - **Rule↔series lifecycle coupling.** For a `source='rule'` series the "recurring" checkbox lives on the
   rule, so the destructive series actions reconcile the two: **suppress** and **delete** clear the rule's
   `is_recurring` and drop the series (and delete the rule outright if clearing the flag leaves it

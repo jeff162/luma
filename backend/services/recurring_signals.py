@@ -462,9 +462,17 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
     dismissed_count = len(signals) - len(open_signals)
 
     # Warnings first, then most recent — the order the review surface reads top to bottom.
+    #
+    # The last two settle ties, which are ordinary rather than exotic: two series whose newest charge fell
+    # on the same day produce two warnings the date cannot separate, and `_load_series` is unordered, so
+    # the order would otherwise be however SQLite scanned the table that run. A list worked through top to
+    # bottom that shuffles between reads is a defect in itself, and a test that clicks its first row is
+    # testing whichever finding it drew. Name first because it is the one a reader can follow; the key
+    # last because it is unique by construction, so no pair can reach the scan order.
     def _sort_key(s):
         when = s.get("txn_date") or s.get("expected_date") or s.get("due_date") or s.get("first_seen") or ""
-        return (0 if s["severity"] == SEVERITY_WARNING else 1, str(when))
+        return (0 if s["severity"] == SEVERITY_WARNING else 1, str(when),
+                str(s.get("series_name") or ""), s["key"])
     open_signals.sort(key=_sort_key)
 
     counts: dict[str, int] = {}

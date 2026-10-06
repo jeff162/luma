@@ -29,9 +29,21 @@ on:
   pull_request:
   workflow_call:
 
-# Three pushes in a minute need the answer for the third, not for all three.
+# Three pushes in a minute need the answer for the third, not for all three — but a release's gate is
+# not a superseded push, and cancelling one throws away a build nobody can get back without starting over.
+#
+# Telling the two apart cannot be done by asking whether this workflow was *called*: inside a called
+# workflow the whole `github` context belongs to the caller, so `github.event_name` is the caller's event
+# (`push`, `workflow_dispatch`) and never `workflow_call`, and `github.workflow` is the caller's name.
+# What does work is that this workflow's own triggers are a push to `main` and a pull request — so a
+# `workflow_dispatch` or a tag ref arriving here can only be `release.yml` calling in. Those get a group
+# of their own per run (`github.run_id` is the caller's, one per release), which is what stopped two
+# manual release builds from cancelling each other: both evaluated to one group under the caller's ref.
+#
+# `cancel-in-progress` stays plain `true` because a group carrying the run id is unique — there is never
+# anything in it to cancel.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && format('release-ci-{0}', github.run_id) || format('ci-{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: true
 
 permissions:

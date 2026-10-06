@@ -157,7 +157,7 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
   )
 
   return (
-    <div style={{
+    <div data-signal-key={signal.key} style={{
       display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px',
       borderTop: '1px solid color-mix(in srgb, var(--border) 55%, transparent)',
       // Marked while its series' transactions are open below, the same way a series card marks itself —
