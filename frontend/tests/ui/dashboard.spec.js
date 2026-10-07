@@ -290,3 +290,62 @@ test('removing a tag from a drilled transaction moves the report behind it', asy
   await page.getByRole('button', { name: '×' }).last().click()
   await picker.selectOption({ label: 'group' })
 })
+
+// The single-period trend's grain chooser stays on screen while the chart navigates the period. A bar
+// click once replaced it with the back-step alone, leaving no way into a selected year's months; and a
+// to-date selection could only be compared against earlier periods rounded to whole months. This walks
+// the reported path: a to-date pick, its exact same-span comparison, a bar click and the step back
+// keeping that choice, and a FilterBar pick dropping it. Month to date rather than year to date, because
+// the demo ledger's spending sits in one year but several months.
+test('single-period trend keeps its grain chooser through bar clicks and compares exact spans', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+  await page.getByRole('button', { name: 'Expenses' }).click()
+
+  const grain = page.getByRole('combobox', { name: 'Trend bucket size' })
+  const datePicker = page.getByRole('button', { name: /^📅/ })
+  const pickPreset = async label => {
+    await datePicker.click()
+    await page.getByText(label, { exact: true }).click()
+  }
+  // The trend is two charts, the fixed axis column first and the panning plot after it, each drawing one
+  // rectangle per bucket; the plot's are the second half.
+  const firstPlotBar = async () => {
+    const bars = page.locator('.recharts-bar-rectangle')
+    await expect.poll(() => bars.count()).toBeGreaterThan(2)
+    return bars.nth((await bars.count()) / 2)
+  }
+
+  await pickPreset('Year to date')
+  await expect(grain).toHaveValue('year')
+  await expect(grain.locator('option')).toHaveText(['Monthly', 'Quarterly', 'Yearly', 'Same span each year'])
+
+  await pickPreset('Month to date')
+  await expect(grain).toHaveValue('month')
+  // Same span asks for day-precise totals: the 1st through today's date in each month, ending with this one.
+  const now = new Date()
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const today = `${thisMonth}-${String(now.getDate()).padStart(2, '0')}`
+  const spanRequest = page.waitForRequest(request => request.url().includes('/summary/range-trend'))
+  await grain.selectOption('span')
+  const ranges = new URL((await spanRequest).url()).searchParams.get('ranges').split(',')
+  expect(ranges.at(-1)).toBe(`${thisMonth}-01:${today}`)
+  expect(ranges.every(range => range.slice(8, 10) === '01' && Number(range.slice(-2)) <= now.getDate())).toBe(true)
+
+  // A bar click selects that exact span, keeps the chooser and its pick, and the back-step keeps it too.
+  await (await firstPlotBar()).click()
+  const back = page.getByRole('button', { name: /^← Back to Month to date/ })
+  await expect(back).toBeVisible()
+  await expect(grain).toHaveValue('span')
+  await back.click()
+  await expect(datePicker).toHaveText(/Month to date/)
+  await expect(grain).toHaveValue('span')
+
+  // A period chosen in the FilterBar is a new selection, and the chooser goes back to its default.
+  await grain.selectOption('year')
+  await pickPreset('Last month')
+  await expect(grain).toHaveValue('month')
+  await expect(grain.locator('option')).toHaveText(['Monthly', 'Quarterly', 'Yearly'])
+})

@@ -446,6 +446,18 @@ export const api = {
     })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
+  // `ranges` is [{ start, end }] of inclusive ISO days; one row comes back per range, in order.
+  getRangeTrend: (ranges, account_id, tag_ids, view, owner_ids, opts = {}) => {
+    const q = new URLSearchParams({
+      ranges: ranges.map(r => `${r.start}:${r.end}`).join(','),
+      ...(account_id ? { account_id } : {}),
+      ...csvParam('tag_ids', tag_ids),
+      ...(view ? { view } : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...summaryFilterParams(opts),
+    })
+    return request(`/transactions/summary/range-trend?${q}`)
+  },
   overrideCategory: (txnId, category_id, notes) =>
     request(`/transactions/${txnId}/category`, {
       method: 'PATCH',

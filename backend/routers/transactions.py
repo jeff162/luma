@@ -2577,9 +2577,10 @@ def spending_by_category_in_group(
 
     return [dict(r) for r in rows]
 
-# Returns signed monthly totals (no ABS), so reverses against the natural
-# direction of the queried scope appear as negative bars instead of being
-# folded into a magnitude. Sign and transaction-filter selection:
+# The population and sign shared by the trend endpoints (`monthly-trend`, `range-trend`), which differ
+# only in how they cut time. Signed totals (no ABS), so reverses against the natural direction of the
+# queried scope appear as negative bars instead of being folded into a magnitude. Sign and
+# transaction-filter selection:
 #   - category_id given: ignore `view`; sign follows category type so
 #     income-type scopes flip to positive-on-receipt; the existing
 #     category-membership filter limits which transactions count.
@@ -2588,24 +2589,8 @@ def spending_by_category_in_group(
 #       * spending  -> filter to expense-side transactions, SUM
 #       * income    -> filter to income-side transactions, -SUM
 #       * cash_flow -> all transactions, -SUM (positive = net inflow)
-@router.get("/summary/monthly-trend")
-def monthly_trend(
-    category_id: Optional[str] = Query(None),
-    payee:       Optional[str] = Query(None),
-    account_id:  Optional[str] = Query(None),
-    facets:      TransactionFacets = Depends(),
-    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
-    months:      int            = Query(18, le=120),
-    date_start:  Optional[str] = Query(None),
-    date_end:    Optional[str] = Query(None),
-    anchor:      Optional[str] = Query(None, description="'latest' slides the rolling window to end at the scope's most recent transaction instead of today"),
-    view:        str            = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
-):
-    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
-    facets = coerce_facets(facets) or TransactionFacets()
+def _trend_scope(category_id, payee, account_id, facets, source_account_ids, view):
     if payee:
-        # Payee detail drawers want the merchant's full visible history by default, so the rolling month window is
-        # suppressed unless the caller supplied an explicit date filter.
         clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
         params  = [payee, payee, payee]
@@ -2670,6 +2655,42 @@ def monthly_trend(
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     append_facets(clauses, params, facets)
 
+    needs_category_join = bool(category_id) or (not payee)
+    join_sql = (
+        "LEFT JOIN category c ON c.id = t.category_id "
+        "LEFT JOIN category p ON p.id = c.parent_id"
+        if needs_category_join else ""
+    )
+    return clauses, params, join_sql
+
+
+def _trend_sign_factor(conn, category_id, payee, view) -> int:
+    if category_id:
+        return -1 if _resolve_category_is_income(conn, category_id) else 1
+    if payee:
+        return 1
+    return -1 if view in ("income", "cash_flow") else 1
+
+
+@router.get("/summary/monthly-trend")
+def monthly_trend(
+    category_id: Optional[str] = Query(None),
+    payee:       Optional[str] = Query(None),
+    account_id:  Optional[str] = Query(None),
+    facets:      TransactionFacets = Depends(),
+    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
+    months:      int            = Query(18, le=120),
+    date_start:  Optional[str] = Query(None),
+    date_end:    Optional[str] = Query(None),
+    anchor:      Optional[str] = Query(None, description="'latest' slides the rolling window to end at the scope's most recent transaction instead of today"),
+    view:        str            = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
+):
+    # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
+    facets = coerce_facets(facets) or TransactionFacets()
+    # Payee detail drawers want the merchant's full visible history by default, so the rolling month
+    # window is suppressed for a payee scope unless the caller supplied an explicit date filter.
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, source_account_ids, view)
+
     if date_start:
         clauses.append("t.date >= ?")
         params.append(date_start)
@@ -2688,13 +2709,6 @@ def monthly_trend(
         # all-history scans unless the caller explicitly asked for that.
         clauses.append("t.date >= date('now', ? || ' months')")
         params.append(f"-{months}")
-
-    needs_category_join = bool(category_id) or (not payee)
-    join_sql = (
-        "LEFT JOIN category c ON c.id = t.category_id "
-        "LEFT JOIN category p ON p.id = c.parent_id"
-        if needs_category_join else ""
-    )
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -2716,14 +2730,7 @@ def monthly_trend(
                 params.append(anchor_date)
                 where = "WHERE " + " AND ".join(clauses)
 
-        if category_id:
-            sign_factor = -1 if _resolve_category_is_income(conn, category_id) else 1
-        elif payee:
-            sign_factor = 1
-        elif view == "income" or view == "cash_flow":
-            sign_factor = -1
-        else:
-            sign_factor = 1
+        sign_factor = _trend_sign_factor(conn, category_id, payee, view)
 
         rows = conn.execute(
             f"""
@@ -2741,6 +2748,89 @@ def monthly_trend(
         ).fetchall()
 
     return [dict(r) for r in rows]
+
+
+# The most ranges one `range-trend` call may ask for — the single-period chart's same-span window
+# needs a fraction of this.
+RANGE_TREND_MAX_RANGES = 64
+
+
+# The `monthly-trend` population and sign, totalled over caller-supplied day-precise date ranges
+# instead of calendar months. It exists because a bar has to equal the total its own range would give
+# when selected, and a month-grained series cannot honour that for a range that does not start and end
+# on month boundaries (Jan 1 – Oct 7 in each prior year; the 8th to the 7th of each month).
+#
+# `ranges` is `start:end` pairs (inclusive ISO dates), comma-separated. One row comes back per range,
+# in the order asked, including a zero row for a range nothing fell in — the caller asked about that
+# range, so "nothing" is its answer. Ranges may overlap; a transaction counts in every range holding it.
+@router.get("/summary/range-trend")
+def range_trend(
+    ranges:      str           = Query(..., description="comma-separated start:end inclusive ISO date pairs"),
+    category_id: Optional[str] = Query(None),
+    payee:       Optional[str] = Query(None),
+    account_id:  Optional[str] = Query(None),
+    facets:      TransactionFacets = Depends(),
+    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
+    view:        str           = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
+):
+    facets = coerce_facets(facets) or TransactionFacets()
+    spans = []
+    for part in (ranges or "").split(","):
+        if not part.strip():
+            continue
+        start_text, sep, end_text = part.partition(":")
+        if not sep:
+            raise HTTPException(status_code=400, detail="each range must be start:end")
+        start, end = _require_calendar_date(start_text), _require_calendar_date(end_text)
+        if start > end:
+            raise HTTPException(status_code=400, detail=f"range {start}:{end} ends before it starts")
+        spans.append((start, end))
+    if not spans:
+        raise HTTPException(status_code=400, detail="at least one range is required")
+    if len(spans) > RANGE_TREND_MAX_RANGES:
+        raise HTTPException(status_code=400, detail=f"at most {RANGE_TREND_MAX_RANGES} ranges")
+
+    clauses, params, join_sql = _trend_scope(category_id, payee, account_id, facets, source_account_ids, view)
+    # The overall bounds let the date index prune before the per-range join does its work.
+    clauses.append("t.date >= ?")
+    params.append(min(s for s, _ in spans))
+    clauses.append("t.date <= ?")
+    params.append(max(e for _, e in spans))
+    where = "WHERE " + " AND ".join(clauses)
+
+    values_sql = ", ".join("(?, ?, ?)" for _ in spans)
+    range_params = [v for i, (s, e) in enumerate(spans) for v in (i, s, e)]
+
+    with get_db() as conn:
+        # The same split-expansion seam monthly-trend reads, so a split counts per allocation here too.
+        _expanded = txn_effective_sql(conn, expand=True)
+        sign_factor = _trend_sign_factor(conn, category_id, payee, view)
+        rows = conn.execute(
+            f"""
+            WITH r(idx, lo, hi) AS (VALUES {values_sql})
+            SELECT
+                r.idx                           AS idx,
+                ({sign_factor} * SUM(t.amount)) AS total,
+                COUNT(DISTINCT t.id)            AS count
+            FROM   {_expanded} t
+            JOIN   r ON t.date >= r.lo AND t.date <= r.hi
+            {join_sql}
+            {where}
+            GROUP BY r.idx
+            """,
+            range_params + params,
+        ).fetchall()
+
+    found = {r["idx"]: r for r in rows}
+    return [
+        {
+            "start": start,
+            "end": end,
+            "total": found[i]["total"] if i in found else 0,
+            "count": found[i]["count"] if i in found else 0,
+        }
+        for i, (start, end) in enumerate(spans)
+    ]
 
 
 # Monthly cash flow, split into the two sides the trend chart draws as diverging bars.

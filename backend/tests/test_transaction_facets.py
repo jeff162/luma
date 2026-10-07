@@ -49,6 +49,7 @@ FACETED_ENDPOINTS = (
     "/api/transactions/summary/by-group",
     "/api/transactions/summary/by-category-in-group",
     "/api/transactions/summary/monthly-trend",
+    "/api/transactions/summary/range-trend",
     "/api/transactions/summary/monthly-cash-flow",
     "/api/transactions/summary/monthly-by-group",
     "/api/import-export/transactions.csv",

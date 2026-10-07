@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * Trend-bucket geometry for the Dashboard single-period chart. Pure month math, kept in its own module
- * so it is unit-testable and so the page file exports only components. Bucket ranges are inclusive month
- * codes ('YYYY-MM'); the page folds monthly-trend rows into them (aggregateMonthlyIntoBuckets).
+ * Trend-bucket geometry for the Dashboard's charts. Pure date math, kept in its own module so it is
+ * unit-testable and so the page file exports only components. Month codes are 'YYYY-MM'; the
+ * single-period trend's section at the end also deals in inclusive ISO days.
  */
 
 // Every month code from `startYM` to `endYM`, both inclusive. Callers use it to run an axis
@@ -91,67 +91,224 @@ export function resolveTrendsWindowKey(rows, selectedYear, currentMonth) {
   return months.reduce((latest, month) => (month > latest ? month : latest)).slice(0, 4)
 }
 
-// A "year to date" selection: anchored to January 1 and ending before December of the same calendar
-// year (the "Year to date" preset, or a custom "Jan 1 → date this year" range). Such a slice compares
-// most meaningfully against the *same* Jan→month window in prior years, not against contiguous tiles of
-// its own length — so the trend treats it specially (see computeTrendBuckets).
-export function isYearToDateRange(date) {
-  return !!date?.start && !!date?.end
-    && date.start.slice(5, 10) === '01-01'
-    && date.start.slice(0, 4) === date.end.slice(0, 4)
-    && Number(date.end.slice(5, 7)) < 12
+// --- The Dashboard's single-period trend ----------------------------------------------------------
+//
+// The chart under the single-period breakdown answers "this kind of slice, over time", and it has two
+// ways of cutting time, picked from its chooser:
+//
+// - **Calendar grains** (month / quarter / year) bucket all of the data's history. The selected period
+//   is highlighted on every bucket it overlaps, so a period that is not itself a calendar unit — Past 12
+//   months, Year to date, a custom range — lights up the run of bars it touches rather than being
+//   squeezed into one. This is the default, at the grain the selection's length suggests.
+// - **Same span** repeats the selected period exactly, shifted back a month, quarter or year at a time:
+//   Jan 1 – Oct 7 in each prior year for Year to date, the 1st to the 7th of each month for Month to
+//   date. Offered only when the selection is not already a calendar unit (where it would duplicate that
+//   grain) and fits inside a year.
+//
+// **A bar equals what selecting it shows.** That is the invariant both modes keep, and the reason the
+// second one is day-precise and reads `/summary/range-trend` rather than folding monthly rows: a span
+// that does not start and end on month boundaries cannot be rebuilt from whole months, and the earlier
+// model that tried — bucket width rounded from the selection's length, tiled from its start month —
+// highlighted a bar covering different dates than the totals above it.
+//
+// Dates are inclusive ISO days ('YYYY-MM-DD'); a bucket's `start`/`end` are month codes (what the scroll
+// anchoring and the monthly rows key on) and `rangeStart`/`rangeEnd` the exact days a click selects.
+
+export const TREND_GRAINS = ['month', 'quarter', 'year']
+export const TREND_GRAIN_SAME_SPAN = 'span'
+const GRAIN_MONTHS = { month: 1, quarter: 3, year: 12 }
+const GRAIN_LABELS = { month: 'Monthly', quarter: 'Quarterly', year: 'Yearly' }
+const GRAIN_NOUNS = { 1: 'month', 3: 'quarter', 12: 'year' }
+
+// The ceiling on same-span buckets, matching what one `/summary/range-trend` call accepts
+// (`RANGE_TREND_MAX_RANGES` in backend/routers/transactions.py).
+export const SAME_SPAN_MAX_BUCKETS = 64
+
+function localISODate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// Single-page bottom-chart trend: instead of fetching a fixed rolling window, bucket the historical
-// timeline by the SELECTED period's length so the trend reads as "this kind of slice, over time." The
-// selected period sits as one bar; a generous run of earlier buckets and a small lookahead show the user
-// where they are.
-//
-// Year-to-date is the exception (see isYearToDateRange): the bars step a full year at a time and each
-// spans the same Jan→end-month window, so the chart answers "this year so far vs. prior years to the
-// same point." The window is whole calendar months (Jan→end month), each bar is labeled by its year, and
-// there's no future lookahead (prior years only). The comparison is at month granularity — a prior
-// year's current month counts whole, not truncated to today's day-of-month.
-export function computeTrendBuckets(periodDate, options = {}) {
-  const earlierCount = options.earlierCount ?? 11
-  let laterCount = options.laterCount ?? 3
-  let anchorStart, bucketMonths
-  if (periodDate?.start && periodDate?.end) {
-    anchorStart = periodDate.start.slice(0, 7)
-    // Bucket width tracks the selected period's *duration*, not how many calendar-month labels it
-    // touches. Otherwise a ~30-day range straddling a month boundary (e.g. "Last 30 days") counts as
-    // two months and inflates every bucket — and the displayed average — vs. an equivalent "Last month".
-    const daySpan = Math.round((new Date(periodDate.end) - new Date(periodDate.start)) / 86400000) + 1
-    bucketMonths = Math.max(1, Math.round(daySpan / 30.44))
-  } else {
-    const now = new Date()
-    anchorStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-    bucketMonths = 1
+function isBoundedDate(date) {
+  return !!date?.start && !!date?.end
+}
+
+function daysInMonth(y, m) {
+  return new Date(y, m, 0).getDate()
+}
+
+/*
+ * Move an ISO day by whole calendar months, clamping to the target month's length. `stickToMonthEnd`
+ * keeps a month's last day on the last day (Sep 30 + 1 → Oct 31), which is what a span *ending* at a
+ * month end means; a start is never moved that way, or Feb 28 would start a span on Mar 31.
+ */
+export function shiftDateByMonths(iso, deltaMonths, { stickToMonthEnd = false } = {}) {
+  const [y, m, d] = iso.split('-').map(Number)
+  const [ty, tm] = shiftMonth(`${y}-${String(m).padStart(2, '0')}`, deltaMonths).split('-').map(Number)
+  const lastDay = daysInMonth(ty, tm)
+  const day = stickToMonthEnd && d === daysInMonth(y, m) ? lastDay : Math.min(d, lastDay)
+  return `${ty}-${String(tm).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+// The calendar grain a range exactly is — one whole month, quarter or year — or null.
+export function calendarGrainOf(date) {
+  if (!isBoundedDate(date) || date.start.slice(8) !== '01') return null
+  const startMonth = date.start.slice(0, 7)
+  for (const grain of TREND_GRAINS) {
+    const size = GRAIN_MONTHS[grain]
+    const aligned = grain === 'month' || (Number(startMonth.slice(5)) - 1) % size === 0
+    if (aligned && date.end === lastDayOfMonthISO(shiftMonth(startMonth, size - 1))) return grain
   }
-  const yearToDate = isYearToDateRange(periodDate)
-  const stepMonths = yearToDate ? 12 : bucketMonths
-  if (yearToDate) {
-    // Size the window to whole calendar months so the selected bar spans exactly Jan→end month, and
-    // show prior years only.
-    bucketMonths = Number(periodDate.end.slice(5, 7))
-    laterCount = 0
+  return null
+}
+
+function rangeDays(date) {
+  return Math.round((new Date(date.end) - new Date(date.start)) / 86400000) + 1
+}
+
+/*
+ * The grain the chart opens at for a selection: the calendar unit it *is*, when it is one, otherwise the
+ * unit nearest its length, so the selection covers about one bar (Last 30 days → months, Last 90 days →
+ * quarters, Year to date and Past 12 months → years). With no explicit selection the trend is not tied
+ * to a period at all, and opens monthly.
+ */
+export function defaultTrendGrain(date) {
+  if (!isBoundedDate(date)) return 'month'
+  const exact = calendarGrainOf(date)
+  if (exact) return exact
+  const months = rangeDays(date) / 30.44
+  if (months <= 1.5) return 'month'
+  if (months <= 4.5) return 'quarter'
+  return 'year'
+}
+
+/*
+ * How far apart same-span bars sit, in months: the smallest of a month, a quarter and a year that the
+ * selection fits inside. Null where the mode is not offered — no explicit selection, a selection that is
+ * already a calendar unit, or one longer than a year. A selection exactly one step long (the Past 12
+ * months preset runs from a date to the same date a year later) shares its boundary day with the next
+ * bar; each bar is still exactly the span it names.
+ */
+export function sameSpanStepMonths(date) {
+  if (!isBoundedDate(date) || calendarGrainOf(date)) return null
+  for (const step of [1, 3, 12]) {
+    if (date.end <= shiftDateByMonths(date.start, step)) return step
   }
-  const anchorEnd = shiftMonth(anchorStart, bucketMonths - 1)
-  // Year-to-date bars all share one Jan→month range, so label each by its year to tell them apart;
-  // ordinary buckets get their range/month label downstream (bucketLabel).
-  const bucketOf = (start, end, isSelected) => ({
-    start, end, isSelected,
-    ...(yearToDate ? { label: start.slice(0, 4) } : {}),
-  })
+  return null
+}
+
+// The chooser's entries for a selection: the calendar grains always, same-span when it applies.
+export function trendGrainOptions(date) {
+  const options = TREND_GRAINS.map(value => ({ value, label: GRAIN_LABELS[value] }))
+  const step = sameSpanStepMonths(date)
+  if (step) options.push({ value: TREND_GRAIN_SAME_SPAN, label: `Same span each ${GRAIN_NOUNS[step]}` })
+  return options
+}
+
+// The grain in force: the user's pick while it still applies to the selection, else the default.
+export function effectiveTrendGrain(choice, date) {
+  if (choice === TREND_GRAIN_SAME_SPAN) return sameSpanStepMonths(date) ? choice : defaultTrendGrain(date)
+  return TREND_GRAINS.includes(choice) ? choice : defaultTrendGrain(date)
+}
+
+export function trendGrainNoun(date) {
+  return GRAIN_NOUNS[sameSpanStepMonths(date)] || null
+}
+
+/*
+ * Calendar buckets over every month from the data's first to its last, widened to take in the selection
+ * so it is always on the chart, gaps included so the axis stays uniform. Quarters and years snap to
+ * their calendar boundaries. A bucket is selected when it overlaps the selection at all.
+ */
+export function calendarTrendBuckets({ firstMonth, lastMonth, grain, date, fallbackMonth }) {
+  const bounded = isBoundedDate(date)
+  const months = [firstMonth, lastMonth, bounded && date.start.slice(0, 7), bounded && date.end.slice(0, 7)]
+    .filter(Boolean)
+  const min = months.length ? months.reduce((a, b) => (a < b ? a : b)) : fallbackMonth
+  const max = months.length ? months.reduce((a, b) => (a > b ? a : b)) : fallbackMonth
+  const size = GRAIN_MONTHS[grain] || 1
+  const [minY, minM] = min.split('-').map(Number)
+  const startM = minM - ((minM - 1) % size)
+  let cursor = `${minY}-${String(startM).padStart(2, '0')}`
   const buckets = []
-  for (let i = earlierCount; i >= 1; i--) {
-    const start = shiftMonth(anchorStart, -i * stepMonths)
-    buckets.push(bucketOf(start, shiftMonth(start, bucketMonths - 1), false))
+  while (cursor <= max) {
+    const end = shiftMonth(cursor, size - 1)
+    const rangeStart = `${cursor}-01`
+    const rangeEnd = lastDayOfMonthISO(end)
+    buckets.push({
+      start: cursor, end, rangeStart, rangeEnd,
+      isSelected: bounded && rangeStart <= date.end && rangeEnd >= date.start,
+    })
+    cursor = shiftMonth(cursor, size)
   }
-  buckets.push(bucketOf(anchorStart, anchorEnd, true))
-  for (let i = 1; i <= laterCount; i++) {
-    const start = shiftMonth(anchorStart, i * stepMonths)
-    buckets.push(bucketOf(start, shiftMonth(start, bucketMonths - 1), false))
+  return buckets
+}
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function dayLabel(iso, { year = true } = {}) {
+  const [y, m, d] = iso.split('-').map(Number)
+  return `${SHORT_MONTHS[m - 1]} ${d}${year ? `, ${y}` : ''}`
+}
+
+/*
+ * A span's names: `full` is exact and goes on the tooltip and the date chip; `axis` fits a bar's width,
+ * keeping only what tells the bars apart — the year when steps are yearly and the span sits inside one,
+ * the month when the span sits inside one, else the two ends.
+ */
+export function sameSpanLabels(rangeStart, rangeEnd, stepMonths) {
+  const sameYear = rangeStart.slice(0, 4) === rangeEnd.slice(0, 4)
+  const full = sameYear
+    ? `${dayLabel(rangeStart, { year: false })} – ${dayLabel(rangeEnd)}`
+    : `${dayLabel(rangeStart)} – ${dayLabel(rangeEnd)}`
+  let axis
+  if (stepMonths === 12 && sameYear) axis = rangeStart.slice(0, 4)
+  else if (rangeStart.slice(0, 7) === rangeEnd.slice(0, 7)) {
+    axis = `${SHORT_MONTHS[Number(rangeStart.slice(5, 7)) - 1]} ${rangeStart.slice(0, 4)}`
+  } else if (stepMonths === 12) {
+    const short = iso => `${SHORT_MONTHS[Number(iso.slice(5, 7)) - 1]} ’${iso.slice(2, 4)}`
+    axis = `${short(rangeStart)} – ${short(rangeEnd)}`
+  } else {
+    axis = `${dayLabel(rangeStart, { year: false })} – ${dayLabel(rangeEnd, { year: false })}`
   }
-  return { bucketMonths, buckets, yearToDate }
+  return { full, axis }
+}
+
+/*
+ * The selection repeated a step at a time across the data — from the first span reaching the data's
+ * first month to the last one starting by the end of its last month or by today, whichever is earlier
+ * (and never short of the selection itself). Built
+ * from the selection itself each time, so clicking one of these bars yields the same family around the
+ * new selection and the chart does not move. Capped at SAME_SPAN_MAX_BUCKETS, keeping the newest unless
+ * that would drop the selection.
+ */
+export function sameSpanTrendBuckets({ date, firstMonth, lastMonth, today = localISODate(new Date()) }) {
+  const step = sameSpanStepMonths(date)
+  if (!step) return []
+  const at = k => {
+    const rangeStart = shiftDateByMonths(date.start, k * step)
+    const rangeEnd = shiftDateByMonths(date.end, k * step, { stickToMonthEnd: true })
+    return { rangeStart, rangeEnd }
+  }
+  const firstDay = `${firstMonth || date.start.slice(0, 7)}-01`
+  const dataEnd = lastDayOfMonthISO(lastMonth || date.end.slice(0, 7))
+  const lastDay = dataEnd < today ? dataEnd : today
+  let lo = 0
+  while (at(lo - 1).rangeEnd >= firstDay) lo--
+  let hi = 0
+  while (at(hi + 1).rangeStart <= lastDay) hi++
+  if (hi - lo + 1 > SAME_SPAN_MAX_BUCKETS) {
+    lo = Math.max(lo, hi - SAME_SPAN_MAX_BUCKETS + 1)
+    if (lo > 0) lo = 0
+    hi = Math.min(hi, lo + SAME_SPAN_MAX_BUCKETS - 1)
+  }
+  const buckets = []
+  for (let k = lo; k <= hi; k++) {
+    const { rangeStart, rangeEnd } = at(k)
+    const { full, axis } = sameSpanLabels(rangeStart, rangeEnd, step)
+    buckets.push({
+      start: rangeStart.slice(0, 7), end: rangeEnd.slice(0, 7), rangeStart, rangeEnd,
+      label: axis, fullLabel: full, isSelected: k === 0,
+    })
+  }
+  return buckets
 }

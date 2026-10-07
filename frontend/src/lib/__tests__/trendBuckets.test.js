@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { isYearToDateRange, computeTrendBuckets, shiftMonth, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey } from '../trendBuckets.js'
+import {
+  shiftMonth, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
+  shiftDateByMonths, defaultTrendGrain, sameSpanStepMonths, trendGrainOptions, effectiveTrendGrain,
+  calendarTrendBuckets, sameSpanTrendBuckets, SAME_SPAN_MAX_BUCKETS, TREND_GRAIN_SAME_SPAN,
+} from '../trendBuckets.js'
 
 describe('shiftMonth', () => {
   it('crosses year boundaries in both directions', () => {
@@ -72,68 +76,127 @@ describe('resolveTrendsWindowKey', () => {
   })
 })
 
-describe('isYearToDateRange', () => {
-  it('is true for a Jan-1-anchored partial year', () => {
-    expect(isYearToDateRange({ start: '2026-01-01', end: '2026-07-27' })).toBe(true)
-  })
-  it('is false for a full calendar year (nothing to align differently)', () => {
-    expect(isYearToDateRange({ start: '2026-01-01', end: '2026-12-31' })).toBe(false)
-  })
-  it('is false when it does not start on Jan 1 (e.g. Last 30 days beginning Jan 5)', () => {
-    expect(isYearToDateRange({ start: '2026-01-05', end: '2026-02-03' })).toBe(false)
-  })
-  it('is false for month-to-date', () => {
-    expect(isYearToDateRange({ start: '2026-07-01', end: '2026-07-27' })).toBe(false)
-  })
-  it('is false with no date', () => {
-    expect(isYearToDateRange(null)).toBe(false)
+// The FilterBar presets as they resolve on 2026-10-07, the shapes the single-period trend has to handle.
+const PRESETS = {
+  monthToDate: { start: '2026-10-01', end: '2026-10-07' },
+  lastMonth: { start: '2026-09-01', end: '2026-09-30' },
+  yearToDate: { start: '2026-01-01', end: '2026-10-07' },
+  lastYear: { start: '2025-01-01', end: '2025-12-31' },
+  past12Months: { start: '2025-10-07', end: '2026-10-07' },
+  last30Days: { start: '2026-09-08', end: '2026-10-07' },
+  last90Days: { start: '2026-07-10', end: '2026-10-07' },
+}
+
+describe('shiftDateByMonths', () => {
+  it('clamps to the target month, and keeps a span end on the month end only when asked', () => {
+    expect(shiftDateByMonths('2026-03-31', -1)).toBe('2026-02-28')
+    expect(shiftDateByMonths('2026-09-30', 1)).toBe('2026-10-30')
+    expect(shiftDateByMonths('2026-09-30', 1, { stickToMonthEnd: true })).toBe('2026-10-31')
+    expect(shiftDateByMonths('2026-10-07', -12)).toBe('2025-10-07')
   })
 })
 
-describe('computeTrendBuckets — year to date', () => {
-  const ytd = { start: '2026-01-01', end: '2026-07-27' }
+describe('the single-period trend grain', () => {
+  it('opens at the unit a selection is, or the one nearest its length', () => {
+    expect(defaultTrendGrain(null)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.lastMonth)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.lastYear)).toBe('year')
+    expect(defaultTrendGrain({ start: '2026-07-01', end: '2026-09-30' })).toBe('quarter')
+    expect(defaultTrendGrain(PRESETS.monthToDate)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.last30Days)).toBe('month')
+    expect(defaultTrendGrain(PRESETS.last90Days)).toBe('quarter')
+    expect(defaultTrendGrain(PRESETS.yearToDate)).toBe('year')
+    expect(defaultTrendGrain(PRESETS.past12Months)).toBe('year')
+  })
 
-  it('steps a full year and spans Jan→end month, prior years only', () => {
-    const { buckets, bucketMonths, yearToDate } = computeTrendBuckets(ytd, { earlierCount: 3 })
-    expect(yearToDate).toBe(true)
-    expect(bucketMonths).toBe(7) // Jan..Jul
-    // No lookahead: the selected bucket is the last one.
-    expect(buckets[buckets.length - 1].isSelected).toBe(true)
-    // Each bar is the same Jan→Jul window of consecutive years.
-    expect(buckets.map(b => [b.start, b.end])).toEqual([
-      ['2023-01', '2023-07'],
-      ['2024-01', '2024-07'],
-      ['2025-01', '2025-07'],
-      ['2026-01', '2026-07'],
+  it('offers same-span only for a selection that is not a calendar unit, stepping by the smallest unit it fits', () => {
+    expect(sameSpanStepMonths(PRESETS.monthToDate)).toBe(1)
+    expect(sameSpanStepMonths(PRESETS.last30Days)).toBe(1)
+    expect(sameSpanStepMonths(PRESETS.last90Days)).toBe(3)
+    expect(sameSpanStepMonths(PRESETS.yearToDate)).toBe(12)
+    expect(sameSpanStepMonths(PRESETS.past12Months)).toBe(12)
+    expect(sameSpanStepMonths(PRESETS.lastMonth)).toBe(null)
+    expect(sameSpanStepMonths(PRESETS.lastYear)).toBe(null)
+    expect(sameSpanStepMonths({ start: '2024-03-01', end: '2026-10-07' })).toBe(null)
+    expect(sameSpanStepMonths({ start: null, end: null })).toBe(null)
+    expect(trendGrainOptions(PRESETS.yearToDate).map(o => o.value)).toEqual(['month', 'quarter', 'year', TREND_GRAIN_SAME_SPAN])
+    expect(trendGrainOptions(PRESETS.lastMonth).map(o => o.value)).toEqual(['month', 'quarter', 'year'])
+  })
+
+  it('drops a same-span pick the selection no longer supports, and keeps a calendar pick', () => {
+    expect(effectiveTrendGrain(TREND_GRAIN_SAME_SPAN, PRESETS.yearToDate)).toBe(TREND_GRAIN_SAME_SPAN)
+    expect(effectiveTrendGrain(TREND_GRAIN_SAME_SPAN, PRESETS.lastMonth)).toBe('month')
+    expect(effectiveTrendGrain('year', PRESETS.lastMonth)).toBe('year')
+    expect(effectiveTrendGrain(null, PRESETS.past12Months)).toBe('year')
+  })
+})
+
+describe('calendarTrendBuckets', () => {
+  it('highlights every bucket a non-calendar selection overlaps', () => {
+    const buckets = calendarTrendBuckets({ firstMonth: '2024-01', lastMonth: '2026-10', grain: 'month', date: PRESETS.past12Months })
+    const selected = buckets.filter(b => b.isSelected).map(b => b.start)
+    // Oct 7 '25 – Oct 7 '26 touches both Octobers.
+    expect(selected).toEqual(monthsBetween('2025-10', '2026-10'))
+    const years = calendarTrendBuckets({ firstMonth: '2024-01', lastMonth: '2026-10', grain: 'year', date: PRESETS.past12Months })
+    expect(years.map(b => [b.start, b.isSelected])).toEqual([['2024-01', false], ['2025-01', true], ['2026-01', true]])
+  })
+
+  it('snaps quarters to the calendar and widens to take in a selection outside the data', () => {
+    const buckets = calendarTrendBuckets({ firstMonth: '2025-05', lastMonth: '2025-08', grain: 'quarter', date: { start: '2026-01-01', end: '2026-01-31' } })
+    expect(buckets.map(b => [b.rangeStart, b.rangeEnd])).toEqual([
+      ['2025-04-01', '2025-06-30'], ['2025-07-01', '2025-09-30'],
+      ['2025-10-01', '2025-12-31'], ['2026-01-01', '2026-03-31'],
     ])
-    // Labeled by year so same-range bars are distinguishable.
-    expect(buckets.map(b => b.label)).toEqual(['2023', '2024', '2025', '2026'])
+    expect(buckets.map(b => b.isSelected)).toEqual([false, false, false, true])
   })
 })
 
-describe('computeTrendBuckets — non-YTD is unchanged', () => {
-  it('tiles contiguous month-wide buckets for a single month with a lookahead', () => {
-    const { buckets, bucketMonths, yearToDate } = computeTrendBuckets(
-      { start: '2026-07-01', end: '2026-07-31' },
-      { earlierCount: 2, laterCount: 1 },
-    )
-    expect(yearToDate).toBe(false)
-    expect(bucketMonths).toBe(1)
-    expect(buckets.map(b => b.start)).toEqual(['2026-05', '2026-06', '2026-07', '2026-08'])
-    expect(buckets.find(b => b.isSelected).start).toBe('2026-07')
-    expect(buckets.every(b => b.label === undefined)).toBe(true) // labels derived downstream
+describe('sameSpanTrendBuckets', () => {
+  it('repeats year to date day-for-day in every year of the data', () => {
+    const buckets = sameSpanTrendBuckets({ date: PRESETS.yearToDate, firstMonth: '2024-03', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(buckets.map(b => [b.rangeStart, b.rangeEnd, b.label, b.isSelected])).toEqual([
+      ['2024-01-01', '2024-10-07', '2024', false],
+      ['2025-01-01', '2025-10-07', '2025', false],
+      ['2026-01-01', '2026-10-07', '2026', true],
+    ])
+    expect(buckets[0].fullLabel).toBe('Jan 1 – Oct 7, 2024')
   })
 
-  it('tiles contiguous multi-month windows immediately prior (e.g. a ~90-day range)', () => {
-    const { buckets, bucketMonths } = computeTrendBuckets(
-      { start: '2026-05-01', end: '2026-07-30' }, // ~3 months
-      { earlierCount: 2, laterCount: 0 },
-    )
-    expect(bucketMonths).toBe(3)
-    expect(buckets.map(b => [b.start, b.end])).toEqual([
-      ['2025-11', '2026-01'],
-      ['2026-02', '2026-04'],
-      ['2026-05', '2026-07'],
+  it('compares month to date against the same days of earlier months, not whole months', () => {
+    const buckets = sameSpanTrendBuckets({ date: PRESETS.monthToDate, firstMonth: '2026-08', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(buckets.map(b => [b.rangeStart, b.rangeEnd])).toEqual([
+      ['2026-08-01', '2026-08-07'], ['2026-09-01', '2026-09-07'], ['2026-10-01', '2026-10-07'],
     ])
   })
+
+  it('tiles a rolling 30 days back without gaps, and stops at today', () => {
+    const buckets = sameSpanTrendBuckets({ date: PRESETS.last30Days, firstMonth: '2026-07', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(buckets.map(b => [b.rangeStart, b.rangeEnd])).toEqual([
+      ['2026-06-08', '2026-07-07'], ['2026-07-08', '2026-08-07'],
+      ['2026-08-08', '2026-09-07'], ['2026-09-08', '2026-10-07'],
+    ])
+  })
+
+  it('yields the same bars around a clicked bar, so the chart stays put', () => {
+    const before = sameSpanTrendBuckets({ date: PRESETS.yearToDate, firstMonth: '2020-01', lastMonth: '2026-10', today: '2026-10-07' })
+    const clicked = before[2]
+    const after = sameSpanTrendBuckets({ date: { start: clicked.rangeStart, end: clicked.rangeEnd }, firstMonth: '2020-01', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(after.map(b => b.rangeStart)).toEqual(before.map(b => b.rangeStart))
+    expect(after.findIndex(b => b.isSelected)).toBe(2)
+  })
+
+  it('caps a long history at the newest buckets, never dropping the selection', () => {
+    const newest = sameSpanTrendBuckets({ date: PRESETS.monthToDate, firstMonth: '2000-01', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(newest).toHaveLength(SAME_SPAN_MAX_BUCKETS)
+    expect(newest[newest.length - 1].isSelected).toBe(true)
+    const old = sameSpanTrendBuckets({ date: { start: '2001-03-01', end: '2001-03-07' }, firstMonth: '2000-01', lastMonth: '2026-10', today: '2026-10-07' })
+    expect(old).toHaveLength(SAME_SPAN_MAX_BUCKETS)
+    expect(old.some(b => b.isSelected)).toBe(true)
+  })
 })
+
+function monthsBetween(a, b) {
+  const out = []
+  for (let m = a; m <= b; m = shiftMonth(m, 1)) out.push(m)
+  return out
+}

@@ -75,23 +75,6 @@ column.
   inflows as much as outflows, so it would contradict itself on a credit row, and `debit` already names a
   *direction* here (`category_rule.debit_credit`, the list endpoint's `direction`).
 
-## Trend bucketing: period-sized buckets vs the grain picker
-
-**Context (raised 2026-08-25, parked the same day).** The Dashboard single-period trend chart has two
-bucketing models chosen by whether `filters.date` holds an explicit range. With no explicit chip
-— including when the Dashboard's own "Last 12 months" default is in force, since the default lives
-in `dashboardDefaultDate` rather than in the filter — it buckets all history by calendar grain and
-shows the Monthly/Quarterly/Yearly selector (gated on >18 months of data). Pick any range by hand,
-*including "Last 12 months"*, and the selector disappears and each bar becomes one period-length.
-
-**Why it is filed rather than fixed.** The user read the default case as the intended model ("the
-picker should just drive it") and was surprised the explicit pick behaves differently. That
-expectation was never recorded anywhere: the split is a side effect of the documented decision that
-the trend is deliberately independent of the Dashboard default (`ui-patterns.md`), and the only
-mention of the hide rule is an aside in the scroll-anchoring entry above. Whether the picker should
-become the sole control is an open design question — `computeTrendBuckets` and its "this kind of
-slice, over time" model would lose its reason to exist on the single-period chart.
-
 ## Trends-tab semantics audit when the tag-report selector lands there
 
 **Context.** The Trends tab's "Total per month" and "Annual totals" bar charts aggregate across all
