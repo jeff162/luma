@@ -20,13 +20,17 @@ second place to forget.
 `#` lines say where that text came from. Neither is a stop, because the alternative is shipping a kit
 that is quietly out of compliance with one of its dependencies.
 
-**The shared libraries are the third source, and only Linux has them.** PyInstaller copies the C
-libraries the interpreter and the extension modules link against out of the build machine — OpenSSL,
-SQLite, zlib and a dozen others — so a Linux kit conveys software that arrived from neither PyPI nor
-python.org. They are attributed through the build machine's own package manager, which is what Debian's
-`/usr/share/doc/<package>/copyright` files exist for. macOS links its system frameworks instead of
-copying them, and the official Windows Python carries the licenses of what it bundles in its own
-`LICENSE.txt`, so both of those are already covered.
+**The shared libraries are the third source.** PyInstaller copies the C libraries the interpreter and
+the extension modules link against out of the build machine — OpenSSL, SQLite, zlib and a dozen others —
+so a Linux kit conveys software that arrived from neither PyPI nor python.org. They are attributed through
+the build machine's own package manager, which is what Debian's `/usr/share/doc/<package>/copyright` files
+exist for. The official Windows Python carries the licenses of what it bundles in its own `LICENSE.txt`,
+so there that is already covered.
+
+**macOS has neither.** The python.org installer builds OpenSSL into the Python framework rather than
+linking the system's, no package manager on that machine installed it, and the framework's `LICENSE.txt`
+speaks for CPython alone. Those libraries are therefore credited by name from a text this repository
+supplies, the same answer as a wheel that ships none.
 
 **What Windows still collects from outside Python is Microsoft's own C runtime**, and it is named here
 rather than traced: PyInstaller asks for the Universal CRT and the VC14 runtime by name whatever directory
@@ -38,12 +42,15 @@ terms let an application carry these and ask for no notice in return, which is t
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import sysconfig
 import textwrap
+from collections.abc import Callable
 from importlib.metadata import Distribution, PackageNotFoundError, distribution
 from pathlib import Path
+from typing import NamedTuple
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
@@ -117,6 +124,41 @@ _MICROSOFT_RUNTIME_LIBRARY = re.compile(
     r"(^|[\\/])(api-ms-win-.*|ucrtbase|vcruntime140.*|msvcp140.*|concrt140|vccorlib140)\.dll$",
     re.IGNORECASE,
 )
+
+
+class _BundledLibrary(NamedTuple):
+    """A library the Python installation itself bundles: which of the collected files belong to it, what
+    it declares about itself, and where the version it is credited under is read from. Its license text is
+    the `scripts/license-texts/` entry named after it, exactly like a distribution that ships none."""
+
+    files: re.Pattern[str]
+    declared: str
+    source: str
+    version: Callable[[], str]
+
+
+# What the python.org macOS installer builds into the framework instead of linking from the system.
+# `Mac/BuildScript/build-installer.py` configures OpenSSL with the framework version as its prefix, so the
+# dylibs land in the installation's `lib/` — one level above every tree `_python_trees` names, where the
+# check there misses them — and PyInstaller collects them because `_ssl` links against them.
+#
+# Nothing else can speak for them. macOS has no package manager that installed them, and the framework's
+# `LICENSE.txt` covers CPython alone: that installer substitutes the bundled libraries' *names* into its
+# `License.rtf` and installs no license text of theirs anywhere. So they are credited from a supplied text
+# like a wheel that ships none, and a bundled library this does not recognize still stops the build —
+# which is what pinning the ABI version in the pattern is for. A `libcrypto.4.dylib` would be a new major
+# series whose license has to be read again before a kit carries it.
+_BUNDLED_FRAMEWORK_LIBRARIES = {
+    "OpenSSL": _BundledLibrary(
+        files=re.compile(r"^lib(crypto|ssl)\.3\.dylib$"),
+        declared="Apache-2.0",
+        source="https://www.openssl.org/",
+        # Read from the interpreter rather than stated here, because the exact release is whichever one
+        # the installer on the build machine happened to bundle, and `_ssl` is linked against the very
+        # files being credited. "OpenSSL 3.0.16 11 Feb 2025" is the shape of what it reports.
+        version=lambda: ssl.OPENSSL_VERSION.split()[1],
+    ),
+}
 
 
 def _read_requirements(path: Path) -> list[Requirement]:
@@ -255,9 +297,27 @@ def _package_copyright(package: str) -> str | None:
     return None
 
 
+def _bundled_component(path: Path, platform: str = sys.platform) -> str | None:
+    """Which bundled component a collected library belongs to, or `None` if nothing here speaks for it.
+
+    macOS only, and only for a library that came out of the Python installation itself: on Linux a library
+    inside the installation is traced to the package that installed it, and on Windows the whole prefix
+    already counts as Python. Restricted to that prefix rather than matched on the file name alone, so a
+    copy of OpenSSL from somewhere else on the machine — a Homebrew one, say — stops the build instead of
+    being credited to a provenance it does not have."""
+    if platform != "darwin":
+        return None
+    installation = os.path.normcase(str(Path(sys.base_prefix).resolve()))
+    if not os.path.normcase(str(path)).startswith(installation):
+        return None
+    return next((name for name, bundled in _BUNDLED_FRAMEWORK_LIBRARIES.items()
+                 if bundled.files.match(path.name)), None)
+
+
 def native_library_notices(binaries) -> str:
-    """The section covering the shared libraries copied out of the build machine, one entry per package
-    rather than per file, since several libraries usually arrive from one.
+    """The section covering the shared libraries copied out of the build machine, one entry per package —
+    or per bundled component, where no package manager installed the library — rather than per file, since
+    several libraries usually arrive from one.
 
     A library nothing can attribute stops the build. It is the same rule the packages follow, and the
     reason is stronger here: a system library carries no metadata of its own, so an unattributed one
@@ -266,26 +326,45 @@ def native_library_notices(binaries) -> str:
     if not libraries:
         return ""
     by_package: dict[str, list[Path]] = {}
+    by_component: dict[str, list[Path]] = {}
     unattributed = []
     for path in libraries:
         package = _owning_package(path)
-        if package is None:
+        if package is not None:
+            by_package.setdefault(package, []).append(path)
+            continue
+        component = _bundled_component(path)
+        if component is None:
             unattributed.append(str(path))
             continue
-        by_package.setdefault(package, []).append(path)
-    texts = {}
-    for package in list(by_package):
+        by_component.setdefault(component, []).append(path)
+    # Title, the fields it declares, what it accounts for, and the text that governs it.
+    entries: list[tuple[str, list[str], list[Path], str]] = []
+    for package in sorted(by_package):
         text = _package_copyright(package)
         if text is None:
             unattributed += [str(p) for p in by_package[package]]
-            del by_package[package]
             continue
-        texts[package] = text
+        entries.append((package, [], by_package[package], text))
+    for component in sorted(by_component):
+        bundled = _BUNDLED_FRAMEWORK_LIBRARIES[component]
+        text = supplement_text(component)
+        if text is None:
+            unattributed += [str(p) for p in by_component[component]]
+            continue
+        entries.append((
+            f"{component} {bundled.version()}",
+            [f"License: {bundled.declared}", f"Source: {bundled.source}"],
+            by_component[component],
+            text,
+        ))
     if unattributed:
         raise SystemExit(
             "These shared libraries would be shipped with no license: " + ", ".join(sorted(unattributed))
-            + ". They come from the build machine, so either the package manager cannot name their "
-            "package or that package ships no copyright file; both have to be resolved before a kit "
+            + ". They come from the build machine, so nothing else in the kit accounts for them: the "
+            "package manager cannot name their package, or that package ships no copyright file, or "
+            "(for a library the Python installation bundles rather than links from the system) no "
+            "scripts/license-texts entry supplies its text. All of them have to be resolved before a kit "
             "built here can be distributed."
         )
     out = [
@@ -293,16 +372,19 @@ def native_library_notices(binaries) -> str:
         "",
         "The C libraries the Python runtime and its extension modules link against, copied into this",
         "build from the machine that made it. Each entry is one package of the distribution it came",
-        "from, with that package's own copyright and license file.",
+        "from, with that package's own copyright and license file. A library the Python installation",
+        "bundles rather than links from the system is one entry too, under the component it belongs to,",
+        "with the license text that component publishes.",
     ]
-    for package in sorted(by_package):
+    for title, fields, paths, text in entries:
         out += [
             "",
             RULE,
-            package,
-            "Provides: " + ", ".join(sorted(p.name for p in by_package[package])),
+            title,
+            *fields,
+            "Provides: " + ", ".join(sorted(p.name for p in paths)),
             "",
-            texts[package],
+            text,
         ]
     return "\n".join(out) + "\n"
 
@@ -442,11 +524,8 @@ def license_index(sections) -> str:
     order = sorted((k for k in grouped if k != UNKNOWN_LICENSE), key=str.lower)
     order += [UNKNOWN_LICENSE] if UNKNOWN_LICENSE in grouped else []
     out = [
-        "Licenses at a glance",
+        "Components grouped by license",
         "",
-        "Every component in this file, grouped by the license it declares for itself. A summary only:",
-        "the license text reproduced with each entry below is what governs. A component declaring no",
-        "identifier is listed under Other, its terms stated in the text it carries.",
     ]
     for license_name in order:
         names = sorted(grouped[license_name], key=str.lower)
@@ -471,9 +550,8 @@ def combined_notices(web_notices: str, binaries=(), requirements: Path = REQUIRE
     return (
         "Third-party licenses\n"
         "\n"
-        "Luma itself is licensed under the GNU AGPL v3.0 or later; see the LICENSE file beside this one.\n"
-        "This file covers the other software included in this build. Each entry names a component and\n"
-        "reproduces the license text it ships; the summary below lists what those licenses are.\n"
+        "Luma is licensed under the GNU AGPL v3.0 or later; see the LICENSE file.\n"
+        "This file covers the other software packaged in this build.\n"
         f"{separator}"
         + separator.join(sections)
         + "\n"

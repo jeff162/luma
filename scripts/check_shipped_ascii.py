@@ -36,6 +36,10 @@ ROOT = Path(__file__).resolve().parent.parent
 WATCHED = {
     "scripts/build_desktop.py": "the README.txt written into every downloadable kit",
     "backend/desktop.py": "console output and luma-desktop.log, on every launch",
+    # Its own prose only. The license texts it reproduces are read at build time from each package's
+    # metadata and never appear as literals here, so nothing a dependency carries can be caught by this
+    # -- nor should it be: a license is reproduced verbatim, accented copyright holders and all.
+    "scripts/third_party_notices.py": "the THIRD-PARTY-LICENSES.txt written into every kit",
 }
 
 

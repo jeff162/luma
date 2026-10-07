@@ -83,17 +83,15 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
   `backend/requirements.txt`, with environment markers evaluated — so a dependency that only exists on one
   platform, or only through an extra (`uvicorn[standard]`), is included exactly where it is installed.
   The Python runtime's own `LICENSE.txt` heads the section.
-- The **shared libraries**, on Linux only, come from `analysis.binaries` — PyInstaller's own record of
-  what it copied off the build machine, which is why the file is written from inside the spec rather than
-  before it. OpenSSL, SQLite, zlib and about nine others arrive that way, from neither PyPI nor
+- The **shared libraries** come from `analysis.binaries` — PyInstaller's own record of what it copied
+  off the build machine, which is why the file is written from inside the spec rather than before it. OpenSSL, SQLite, zlib and about nine others arrive that way, from neither PyPI nor
   python.org. Each is traced to the package that installed it (`dpkg-query`, or `rpm` on a Fedora build)
   and credited with that package's own copyright file, one entry per package. The interpreter's own
   `libpython` is skipped rather than traced: it is Python, already carried by the runtime entry above, and
   a relocatable Python — the kind CI builds on — keeps it in the installation's `lib/`, where neither the
-  package manager nor the standard-library paths that identify the installation can account for it. macOS
-  links the system's frameworks instead of copying them and Windows takes its libraries from a Python
-  whose `LICENSE.txt` lists them, so the section is empty there and left out. Empty on Windows takes one
-  extra rule: `python3xx.dll` sits at the installation root and OpenSSL, SQLite and libffi in the `DLLs`
+  package manager nor the standard-library paths that identify the installation can account for it.
+  Windows takes its libraries from a Python whose `LICENSE.txt` lists them, so the section is empty there
+  and left out. Empty on Windows takes one extra rule: `python3xx.dll` sits at the installation root and OpenSSL, SQLite and libffi in the `DLLs`
   directory beside it, outside the four directories that identify the installation everywhere else, so
   the whole prefix counts as Python there — safe only because nothing else is installed under it, which
   is not true of the `/usr` the same prefix names on Linux. It takes a second rule as well, because what
@@ -106,6 +104,18 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
   build machine's CRT for nothing. The VC14 runtime stays — a machine without the Visual C++
   redistributable has no copy, and the frozen interpreter needs it to start.
 
+  **macOS has neither answer**, which is the third rule. The python.org installer builds OpenSSL into the
+  Python framework rather than linking the system's, leaving `libcrypto.3.dylib` and `libssl.3.dylib` in
+  the installation's `lib/` — above the four directories that identify it, so they are collected as
+  system libraries — and nothing on that machine can speak for them: no package manager installed them,
+  and the framework's `LICENSE.txt` covers CPython alone, since the installer only substitutes the
+  bundled libraries' *names* into its own `License.rtf` and installs no license text of theirs. They are
+  credited by name instead, from `scripts/license-texts/openssl.txt`, under the version the interpreter
+  reports being linked against — which is that same copy. The mapping that does it is restricted to the
+  installation prefix and to the ABI version in the file name, so an OpenSSL from elsewhere on the
+  machine, or a future major series whose license has to be read again, stops the build rather than
+  inheriting this attribution.
+
   **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
   from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose
   license asks for more than its notice — for a capability the app never uses. Dropping it takes ncurses
@@ -115,7 +125,7 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
 that do not, put the upstream text in `scripts/license-texts/<name>.txt` (server) or
 `frontend/scripts/license-texts/<name>.txt` (web), with leading `#` lines saying where it was taken from —
 those lines are reproduced in the notice, so a reader can tell a supplied text from a shipped one.
-`nulltype` and `victory-vendor` are the current two. A shared library the package manager cannot name, or
+`nulltype`, `victory-vendor` and the macOS framework's `openssl` are the current three. A shared library the package manager cannot name, or
 whose package ships no copyright file, stops the build the same way — a system library carries no metadata
 of its own, so one missed here leaves no trace in the finished kit. Third-party material carried in the source tree
 rather than installed (the passphrase word list) is listed alongside the packages, its notice read from

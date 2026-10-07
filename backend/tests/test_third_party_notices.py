@@ -9,6 +9,7 @@ is going to diff.
 
 import importlib.util
 import os
+import ssl
 import sys
 import sysconfig
 from pathlib import Path
@@ -77,7 +78,7 @@ def test_the_combined_file_keeps_both_halves():
     assert "GNU AGPL" in combined.splitlines()[2]
 
 
-# --- the shared libraries a Linux build copies off the machine that made it -------------------------
+# --- the shared libraries a build copies off the machine that made it -------------------------
 
 BINARY = ("libz.so.1", "/usr/lib/x86_64-linux-gnu/libz.so.1.2.11", "BINARY")
 # Built from the *running* interpreter's standard library, because that is what "inside the Python
@@ -95,6 +96,15 @@ EXTENSION = (
 RUNTIME = (
     "libpython",
     f"/opt/python/3.12/lib/{Path(sysconfig.get_config_var('INSTSONAME') or 'libpython3.so').name}",
+    "BINARY",
+)
+
+
+# What the python.org macOS installer builds into the framework, where it leaves it: the installation's
+# own `lib/`, outside every tree that identifies the installation, under a name carrying the ABI version.
+FRAMEWORK_OPENSSL = (
+    "libcrypto.3.dylib",
+    str(Path(sys.base_prefix) / "lib" / "libcrypto.3.dylib"),
     "BINARY",
 )
 
@@ -195,9 +205,38 @@ def test_a_package_with_no_copyright_file_stops_the_build_too():
             notices.native_library_notices([BINARY])
 
 
+def test_a_library_the_python_installation_bundles_is_credited_by_name():
+    """Asserted from any platform, like the Windows rules above, because the build it protects runs on one
+    other. macOS has no package manager that can name the OpenSSL its Python installer builds into the
+    framework, and that framework's own license file covers CPython alone, so without this entry nothing
+    credits it — and the release build stopped there."""
+    bundled = Path(sys.base_prefix) / "lib"
+    assert notices._bundled_component(bundled / "libcrypto.3.dylib", "darwin") == "OpenSSL"
+    # Elsewhere a library inside the installation is traced to the package that installed it, or is
+    # already covered by the runtime's own entry.
+    assert notices._bundled_component(bundled / "libcrypto.3.dylib", "linux") is None
+    # A copy from anywhere else on the machine is not the one the installer bundled, whatever it is named.
+    assert notices._bundled_component(Path("/opt/homebrew/lib/libcrypto.3.dylib"), "darwin") is None
+    # A new major series is a license to read again rather than one to assume.
+    assert notices._bundled_component(bundled / "libcrypto.4.dylib", "darwin") is None
+
+
+def test_a_bundled_library_carries_the_license_text_supplied_for_it():
+    """The text comes from this repository, so the entry says what it is crediting and under which
+    version — the one the interpreter is linked against, which is the copy being collected."""
+    with mock.patch.object(notices, "_owning_package", return_value=None), \
+         mock.patch.object(notices, "_bundled_component", return_value="OpenSSL"):
+        text = notices.native_library_notices([FRAMEWORK_OPENSSL])
+    assert f"OpenSSL {ssl.OPENSSL_VERSION.split()[1]}" in text
+    assert "License: Apache-2.0" in text
+    assert "Provides: libcrypto.3.dylib" in text
+    assert "openssl-3.0.16/LICENSE.txt" in text
+    assert "Apache License" in text
+
+
 def test_a_build_with_no_collected_libraries_says_nothing():
-    """macOS links the system's frameworks rather than copying them, and Windows takes its libraries from
-    a Python whose own license file lists them, so both leave this section out entirely."""
+    """Windows takes its libraries from a Python whose own license file lists them, so a build there
+    leaves this section out entirely."""
     assert notices.native_library_notices([]) == ""
     assert "shared libraries" not in notices.combined_notices("web\n", binaries=[])
 
