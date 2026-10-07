@@ -16,8 +16,9 @@ redirect:** a handler added next to the ones uvicorn configured, so the terminal
 nothing can see them (`desktop.py`), would take the output away from the supervisors that already keep it.
 
 **What is kept:** warnings and errors from anywhere, a crashed request's traceback included (uvicorn logs
-those to `uvicorn.error`); a line when the server starts, so a reader can tell one run from the next; and
-access lines only for requests that failed. Successful requests stay out, or routine polling would soon
+those to `uvicorn.error`); a line when the server starts, naming the version and — where something knew it,
+which is `set_reachable_url` below — the address this instance serves, so a reader can tell one run from the
+next; and access lines only for requests that failed. Successful requests stay out, or routine polling would soon
 rotate a failure out of the file. It rotates at `LOG_MAX_BYTES` and keeps one previous file, so a
 persistent failure cannot fill a disk and an older one is still readable.
 
@@ -92,6 +93,14 @@ _COUNT_WRITE_TIMEOUT_MS = 500
 _handler: RotatingFileHandler | None = None
 _counter: logging.Handler | None = None
 _attached: list[logging.Logger] = []
+
+# The address this instance serves, for the start marker — and unset unless something declares it, because
+# the address a user reaches is not generally this process's to state. Only the desktop launcher knows one:
+# it picks the port, and falls back off the configured one when that is busy, so the log is the only record
+# of where a given run actually landed. Running from source the browser is on Vite's port with this server
+# as an internal hop behind it, and in a container the published port is a mapping made outside it — in
+# both the marker omits the address rather than naming one nothing can be reached at.
+_reachable_url: str | None = None
 
 # Errors logged but not yet in the control database's count. Taken whole by one flush at a time; a flush
 # that finds another under way leaves its error for the next, rather than waiting on it or counting twice.
@@ -189,6 +198,13 @@ def _reaches(logger: logging.Logger, attached: list[logging.Logger]) -> bool:
     return False
 
 
+def set_reachable_url(url: str | None) -> None:
+    """Declare the address this instance serves, for the start marker to name. Called before the server
+    runs: `install()` happens inside the application lifespan, which has no way to ask."""
+    global _reachable_url
+    _reachable_url = url
+
+
 def install() -> Path | None:
     """Start copying log records to the file, returning where, or None if it could not be opened, in which
     case the server runs exactly as it would have without it.
@@ -219,7 +235,12 @@ def install() -> Path | None:
 
     marker = logging.getLogger(_MARKER_LOGGER)
     marker.setLevel(logging.INFO)
-    marker.info("--- %s %s started ---", runtime_config.app_name(), runtime_config.APP_VERSION)
+    marker.info(
+        "--- %s %s started%s ---",
+        runtime_config.app_name(),
+        runtime_config.APP_VERSION,
+        f" at {_reachable_url}" if _reachable_url else "",
+    )
     return path
 
 

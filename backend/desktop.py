@@ -59,7 +59,7 @@ from pathlib import Path
 
 import uvicorn
 
-from backend import app_config, runtime_config, spa
+from backend import app_config, app_log_file, runtime_config, spa
 from backend.main import app, spa_mounted
 from backend.routers import app_control
 
@@ -385,13 +385,20 @@ def main(argv: list[str] | None = None) -> int:
     already_running = _running_instance_port()
     if already_running is not None:
         url = f"http://{BROWSER_HOST}:{already_running}"
-        print(f"Luma is already running at {url}")
+        # No version here, and deliberately: the instance being joined is a different process, possibly a
+        # different build, and `/api/health` reports only that something answered. Naming this process's
+        # version would be a claim about a program that is not running.
+        print(f"{runtime_config.app_name()} is already running at {url}")
         if not args.no_browser:
             _open_browser(url)
         return 0
 
     port = _choose_port()
     url = f"http://{BROWSER_HOST}:{port}"
+    # The port is settled here and nowhere else — a busy configured one falls back to an ephemeral port —
+    # so the launcher is the only place that can tell the log file which address this run is on. Declared
+    # before the server runs, because the lifespan that writes the start marker is inside `server.run()`.
+    app_log_file.set_reachable_url(url)
 
     lock = _lock_path()
     lock.parent.mkdir(parents=True, exist_ok=True)
@@ -417,10 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     # Ctrl+C is advice only where somebody is watching a terminal. Where this is going to a log instead,
     # the address is the whole of what the line is for, and how to stop a windowless build is documented
     # beside it (`READ_ME_MACOS` in `scripts/build_desktop.py`) and offered inside the app.
+    running = f"{runtime_config.app_name()} (v{runtime_config.APP_VERSION}) is running at {url}"
     if _has_console():
-        print(f"Luma is running at {url}. Press Ctrl+C to stop.")
+        print(f"{running}. Press Ctrl+C to stop.")
     else:
-        print(f"Luma is running at {url}")
+        print(running)
     try:
         # Blocking, and in the main thread on purpose: uvicorn installs the signal handlers that make
         # Ctrl+C a clean shutdown rather than an abandoned server thread. Nothing is caught: every stop
@@ -429,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         lock.unlink(missing_ok=True)
 
-    print("Luma has stopped.")
+    print(f"{runtime_config.app_name()} has stopped.")
     return 0
 
 

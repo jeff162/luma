@@ -271,6 +271,28 @@ def test_a_second_ctrl_c_does_not_force_quit():
     assert server.force_exit is False
 
 
+def test_the_log_file_is_told_the_address_before_the_server_runs():
+    """The log's start line is written from the application lifespan, which cannot ask what address this
+    run is on: the launcher settles the port, and `_choose_port` may have landed off the configured one.
+    So the declaration has to happen before `server.run()`, which is where the lifespan executes — set
+    afterwards it would be set for the next start rather than this one."""
+    order = []
+    stopped = mock.Mock()
+    stopped.run.side_effect = lambda: order.append("server ran")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.object(desktop, "spa_mounted", True), \
+             mock.patch.object(desktop, "_install_stop_signal_handlers"), \
+             mock.patch.object(desktop, "_lock_path", return_value=Path(tmp) / "luma-desktop.lock"), \
+             mock.patch.object(desktop, "_running_instance_port", return_value=None), \
+             mock.patch.object(desktop, "_choose_port", return_value=8123), \
+             mock.patch.object(desktop, "_GracefulServer", return_value=stopped), \
+             mock.patch.object(desktop.app_log_file, "set_reachable_url", side_effect=order.append):
+            assert desktop.main(["--no-browser"]) == 0
+
+    assert order == ["http://localhost:8123", "server ran"]
+
+
 def _startup_line(has_console: bool) -> str:
     stopped = mock.Mock()
     stopped.run.return_value = None
@@ -287,7 +309,7 @@ def _startup_line(has_console: bool) -> str:
             assert desktop.main(["--no-browser"]) == 0
     return next(
         call.args[0] for call in printed.call_args_list
-        if call.args and str(call.args[0]).startswith("Luma is running")
+        if call.args and "is running at" in str(call.args[0])
     )
 
 

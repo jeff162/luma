@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend import app_log_file
+from backend import app_log_file, runtime_config
 from backend.db import control_database, database
 from backend.tests._api_client import api_client
 
@@ -73,6 +73,29 @@ class AppLogFileTests(unittest.TestCase):
         self.assertEqual(app_log_file.install(), self.dir / "luma.log")
         logging.getLogger("luma.test").warning("something the server coped with")
         self.assertTrue(any(line.endswith("WARNING luma.test: something the server coped with") for line in self._lines()))
+
+    def _start_marker(self):
+        return next(line for line in self._lines() if app_log_file._MARKER_LOGGER in line)
+
+    def test_the_start_marker_names_the_version_and_the_address_when_one_was_declared(self):
+        # Only the desktop launcher can declare one: it settles the port, so the log is the only record of
+        # which address a given run landed on.
+        self.addCleanup(app_log_file.set_reachable_url, None)
+        app_log_file.set_reachable_url("http://localhost:8123")
+        app_log_file.install()
+        self.assertTrue(
+            self._start_marker().endswith(f"{runtime_config.APP_VERSION} started at http://localhost:8123 ---"),
+            self._start_marker(),
+        )
+
+    def test_the_start_marker_omits_an_address_nobody_declared(self):
+        """Running from source the browser is on Vite's port with this server behind it, and a container's
+        published port is a mapping made outside it — neither is this process's to state, so the marker
+        says nothing rather than naming somewhere nobody can reach."""
+        app_log_file.install()
+        self.assertTrue(
+            self._start_marker().endswith(f"{runtime_config.APP_VERSION} started ---"), self._start_marker()
+        )
 
     def test_it_copies_rather_than_replaces_what_already_receives_the_output(self):
         # The terminal, the journal and `docker logs` all hang off handlers like this one.

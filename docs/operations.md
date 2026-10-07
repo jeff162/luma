@@ -102,9 +102,14 @@ holds warnings and errors, a crashed request's traceback included, a line each t
 access lines only for requests that failed; successful requests stay out, or routine polling would soon
 rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
 uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
-genuine failures out the same way. It rotates at 1 MB and keeps one previous file (`luma.log.1`). What it
-cannot hold is anything before the application starts, such as a missing dependency or a crash during
-import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
+genuine failures out the same way. **The start line names the version**, and in the desktop shape the
+address that launch settled on — a busy configured port falls back to an ephemeral one, and nothing else
+records which one a given run ended up on. The other topologies omit the address rather than guess at it:
+running from source the browser is on the frontend's port with this server as an internal hop behind it,
+and a container's published port is a mapping made outside the process. It rotates at 1 MB and keeps one
+previous file (`luma.log.1`).
+What it cannot hold is anything before the application starts, such as a missing dependency or a crash
+during import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
 in the application's own startup (a migration raising), is held — the log is set up before the data
 database is readied. Settings → **Error log** reads the errors back out of it, for administrators only,
 since a traceback can carry transaction details and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest.
