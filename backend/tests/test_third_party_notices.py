@@ -132,6 +132,44 @@ def test_microsofts_c_runtime_needs_no_attribution_wherever_it_was_found():
     assert notices._system_library_paths(collected) == []
 
 
+def test_the_index_groups_what_components_declare_and_nothing_else():
+    """The index is read back out of the rendered notices, where a license text is reproduced verbatim and
+    may hold a rule line of its own — Pillow's Debian-style copyright does, and a loose reading filed its
+    `Files:` paragraphs as components of the build. What a component declares is summarized; what a
+    license text happens to contain is not."""
+    section = "\n".join([
+        "Third-party software in the Luma web interface",
+        "",
+        notices.RULE,
+        "react 18.3.1",
+        "License: MIT License",
+        "Source: https://react.dev/",
+        "",
+        "Permission is hereby granted...",
+        "",
+        notices.RULE,
+        "some-package 1.0",
+        "Source: https://example.invalid/",
+        "",
+        "This package bundles others, and reproduces their copyright file:",
+        "",
+        notices.RULE,
+        "Files: third_party/something/*",
+        "Copyright: 2016 Somebody",
+        "License: BSD-3-Clause",
+        "",
+    ])
+    index = notices.license_index([section])
+    # Spelling folded to the identifier, so one license is not listed twice under two names.
+    assert "MIT (1)" in index
+    assert "react 18.3.1" in index
+    # Declares no license of its own, and the copyright file it reproduces does not speak for it.
+    assert "Other (1)" in index
+    assert "some-package 1.0" in index
+    assert "BSD-3-Clause" not in index
+    assert "Files:" not in index
+
+
 def test_each_library_is_credited_to_the_package_that_installed_it():
     with mock.patch.object(notices, "_owning_package", return_value="zlib1g"), \
          mock.patch.object(notices, "_package_copyright", return_value="Copyright: 1995-2024 Jean-loup Gailly"):

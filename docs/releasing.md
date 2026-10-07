@@ -119,7 +119,16 @@ those lines are reproduced in the notice, so a reader can tell a supplied text f
 whose package ships no copyright file, stops the build the same way — a system library carries no metadata
 of its own, so one missed here leaves no trace in the finished kit. Third-party material carried in the source tree
 rather than installed (the passphrase word list) is listed alongside the packages, its notice read from
-the file's own header.
+the file's own header and its license from the `SPDX-License-Identifier:` line in that header.
+
+**The file opens with a summary of the licenses in it**, every component grouped under the identifier it
+declares for itself. It is read back out of the rendered entries rather than collected alongside them, so
+an index that disagrees with the file it indexes is not a state this can reach — and it is why each entry
+declares at least one field (`License:`, `Source:` or `Provides:`) under its name. A summary and not a
+determination: the identifiers are each component's own claim, common spellings of one license are folded
+together so it is not listed three times, and a component that declares nothing — the Python runtime, the
+shared libraries, a package whose metadata carries only a classifier — is listed under *Other* with the
+license text beside its entry left to speak for it.
 
 Checking what a build would ship, without running one: `backend/venv/bin/python
 scripts/third_party_notices.py` prints the server half.

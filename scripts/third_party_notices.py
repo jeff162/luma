@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import textwrap
 from importlib.metadata import Distribution, PackageNotFoundError, distribution
 from pathlib import Path
 
@@ -362,6 +363,98 @@ def server_notices(requirements: Path = REQUIREMENTS) -> str:
     return "\n".join(out) + "\n"
 
 
+# How an entry announces itself, which both halves of the file agree on: a rule line, the component's
+# name, then at least one `Field: value` line naming its license, its source, or what it provides. The
+# summary below is read back out of the rendered text for that reason — an index derived from the finished
+# file cannot disagree with it, and needs no second pass over npm manifests from a script that never sees
+# them.
+#
+# Read strictly, because a license text is reproduced verbatim and can contain anything, including a rule
+# line of its own: Pillow ships a Debian-style copyright whose `Files:` paragraphs are separated that way,
+# and a loose reading filed six of them as components. Hence both guards — a component's name carries no
+# `Field:` of its own, and the lines under it are *only* the fields an entry declares.
+_ENTRY_FIELD = re.compile(r"^(License|Source|Provides): *(.*)$")
+
+# Past this, what the metadata holds is not an identifier. A few older distributions put their entire
+# license text in the `License` field, and the first line of one reads as a sentence rather than a name.
+_LICENSE_NAME_LIMIT = 60
+
+UNKNOWN_LICENSE = "Other"
+
+# Spellings of the same license, folded so the summary does not list Apache-2.0 three times under three
+# names. Spelling only: nothing here decides that one license *is* another, and an identifier this does
+# not recognize is shown exactly as the component declared it, ambiguous (`BSD`) or odd (`Dual License`)
+# as that may be.
+_LICENSE_SPELLINGS = {
+    "the mit license": "MIT",
+    "mit license": "MIT",
+    "apache 2.0": "Apache-2.0",
+    "apache license 2.0": "Apache-2.0",
+    "apache license, version 2.0": "Apache-2.0",
+    "apache software license": "Apache-2.0",
+    "bsd-3-clause license": "BSD-3-Clause",
+    "bsd-2-clause license": "BSD-2-Clause",
+    "isc license": "ISC",
+}
+
+
+def _declared_licenses(section: str) -> list[tuple[str, str]]:
+    """Each component in a rendered section, as `(name, declared license)`. The license is `Other` for a
+    component that declares none — the Python runtime and the shared libraries, whose terms are stated in
+    the text they carry rather than in a field."""
+    entries = []
+    for block in section.split(f"\n{RULE}\n")[1:]:
+        lines = block.strip().splitlines()
+        if not lines or _ENTRY_FIELD.match(lines[0]) or ": " in lines[0]:
+            continue
+        fields = {}
+        for line in lines[1:]:
+            if not line.strip():
+                break
+            field = _ENTRY_FIELD.match(line)
+            if not field:
+                fields.clear()
+                break
+            fields[field.group(1)] = field.group(2).strip()
+        if not fields:
+            continue
+        declared = " ".join(fields.get("License", "").split())
+        if not declared or len(declared) > _LICENSE_NAME_LIMIT:
+            declared = UNKNOWN_LICENSE
+        entries.append((lines[0].strip(), _LICENSE_SPELLINGS.get(declared.lower(), declared)))
+    return entries
+
+
+def license_index(sections) -> str:
+    """The summary that heads the file: every component grouped under the license it declares.
+
+    A summary and not a determination. The identifiers are each component's own claim about itself, a
+    handful of components make no claim at all, and one string can stand for a choice of licenses — so
+    this is the shape of what the build carries, read before the license texts that actually govern. Worth
+    having anyway, because the question it answers — what obligations come with this? — is otherwise
+    unanswerable without reading 400 KB of boilerplate.
+    """
+    grouped: dict[str, list[str]] = {}
+    for section in sections:
+        for name, license_name in _declared_licenses(section):
+            grouped.setdefault(license_name, []).append(name)
+    # Alphabetical, with the components that declare nothing last rather than filed under O.
+    order = sorted((k for k in grouped if k != UNKNOWN_LICENSE), key=str.lower)
+    order += [UNKNOWN_LICENSE] if UNKNOWN_LICENSE in grouped else []
+    out = [
+        "Licenses at a glance",
+        "",
+        "Every component in this file, grouped by the license it declares for itself. A summary only:",
+        "the license text reproduced with each entry below is what governs. A component declaring no",
+        "identifier is listed under Other, its terms stated in the text it carries.",
+    ]
+    for license_name in order:
+        names = sorted(grouped[license_name], key=str.lower)
+        out += ["", f"{license_name} ({len(names)})"]
+        out += textwrap.wrap(", ".join(names), width=96, initial_indent="  ", subsequent_indent="  ")
+    return "\n".join(out) + "\n"
+
+
 def combined_notices(web_notices: str, binaries=(), requirements: Path = REQUIREMENTS) -> str:
     """The one file a kit carries: the web interface's notices as the frontend build wrote them, then the
     server's, then the shared libraries this build collected. One file rather than three because a
@@ -372,12 +465,15 @@ def combined_notices(web_notices: str, binaries=(), requirements: Path = REQUIRE
     if native:
         sections.append(native)
     separator = f"\n\n{RULE}\n{RULE}\n\n"
+    # Read from the sections rather than built alongside them, so the index and the entries it indexes
+    # cannot drift apart.
+    sections.insert(0, license_index(sections).strip())
     return (
         "Third-party licenses\n"
         "\n"
         "Luma itself is licensed under the GNU AGPL v3.0 or later; see the LICENSE file beside this one.\n"
         "This file covers the other software included in this build. Each entry names a component and\n"
-        "reproduces the license text it ships.\n"
+        "reproduces the license text it ships; the summary below lists what those licenses are.\n"
         f"{separator}"
         + separator.join(sections)
         + "\n"

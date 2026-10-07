@@ -71,8 +71,22 @@ function packageEntry(dir, supplementDir) {
   return { name: manifest.name, version: manifest.version, license: licenseOf(manifest), source: sourceOf(manifest), texts }
 }
 
+// A vendored file declares its own license the way a package's manifest does, with an SPDX identifier in
+// the header block that is already its notice. Read rather than configured, so the claim lives in one
+// place; it is also what lists the file in the summary that heads the combined notices of a packaged
+// build, which reads each entry's `License:` line.
+const SPDX_LICENSE = /^SPDX-License-Identifier: *(.+)$/m
+
 function vendoredEntry({ file, name }) {
-  return { name, version: '', license: '', source: '', texts: [{ name: path.basename(file), text: splitHeader(file).header }] }
+  const { header } = splitHeader(file)
+  const declared = header.match(SPDX_LICENSE)
+  return {
+    name,
+    version: '',
+    license: declared ? declared[1].trim() : '',
+    source: '',
+    texts: [{ name: path.basename(file), text: header }],
+  }
 }
 
 function render(entries) {
