@@ -354,7 +354,7 @@ account's statements, so one person's statements cannot land in another's PayPal
 
 Each statement becomes its own card under the PayPal data source, beside any activity CSVs. A statement
 row already in the ledger — from a data connection or an earlier CSV — is recognized as a duplicate and
-given the statement's detail. A statement imported before is skipped, and so is a month with no activity.
+enriched with the statement's detail. A statement imported before is skipped, and so is a month with no activity.
 A payment in another currency is not imported, and neither is the card deposit that paid for it, so the
 card charge stays the record of that purchase. The statement lacks the activity CSV's item title; where
 that matters, the CSV is still the richer file.

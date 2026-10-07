@@ -2885,8 +2885,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Each statement becomes its own card under the PayPal data source. A transaction already in the
-          ledger &mdash; from a data connection or an earlier CSV &mdash; is recognized as a duplicate and given
-          the statement&apos;s detail. A statement imported before is skipped, as is a month with no activity.
+          ledger &mdash; from a data connection or an earlier CSV &mdash; is recognized as a duplicate and enriched
+          with the statement&apos;s detail. A statement imported before is skipped, as is a month with no activity.
           A payment in another currency is not imported, nor the card deposit that paid for it, so the card
           charge stays the record of that purchase. The activity CSV carries each purchase&apos;s item title,
           which the statement lacks.

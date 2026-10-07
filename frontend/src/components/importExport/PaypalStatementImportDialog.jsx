@@ -85,7 +85,7 @@ function ImportResult({ result }) {
           <strong>{periodLabel(b.period_start, b.period_end)}</strong>
           {' — '}
           {b.imported} imported
-          {b.duplicates ? `, ${b.duplicates} already in the ledger${b.enriched ? ` (${b.enriched} given the statement's detail)` : ''}` : ''}
+          {b.duplicates ? `, ${b.duplicates} already in the ledger${b.enriched ? ` (${b.enriched} enriched)` : ''}` : ''}
           {b.rejected ? `, ${b.rejected} refused` : ''}
         </div>
       ))}
@@ -167,7 +167,7 @@ export function PaypalStatementImportDialog({ files, accounts, onClose, onImport
   return (
     <AppDialog
       title="Import PayPal statements"
-      description={result ? null : 'Each statement becomes its own card under the PayPal data source. Transactions already in the ledger are recognized as duplicates and given the statement’s detail.'}
+      description={result ? null : 'Each statement becomes its own card under the PayPal data source. Transactions already in the ledger are recognized as duplicates and enriched with the statement’s detail.'}
       onClose={onClose}
       width="min(620px, 100%)"
       actions={result ? (
