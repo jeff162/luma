@@ -92,10 +92,9 @@ function vendoredEntry({ file, name }) {
 function render(entries) {
   const rule = '-'.repeat(78)
   const out = [
-    'Third-party software in the Luma web interface',
+    'Third-party software included in the build.',
     '',
-    'The packages and other material included in this build of the web interface, each with the',
-    'license text it ships. Generated from the bundle at build time.',
+    'License text for the packages and other material packaged with this build of Luma.',
   ]
   for (const e of entries) {
     out.push('', rule, `${e.name}${e.version ? ` ${e.version}` : ''}`)
