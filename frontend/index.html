@@ -38,6 +38,13 @@
       /* The shared Button (components/ui.jsx) looks pressed while it is held. Its styles are inline, and an
          inline style cannot express :active, so this is the one place that state can live. */
       .ui-button:not(:disabled):active { transform: translateY(1px); filter: brightness(0.9); }
+      /* A Button's progress fill. Tinted from the label colour so it reads on every variant; the width eases
+         between polls so the bar advances rather than jumping. */
+      .ui-button-progress {
+        position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none;
+        background: color-mix(in srgb, currentColor 24%, transparent);
+        transition: width 0.4s linear;
+      }
       /* RefreshButton's icon. A turn ends at an iteration boundary, so under reduced motion the animation
          still has to iterate — it pulses in place instead of turning. */
       /* SearchInput (components/ui.jsx) draws its own clear ×, so the browser's is hidden — a pseudo-element
@@ -51,6 +58,7 @@
       .ui-refresh-icon.is-spinning { animation: ui-refresh-turn 0.6s linear infinite; }
       @media (prefers-reduced-motion: reduce) {
         .ui-button:not(:disabled):active { transform: none; }
+        .ui-button-progress { transition: none; }
         .ui-refresh-icon.is-spinning { animation-name: ui-refresh-pulse; }
       }
       :root {

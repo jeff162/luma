@@ -1070,6 +1070,15 @@ result no response depends on has no reason to be inside at all** — the sweep 
 surfaces read later, so both now run after the commit, in their own connections, guarded so a failure in
 either cannot fail the ingest that already succeeded.
 
+**A file import holds its write transaction from first row to commit**, which the rule above allows:
+there is nothing to fetch between rows, and an import that fails halfway leaves nothing behind. Two consequences follow. Its progress cannot be read back from the
+database the way a sync's is, so the run reports into an in-memory registry instead
+(`services/import_progress.py`), keyed by a name the browser sends with the upload and by tenant, present
+only while the run is; the browser polls `GET /import-export/run-progress/{id}` beside the upload's own
+request. And the endpoint does its work on the threadpool (`run_in_threadpool`), not on the event loop —
+work done in an `async def` body holds the loop for its whole duration, so the poll, and every other
+request, would be answered only once there was nothing left to report.
+
 **An expression in a predicate needs an index on that same expression** — SQLite matches the expression
 textually, not algebraically, so a function around a column silently opts the query out of every index on
 it. `idx_txn_amount_round` exists for that reason: the cross-account duplicate sweep joins on

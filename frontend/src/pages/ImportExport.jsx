@@ -131,6 +131,7 @@ import {
   summarizeImportedCategorySettings,
 } from '../lib/importExport/importedCategorySettings.js'
 import { mergePreviewAmounts, usePreviewAmounts } from '../lib/importExport/previewAmounts.js'
+import { runImportWithProgress } from '../lib/importExport/importRunProgress.js'
 import {
   guessNewAccountTypeFromName,
   findExactAccountNameMatch,
@@ -178,6 +179,17 @@ function isPaypalStatementCandidate(file) {
   return /\.(pdf|zip)$/i.test(file?.name || '')
 }
 
+// The Import button's label while it runs: which file of a multi-file run, and how far through its rows.
+function formatImportingLabel(fileProgress, rowProgress) {
+  const rows = rowProgress ? `${rowProgress.done.toLocaleString()} / ${rowProgress.total.toLocaleString()}` : null
+  if (fileProgress) {
+    return rows
+      ? `File ${fileProgress.current}/${fileProgress.total} · ${rows}…`
+      : `Importing ${fileProgress.current}/${fileProgress.total}…`
+  }
+  return rows ? `Importing ${rows}…` : 'Importing…'
+}
+
 // Keep the import UI recoverable if a preview or mapping render crashes.
 function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const navigate = useNavigate()
@@ -198,6 +210,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const [importFilePreviews, setImportFilePreviews] = useState([])
   const [multiSourceChoice, setMultiSourceChoice] = useState(null)
   const [multiImportProgress, setMultiImportProgress] = useState(null)
+  // Rows done / total in the file importing right now, once its rows have started; drives the Import button.
+  const [importRowProgress, setImportRowProgress] = useState(null)
   // After a PayPal import, the money-movement review: { batchId, proposals }. The user approves which
   // Type values route to the excluded Money movement category.
   const [moneyMovementReview, setMoneyMovementReview] = useState(null)
@@ -2400,7 +2414,11 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
       let result
       if (importEntries.length === 1) {
         const only = importEntries[0]
-        result = await api.runImport(only.file, { ...baseConfig, ...buildAccountConfig(only.filePreview), filename: only.filename })
+        result = await runImportWithProgress(
+          only.file,
+          { ...baseConfig, ...buildAccountConfig(only.filePreview), filename: only.filename },
+          setImportRowProgress,
+        )
         setMultiImportProgress(null)
       } else {
         // Import each file as its own batch/card (the natural per-file result), one after another. A file
@@ -2411,8 +2429,13 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         for (let i = 0; i < importEntries.length; i++) {
           const { file, filePreview, filename } = importEntries[i]
           setMultiImportProgress({ current: i + 1, total: importEntries.length, filename })
+          setImportRowProgress(null)
           try {
-            const fileResult = await api.runImport(file, { ...baseConfig, ...buildAccountConfig(filePreview), filename })
+            const fileResult = await runImportWithProgress(
+              file,
+              { ...baseConfig, ...buildAccountConfig(filePreview), filename },
+              setImportRowProgress,
+            )
             perFile.push({ filename, result: fileResult })
           } catch (err) {
             if (err?.status === 409 && err?.detail?.reason === 'already_imported') {
@@ -2498,7 +2521,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         description: e.message,
       })
     }
-    finally { setLoading(false) }
+    finally {
+      setImportRowProgress(null)
+      setLoading(false)
+    }
   }
 
   // After a PayPal import, offer the money-movement review. All PayPal imports share the one system
@@ -4270,11 +4296,15 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
 
           <div style={{ display: 'flex', gap: 10 }}>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
-              <Button onClick={runImport} disabled={!canImport() || loading}>
+              <Button
+                onClick={runImport}
+                disabled={!canImport() || loading}
+                progress={loading && importRowProgress
+                  ? importRowProgress.done / Math.max(importRowProgress.total, 1)
+                  : undefined}
+              >
                 {loading
-                  ? (multiImportProgress
-                    ? `Importing ${multiImportProgress.current}/${multiImportProgress.total}…`
-                    : 'Importing…')
+                  ? formatImportingLabel(multiImportProgress, importRowProgress)
                   : (importFiles.length > 1
                     ? `Import ${importFiles.length} files`
                     : `Import ${importableRowCount} rows`)}

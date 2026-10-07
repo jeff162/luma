@@ -124,6 +124,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from functools import lru_cache
 from typing import Callable, Iterable, NamedTuple, Optional
 
 from backend.services.categorizer import source_match_text_from_json
@@ -551,7 +552,18 @@ def normalize_evidence_text(value: Optional[str]) -> str:
     """Casefold to comparable form: strip trailing reference digits, lowercase, and reduce to
     single-spaced alphanumerics so punctuation and spacing differences between two sources don't
     defeat a match."""
-    normalized = sanitize_rule_merchant_text(str(value or "")).lower()
+    return _normalize_evidence_str(str(value or ""))
+
+
+# Building a dedupe context normalizes every candidate row's texts, several per row, and the same
+# descriptors recur across a ledger — so the pure string transform is memoized, process-wide. Bounded,
+# because the server is long-lived and the inputs are whatever the ledger holds.
+EVIDENCE_TEXT_CACHE_SIZE = 65536
+
+
+@lru_cache(maxsize=EVIDENCE_TEXT_CACHE_SIZE)
+def _normalize_evidence_str(value: str) -> str:
+    normalized = sanitize_rule_merchant_text(value).lower()
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     return " ".join(normalized.split())
 

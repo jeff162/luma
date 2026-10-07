@@ -10,6 +10,7 @@ transaction text, owner, account, and amount window.
 
 import json
 import sqlite3
+from functools import lru_cache
 from typing import Optional
 
 from backend.services.account_groups import effective_account_id_sql
@@ -167,15 +168,20 @@ def match_expr_clause_texts(match_expr) -> Optional[list[str]]:
     return texts or None
 
 
+# A pass tests every rule against every row, so a rule's needles are derived once rather than re-parsed
+# from its JSON per row. Keyed on the stored values themselves, so an edited rule is simply a new key.
+@lru_cache(maxsize=4096)
+def _matcher_needles(keyword, match_expr) -> tuple[str, ...]:
+    clause_texts = match_expr_clause_texts(match_expr)
+    return tuple(clause_texts) if clause_texts is not None else (str(keyword).lower(),)
+
+
 def merchant_matcher_matches(rule, text: str, source_text_lc: str, match_source_text) -> bool:
     """Does the rule's merchant matcher fire on ``text`` (already lowercased, the joined name fields)?
     A multi-clause rule (``match_expr`` set) requires *every* clause; a legacy rule uses its single
     ``keyword``. A clause/keyword is satisfied when its text is a substring of ``text`` — or, when the rule
     matches source text, of ``source_text_lc``. This is the one predicate every match site shares."""
-    clause_texts = match_expr_clause_texts(_dict_get(rule, "match_expr"))
-    if clause_texts is None:
-        clause_texts = [str(rule["keyword"]).lower()]
-    for needle in clause_texts:
+    for needle in _matcher_needles(rule["keyword"], _dict_get(rule, "match_expr")):
         in_name = bool(text) and needle in text
         in_source = bool(match_source_text) and bool(source_text_lc) and needle in source_text_lc
         if not (in_name or in_source):

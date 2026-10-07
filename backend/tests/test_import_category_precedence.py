@@ -26,7 +26,7 @@ from backend.db.database import (
     set_current_db_path,
 )
 from backend.routers.import_export import run_import
-from backend.routers.import_export.core import _set_batch_imported_category_usage
+from backend.routers.import_export.core import _set_batch_imported_category_usage, undo_batch
 
 
 class FakeUploadFile:
@@ -216,6 +216,28 @@ class ImportCategoryPrecedenceTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchone())
         self.assertEqual(row["display_name"], "Canonical Coffee")    # rename applied at import
         self.assertEqual(row["merchant_name"], "ZZQX MERCHANT 001")  # raw description kept on merchant_name
+
+    async def test_undo_removes_label_categories_the_import_created_however_many_rows_use_them(self):
+        # A label category the import mints belongs to that batch until something else claims it, so undo
+        # takes it back out. A label used by more than one row of its own file must still count as the
+        # batch's — the repeat is that same batch, not a second one adopting it.
+        account_id = self._insert_account("Checking")
+
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,WBWB STORE,Checking,12.00,Gadgets",
+                "2026-01-09,WBWB STORE,Checking,15.00,Gadgets",
+                "2026-01-10,QPQP SHOP,Checking,7.00,Widgets",
+            ]),
+            {"Checking": account_id},
+        )
+        self.assertEqual(self._unassigned_leaf_names(), ["Gadgets", "Widgets"])
+
+        with self._use_db_path():
+            undo_batch(self._latest_batch_id(), force=False)
+
+        self.assertEqual(self._unassigned_leaf_names(), [])
 
 
 if __name__ == "__main__":

@@ -780,15 +780,22 @@ export function PageHeader({ title, children, leftAdornment, help, titleAdornmen
 // form only avoided submitting because its click also removed the form, before the browser's default
 // action ran. A button that acts through its own onClick should not *also* submit by accident of where it
 // sits; one that means to submit says `type="submit"`.
+//
+// `progress` (a 0–1 fraction) turns the button into its own progress bar for a long action it started: the
+// face fills from the left behind the label, which carries the figures. A running bar is the button busy
+// rather than unavailable, so it keeps its full colour even though it is disabled for the duration.
 export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title,
-  type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy }) {
+  type = 'button', 'aria-label': ariaLabel, 'aria-busy': ariaBusy, progress }) {
+  const showsProgress = typeof progress === 'number' && Number.isFinite(progress)
   const base = {
     padding: small ? '6px 12px' : '9px 16px',
-    borderRadius: 8, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
+    borderRadius: 8, border: 'none', cursor: showsProgress ? 'progress' : (disabled ? 'not-allowed' : 'pointer'),
     fontSize: small ? 13 : 14, fontWeight: 500,
     // The press itself is quick, so it reads as the button going down under the pointer rather than easing.
     transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.06s, filter 0.06s',
-    opacity: disabled ? 0.5 : 1, ...style,
+    opacity: disabled && !showsProgress ? 0.5 : 1,
+    ...(showsProgress ? { position: 'relative', overflow: 'hidden' } : null),
+    ...style,
   }
   const variants = {
     primary:  { background: 'var(--accent)',  color: '#fff' },
@@ -807,7 +814,7 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
       className="ui-button"
       type={type}
       aria-label={ariaLabel}
-      aria-busy={ariaBusy}
+      aria-busy={ariaBusy ?? (showsProgress || undefined)}
       // The DOM attribute, not just the dimmed look and the dropped handlers. Without it the control
       // stays focusable, still announces as enabled to a screen reader, and still submits a form it
       // sits in — so a button that looks unavailable is only unavailable to a mouse. The handlers stay
@@ -818,7 +825,16 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
       style={{ ...base, ...variants[variant] }}
       title={title}
     >
-      {children}
+      {showsProgress ? (
+        <>
+          <span
+            aria-hidden="true"
+            className="ui-button-progress"
+            style={{ width: `${Math.min(Math.max(progress, 0), 1) * 100}%` }}
+          />
+          <span style={{ position: 'relative' }}>{children}</span>
+        </>
+      ) : children}
     </button>
   )
 }

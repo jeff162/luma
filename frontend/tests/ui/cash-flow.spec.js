@@ -42,8 +42,8 @@ test('the cash flow trends form opens a year into its months', async ({ page }) 
   await page.getByRole('button', { name: 'Cash flow' }).click()
   await page.getByRole('button', { name: 'Trends' }).click()
 
-  const yearCard = page.getByText('Money in and out by year').locator('xpath=..')
-  const monthCard = page.getByText('Money in and out by month').locator('xpath=..')
+  const yearCard = page.getByText('Yearly trend').locator('xpath=..')
+  const monthCard = page.getByText('Monthly trend').locator('xpath=..')
   const picker = page.locator('select').filter({ has: page.locator('option', { hasText: 'Last 12 months' }) })
   await expect(picker).toHaveValue('last12')
 

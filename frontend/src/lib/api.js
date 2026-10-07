@@ -912,10 +912,12 @@ export const api = {
       return res.json()
     })
   },
-  runImport: (file, config) => {
+  // `progressId` names the run so `getImportRunProgress` can follow it while this request is open.
+  runImport: (file, config, { progressId } = {}) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('config', JSON.stringify(config))
+    if (progressId) fd.append('progress_id', progressId)
     return trackedFetch('/api/import-export/run', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -925,6 +927,8 @@ export const api = {
       return res.json()
     })
   },
+  getImportRunProgress: (progressId) =>
+    request(`/import-export/run-progress/${encodeURIComponent(progressId)}`),
   // PayPal money-movement review, at the data-source (profile) level: the distinct captured Type values
   // across all of the source's imports (with money-movement + already-ruled flags), and the endpoint that
   // adds/removes account-scoped match_source_text rules → Money movement, recategorizing existing rows.

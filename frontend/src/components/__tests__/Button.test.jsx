@@ -57,3 +57,14 @@ describe('Button inside a form', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 })
+
+describe('Button showing progress', () => {
+  it('keeps its label as its name, reports busy, and still refuses presses while disabled', async () => {
+    const onClick = vi.fn()
+    render(<Button disabled progress={0.4} onClick={onClick}>Importing 4 / 10…</Button>)
+    const button = screen.getByRole('button', { name: 'Importing 4 / 10…' })
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    await userEvent.click(button)
+    expect(onClick).not.toHaveBeenCalled()
+  })
+})

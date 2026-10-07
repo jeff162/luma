@@ -44,6 +44,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend import app_config
@@ -91,6 +92,7 @@ from backend.services.duplicate_detection import (
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 from backend.services.import_batch_totals import IMPORT_SUMMARY_KEY, refresh_batch_totals
+from backend.services.import_progress import import_progress, tracked_import
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
 from backend.services.source_capabilities import (
@@ -2517,7 +2519,10 @@ def _ensure_imported_batch_category(conn, batch_id: str, raw_name: str):
             # category_id / category_source NULL, keeps imported_category). Never resurrect
             # the inactive leaf or create a fresh one for the same label.
             return None
-        if existing["import_source_batch_id"]:
+        # Another batch's label, now used by this one too, stops belonging to that batch — undoing it must
+        # not delete a category this batch's rows sit in. A label this batch created stays its own, so
+        # undoing this batch can remove it.
+        if existing["import_source_batch_id"] and existing["import_source_batch_id"] != batch_id:
             conn.execute(
                 "UPDATE category SET import_source_batch_id = NULL WHERE id = ?",
                 (existing["id"],),
@@ -2882,18 +2887,34 @@ def clear_import_memory(request: Request):
 async def run_import(
     file:   UploadFile = File(...),
     config: str        = Form(...),
+    progress_id: Optional[str] = Form(None),
 ):
     """
     Execute the import from a multipart upload. The CSV is parsed server-side (the preview only returns
     10 rows), so we re-read the whole file here. This endpoint only handles the HTTP/multipart envelope
     and the demo guard; the actual import is `run_import_core`, so the same logic is reusable in-process
     (e.g. the demo loader builds its data through the real pipeline) without going through HTTP.
+
+    Everything after the upload is read runs on the worker threadpool: a large file takes seconds, and
+    run on the event loop it would hold it for all of them — no other request, `GET /run-progress`
+    included, could be answered until the import ended. `progress_id` names the run for that poll
+    (`services/import_progress.py`).
     """
     try:
         cfg = json.loads(config)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid config JSON")
 
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+    filename = file.filename or cfg.get("filename", "upload.csv")
+    return await run_in_threadpool(_run_uploaded_import, text, cfg, filename, progress_id)
+
+
+def _run_uploaded_import(text: str, cfg: dict, filename: str, progress_id: Optional[str]) -> dict:
     with get_db() as conn:
         if is_demo_data_loaded(conn):
             raise HTTPException(status_code=409, detail={
@@ -2902,12 +2923,8 @@ async def run_import(
             })
         require_no_pending_restore(conn, "importing")
 
-    content = await file.read()
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = content.decode("latin-1")
-    result = run_import_core(text, cfg, filename=file.filename or cfg.get("filename", "upload.csv"))
+    with tracked_import(progress_id) as on_progress:
+        result = run_import_core(text, cfg, filename=filename, on_progress=on_progress)
 
     # A completed import is new data, so refresh recurring detection now instead of waiting for a manual
     # scan. Use the cheap scoped path: reprocess only the payees this batch touched, not the whole ledger
@@ -2929,18 +2946,30 @@ async def run_import(
     return result
 
 
-def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
+@router.get("/run-progress/{progress_id}")
+def get_import_run_progress(progress_id: str):
+    """How far the named `/run` has got: `{active: true, done, total}` while it runs (`total` null until
+    the rows start), `{active: false}` before it starts or once it has finished."""
+    progress = import_progress(progress_id)
+    return {"active": False} if progress is None else {"active": True, **progress}
+
+
+def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=None, on_progress=None) -> dict:
     """Import a CSV's text: the CSV front end, then the format-agnostic import (`run_import_parsed`)."""
-    return run_import_parsed(parse_csv_text(text), cfg, filename=filename, conn=conn)
+    return run_import_parsed(parse_csv_text(text), cfg, filename=filename, conn=conn, on_progress=on_progress)
 
 
-def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
+def run_import_parsed(
+    parsed: ParsedFile, cfg: dict, *, filename: str = "upload.csv", conn=None, on_progress=None,
+) -> dict:
     """Core import logic, independent of HTTP/multipart and of the file's format. Given what a front end
     parsed and a config dict, it creates/resolves accounts, inserts + dedupes + categorizes
     transactions, writes the batch and its account-coverage rows, runs the post-import suspect sweep,
     and returns the result summary. A caller may pass its own `conn` to run inside an existing
     transaction (the demo loader does, so its owners/accounts/profiles are visible to the import and
-    everything commits together); when omitted, the core opens and commits its own."""
+    everything commits together); when omitted, the core opens and commits its own. `on_progress`, when
+    given, is called `(rows_done, rows_total)` as the row loop advances — the setup before it (the dedupe
+    context) and the passes after it are not counted."""
     file_content_hash = parsed.content_hash
     all_lines = parsed.lines
     headers = parsed.headers
@@ -3373,7 +3402,12 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
         # from cardinality across the whole file) — compute once, then apply per row.
         evidence_plan = _build_evidence_column_plan(
             data_rows, headers, col, is_paypal=is_paypal, declared_roles=parsed.evidence_roles)
+        # Imported category labels repeat across a file, and resolving one reads the whole category table,
+        # so each distinct label is resolved once per import (normalized name -> row, None included).
+        imported_category_by_name: dict = {}
         for i, row in enumerate(data_rows):
+            if on_progress:
+                on_progress(i, len(data_rows))
             row_num = parsed.first_row_number + skip_rows + i
             skip_account_row = False
 
@@ -3557,7 +3591,11 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
                     acc["owner_id"],
                     category_scope_token,
                 ):
-                    imported_category = _ensure_imported_batch_category(conn, batch_id, raw_imported_category)
+                    label_key = normalize_import_category(raw_imported_category)
+                    if label_key not in imported_category_by_name:
+                        imported_category_by_name[label_key] = _ensure_imported_batch_category(
+                            conn, batch_id, raw_imported_category)
+                    imported_category = imported_category_by_name[label_key]
                     if imported_category:
                         cat_id = imported_category["id"]
                         category_source = "import"
@@ -3630,6 +3668,8 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
 
             batch_account_stats[csv_val]["count"] += 1
 
+        if on_progress:
+            on_progress(len(data_rows), len(data_rows))
         trailing_non_transaction_suspected = footer_error_start_row is not None
 
         if footer_error_start_index is not None:
