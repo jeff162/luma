@@ -158,6 +158,20 @@ FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "account:"
 NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "new-account:"
 UNCATEGORIZED_IMPORT_CATEGORY_NAMES = {"uncategorized", "uncategorised", "unassigned"}
 MAX_IMPORT_EVIDENCE_TEXT_FIELDS = 6
+# Names for the parts of duplicate detection, used as keys in an optional "duplicate_strategies"
+# setting an import can send to switch parts of it off. coverage_window covers the three rules that
+# reject a row because an earlier import already covered its date range, including the match against
+# rows left over on the last covered day. cross_source_text covers the rule that rejects a row having
+# the same date and amount as an existing one when the two descriptions read like one charge written
+# two different ways. exact_hash is only a name: an exact match on content is always rejected and has
+# no switch, so nothing reads that constant. Switching both of the others off still rejects rows that
+# are provably the same, and sends everything else to the duplicate review instead of dropping it.
+#
+# As of 2026-10-06 nothing sends the setting. The import honors it if it arrives, but no screen offers
+# it, and a batch's config_snapshot records both strategies as on regardless of what the import
+# actually used, so whatever starts sending it has to write the real values there as well. These went
+# in part way through a larger change in April 2026 and the screen was never built. If a use for them
+# does not turn up, the keys, the switches and the branches that read them can all come out.
 EXACT_DUPLICATE_STRATEGY_KEY = "exact_hash"
 COVERAGE_DUPLICATE_STRATEGY_KEY = "coverage_window"
 TEXT_DUPLICATE_STRATEGY_KEY = "cross_source_text"
