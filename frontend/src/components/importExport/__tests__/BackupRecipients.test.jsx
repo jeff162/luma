@@ -169,6 +169,10 @@ describe('saving the generated private key adds the recipient', () => {
     keyField.setSelectionRange(0, keyField.value.length)
     fireEvent.copy(keyField)
     expect(createBackupRecipient).toHaveBeenCalledTimes(1)
+    // `fireEvent` wraps only the dispatch, so the add resolves after this test body returns — late
+    // enough to warn about a state update outside `act`, on a loaded machine. Waiting for the state
+    // it produces also checks the manual copy reaches it, which is the point of the handler.
+    await screen.findByText(/Backup key added/)
   })
 
   it('offers a retry when adding fails', async () => {
