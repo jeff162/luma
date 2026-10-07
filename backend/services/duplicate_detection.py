@@ -1395,6 +1395,83 @@ def _display_candidates(candidates: list[dict]) -> list[dict]:
     ]
 
 
+def _claim_strength(candidate: dict) -> tuple[int, int]:
+    """How strongly a coverage candidate is this row's twin, lower being stronger: the text tier first,
+    then the date distance — the same order `_display_candidates` ranks a row's own list by."""
+    return (_TEXT_RELATION_RANK.get(candidate.get("text_relation"), 3), abs(candidate.get("day_offset") or 0))
+
+
+# A specific match the ladder made (exact hash, terminal day, text strategy) outranks any coverage guess.
+_SPECIFIC_MATCH_STRENGTH = (-1, 0)
+
+
+def _sole_claims(matched_entries: list[dict]) -> dict[str, tuple[tuple[int, int], int]]:
+    """Each existing row some entry names as its **only** same-account match **in agreeing words** (or
+    as a specific match), with the strongest such claim and the index of the entry making it. A row
+    naming several candidates claims none of them — it may be any one — and a wordless claim proves no
+    more than the wordless guess it would displace."""
+    claims: dict[str, tuple[tuple[int, int], int]] = {}
+    for index, matched in enumerate(matched_entries):
+        if not isinstance(matched, dict):
+            continue
+        if "covered" in matched:
+            candidates = [c for c in (matched.get("candidates") or []) if isinstance(c, dict) and c.get("id")]
+            if len(candidates) != 1 or candidates[0].get("cross_account") or not candidates[0].get("text_relation"):
+                continue
+            txn_id, strength = candidates[0]["id"], _claim_strength(candidates[0])
+        elif matched.get("id"):
+            txn_id, strength = matched["id"], _SPECIFIC_MATCH_STRENGTH
+        else:
+            continue
+        if txn_id not in claims or strength < claims[txn_id][0]:
+            claims[txn_id] = (strength, index)
+    return claims
+
+
+def _outclaimed(candidate: dict, claims: dict, own_index: Optional[int]) -> bool:
+    """Whether another entry's claim on this candidate is stronger. A cross-account candidate is never
+    outclaimed: it explains a row as the *other* leg of a movement, or the same payment recorded on
+    another account, and a file carrying both legs rightly has two rows pointing at it in two senses."""
+    if candidate.get("cross_account"):
+        return False
+    claim = claims.get(candidate.get("id"))
+    return claim is not None and claim[1] != own_index and claim[0] < _claim_strength(candidate)
+
+
+def release_contested_candidates(matched_entries: list[dict]) -> int:
+    """Take an existing row out of a coverage reject's candidate list when another row of the **same
+    batch** names it as its only match, more strongly. Mutates the entries; returns how many were emptied.
+
+    One file does not describe one transaction twice, so two of its rows naming the same existing row
+    means at most one of them is right. The coverage lookup cannot see that, because it judges each row
+    alone, on amount and date: a PayPal purchase and its refund two days later each carry a nameless
+    card leg of the same amount, and each leg found the *other* day's purchase or refund — the only
+    same-amount row in reach — while that row's own same-day, same-wording twin was claiming it too.
+    Auto-enrich then folded the leg's `Type` into the wrong row, and a refund that reads as a card
+    deposit is what the PayPal reconciliation went looking for a counterpart for.
+
+    Only a **sole**, **worded**, **strictly stronger** claim releases a candidate (`_sole_claims`), and
+    only a same-account one (`_outclaimed`): a row naming several candidates might be any of them, two
+    equal claims leave nothing to choose between, and two wordless ones prove nothing, so all stand. The
+    verdict is untouched — every row here stays rejected — so like `_display_candidates` this changes
+    only what the report names, and through it what enrichment reaches. An entry left with nothing reads
+    as `no_match`, and `refresh_unexplained_coverage_candidates` (which honours the same claims) may name
+    a better explanation from the wider ledger.
+    """
+    claims = _sole_claims(matched_entries)
+    emptied = 0
+    for index, matched in enumerate(matched_entries):
+        if not isinstance(matched, dict) or "covered" not in matched or not matched.get("candidates"):
+            continue
+        kept = [c for c in matched["candidates"] if not (isinstance(c, dict) and _outclaimed(c, claims, index))]
+        if len(kept) == len(matched["candidates"]):
+            continue
+        matched["candidates"] = kept
+        matched["candidate_count"] = len(kept)
+        emptied += not kept
+    return emptied
+
+
 def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
     """Build the verdict's `matched` dict for a coverage-window hit. We deliberately do NOT echo
     the incoming amount as a synthetic 'matched amount' (it implies a specific match we didn't
@@ -3115,6 +3192,9 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     Returns how many entries gained an explanation.
     """
     pending: list[dict] = []
+    # Every entry's stored match, so a refreshed explanation honours the batch's own claims exactly as
+    # the import did (`release_contested_candidates`) — otherwise the row it released re-names on read.
+    batch_matched: list[dict] = []
     for row in conn.execute(
         """
         SELECT row_number, reason, matched_transaction_json, txn_payload_json
@@ -3128,6 +3208,7 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
             payload = json.loads(row["txn_payload_json"]) if row["txn_payload_json"] else {}
         except (TypeError, ValueError):
             continue
+        batch_matched.append(matched)
         if not isinstance(matched, dict) or "covered" not in matched or matched.get("candidates"):
             continue
         account_id = str((payload or {}).get("account_id") or "").strip()
@@ -3227,6 +3308,11 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
             context.existing_rows_by_effective_account_amount.setdefault(
                 r["effective_account_id"], {}).setdefault(key, []).append(summary)
 
+    claims = _sole_claims(batch_matched)
+
+    def _unclaimed(candidates: list[dict]) -> list[dict]:
+        return [c for c in candidates if not _outclaimed(c, claims, None)]
+
     updated = 0
     for p in pending:
         # Rows this same batch imported ARE eligible candidates, and excluding them was a mistake:
@@ -3234,18 +3320,18 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         # actually turns up is a file carrying the same charge twice under two different account
         # labels — one copy imports, the other is rejected by coverage. Suppressing the imported copy
         # hid exactly the explanation the report exists to give.
-        candidates = _display_candidates(_candidate_summary_rows_for_coverage(
+        candidates = _unclaimed(_display_candidates(_candidate_summary_rows_for_coverage(
             context, p["account_id"], p["parsed_date"], p["amount"], p["scope_id"], p["incoming_texts"],
-        ))
+        )))
         if not candidates:
             # Nothing on the account or in its group, so look across accounts — in the order the import
             # uses, transfer twin first. One difference, and it favours the row: at import the transfer
             # probe is gated on the *raw* candidate list being empty, so a coincidental same-amount
             # neighbour that the tiering then discarded was enough to stop it running. Here it is gated on
             # what survived the tiering, which is the question the report actually wanted answered.
-            candidates = find_cross_account_transfer_candidates(
+            candidates = _unclaimed(find_cross_account_transfer_candidates(
                 conn, p["account_id"], p["parsed_date"], p["amount"],
-            )
+            ))
         if not candidates and p["merchant"]:
             # Still nothing, so ask the wider ledger whether a corroborating charge exists — the same
             # question `_coverage_reject_verdict` asks, on the entries where a coincidence in the
@@ -3254,7 +3340,7 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
                 conn, p["account_id"], p["parsed_date"], p["amount"], p["merchant"],
             )
             if payment_match is not None:
-                candidates = [payment_match]
+                candidates = _unclaimed([payment_match])
         if not candidates:
             continue
         matched = dict(p["matched"])

@@ -29,6 +29,7 @@ from backend.db.database import (
 )
 from backend.routers.import_export import run_import
 from backend.routers.import_export.core import _enrich_duplicate_rows, undo_batch
+from backend.services.import_enrichment import compute_enrichment_delta
 
 
 class FakeUploadFile:
@@ -176,6 +177,57 @@ class AutoEnrichImportTests(unittest.IsolatedAsyncioTestCase):
                 enriched, skipped = _enrich_duplicate_rows(conn, batch_id, [2])
         self.assertEqual(enriched, [])
         self.assertEqual(skipped, [{"row": 2, "reason": "ambiguous match"}])
+
+    async def test_a_wallet_leg_does_not_enrich_the_other_days_purchase_or_refund(self):
+        # The reported shape: an aggregator holds a wallet purchase and its refund two days later; the
+        # wallet's own export adds a nameless card leg beside each, of the same amount. Each leg's only
+        # same-amount row in reach is the *other* day's purchase or refund, which that day's named row
+        # is claiming as its same-day twin — so the leg must not take it, and its Type must not land
+        # there. A purchase reading "General Card Withdrawal" is what sent the reconciliation hunting.
+        aggregator = "\n".join([
+            "Date,Name,Account,Amount",
+            "2026-04-01,Opening Fixture,Checking,-3.00",
+            "2026-04-22,Velo Shop,Checking,-54.95",
+            "2026-04-24,Velo Shop,Checking,54.95",
+            "2026-04-30,Closing Fixture,Checking,-4.00",
+            # Past the default lag window, so the aggregator's coverage reaches both days in question.
+            "2026-05-12,Later Fixture,Checking,-5.00",
+            "2026-05-20,Last Fixture,Checking,-6.00",
+        ])
+        wallet = "\n".join([
+            "Date,Name,Type,Account,Amount",
+            "2026-04-22,Velo Shop,Express Checkout Payment,Checking,-54.95",
+            "2026-04-22,,General Card Deposit,Checking,54.95",
+            "2026-04-24,Velo Shop,Payment Refund,Checking,54.95",
+            "2026-04-24,,General Card Withdrawal,Checking,-54.95",
+            # Enough repeats for `Type` to measure categorical, as a wallet export's does: a descriptive
+            # type would be compared as text, and the legs' candidates hidden for disagreeing with it.
+            "2026-04-05,Corner Cafe,Express Checkout Payment,Checking,-7.10",
+            "2026-04-08,Book Nook,Express Checkout Payment,Checking,-8.20",
+            "2026-04-11,Hill Bakery,Express Checkout Payment,Checking,-9.30",
+            "2026-04-14,Pond Florist,Express Checkout Payment,Checking,-10.40",
+        ])
+        await self._run_import(aggregator)
+        await self._run_import(wallet, enrich_from_source=True, evidence_columns=["Type"])
+
+        with self._use_db_path():
+            with get_db() as conn:
+                types = {
+                    row["date"]: [f["value"] for f in json.loads(row["import_evidence_json"] or "{}").get(
+                        "extra_text_fields", []) if f.get("header") == "Type"]
+                    for row in conn.execute(
+                        "SELECT date, import_evidence_json FROM txn WHERE raw_name = 'Velo Shop'")
+                }
+        self.assertEqual(types, {"2026-04-22": ["Express Checkout Payment"], "2026-04-24": ["Payment Refund"]})
+
+    def test_a_type_naming_another_kind_of_transaction_is_not_folded_in(self):
+        existing = {"extra_text_fields": [{"header": "Type", "value": "Payment Refund"}]}
+        deposit = {"extra_text_fields": [{"header": "Type", "value": "General Credit Card Deposit"},
+                                         {"header": "Ref ID", "value": "R1"}]}
+        self.assertEqual(compute_enrichment_delta(existing, [], deposit), [])
+        # The same kind spelled the way another export spells it still enriches.
+        restated = {"extra_text_fields": [{"header": "Type", "value": "Refund"}, {"header": "Ref ID", "value": "R1"}]}
+        self.assertEqual([f["value"] for f in compute_enrichment_delta(existing, [], restated)], ["Refund", "R1"])
 
 
 if __name__ == "__main__":

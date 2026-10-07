@@ -30,6 +30,7 @@ from backend.services.duplicate_detection import (
     _candidate_summary_rows_for_coverage,
     _display_candidates,
     duplicate_amount_key as amount_key,
+    release_contested_candidates,
     row_match_texts,
 )
 
@@ -378,6 +379,22 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         self.assertIsNone(ctx.conn)
         out = self._lookup(ctx, "2026-01-10", amount="716.00")
         self.assertEqual(out, [])
+
+    def test_only_a_worded_same_account_claim_releases_a_candidate(self):
+        # Measured on a real ledger, the two guards are what keep this to a handful of rows: a PayPal row
+        # naming the card charge on another account as "the same payment" sits beside that charge's own
+        # row in the same file, and a wordless same-day neighbour proves no more than a wordless guess.
+        def covered(*candidates):
+            return {"covered": {}, "candidates": list(candidates), "candidate_count": len(candidates)}
+        claimant = covered({"id": "twin", "text_relation": "exact"})
+        guess = covered({"id": "twin", "day_offset": 2})
+        transfer = covered({"id": "twin", "cross_account": True})
+        wordless_claimant = covered({"id": "other"})
+        wordless_guess = covered({"id": "other", "day_offset": 2})
+        release_contested_candidates([claimant, guess, transfer, wordless_claimant, wordless_guess])
+        self.assertEqual(guess["candidates"], [])
+        self.assertEqual([len(m["candidates"]) for m in (claimant, transfer, wordless_claimant, wordless_guess)],
+                         [1, 1, 1, 1])
 
 
 if __name__ == "__main__":

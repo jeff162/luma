@@ -86,6 +86,7 @@ from backend.services.duplicate_detection import (
     MIN_TERMINAL_WINDOW_DAYS,
     sweep_import_suspects,
     refresh_unexplained_coverage_candidates,
+    release_contested_candidates,
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
@@ -3721,7 +3722,11 @@ def run_import_parsed(parsed: ParsedFile, cfg: dict, *, filename: str = "upload.
             conn.execute("DELETE FROM import_batch WHERE id = ?", (batch_id,))
             batch_id = None
         else:
+            # Before anything reads the candidates — the report and auto-enrich below both act on them.
+            emptied = release_contested_candidates([entry["matched_transaction"] for entry in duplicate_rows])
             save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
+            if emptied:
+                refresh_unexplained_coverage_candidates(conn, batch_id)
             save_batch_rejected_rows(conn, batch_id, stored_rejected_entries)
             # Per-source auto-enrich: for a trusted source, fold each hard-rejected duplicate's novel
             # detail into the existing row it matched — silently, but reported. Only unambiguous rows are

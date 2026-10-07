@@ -20,6 +20,10 @@ Three properties keep it safe and general (see `docs/data-model.md` → Import b
     re-enrichment of the same match adds nothing.
   * **Reversible.** The exact set of appended fields is returned as the delta, recorded on the duplicate
     report row, and removed verbatim on undo.
+  * **Refused when the two disagree about what the transaction is.** A captured `Type` is the source's
+    own statement of the kind of transaction (a payment, a refund, a card deposit into a wallet), and
+    two rows whose types name different kinds are two transactions however their amounts line up — so
+    nothing of the incoming one is folded in (see `_conflicting_kind`).
 
 This is source-agnostic: the same engine backs the manual duplicate-resolution action and the opt-in
 per-source auto-enrich. It operates on the incoming import's captured `import_evidence` — so a field
@@ -33,6 +37,13 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
+
+from backend.services.money_movement import (
+    is_money_movement_type,
+    is_refund_type,
+    is_wallet_funding_type,
+    is_wallet_withdrawal_type,
+)
 
 
 def _parse(raw) -> dict:
@@ -93,9 +104,48 @@ def _incoming_detail_fields(incoming_evidence: dict) -> list[dict]:
     return fields
 
 
+def _type_kinds(evidence: dict) -> set[str]:
+    """The kinds of transaction an evidence blob's captured `Type` values name. Compared by kind rather
+    than by value because two sources spell one type differently — the activity CSV's "General Card
+    Deposit" is the statement's "General Credit Card Deposit"."""
+    kinds: set[str] = set()
+    for field in evidence.get("extra_text_fields") or []:
+        if not isinstance(field, dict) or str(field.get("header") or "").strip().casefold() != "type":
+            continue
+        value = str(field.get("value") or "").strip()
+        if not value:
+            continue
+        if is_wallet_funding_type(value):
+            kinds.add("funding")
+        elif is_wallet_withdrawal_type(value):
+            kinds.add("withdrawal")
+        elif is_money_movement_type(value):
+            kinds.add("movement")
+        elif is_refund_type(value):
+            kinds.add("refund")
+        else:
+            kinds.add("payment")
+    return kinds
+
+
+def _conflicting_kind(existing_evidence: dict, incoming_evidence: dict) -> bool:
+    """Whether both sides state a `Type` and the incoming one names a kind the row is not.
+
+    The case that found it: a wallet's nameless card leg matched, on amount alone, the purchase two days
+    away, and folding its "General Card Withdrawal" into that purchase made the PayPal reconciliation read
+    the purchase's money as leaving for a card. A row with no captured type yet has nothing to disagree
+    with, so this cannot stop a first enrichment — the duplicate report's own claims are what keep the
+    wrong row from reaching it (`release_contested_candidates`)."""
+    existing, incoming = _type_kinds(existing_evidence), _type_kinds(incoming_evidence)
+    return bool(existing and incoming and not incoming <= existing)
+
+
 def compute_enrichment_delta(existing_evidence: dict, existing_names, incoming_evidence: dict) -> list[dict]:
     """The novel descriptive fields the incoming detail adds over what the row already holds. A field is
-    novel when its value appears nowhere in the row's names or existing evidence."""
+    novel when its value appears nowhere in the row's names or existing evidence. Nothing is novel when
+    the incoming row is a different kind of transaction (`_conflicting_kind`)."""
+    if _conflicting_kind(existing_evidence or {}, incoming_evidence or {}):
+        return []
     known = _evidence_values(existing_evidence)
     known |= {str(name).strip().casefold() for name in existing_names if name and str(name).strip()}
     delta: list[dict] = []
