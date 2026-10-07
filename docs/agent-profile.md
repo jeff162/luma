@@ -95,6 +95,15 @@ instruction and fix the drift rather than silently choosing the looser version.
   through the same steps, and treating it as an engine difference sends the investigation into CSS when
   the cause is application state.
 
+- **A failure in a browser spec is often reproducible without a browser, and far faster.** The specs run
+  against the demo ledger, which any script can build: a temp database, `init_db`, `load_demo_data`,
+  `scan_and_store`, then the service call the page makes. A recurring-signals spec that read as an
+  intermittent CI flake was pinned that way in about two minutes — the exclusion under test moved the
+  finding to the previous charge instead of resolving it, which the count the spec asserted could never
+  show — and only then was Playwright run, to confirm the same failure locally. The browser is needed to
+  prove the *page* is wired up; whether the data does what the test assumes is a question the services
+  answer on their own, deterministically and without a 60-second timeout between hypotheses.
+
 - **Open the thing before reasoning about it.** The most expensive mistakes in this repo have not
   been hard problems reasoned about badly; they have been easy facts inferred from a name instead of
   read. Four in one session: using the shared `Spinner` in a status row without noticing it is a
@@ -179,8 +188,14 @@ instruction and fix the drift rather than silently choosing the looser version.
   trouble has been — long interactive sessions and a conclusion drawn from one screenshot. Ask for a
   headed session when it would genuinely help rather than grinding on: something that cannot be
   isolated another way, or an attempt or two that have already failed. Say what it would settle.
-  `scripts/check_backend_and_frontend.sh` runs the whole gate and is the habitual command. To run one spec,
-  put its path before the project flag — `npx playwright test tests/ui/<spec>.js --config=playwright.config.js
+  `scripts/check_backend_and_frontend.sh` is the habitual command, and it runs the gate rather than the
+  whole suite: its browser step is `npm run ui:test`, which selects the `app`, `import` and `marketplace`
+  lanes and leaves the **a11y** lane out, while CI runs every lane. A change that breaks an a11y spec
+  therefore passes here and fails there — that is how a clickable `div` carrying no button role shipped to
+  CI with a green local gate, and the gate then reported "46 passed" while verifying the fix for it,
+  having never run the spec in question. **`npm run ui:test:all` is what matches CI**, and is the run to
+  make after touching shared UI or anything an a11y spec drives.
+  To run one spec, put its path before the project flag — `npx playwright test tests/ui/<spec>.js --config=playwright.config.js
   --project=app` — since `--project app tests/ui/<spec>.js` reads the path as a second project name and
   exits with "Project(s) not found" before running anything.
 

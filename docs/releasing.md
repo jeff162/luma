@@ -96,7 +96,15 @@ meet in `scripts/third_party_notices.py`, which `scripts/luma.spec` calls *durin
   extra rule: `python3xx.dll` sits at the installation root and OpenSSL, SQLite and libffi in the `DLLs`
   directory beside it, outside the four directories that identify the installation everywhere else, so
   the whole prefix counts as Python there — safe only because nothing else is installed under it, which
-  is not true of the `/usr` the same prefix names on Linux.
+  is not true of the `/usr` the same prefix names on Linux. It takes a second rule as well, because what
+  Windows collects from *outside* Python is Microsoft's C runtime: PyInstaller's include list names those
+  files explicitly and overrides its own rule against collecting from the Windows directory, so a copy
+  arrives from wherever one sits on disk — the release build was taking the UCRT forwarder stubs out of
+  the JDK on the CI image's PATH. They are skipped by name, Microsoft's redistributable terms asking for
+  no notice in return, and `luma.spec` drops the UCRT half of them from the bundle outright: Windows 10
+  made it a system component and loads its own copy ahead of any shipped one, so a kit was carrying a
+  build machine's CRT for nothing. The VC14 runtime stays — a machine without the Visual C++
+  redistributable has no copy, and the frozen interpreter needs it to start.
 
   **`readline` is excluded from the bundle** (`luma.spec`) rather than credited. Nothing here reads a line
   from a terminal, and the module pulls in GNU readline — GPL-3.0-or-later, the one library here whose

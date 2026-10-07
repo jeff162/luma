@@ -27,6 +27,12 @@ python.org. They are attributed through the build machine's own package manager,
 `/usr/share/doc/<package>/copyright` files exist for. macOS links its system frameworks instead of
 copying them, and the official Windows Python carries the licenses of what it bundles in its own
 `LICENSE.txt`, so both of those are already covered.
+
+**What Windows still collects from outside Python is Microsoft's own C runtime**, and it is named here
+rather than traced: PyInstaller asks for the Universal CRT and the VC14 runtime by name whatever directory
+they are found in, so the path a copy came from says nothing about what it is. Microsoft's redistributable
+terms let an application carry these and ask for no notice in return, which is the same reason
+`VCRUNTIME140.dll` needs none where the Python installer drops it.
 """
 
 import os
@@ -90,6 +96,25 @@ _PYTHON_RUNTIME_LIBRARIES = frozenset(
     Path(name).name
     for name in (sysconfig.get_config_var(var) for var in ("INSTSONAME", "LDLIBRARY", "PY3LIBRARY"))
     if name
+)
+
+# Microsoft's C runtime, which a Windows build collects from wherever a copy happens to sit on disk —
+# PyInstaller's Windows include list (`PyInstaller/depend/dylib.py`) names these files explicitly and that
+# list overrides its own rule against collecting anything from the Windows directory, so neither the
+# system copy nor one in some unrelated package's `bin` is left behind. Matched by name because the
+# directory a copy came from is therefore meaningless: the release build found the UCRT forwarders in the
+# JDK that the CI image happens to put on PATH, and would have found `ucrtbase.dll` in `system32`.
+#
+# They need no notice. Microsoft's redistributable terms for the Visual Studio runtime permit an
+# application to carry these files, which is also what lets `VCRUNTIME140.dll` ride along from the Python
+# installation root. `luma.spec` drops the UCRT half of this list from the bundle outright, so in a
+# release build only the VC14 runtime reaches here; the UCRT names stay because a build that collects them
+# some other way must not be stopped by a file it is allowed to ship.
+# Either separator, and the whole path rather than its last component: a Windows path read anywhere else
+# has no last component, and the tests are the one place these names are checked off Windows.
+_MICROSOFT_RUNTIME_LIBRARY = re.compile(
+    r"(^|[\\/])(api-ms-win-.*|ucrtbase|vcruntime140.*|msvcp140.*|concrt140|vccorlib140)\.dll$",
+    re.IGNORECASE,
 )
 
 
@@ -187,6 +212,8 @@ def _system_library_paths(binaries) -> list[Path]:
         if any(os.path.normcase(str(source)).startswith(tree) for tree in _PYTHON_TREES):
             continue
         if source.name in _PYTHON_RUNTIME_LIBRARIES:
+            continue
+        if _MICROSOFT_RUNTIME_LIBRARY.search(str(source)):
             continue
         if source.suffix == ".so" or ".so." in source.name or source.suffix in {".dylib", ".dll"}:
             paths.append(source)

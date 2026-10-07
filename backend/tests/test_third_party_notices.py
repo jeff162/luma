@@ -118,6 +118,20 @@ def test_a_windows_build_counts_the_whole_python_installation_as_python():
     assert installation not in notices._python_trees("linux")
 
 
+def test_microsofts_c_runtime_needs_no_attribution_wherever_it_was_found():
+    """Asserted from any platform, like the rule above it. PyInstaller names the UCRT and the VC14 runtime
+    in its Windows include list and collects whichever copy it finds first, so these arrive from paths no
+    rule about Python's installation can predict — the release build took the forwarder stubs out of a JDK
+    on the CI image's PATH, and with no package manager to name them every one of them stopped the build.
+    Microsoft's redistributable terms ask for no notice, so they are skipped rather than credited."""
+    collected = [
+        ("api-ms-win-crt-runtime-l1-1-0.dll", r"C:\hostedtoolcache\jdk\bin\api-ms-win-crt-runtime-l1-1-0.dll", "BINARY"),
+        ("ucrtbase.dll", r"C:\Windows\system32\ucrtbase.dll", "BINARY"),
+        ("VCRUNTIME140.dll", r"C:\some\other\place\VCRUNTIME140.dll", "BINARY"),
+    ]
+    assert notices._system_library_paths(collected) == []
+
+
 def test_each_library_is_credited_to_the_package_that_installed_it():
     with mock.patch.object(notices, "_owning_package", return_value="zlib1g"), \
          mock.patch.object(notices, "_package_copyright", return_value="Copyright: 1995-2024 Jean-loup Gailly"):

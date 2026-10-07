@@ -24,8 +24,11 @@
 #   platform backend conditionally. Static analysis cannot see any of them, and the failure arrives as
 #   an ImportError in the field rather than at build time. The rest of the backend is statically
 #   imported and needs no help.
+# - **The Universal CRT is dropped from a Windows build.** PyInstaller collects it; Windows loads its own
+#   copy regardless. See `REDUNDANT_WINDOWS_CRT` below.
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -102,6 +105,24 @@ analysis = Analysis(
     excludes=["backend.tests", "pytest", "_pytest", "readline"],
     noarchive=False,
 )
+
+# The Universal C Runtime, which PyInstaller's Windows include list asks for by name and which a kit does
+# not need. Microsoft made the UCRT a system component in Windows 10, managed by Windows Update, and
+# Windows resolves these names against its own copy before any that sits beside the executable — so the
+# collected files are dead weight in every kit this project ships, and PyInstaller's own source says as
+# much where it lists them. Dropping them also means a kit stops carrying whichever copy the build machine
+# happened to have on PATH: the release build was collecting the forwarder stubs out of a JDK.
+#
+# The VC14 runtime (`VCRUNTIME140.dll` and friends) is deliberately *not* dropped. That one is a genuine
+# redistributable: a machine without the Visual C++ redistributable installed has no copy of it, and the
+# frozen interpreter will not start without one.
+REDUNDANT_WINDOWS_CRT = re.compile(r"(api-ms-win-(core|crt)-.*|ucrtbase)\.dll$", re.IGNORECASE)
+
+if sys.platform == "win32":
+    analysis.binaries = [
+        entry for entry in analysis.binaries
+        if not REDUNDANT_WINDOWS_CRT.match(Path(str(entry[0])).name)
+    ]
 
 # The licenses of everything the build carries, written *here* because this is where the list of collected
 # shared libraries exists: `analysis.binaries` is PyInstaller's own answer to what it copied off this
