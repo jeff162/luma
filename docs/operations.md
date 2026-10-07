@@ -202,6 +202,17 @@ presents as total data loss.
 a distinct port each. The cookie name follows the control-database path on its own, so the two do not
 sign each other out.
 
+**Give the second one an `APP_NAME`, or its passkeys are indistinguishable from the first's.** A device
+keeps one passkey list per *host*, and the label in that list is all a user has to go on when deciding
+which entry to keep — it is `username (AppName purpose)`, so two default-configured instances both read
+`name (Luma vault)`. Nothing is at risk of being overwritten: the WebAuthn user handle derives from an
+account id minted per control database, which is what an authenticator compares, so the collision is
+cosmetic and shows up only when cleaning the list out. `APP_NAME` is a display setting with no effect on
+where data lives (the data directory name is a fixed literal for exactly that reason), which makes it the
+cheap discriminator: `APP_NAME=Luma Demo` turns the entries into `name (Luma Demo vault)`. The instance
+identifier is deliberately not used — it is long, opaque, and tells the user nothing at the moment they
+are choosing. `security-model.md` → *Do not couple them* covers the labelling rules themselves.
+
 **A watched import folder is a directory on the server, not on the browser's machine.** A data source
 may name one, and the path is resolved by the backend process — so on Desktop it is the user's own
 machine and the distinction never arises, on a LAN server it is a folder on the server, and in a

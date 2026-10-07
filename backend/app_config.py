@@ -122,7 +122,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="app_name",
         env_var="APP_NAME",
         label="Application name",
-        help="Display name used in page titles, the sign-in issuer, and provider link screens.",
+        help="Display name used in page titles, the sign-in issuer, provider link screens, and the label saved passkeys carry on the device. Set it per instance where several run on one host, so their passkey entries can be told apart.",
         default=DEFAULT_APP_NAME,
         advanced=True,
     ),

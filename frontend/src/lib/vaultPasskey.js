@@ -25,6 +25,7 @@
 // removes a prompt where it is not.
 
 import { api } from './api.js'
+import { APP_NAME } from './appConfig.js'
 import { decodeBase64, encodeBase64 } from './base64url.js'
 
 const PRF_UNSUPPORTED = { ok: false, reason: 'no_prf' }
@@ -117,7 +118,10 @@ export async function registerPasskey(params, { label } = {}) {
   try {
     credential = await navigator.credentials.create({
       publicKey: {
-        rp: { id: params.rp_id, name: 'Luma' },
+        // `APP_NAME`, not a literal, so this agrees with the sign-in ceremony's `rp_name` (which is
+        // `app_name()` server-side) on a renamed instance. Most choosers show the user name below
+        // rather than this, but the two reading differently for the same host is a plain disagreement.
+        rp: { id: params.rp_id, name: APP_NAME },
         user: {
           id: new TextEncoder().encode(params.user_handle),
           name: params.user_name,
