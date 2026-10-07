@@ -28,7 +28,7 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, SegmentedToggle, RefreshButton, Spinner, StaleWhileRefreshing, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
 import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -2222,15 +2222,18 @@ export default function Dashboard() {
   }
 
   // Tag-signature detail panels stack like the other floating drawers. The key encodes
-  // the report id + signature so the same wedge double-click focuses the existing panel.
+  // the report id + signature so the same wedge double-click focuses the existing panel. The report
+  // and signature ids are kept beside it so the panel's header can be re-read from the *live* wedge
+  // rather than this opening snapshot (see the lookup at the render site).
   function openTagDetail(row, report) {
     if (!row || !report) return
-    const signatureKey = (row.signature_tag_ids || []).slice().sort().join('|') || '__other__'
-    const key = `tag::${report.id}::${signatureKey}`
+    const key = `tag::${report.id}::${row.signature_id}`
     setDetailTagSignatures(prev => [
       ...prev.filter(item => item.key !== key),
       {
         key,
+        reportId: report.id,
+        signatureId: row.signature_id,
         signature: row,
         reportTagIds: report.tagIds || [],
         reportName: report.name,
@@ -2615,6 +2618,20 @@ export default function Dashboard() {
     [activeTagReport, tagSignatureBuckets, tagsById],
   )
   const tagSignatureTotal = tagSignatureRows.reduce((s, r) => s + r.total, 0)
+
+  // An open TagDetail's header count and total are the server's bucket for that wedge, so that the panel
+  // and the pie state the same figure. That only holds if the panel re-reads the wedge: the aggregates
+  // refresh under it on every transaction change (refreshTotalsInPlace), and a panel still rendering its
+  // opening snapshot would sit beside a pie it no longer agrees with. A signature that has emptied out
+  // drops from the refreshed rows entirely, which is a count of zero rather than a missing answer — the
+  // rows left on screen are the edited ones lingering (ui-patterns: an edited transaction lingers). With
+  // the report no longer the active breakdown nothing is refreshing behind the panel, so its snapshot is
+  // still the last thing the server said about that wedge and stands.
+  function liveTagSignature(entry) {
+    if (!activeTagReport || activeTagReport.id !== entry.reportId) return entry.signature
+    return tagSignatureRows.find(row => row.signature_id === entry.signatureId)
+      || { ...entry.signature, count: 0, total: 0 }
+  }
 
   // A cash-flow node's click goes wherever that node's own kind of thing already goes: a collapsed tail
   // pages its own side one level deeper, and a bucket takes the same drill its pie wedge would — groups
@@ -3127,7 +3144,7 @@ export default function Dashboard() {
                             the paged fetch still in flight, not a real empty state — show the spinner. */}
                           {txnData.length === 0 ? <Spinner /> : (
                             <>
-                              <TransactionListToolbar rows={txnData} copy={catTxnPaged.copy} title={selectedCat.category_name} bulk={selectedCatBulk} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
+                              <TransactionListToolbar rows={txnData} copy={catTxnPaged.copy} title={selectedCat.category_name} bulk={selectedCatBulk} onRefresh={catTxnPaged.reload} refreshing={catTxnPaged.reloading} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
                               <div style={{ padding: '0 12px' }}>
                                 <BulkEditChrome controller={selectedCatBulk} />
                               </div>
@@ -3386,6 +3403,11 @@ export default function Dashboard() {
                         </span>
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                        <RefreshButton
+                          onRefresh={groupTxnPaged.reload}
+                          loading={groupTxnPaged.reloading}
+                          title="Refresh — re-query the list and drop transactions that no longer match"
+                        />
                         <CopyTransactionsButton rows={groupTxnData} {...groupTxnPaged.copy} title={selectedGroup.group_name} tooltip="Copy the transactions shown" />
                         <Button variant="ghost" small onClick={selectedGroupBulk.toggle}>
                           {selectedGroupBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
@@ -3564,7 +3586,7 @@ export default function Dashboard() {
       {detailTagSignatures.map((entry, index) => (
         <TagDetail
           key={entry.key}
-          signature={entry.signature}
+          signature={liveTagSignature(entry)}
           reportTagIds={entry.reportTagIds}
           reportName={entry.reportName}
           view={entry.view}

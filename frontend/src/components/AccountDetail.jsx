@@ -124,6 +124,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const {
     rows: monthTxns,
     loading: txnLoading,
+    reload,
+    reloading,
     listRef,
     sortState,
     onSort,
@@ -319,7 +321,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} />
+                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${displayName}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}

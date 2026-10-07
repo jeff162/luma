@@ -58,6 +58,24 @@ export const txnMutations = {
     return result
   },
 
+  // Attach or detach one tag on one transaction (`present: false` on an inherited tag writes the
+  // per-transaction block — see data-model.md). A tag is a reporting dimension, so this moves the
+  // dashboard's tag-report buckets and, whenever a tag filter is active, every other aggregate on the
+  // page as well. Answers with the row's resolved tags + blocks, which callers patch onto their row.
+  async setTag(txnId, tagId, present) {
+    const result = await api.updateTransactionTag(txnId, tagId, present)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // The bulk write behind every transaction list's bulk-edit bar. Its actions span categorization,
+  // tags, review state and trash, so it invalidates at least as much as the single-row writes above.
+  async bulkUpdate(selection, actions) {
+    const result = await api.bulkUpdateTransactions(selection, actions)
+    notifyTransactionsChanged()
+    return result
+  },
+
   async applyRule(ruleId, options) {
     const result = await api.applyRule(ruleId, options)
     notifyTransactionsChanged()
@@ -106,23 +124,16 @@ export const txnMutations = {
   // Clear the needs-review flag on a single row. Reuses the bulk endpoint (there is no per-row
   // review endpoint) with a one-id selection.
   async markReviewed(txnId) {
-    const result = await api.bulkUpdateTransactions(
-      { mode: 'ids', ids: [txnId] },
-      [{ type: 'mark_reviewed' }],
-    )
-    notifyTransactionsChanged()
-    return result
+    return txnMutations.bulkUpdate({ mode: 'ids', ids: [txnId] }, [{ type: 'mark_reviewed' }])
   },
 
   // Flag a single row as needing review again — the undo behind "Marked reviewed". Same bulk endpoint,
   // through its `set_review_status` action.
   async markNeedsReview(txnId) {
-    const result = await api.bulkUpdateTransactions(
+    return txnMutations.bulkUpdate(
       { mode: 'ids', ids: [txnId] },
       [{ type: 'set_review_status', needs_review: true }],
     )
-    notifyTransactionsChanged()
-    return result
   },
 
   async trashTransaction(txnId) {

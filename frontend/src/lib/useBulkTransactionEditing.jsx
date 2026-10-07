@@ -33,10 +33,9 @@
  */
 
 import { useCallback, useMemo, useState } from 'react'
-import { api } from './api.js'
 import { useTags } from './useTags.js'
 import { useTransactionSelection } from './useTransactionSelection.js'
-import { categoryReconcilePatch, reconcileRowsAfterRuleApply } from './txnMutations.js'
+import { categoryReconcilePatch, reconcileRowsAfterRuleApply, txnMutations } from './txnMutations.js'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { AppConfirmDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
 
@@ -187,7 +186,7 @@ export function useBulkTransactionEditing({
     // row when "all matching" is active.
     const affectedIds = new Set(rows.filter(txn => tableSelection.isSelected(getRowId(txn))).map(getRowId))
     try {
-      const result = await api.bulkUpdateTransactions(selection.toSelectionPayload(filterParams), actions)
+      const result = await txnMutations.bulkUpdate(selection.toSelectionPayload(filterParams), actions)
       selection.clear()
       setShowPanel(false)
       setBulkMode(false)

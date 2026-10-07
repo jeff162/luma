@@ -7,6 +7,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
@@ -758,7 +759,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
   }
 
   async function handleToggleTag(tag, present) {
-    const result = await api.updateTransactionTag(txn.id, tag.id, present)
+    const result = await txnMutations.setTag(txn.id, tag.id, present)
     onUpdateTags?.(txn.id, result.tags || [], result.blocked_tags || [])
   }
 

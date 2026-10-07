@@ -78,6 +78,8 @@ export default function PeriodDetail({
     rows: transactions,
     setRows: setTransactions,
     loading,
+    reload,
+    reloading,
     listRef,
     total: txnTotal,
     setTotal: setTxnTotal,
@@ -145,7 +147,7 @@ export default function PeriodDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <TransactionListToolbar rows={transactions} copy={copy} title={title} bulk={bulk} />
+          <TransactionListToolbar rows={transactions} copy={copy} title={title} bulk={bulk} onRefresh={reload} refreshing={reloading} />
           <BulkEditChrome controller={bulk} />
           <TransactionListTable
             rows={transactions}

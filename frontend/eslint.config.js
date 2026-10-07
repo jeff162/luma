@@ -21,6 +21,8 @@ import globals from 'globals'
 const txnMutationRestrictions = [
   { object: 'api', property: 'overrideCategory', message: 'Use txnMutations.setCategory so derived counts (Tasks badge, etc.) get invalidated.' },
   { object: 'api', property: 'clearOverride', message: 'Use txnMutations.uncategorize so derived counts get invalidated.' },
+  { object: 'api', property: 'updateTransactionTag', message: 'Use txnMutations.setTag so derived views (the dashboard tag report, any tag-filtered aggregate) get invalidated.' },
+  { object: 'api', property: 'bulkUpdateTransactions', message: 'Use txnMutations.bulkUpdate so derived views get invalidated.' },
   { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
   { object: 'api', property: 'widenRuleRange', message: 'Use txnMutations.widenRuleRange so derived counts get invalidated.' },
   { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },

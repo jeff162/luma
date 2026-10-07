@@ -54,12 +54,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     [rangeMode, rangeKey, trend],
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
-  // Bumped when a split is rewritten from this list. Its rows are the server's *expanded* allocations —
-  // scoped to this category, a split transaction arrives as the part that matched — so a rewritten split
-  // can move a row to another category or out of the window entirely, which no row patch can restate.
-  // Folding it into the paging key is the reload: `usePagedTransactions` refetches when the key changes.
-  const [reloadNonce, setReloadNonce] = useState(0)
-  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}|${reloadNonce}` : null
+  const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}` : null
   // The window + category: what the list fetches, what "select all matching" resolves, and what a download
   // of the list exports.
   const listParams = useMemo(() => ({ ...range.params, category_ids: String(category.id) }), [range, category.id])
@@ -69,6 +64,8 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   const {
     rows: monthTxns,
     loading: txnLoading,
+    reload,
+    reloading,
     listRef,
     sortState,
     onSort,
@@ -189,7 +186,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${category.name}`} bulk={bulk} />
+                  <TransactionListToolbar rows={localMonthTxns} copy={copy} title={`${range.label} · ${category.name}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}
@@ -199,9 +196,11 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     onTransactionOpenDetail={setPayeeDetail}
                     onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
                     onRowsChange={setLocalMonthTxns}
-                    // This list is scoped to one category, so its rows are expanded allocations —
-                    // a rewritten split has to be fetched again rather than patched. See reloadNonce.
-                    onSplitSaved={() => setReloadNonce(n => n + 1)}
+                    // This list is scoped to one category, so its rows are expanded allocations — a
+                    // split transaction arrives as the part that matched. A rewritten split can move a
+                    // row to another category or out of the window entirely, which no row patch can
+                    // restate, so it takes the same re-query the Refresh button runs.
+                    onSplitSaved={reload}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

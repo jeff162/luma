@@ -118,7 +118,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   async function toggleTagFromModal(tag, present) {
     if (!tagTarget) return
     const targetId = tagTarget.id
-    const result = await api.updateTransactionTag(targetId, tag.id, present)
+    const result = await txnMutations.setTag(targetId, tag.id, present)
     reconcileRow?.(targetId, { tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
     setTagTarget(prev => (prev && prev.id === targetId
       ? { ...prev, tags: result.tags || [], blocked_tags: result.blocked_tags || [] }

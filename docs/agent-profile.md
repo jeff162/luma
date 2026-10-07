@@ -452,6 +452,15 @@ for what the *user* can act on.
   fails at import, which proves nothing — so write the proof around behavior the old code already exposes
   (an HTTP route, a service call) wherever possible.
 
+- **Playwright's `check()` / `uncheck()` do not fit this app's pickers; use `click()` and assert the
+  outcome.** Those two helpers click and then verify the control's state changed, and in this app a
+  checkbox in a tag or category picker is driven by the *row's* state as the write answers — so it does
+  not flip in the same tick as the click, and the helper's own verification races it and throws "Clicking
+  the checkbox did not change its state" while the write is in flight and in fact succeeding. A plain
+  `click()` followed by `expect(box).not.toBeChecked()` and an assertion on whatever the edit was
+  supposed to move waits properly and says more. Worth suspecting generally for a control whose state
+  comes back from the server rather than from the DOM.
+
 - **A test that unlocks the vault over HTTP and then calls `crypto_service` directly gets `VaultLocked`.**
   An unlock belongs to the browser session that presented the secret (`security-model.md` → *Identity and
   the network perimeter*), and a direct service call from the test thread is a different session with

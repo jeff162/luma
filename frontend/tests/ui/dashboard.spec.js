@@ -238,3 +238,55 @@ test('tag report menu edits tags and saves the unsaved report under a name', asy
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(picker.locator('option', { hasText: name })).toHaveCount(0)
 })
+
+// A tag edit has to move the report it was made from.
+//
+// The whole point of drilling a wedge is that the panel and the pie behind it are the same population,
+// and a tag is the dimension the report buckets by — so removing one from a drilled transaction changes
+// the bucket it was counted in. Two things had to be true for that to show, and neither was: the write
+// has to reach the invalidation seam (it was calling `api.updateTransactionTag` directly, so nothing
+// re-queried an aggregate), and the open panel has to re-read its wedge from the refreshed figures
+// rather than the snapshot it opened with. The row itself stays put throughout — an edited transaction
+// lingers where it was found — so the count is what moves, and it is the thing to assert.
+//
+// Both directions, because the tag is restored at the end: the demo database is shared with the specs
+// running beside this one, and a blocked inherited tag would otherwise outlive the run.
+test('removing a tag from a drilled transaction moves the report behind it', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+  await page.getByRole('button', { name: 'Expenses' }).click()
+
+  const picker = page.getByLabel('Choose dashboard spending breakdown')
+  await picker.selectOption({ label: '+ Tag report' })
+  await page.getByRole('checkbox', { name: 'Discretionary' }).check()
+  await page.getByRole('button', { name: 'Display', exact: true }).click()
+
+  // The wedge for the one selected tag, opened from the breakdown list beside the pie. The panel's
+  // subtitle is the server's bucket for that wedge — the figure the pie is drawn from — and is the only
+  // "N transactions" on screen, since the page behind it is at the breakdown level with no rows of its own.
+  await page.getByTitle('Discretionary', { exact: true }).click()
+  const count = page.getByText(/· \d+ transactions · /)
+  const before = Number((await count.textContent()).match(/(\d+) transactions/)[1])
+  expect(before).toBeGreaterThan(1)
+
+  // The demo seeds Discretionary on the Dining/Entertainment categories, so the row carries it as an
+  // inherited chip and unchecking it writes the per-transaction block.
+  await page.getByRole('button', { name: /^Discretionary \(inherited from/ }).first().click()
+  // `click` rather than `uncheck`/`check`: the box is driven by the row's tags as the write answers, so
+  // its state does not change in the same tick as the click and Playwright's own state check races it.
+  const choice = page.getByRole('checkbox', { name: /^Discretionary/ })
+  await choice.click()
+  await expect(choice).not.toBeChecked()
+  await expect(count).toContainText(`${before - 1} transactions`)
+
+  await choice.click()
+  await expect(choice).toBeChecked()
+  await expect(count).toContainText(`${before} transactions`)
+
+  // Leave the breakdown where the other specs expect it: the report here was never saved, but the
+  // selection is a persisted preference.
+  await page.getByRole('button', { name: '×' }).last().click()
+  await picker.selectOption({ label: 'group' })
+})

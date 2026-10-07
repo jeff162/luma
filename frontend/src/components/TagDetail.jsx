@@ -87,6 +87,8 @@ export default function TagDetail({
     rows: transactions,
     setRows: setTransactions,
     loading,
+    reload,
+    reloading,
     listRef,
     sortState,
     onSort,
@@ -151,7 +153,7 @@ export default function TagDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <TransactionListToolbar rows={transactions} copy={copy} title={reportName || 'Tagged transactions'} bulk={bulk} />
+          <TransactionListToolbar rows={transactions} copy={copy} title={reportName || 'Tagged transactions'} bulk={bulk} onRefresh={reload} refreshing={reloading} />
           <BulkEditChrome controller={bulk} />
           <TransactionListTable
             rows={transactions}

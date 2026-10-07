@@ -18,14 +18,14 @@ import {
   BulkEditChrome,
   BULK_CONFIRM_THRESHOLD,
 } from '../useBulkTransactionEditing.jsx'
-import { api } from '../api.js'
 
-vi.mock('../api.js', () => ({
-  api: {
-    bulkUpdateTransactions: vi.fn(() => Promise.resolve({ updated_count: 1 })),
-    getTags: vi.fn(() => Promise.resolve([])),
-  },
+// Hoisted bare mocks rather than reaching through `api.*`: the transaction writes are lint-guarded so
+// feature code cannot skip the invalidation layer, and a test asserting on them reads them by name.
+const { bulkUpdateTransactions, getTags } = vi.hoisted(() => ({
+  bulkUpdateTransactions: vi.fn(() => Promise.resolve({ updated_count: 1 })),
+  getTags: vi.fn(() => Promise.resolve([])),
 }))
+vi.mock('../api.js', () => ({ api: { bulkUpdateTransactions, getTags } }))
 
 const ROWS = [{ id: 'a' }, { id: 'b' }]
 
@@ -55,7 +55,7 @@ let user
 
 beforeEach(() => {
   user = userEvent.setup()
-  api.bulkUpdateTransactions.mockClear()
+  bulkUpdateTransactions.mockClear()
 })
 
 afterEach(cleanup)
@@ -65,14 +65,14 @@ describe('confirming a large bulk apply', () => {
     await selectAll(user, BULK_CONFIRM_THRESHOLD - 1)
     await user.click(screen.getByText('Mark reviewed'))
 
-    await waitFor(() => expect(api.bulkUpdateTransactions).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bulkUpdateTransactions).toHaveBeenCalledTimes(1))
   })
 
   it('holds a large selection at a dialog naming the count and the action', async () => {
     await selectAll(user, BULK_CONFIRM_THRESHOLD)
     await user.click(screen.getByText('Mark reviewed'))
 
-    expect(api.bulkUpdateTransactions).not.toHaveBeenCalled()
+    expect(bulkUpdateTransactions).not.toHaveBeenCalled()
     expect(screen.getByText(`Apply to ${BULK_CONFIRM_THRESHOLD} transactions?`)).toBeTruthy()
     // Naming the action and the scope is the point: a count alone does not say what is about to happen,
     // and these rows are not all on screen to be looked at.
@@ -84,8 +84,8 @@ describe('confirming a large bulk apply', () => {
     await user.click(screen.getByText('Mark reviewed'))
     await user.click(screen.getByText(`Apply to ${BULK_CONFIRM_THRESHOLD}`))
 
-    await waitFor(() => expect(api.bulkUpdateTransactions).toHaveBeenCalledTimes(1))
-    const [, actions] = api.bulkUpdateTransactions.mock.calls[0]
+    await waitFor(() => expect(bulkUpdateTransactions).toHaveBeenCalledTimes(1))
+    const [, actions] = bulkUpdateTransactions.mock.calls[0]
     expect(actions).toEqual([{ type: 'mark_reviewed' }])
   })
 
@@ -94,7 +94,7 @@ describe('confirming a large bulk apply', () => {
     await user.click(screen.getByText('Mark reviewed'))
     await user.click(screen.getByText('Cancel'))
 
-    expect(api.bulkUpdateTransactions).not.toHaveBeenCalled()
+    expect(bulkUpdateTransactions).not.toHaveBeenCalled()
     expect(screen.queryByText(`Apply to ${BULK_CONFIRM_THRESHOLD} transactions?`)).toBeNull()
   })
 
@@ -105,8 +105,8 @@ describe('confirming a large bulk apply', () => {
     const trashButtons = screen.getAllByText('Move to trash')
     await user.click(trashButtons[trashButtons.length - 1])
 
-    await waitFor(() => expect(api.bulkUpdateTransactions).toHaveBeenCalledTimes(1))
-    const [, actions] = api.bulkUpdateTransactions.mock.calls[0]
+    await waitFor(() => expect(bulkUpdateTransactions).toHaveBeenCalledTimes(1))
+    const [, actions] = bulkUpdateTransactions.mock.calls[0]
     expect(actions).toEqual([{ type: 'trash' }])
   })
 })

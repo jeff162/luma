@@ -182,6 +182,8 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     rows: monthTxns,
     setRows: setMonthTxns,
     loading: txnLoading,
+    reload,
+    reloading,
     listRef,
     sortState,
     onSort,
@@ -367,7 +369,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   }
 
   async function handleToggleTag(tag, present) {
-    const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
+    const result = await txnMutations.setTag(detailTxn.id, tag.id, present)
     patchDetailTxn({ tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
   }
 
@@ -694,7 +696,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${payee}`} bulk={bulk} />
+                  <TransactionListToolbar rows={monthTxns} copy={copy} title={`${range.label} · ${payee}`} bulk={bulk} onRefresh={reload} refreshing={reloading} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}

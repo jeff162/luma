@@ -542,6 +542,17 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
   const [total, setTotal] = useState(0)
   const [sumAmount, setSumAmount] = useState(0)
   const [sortState, setSortState] = useState(DETAIL_SORT_DEFAULT)
+  // `reload()` bumps this to re-run the first-page fetch for the query already on screen — the Refresh
+  // affordance every list that lets rows linger owes the user (ui-patterns: an edited transaction lingers
+  // where it was found). It is separate from `activeKey` because the query has not changed: what changed
+  // is the ledger under it.
+  const [reloadNonce, setReloadNonce] = useState(0)
+  const [reloading, setReloading] = useState(false)
+  const reload = useCallback(() => setReloadNonce(n => n + 1), [])
+  // The query the last first-page fetch ran for. A fetch for the same one is a reload, and a reload must
+  // not blank the list: hosts render a spinner in place of the table while `loading`, so reusing that flag
+  // would replace the rows the user is looking at with a spinner and lose their scroll position.
+  const loadedQueryRef = useRef(null)
   const listRef = useRef(null)
   // Synchronous re-entry guard (see comment above): blocks a same-offset double-fetch that would append
   // a page twice and produce duplicate React keys while scrolling.
@@ -561,12 +572,18 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
       setOffset(0)
       setHasMore(false)
       setLoading(false)
+      setReloading(false)
       setTotal(0)
       setSumAmount(0)
+      loadedQueryRef.current = null
       return
     }
     let cancelled = false
-    setLoading(true)
+    const query = `${activeKey}\u0000${sortState.key}\u0000${sortState.dir}`
+    const isReload = loadedQueryRef.current === query
+    loadedQueryRef.current = query
+    if (isReload) setReloading(true)
+    else setLoading(true)
     setOffset(0)
     loadPage(0, DETAIL_PAGE_SIZE, sortState).then(result => {
       if (cancelled) return
@@ -578,6 +595,7 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
       setTotal(resultTotal)
       setSumAmount(Number(result?.sum_amount || 0))
       setLoading(false)
+      setReloading(false)
     }).catch(() => {
       if (cancelled) return
       setRows([])
@@ -586,9 +604,10 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
       setTotal(0)
       setSumAmount(0)
       setLoading(false)
+      setReloading(false)
     })
     return () => { cancelled = true }
-  }, [activeKey, loadPage, sortState])
+  }, [activeKey, loadPage, sortState, reloadNonce])
 
   useEffect(() => {
     if (!activeKey || !listRef.current) return
@@ -634,6 +653,8 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
     setRows,
     loading,
     loadingMore,
+    reload,
+    reloading,
     listRef,
     total,
     setTotal,

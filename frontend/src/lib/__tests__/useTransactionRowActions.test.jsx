@@ -17,11 +17,16 @@ import { MemoryRouter } from 'react-router-dom'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../useTransactionRowActions.jsx'
 import { api } from '../api.js'
 
+// `bulkUpdateTransactions` is hoisted out as a bare mock rather than read through `api.*`: the
+// transaction writes are lint-guarded so feature code cannot skip the invalidation layer.
+const { bulkUpdateTransactions } = vi.hoisted(() => ({
+  bulkUpdateTransactions: vi.fn(() => Promise.resolve({ ok: true })),
+}))
 vi.mock('../api.js', () => ({
   api: {
     getMatchingRuleForTransaction: vi.fn(),
     getTags: vi.fn(() => Promise.resolve([])),
-    bulkUpdateTransactions: vi.fn(() => Promise.resolve({ ok: true })),
+    bulkUpdateTransactions,
   },
 }))
 
@@ -187,14 +192,14 @@ describe('marking reviewed', () => {
 
     await user.click(screen.getByText('review'))
     await waitFor(() => expect(reconcileRow).toHaveBeenCalledWith('t1', { needs_review: 0 }))
-    expect(api.bulkUpdateTransactions).toHaveBeenCalledWith(
+    expect(bulkUpdateTransactions).toHaveBeenCalledWith(
       { mode: 'ids', ids: ['t1'] }, [{ type: 'mark_reviewed' }],
     )
     expect(screen.getByText('Marked reviewed')).toBeTruthy()
 
     await user.click(screen.getByText('Undo'))
     await waitFor(() => expect(reconcileRow).toHaveBeenCalledWith('t1', { needs_review: 1 }))
-    expect(api.bulkUpdateTransactions).toHaveBeenLastCalledWith(
+    expect(bulkUpdateTransactions).toHaveBeenLastCalledWith(
       { mode: 'ids', ids: ['t1'] }, [{ type: 'set_review_status', needs_review: true }],
     )
     expect(screen.queryByText('Marked reviewed')).toBeNull()
@@ -203,7 +208,7 @@ describe('marking reviewed', () => {
   it('offers no undo when the write failed, since nothing changed', async () => {
     const user = userEvent.setup()
     const reconcileRow = vi.fn()
-    api.bulkUpdateTransactions.mockRejectedValueOnce(new Error('nope'))
+    bulkUpdateTransactions.mockRejectedValueOnce(new Error('nope'))
     render(<MemoryRouter><ReviewHarness reconcileRow={reconcileRow} /></MemoryRouter>)
 
     await user.click(screen.getByText('review'))
