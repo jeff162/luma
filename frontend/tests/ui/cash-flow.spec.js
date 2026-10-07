@@ -33,3 +33,25 @@ test('the cash flow frame draws the flow diagram over demo data', async ({ page 
     page.getByText('Nothing moved in or out in this period, once transfers are excluded.'),
   ).toHaveCount(0)
 })
+
+// The cash-flow Trends form draws the years above the months, and a year is the way into its months:
+// clicking one sets the year picker, which is what the monthly chart below follows.
+test('the cash flow trends form opens a year into its months', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await page.getByRole('button', { name: 'Cash flow' }).click()
+  await page.getByRole('button', { name: 'Trends' }).click()
+
+  const yearCard = page.getByText('Money in and out by year').locator('xpath=..')
+  const monthCard = page.getByText('Money in and out by month').locator('xpath=..')
+  const picker = page.locator('select').filter({ has: page.locator('option', { hasText: 'Last 12 months' }) })
+  await expect(picker).toHaveValue('last12')
+
+  // The newest year: the demo ledger's earlier year holds too little to draw a bar worth clicking.
+  const year = await yearCard.locator('.recharts-xAxis .recharts-cartesian-axis-tick text').last().textContent()
+  await yearCard.locator('.recharts-bar-rectangle').last().click()
+  await expect(picker).toHaveValue(year)
+  const monthTicks = await monthCard.locator('.recharts-xAxis .recharts-cartesian-axis-tick text').allTextContents()
+  expect(monthTicks.length).toBeGreaterThan(0)
+  expect(monthTicks.every(label => label.endsWith(year))).toBe(true)
+})

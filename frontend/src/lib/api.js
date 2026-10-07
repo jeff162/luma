@@ -422,6 +422,7 @@ export const api = {
       ...csvParam('tag_ids', tag_ids),
       ...csvParam('owner_ids', owner_ids),
       ...csvParam('source_account_ids', opts.source_account_ids),
+      ...(opts.granularity ? { granularity: opts.granularity } : {}),
       ...summaryFilterParams(opts),
     })
     return request(`/transactions/summary/monthly-cash-flow?${q}`)

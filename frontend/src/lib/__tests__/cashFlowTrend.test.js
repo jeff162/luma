@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   CASH_FLOW_TREND_LAST_12,
+  buildCashFlowAnnualSeries,
   buildCashFlowTrendSeries,
   cashFlowTrendYearOptions,
 } from '../cashFlowTrend.js'
@@ -161,5 +162,22 @@ describe('malformed rows', () => {
     // A server net of exactly zero is a real figure, not a missing one.
     const flat = buildCashFlowTrendSeries([{ month: '2026-02', inflow: 700, outflow: 700, net: 0 }], CASH_FLOW_TREND_LAST_12)
     expect(flat.chartData[0].net).toBe(0)
+  })
+})
+
+describe('the yearly series', () => {
+  it('keeps the sign contract and draws a year with no rows as an empty year', () => {
+    const { chartData, avgNet } = buildCashFlowAnnualSeries([
+      { year: '2023', inflow: 50000, outflow: 42000, net: 8000 },
+      { year: '2025', inflow: 60000, outflow: 64000, net: -4000 },
+    ])
+    expect(chartData.map(r => r.year)).toEqual(['2023', '2024', '2025'])
+    expect(chartData[0]).toMatchObject({ inflow: 50000, outflow: -42000, outflowMagnitude: 42000, net: 8000 })
+    expect(chartData[1]).toMatchObject({ inflow: 0, outflow: -0, net: 0 })
+    expect(avgNet).toBeCloseTo(4000 / 3)
+  })
+
+  it('is empty with no rows', () => {
+    expect(buildCashFlowAnnualSeries([]).chartData).toEqual([])
   })
 })

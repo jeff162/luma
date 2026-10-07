@@ -78,6 +78,36 @@ export function buildCashFlowTrendSeries(rows, selectedYear) {
   return { yearOptions, effectiveYear, chartData, avgNet }
 }
 
+/*
+ * The year-by-year series drawn above the monthly one, from `/summary/monthly-cash-flow` at
+ * `granularity=year`. Those rows net each category over the whole year, which is what makes a year's two
+ * bars the two sides of that year's diagram — summing the monthly rows instead would put a category
+ * that went out one month and came back the next on both sides. Same sign contract as the monthly
+ * series, and the same continuous axis: a year with no rows is drawn empty rather than closed up.
+ */
+export function buildCashFlowAnnualSeries(rows) {
+  const byYear = new Map(
+    (rows || []).filter(r => r && /^\d{4}$/.test(String(r.year))).map(r => [String(r.year), r]),
+  )
+  const years = [...byYear.keys()].sort()
+  const chartData = []
+  for (let y = Number(years[0]); years.length && y <= Number(years[years.length - 1]); y++) {
+    const year = String(y)
+    const row = byYear.get(year)
+    const inflow = finite(row?.inflow)
+    const outflow = finite(row?.outflow)
+    chartData.push({
+      year,
+      inflow,
+      outflow: -outflow,
+      outflowMagnitude: outflow,
+      net: row && Number.isFinite(Number(row.net)) ? Number(row.net) : inflow - outflow,
+    })
+  }
+  const avgNet = chartData.length ? chartData.reduce((sum, r) => sum + r.net, 0) / chartData.length : 0
+  return { chartData, avgNet }
+}
+
 function normalizeRows(rows) {
   return (rows || []).filter(r => r && typeof r.month === 'string')
 }

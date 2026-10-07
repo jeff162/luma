@@ -18,6 +18,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import (
     list_transactions,
@@ -135,7 +137,7 @@ class MonthlyCashFlowTests(unittest.TestCase):
 
     def _cash_flow(self, **overrides):
         params = dict(months=24, account_id=None, source_account_ids=None,
-                      date_start=None, date_end=None)
+                      date_start=None, date_end=None, granularity="month")
         params.update(overrides)
         facets, rest = split_facets(params)
         with self._use_db_path():
@@ -395,6 +397,37 @@ class MonthlyCashFlowTests(unittest.TestCase):
 
         self.assertAlmostEqual(sum(c for c in map(cash, cats) if c > 0), row["inflow"])
         self.assertAlmostEqual(-sum(c for c in map(cash, cats) if c < 0), row["outflow"])
+
+    # --- Yearly rows ---------------------------------------------------------------------------
+
+    def test_a_year_nets_each_category_over_the_whole_year(self):
+        # The yearly bars must equal a year's diagram, so the atom is a category's net for the *year*. A
+        # category that nets money out in one month and back in the next sits on both sides of the
+        # monthly rows and on neither side of the year's — which is why the yearly sides cannot be had
+        # by summing months, while the net agrees either way.
+        salary = self._leaf("Earnings", "Payroll", "income")
+        gear = self._leaf("Shopping", "Supplies", "expense")
+        self._insert_transaction(category_id=salary, amount=-3000.0, date="2026-03-01")
+        self._insert_transaction(category_id=gear, amount=400.0, date="2026-03-10")
+        self._insert_transaction(category_id=gear, amount=-400.0, date="2026-04-02")
+        self._insert_transaction(category_id=gear, amount=150.0, date="2025-12-20")
+
+        years = {r["year"]: r for r in self._cash_flow(granularity="year")}
+        months = self._cash_flow()
+        self.assertEqual(sorted(years), ["2025", "2026"])
+        self.assertAlmostEqual(years["2026"]["inflow"], 3000.0)
+        self.assertAlmostEqual(years["2026"]["outflow"], 0.0)
+        self.assertAlmostEqual(sum(r["inflow"] for r in months if r["month"].startswith("2026")), 3400.0)
+        self.assertAlmostEqual(sum(r["outflow"] for r in months if r["month"].startswith("2026")), 400.0)
+        for year, row in years.items():
+            monthly_net = sum(r["net"] for r in months if r["month"].startswith(year))
+            self.assertAlmostEqual(row["net"], monthly_net, places=6, msg=year)
+        self.assertNotIn("month", years["2026"])
+
+    def test_an_unknown_granularity_is_refused(self):
+        with self.assertRaises(HTTPException) as caught:
+            self._cash_flow(granularity="week")
+        self.assertEqual(caught.exception.status_code, 400)
 
     # --- The contract with the other frame -----------------------------------------------------
 

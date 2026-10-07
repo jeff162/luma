@@ -47,7 +47,7 @@ import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
 import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
-import { buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
+import { CASH_FLOW_TREND_LAST_12, buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
 import ClippedBar from '../components/ClippedBar.jsx'
 import PanningChartTooltip from '../components/PanningChartTooltip.jsx'
@@ -732,8 +732,10 @@ function DashboardDefaultPeriodGear({ pref, setPref }) {
             borderRadius: 10, boxShadow: '0 18px 44px rgba(15, 23, 42, 0.28)', padding: '8px 0',
           }}
         >
-          <div style={{ padding: '4px 14px 8px', fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-            textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{
+            padding: '4px 14px 8px', fontSize: 11, fontWeight: 600, color: 'var(--muted)',
+            textTransform: 'uppercase', letterSpacing: '0.05em'
+          }}>
             Default period
           </div>
           {DASHBOARD_DEFAULT_PERIOD_OPTIONS.map(opt => {
@@ -1052,28 +1054,32 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
 }
 
 /*
- * The cash-flow frame's Trends form: what came in and what went out, month by month.
+ * The cash-flow frame's Trends form: what came in and what went out, year by year above and month by
+ * month below.
  *
  * Where the spending and income trends stack one side of the ledger, cash flow has two sides that must
- * stay legible against each other — so the months are drawn as **diverging bars around a zero
- * centerline**, money in above and money out below, with the net as a line across them and the period's
- * average net as the usual reference line. Reading a month is then one glance: how tall each half is,
- * and which side the line sits on.
+ * stay legible against each other — so both charts draw **diverging bars around a zero centerline**,
+ * money in above and money out below, with the net as a line across them and the average net as the
+ * usual reference line. Reading a period is then one glance: how tall each half is, and which side the
+ * line sits on.
  *
- * The bars come pre-netted per category from `/summary/monthly-cash-flow`, which is what makes a month's
- * two halves the same figures as that month's Sankey sides rather than a separate gross reading of the
- * same ledger. The net line is `inflow - outflow` by construction, so it cannot drift from the bars it
- * is drawn over.
+ * The two charts are stacked rather than set side by side as the other frames' monthly and annual charts
+ * are: nothing else shares this page, so each gets the full width. The yearly chart is the way into the
+ * monthly one — clicking a year sets the year picker, and that year's bars are the highlighted ones.
+ *
+ * The bars come pre-netted per category from `/summary/monthly-cash-flow` (per month, and per year at
+ * `granularity=year`), which is what makes a period's two halves the same figures as that period's
+ * Sankey sides rather than a separate gross reading of the same ledger. The net line is
+ * `inflow - outflow` by construction, so it cannot drift from the bars it is drawn over.
  */
-function CashFlowTrendsPanel({ rows, selectedYear, onYearChange, loading, onOpenMonth, onOpenSinglePeriod }) {
+function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, loading, onOpenMonth, onOpenSinglePeriod }) {
   // Window selection and row shaping are pure and live in lib/cashFlowTrend.js, where they can be
   // exercised without a chart — the diverging-bar sign contract below depends on them.
   const { yearOptions, effectiveYear, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
+  const annual = buildCashFlowAnnualSeries(annualRows)
 
   const lastClickRef = useRef({ idx: -1, time: 0 })
-  function handleChartClick(state) {
-    const idx = state?.activeTooltipIndex
-    if (idx == null || idx < 0 || !chartData[idx]) return
+  function handleMonthClick(idx) {
     const monthKey = chartData[idx].monthKey
     if (!onOpenSinglePeriod) {
       onOpenMonth(monthKey)
@@ -1107,54 +1113,99 @@ function CashFlowTrendsPanel({ rows, selectedYear, onYearChange, loading, onOpen
       </div>
 
       <Card>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Money in and out by month</div>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Yearly trend</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
+          Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span>
+          {' · click a year to show its months below'}
+        </div>
+        {annual.chartData.length === 0 ? (
+          <EmptyState message="No cash flow for this selection" />
+        ) : (
+          <CashFlowDivergingChart
+            data={annual.chartData}
+            xKey="year"
+            height={220}
+            avgNet={annual.avgNet}
+            // The rolling window is not a year, so it highlights none and dims none.
+            isHighlighted={effectiveYear === CASH_FLOW_TREND_LAST_12 ? undefined : d => d.year === effectiveYear}
+            onSelect={idx => onYearChange(annual.chartData[idx].year)}
+          />
+        )}
+      </Card>
+
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Monthly trend</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
           Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>
-          {' · click a month to open its transactions, double-click for the single-period view'}
+          {' · click a month to open a transaction report'}
         </div>
         {chartData.length === 0 ? (
           <EmptyState message="No cash flow for this selection" />
         ) : (
-          <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart data={chartData} onClick={handleChartClick} style={{ cursor: 'pointer' }}
-              stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              {/* Every month gets a label up to a year's worth; past that, thin them out rather than
-                  letting them overlap. */}
-              <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
-                interval={chartData.length <= 12 ? 0 : Math.floor(chartData.length / 12)} />
-              <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-              <Tooltip
-                formatter={(value, name, item) => {
-                  if (name === 'Money out') return [formatSignedMoneyAmount(-(item?.payload?.outflowMagnitude ?? 0)), name]
-                  return [formatSignedMoneyAmount(value), name]
-                }}
-                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-              />
-              <ReferenceLine y={0} stroke="var(--muted)" />
-              {/* The diverging pair, and the two things holding it up — both silent if broken.
-                  `stackOffset="sign"` on the chart above keeps separate positive and negative
-                  accumulators, so money in stacks up from zero and money out stacks down from zero.
-                  Without it recharts' default chains the second bar from the *top of the first*
-                  regardless of sign, which draws money out downward from the money-in bar and lands it
-                  exactly on the net: the chart then shows money in, the net twice over (as the
-                  unoverlapped remainder of the first bar, and as whatever crosses below zero), and money
-                  out nowhere at all — with correct tooltips throughout. The prop reads like a removable
-                  nicety and is not one. It also requires `outflow` to arrive **negative**, which is the
-                  contract `buildCashFlowTrendSeries` is written to; magnitude rides along separately as
-                  `outflowMagnitude` for the tooltip. */}
-              <Bar dataKey="inflow" name="Money in" stackId="cashflow" fill="var(--success)" fillOpacity={0.75} />
-              <Bar dataKey="outflow" name="Money out" stackId="cashflow" fill="var(--danger)" fillOpacity={0.65} />
-              <Line type="monotone" dataKey="net" name="Net" stroke="var(--accent)" strokeWidth={2} dot={false} />
-              <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
-                label={<AvgReferenceLabel value={avgNet} />} />
-            </ComposedChart>
-          </ResponsiveContainer>
+          <CashFlowDivergingChart
+            data={chartData}
+            xKey="month"
+            height={320}
+            avgNet={avgNet}
+            onSelect={handleMonthClick}
+          />
         )}
       </Card>
     </div>
+  )
+}
+
+// One cash-flow period chart: money in above zero, money out below, the net across them and the average
+// net as a reference line. `isHighlighted` (optional) dims every other period's bars.
+function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onSelect }) {
+  function handleClick(state) {
+    const idx = state?.activeTooltipIndex
+    if (idx == null || idx < 0 || !data[idx]) return
+    onSelect(idx)
+  }
+  const dimmed = d => (isHighlighted ? !isHighlighted(d) : false)
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <ComposedChart data={data} onClick={handleClick} style={{ cursor: 'pointer' }}
+        stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+        {/* Every period gets a label up to a dozen; past that, thin them out rather than letting them
+            overlap. */}
+        <XAxis dataKey={xKey} tick={{ fill: 'var(--muted)', fontSize: 10 }}
+          interval={data.length <= 12 ? 0 : Math.floor(data.length / 12)} />
+        <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+        <Tooltip
+          formatter={(value, name, item) => {
+            if (name === 'Money out') return [formatSignedMoneyAmount(-(item?.payload?.outflowMagnitude ?? 0)), name]
+            return [formatSignedMoneyAmount(value), name]
+          }}
+          contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+          labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+          itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+        />
+        <ReferenceLine y={0} stroke="var(--muted)" />
+        {/* The diverging pair, and the two things holding it up — both silent if broken.
+            `stackOffset="sign"` on the chart above keeps separate positive and negative
+            accumulators, so money in stacks up from zero and money out stacks down from zero.
+            Without it recharts' default chains the second bar from the *top of the first*
+            regardless of sign, which draws money out downward from the money-in bar and lands it
+            exactly on the net: the chart then shows money in, the net twice over (as the
+            unoverlapped remainder of the first bar, and as whatever crosses below zero), and money
+            out nowhere at all — with correct tooltips throughout. The prop reads like a removable
+            nicety and is not one. It also requires `outflow` to arrive **negative**, which is the
+            contract `buildCashFlowTrendSeries` and `buildCashFlowAnnualSeries` are written to;
+            magnitude rides along separately as `outflowMagnitude` for the tooltip. */}
+        <Bar dataKey="inflow" name="Money in" stackId="cashflow" fill="var(--success)" fillOpacity={0.75}>
+          {data.map(d => <Cell key={d[xKey]} fillOpacity={dimmed(d) ? 0.3 : 0.75} />)}
+        </Bar>
+        <Bar dataKey="outflow" name="Money out" stackId="cashflow" fill="var(--danger)" fillOpacity={0.65}>
+          {data.map(d => <Cell key={d[xKey]} fillOpacity={dimmed(d) ? 0.25 : 0.65} />)}
+        </Bar>
+        <Line type="monotone" dataKey="net" name="Net" stroke="var(--accent)" strokeWidth={2} dot={false} />
+        <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
+          label={<AvgReferenceLabel value={avgNet} />} />
+      </ComposedChart>
+    </ResponsiveContainer>
   )
 }
 
@@ -1737,10 +1788,11 @@ export default function Dashboard() {
     setCashFlowDepths({ [INFLOW]: 0, [OUTFLOW]: 0 })
   }, [spendingViewBy, activeFrame])
 
-  // The Trends tab queries its own full-history window (not the shared date chip), so mute the date
-  // button while the user is here. Restore on unmount so other pages see the chip as live again.
+  // Only Single period reads the shared date chip: Compare takes its two periods from its own pickers and
+  // Trends queries its own full-history window, so mute the date button on both. Restore on unmount so
+  // other pages see the chip as live again.
   useEffect(() => {
-    setDateApplies(mode !== 'trends')
+    setDateApplies(mode === 'single')
     return () => setDateApplies(true)
   }, [mode, setDateApplies])
 
@@ -2069,6 +2121,7 @@ export default function Dashboard() {
   // group's slower answer overwrite the second's.
   const trendSeriesRequestRef = useRef(0)
   const [cashFlowTrendRows, setCashFlowTrendRows] = useState([])
+  const [cashFlowAnnualRows, setCashFlowAnnualRows] = useState([])
   const [trendGroups, setTrendGroups] = useState([])
   const [trendLoading, setTrendLoading] = useState(false)
   // The window the Trends tab shows, resolved here rather than inside TrendsPanel because the group picker's
@@ -2315,10 +2368,15 @@ export default function Dashboard() {
 
   // The cash-flow trends form reads its own endpoint rather than the by-group series: its bars are the
   // per-category nets re-bucketed by direction, which is not something the group series can be summed
-  // into. Same 20-year window as the other trends, so the year picker reaches every year in the data.
+  // into. Same 20-year window as the other trends, so the year picker reaches every year in the data. The
+  // yearly rows are a second call rather than a sum of the monthly ones — see buildCashFlowAnnualSeries.
   const loadCashFlowTrend = useCallback(async () => {
-    const rows = await api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, summaryFilters)
+    const [rows, yearRows] = await Promise.all([
+      api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, summaryFilters),
+      api.getMonthlyCashFlow(240, accountId || undefined, tagIds, ownerIds, { ...summaryFilters, granularity: 'year' }),
+    ])
     setCashFlowTrendRows(rows)
+    setCashFlowAnnualRows(yearRows)
   }, [accountId, tagIds, ownerIds, summaryFilters])
 
   // The picker offers the groups with transactions in the window on screen, under the same filters — the
@@ -3250,82 +3308,82 @@ export default function Dashboard() {
                             )}
                           </BarChart>
                         </div>
-                      <div
-                        ref={attachTrendScroll}
-                        onScroll={rememberTrendAnchor}
-                        style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}
-                      >
-                        {/* Given its width rather than left to discover one. `<ResponsiveContainer>`
+                        <div
+                          ref={attachTrendScroll}
+                          onScroll={rememberTrendAnchor}
+                          style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}
+                        >
+                          {/* Given its width rather than left to discover one. `<ResponsiveContainer>`
                             measures its own box with a ResizeObserver and holds the result in state, so
                             a re-bucket draws once at the *previous* bucket set's width and is corrected
                             only after paint — a stale-width frame whose look depends on which way the
                             grain went and where the plot was scrolled. The width is not responsive
                             anyway: it is the bucket count, and the viewport only when the buckets do
                             not fill it. */}
-                        <div style={{ width: trendPlot.width, height: TREND_CHART_HEIGHT }}>
-                          <BarChart
-                            width={trendPlot.width}
-                            height={TREND_CHART_HEIGHT}
-                            data={trendData}
-                            margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                            <XAxis
-                              dataKey="label"
-                              interval={0}
-                              tick={<TrendBucketTick />}
-                              height={TREND_XAXIS_HEIGHT}
-                            />
-                            {/* Hidden, not absent: the scale still has to be computed here, and it is
+                          <div style={{ width: trendPlot.width, height: TREND_CHART_HEIGHT }}>
+                            <BarChart
+                              width={trendPlot.width}
+                              height={TREND_CHART_HEIGHT}
+                              data={trendData}
+                              margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                              <XAxis
+                                dataKey="label"
+                                interval={0}
+                                tick={<TrendBucketTick />}
+                                height={TREND_XAXIS_HEIGHT}
+                              />
+                              {/* Hidden, not absent: the scale still has to be computed here, and it is
                                 identical to the column's because the domain and data are. */}
-                            <YAxis
-                              hide
-                              domain={trendClamp.domain}
-                              allowDataOverflow={trendClamp.clamped}
-                            />
-                            <Tooltip
-                              // The plot pans, so the card is placed against what is visible rather than
-                              // against the whole canvas — see PanningChartTooltip.
-                              content={<PanningChartTooltip />}
-                              isAnimationActive={false}
-                              // The drawn value is clamped; the tooltip reports the real one.
-                              formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
-                              // The axis label is cut to fit a bar; the card names the exact range.
-                              labelFormatter={(label, payload) => payload?.[0]?.payload?.fullLabel ?? label}
-                              contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                              labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                              itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                            />
-                            {/* Static, like the axis column beside it. Re-bucketing replaces the whole
+                              <YAxis
+                                hide
+                                domain={trendClamp.domain}
+                                allowDataOverflow={trendClamp.clamped}
+                              />
+                              <Tooltip
+                                // The plot pans, so the card is placed against what is visible rather than
+                                // against the whole canvas — see PanningChartTooltip.
+                                content={<PanningChartTooltip />}
+                                isAnimationActive={false}
+                                // The drawn value is clamped; the tooltip reports the real one.
+                                formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
+                                // The axis label is cut to fit a bar; the card names the exact range.
+                                labelFormatter={(label, payload) => payload?.[0]?.payload?.fullLabel ?? label}
+                                contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+                                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                                itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+                              />
+                              {/* Static, like the axis column beside it. Re-bucketing replaces the whole
                                 series, so the default grow-in plays in full on every grain change — and
                                 with the axis in its own chart it would be an animation running against
                                 a scale that had already snapped. */}
-                            <Bar
-                              dataKey="plotted"
-                              radius={[4, 4, 0, 0]}
-                              shape={<ClippedBar />}
-                              name={viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending'}
-                              onClick={handleTrendBarClick}
-                              isAnimationActive={false}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              {trendData.map((entry, idx) => (
-                                <Cell
-                                  key={idx}
-                                  fill={entry.isSelected
-                                    ? 'var(--accent)'
-                                    : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))'}
-                                />
-                              ))}
-                            </Bar>
-                            {/* Unlabelled: the pill naming this line is in the sticky axis column,
+                              <Bar
+                                dataKey="plotted"
+                                radius={[4, 4, 0, 0]}
+                                shape={<ClippedBar />}
+                                name={viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending'}
+                                onClick={handleTrendBarClick}
+                                isAnimationActive={false}
+                                style={{ cursor: 'pointer' }}
+                              >
+                                {trendData.map((entry, idx) => (
+                                  <Cell
+                                    key={idx}
+                                    fill={entry.isSelected
+                                      ? 'var(--accent)'
+                                      : 'color-mix(in srgb, var(--accent) 45%, var(--surface2))'}
+                                  />
+                                ))}
+                              </Bar>
+                              {/* Unlabelled: the pill naming this line is in the sticky axis column,
                                 which is the only part of the chart that does not pan away. */}
-                            {trendData.length > 1 && (
-                              <ReferenceLine y={trendAvg} stroke="var(--accent2)" strokeDasharray="4 4" />
-                            )}
-                          </BarChart>
+                              {trendData.length > 1 && (
+                                <ReferenceLine y={trendAvg} stroke="var(--accent2)" strokeDasharray="4 4" />
+                              )}
+                            </BarChart>
+                          </div>
                         </div>
-                      </div>
                       </div>
                     </Card>
                   )
@@ -3386,6 +3444,7 @@ export default function Dashboard() {
             {mode === 'trends' && viewIsCashFlow && (
               <CashFlowTrendsPanel
                 rows={cashFlowTrendRows}
+                annualRows={cashFlowAnnualRows}
                 selectedYear={trendYear}
                 onYearChange={setTrendYear}
                 loading={trendLoading}

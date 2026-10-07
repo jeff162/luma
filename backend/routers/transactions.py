@@ -2847,6 +2847,11 @@ def range_trend(
 # `view=cash_flow` total for the same filters: netting per bucket and then re-summing is the same
 # arithmetic as summing the whole month. That equality is the contract between the two frames.
 #
+# `granularity=year` applies the same atom to a calendar year — a category's net for the *year* — and
+# returns `year` in place of `month`. It cannot be had by summing a year's monthly rows: a category that
+# nets money in one month and out the next sits on both sides there and on neither here, so the summed
+# sides would overstate the year's diagram while the net still agreed.
+#
 # No `count`: an accurate one is `COUNT(DISTINCT t.id)` per month, which cannot be recovered by summing
 # per-bucket counts (the expansion seam puts a split transaction in several buckets), and reading the
 # source a second time to get it is the cost the seam itself was shaped to avoid. Callers that need a
@@ -2859,9 +2864,12 @@ def monthly_cash_flow(
     source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
+    granularity: str           = Query("month", description="month | year — the period each row covers"),
 ):
     # Direct (non-HTTP) callers may omit the dependency; over HTTP FastAPI always supplies it.
     facets = coerce_facets(facets) or TransactionFacets()
+    if granularity not in ("month", "year"):
+        raise HTTPException(status_code=400, detail="granularity must be month or year")
     clauses = [
         "t.is_pending = 0",
         "t.trashed_at IS NULL",
@@ -2888,6 +2896,8 @@ def monthly_cash_flow(
 
     where = "WHERE " + " AND ".join(clauses)
     bucket_sql = _summary_uncategorized_id_sql('category')
+    # The literal SQL for each choice, so nothing caller-supplied reaches the query text.
+    period_sql = "strftime('%Y', t.date)" if granularity == "year" else "strftime('%Y-%m', t.date)"
 
     with get_db() as conn:
         # Category rollups read the split-expansion seam: a split transaction contributes one row
@@ -2897,28 +2907,31 @@ def monthly_cash_flow(
         rows = conn.execute(
             f"""
             SELECT
-                month,
+                period,
                 SUM(CASE WHEN bucket_net < 0 THEN -bucket_net ELSE 0 END) AS inflow,
                 SUM(CASE WHEN bucket_net > 0 THEN  bucket_net ELSE 0 END) AS outflow,
                 -SUM(bucket_net)                                          AS net
             FROM (
                 SELECT
-                    strftime('%Y-%m', t.date) AS month,
-                    {bucket_sql}              AS bucket,
-                    SUM(t.amount)             AS bucket_net
+                    {period_sql}  AS period,
+                    {bucket_sql}  AS bucket,
+                    SUM(t.amount) AS bucket_net
                 FROM   {_expanded} t
                 LEFT JOIN category c ON c.id = t.category_id
                 LEFT JOIN category p ON p.id = c.parent_id
                 {where}
-                GROUP BY month, bucket
+                GROUP BY period, bucket
             )
-            GROUP BY month
-            ORDER BY month
+            GROUP BY period
+            ORDER BY period
             """,
             params,
         ).fetchall()
 
-    return [dict(r) for r in rows]
+    return [
+        {granularity: r["period"], "inflow": r["inflow"], "outflow": r["outflow"], "net": r["net"]}
+        for r in rows
+    ]
 
 @router.get("/summary/monthly-by-group")
 def monthly_by_group(

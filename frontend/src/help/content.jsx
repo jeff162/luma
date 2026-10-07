@@ -372,6 +372,7 @@ export const HELP_TOPICS = [
     summary: 'A visual way to explore the ledger. Spending and income are shown as charts rather than lists, which suits both reporting and checking that transactions are filed where they belong.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           The dashboard is a visual representation of the transaction data. There are various reporting views
           to investigate where money is going and surface spending patterns. The dashboard is also useful for
@@ -400,8 +401,16 @@ export const HELP_TOPICS = [
             for all of the reports.
           </li>
           <li>
-            The <strong>period</strong> selector at the top of the page selects the time frame for all of
-            the reports except for the <em>Trend</em> report which has it's own period selector.
+            The <strong>period</strong> selector at the top of the page sets the time frame for the{' '}
+            <em>Single period</em> report. <em>Compare</em> chooses its two periods with its own
+            selectors, and <em>Trends</em> chooses its year with its own selector.
+          </li>
+          <li>
+            In the single period report, the <strong>Trend</strong> chart at the bottom of the page shows
+            the same report over all of the data, with the selected period highlighted. Clicking a bar
+            selects that bar's period, and the selector beside the chart groups the bars by month,
+            quarter or year. For a period such as <em>Year to date</em>, it can also repeat that exact
+            span in each earlier year.
           </li>
         </ul>
         <p>
@@ -428,9 +437,10 @@ export const HELP_TOPICS = [
     section: 'dashboard',
     title: 'Cash flow',
     surfaces: ['Dashboard frame selector'],
-    summary: 'Another way to view spending showing what came in against what went out. Single period uses a Sankey diagram; Trends displays money in and money out as a bar graph.',
+    summary: 'Another way to view spending showing what came in against what went out. Single period uses a Sankey diagram; Trends displays money in and money out as bar graphs by year and by month.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           <strong>Cash flow</strong> combines spending and income into one graph. It is
           based on transaction dates as opposed to actual money movement. This means that a
@@ -454,10 +464,11 @@ export const HELP_TOPICS = [
           open.
         </p>
         <p>
-          <strong>Trends</strong> displays cash flow as a bar per month around a zero line
-          &mdash; money in above it, money out below, with the net drawn across them and the average
-          net marked. Clicking a month opens its transactions; double-clicking switches to the
-          single-period view for that month.
+          <strong>Trends</strong> displays cash flow as bars around a zero line &mdash; money in
+          above it, money out below, with the net drawn across them and the average net marked. The
+          top chart has a bar per year and the bottom chart a bar per month. Clicking a year shows its
+          months in the bottom chart. Clicking a month opens its transactions; double-clicking switches
+          to the single-period view for that month.
         </p>
         <p>
           A category's <strong>net</strong> for the period decides which side it lands on.
