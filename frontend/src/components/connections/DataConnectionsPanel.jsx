@@ -126,8 +126,7 @@ export function DataConnectionsPanel({ style, onOpenSyncLog }) {
             <div style={{ fontSize: 14, fontWeight: 600 }}>Data connections</div>
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, lineHeight: 1.5 }}>
-            Pull new and changed transactions from a connected bank. What arrives lands on the cards below,
-            the same as an imported file.
+            Fetch new and changed transactions from the connected accounts.
           </div>
         </div>
 
@@ -191,76 +190,76 @@ export function DataConnectionsPanel({ style, onOpenSyncLog }) {
             const busyHere = fetchingHistoryConnId === c.id || refreshingConnId === c.id
             return (
               <div key={c.id} style={{ padding: '4px 0', borderTop: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {/* The name is the disclosure, which is where it was and where it belongs: what opens is
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {/* The name is the disclosure, which is where it was and where it belongs: what opens is
                     that connection's own per-account detail, so the connection is the thing being opened.
                     Splitting the triangle onto a separate "Last sync" label read as the control having
                     disappeared, because a row with a name and no affordance on it looks inert. */}
-                <button type="button" onClick={() => toggleDetail(c.id)}
-                  title={expandedConnId === c.id
-                    ? 'Hide what the last sync did for each account'
-                    : 'Show what the last sync did for each account'}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
-                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                    font: 'inherit', fontSize: 13, color: 'var(--text)',
-                  }}>
-                  <span aria-hidden style={{ color: 'var(--muted)', fontSize: 10 }}>
-                    {expandedConnId === c.id ? '▾' : '▸'}
-                  </span>
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {c.institution || 'Linked bank'}
-                  </span>
-                </button>
-                {/* A connection the provider will no longer accept cannot be repaired from here — the
+                  <button type="button" onClick={() => toggleDetail(c.id)}
+                    title={expandedConnId === c.id
+                      ? 'Hide what the last sync did for each account'
+                      : 'Show what the last sync did for each account'}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      font: 'inherit', fontSize: 13, color: 'var(--text)',
+                    }}>
+                    <span aria-hidden style={{ color: 'var(--muted)', fontSize: 10 }}>
+                      {expandedConnId === c.id ? '▾' : '▸'}
+                    </span>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {c.institution || 'Linked bank'}
+                    </span>
+                  </button>
+                  {/* A connection the provider will no longer accept cannot be repaired from here — the
                     remedy is a re-authorization, which lives with the rest of the setup. Saying so beats
                     a stale timestamp that suggests nothing is wrong. */}
-                {c.reauth_required ? (
-                  <button type="button" onClick={() => navigate('/accounts?tab=connections')}
-                    title={c.last_sync_error || 'The provider no longer accepts this connection — reconnect it on the Accounts page.'}
-                    style={{
-                      padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                      background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
-                      color: 'var(--danger)',
-                      border: '1px solid color-mix(in srgb, var(--danger) 50%, var(--border))',
-                    }}>
-                    ⚠ reconnect needed
-                  </button>
-                ) : <LastSyncedLine lastSyncedAt={c.last_synced_at} />}
-                {review?.suspects > 0 ? (
-                  <span title={`${review.suspects} synced transaction${review.suspects === 1 ? '' : 's'} may duplicate an existing row — review them on this connection's sync cards below`}
-                    style={{
-                      padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
-                      background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
-                      color: 'var(--warning)',
-                      border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
-                    }}>
-                    ⚠ {review.suspects} to review
-                  </span>
-                ) : null}
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-                  {busyHere ? (
-                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                      {fetchingHistoryConnId === c.id ? 'Fetching…' : 'Refreshing…'}
+                  {c.reauth_required ? (
+                    <button type="button" onClick={() => navigate('/accounts?tab=connections')}
+                      title={c.last_sync_error || 'The provider no longer accepts this connection — reconnect it on the Accounts page.'}
+                      style={{
+                        padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                        background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
+                        color: 'var(--danger)',
+                        border: '1px solid color-mix(in srgb, var(--danger) 50%, var(--border))',
+                      }}>
+                      ⚠ reconnect needed
+                    </button>
+                  ) : <LastSyncedLine lastSyncedAt={c.last_synced_at} />}
+                  {review?.suspects > 0 ? (
+                    <span title={`${review.suspects} synced transaction${review.suspects === 1 ? '' : 's'} may duplicate an existing row — review them on this connection's sync cards below`}
+                      style={{
+                        padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                        background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+                        color: 'var(--warning)',
+                        border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
+                      }}>
+                      ⚠ {review.suspects} to review
                     </span>
                   ) : null}
-                  <ActionMenuButton
-                    open={cardMenu?.connectionId === c.id}
-                    title={`Actions for ${c.institution || 'this connection'}`}
-                    disabled={!!refreshingConnId || !!fetchingHistoryConnId || syncing || removingSync}
-                    onOpen={rect => setCardMenu({ connectionId: c.id, provider: c.provider, connection: c, anchorRect: rect })}
-                  />
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+                    {busyHere ? (
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        {fetchingHistoryConnId === c.id ? 'Fetching…' : 'Refreshing…'}
+                      </span>
+                    ) : null}
+                    <ActionMenuButton
+                      open={cardMenu?.connectionId === c.id}
+                      title={`Actions for ${c.institution || 'this connection'}`}
+                      disabled={!!refreshingConnId || !!fetchingHistoryConnId || syncing || removingSync}
+                      onOpen={rect => setCardMenu({ connectionId: c.id, provider: c.provider, connection: c, anchorRect: rect })}
+                    />
+                  </div>
                 </div>
-              </div>
-              {expandedConnId === c.id ? (
-                <div style={{ padding: '4px 0 6px 18px' }}>
-                  <LastSyncSummary
-                    lastSync={c.last_sync}
-                    syncing={!!c.syncing}
-                    providerAccounts={expandedAccounts}
-                  />
-                </div>
-              ) : null}
+                {expandedConnId === c.id ? (
+                  <div style={{ padding: '4px 0 6px 18px' }}>
+                    <LastSyncSummary
+                      lastSync={c.last_sync}
+                      syncing={!!c.syncing}
+                      providerAccounts={expandedAccounts}
+                    />
+                  </div>
+                ) : null}
               </div>
             )
           })}
