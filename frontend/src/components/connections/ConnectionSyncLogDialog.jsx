@@ -240,37 +240,37 @@ function SyncRow({ entry, when }) {
           visual weight is what made a routine budget-paused walk read as a wall of alarming output. A row
           that springs open is a row that has decided the reader is debugging. */}
       <DetailsToggle>
-          {/* What the provider said about a failure, first: it is the one thing here that explains the
+        {/* What the provider said about a failure, first: it is the one thing here that explains the
               error line above. */}
-          <ProviderErrorDetail entry={entry} />
-          {/* Which bucket paid for each request. Below the fold because the headline figure is how many
+        <ProviderErrorDetail entry={entry} />
+        {/* Which bucket paid for each request. Below the fold because the headline figure is how many
               requests the pull spent; this answers the follow-up, which only a stuck connection asks. */}
-          {pools ? <div style={{ color: 'var(--muted)', fontSize: 11 }}>requests: {pools}</div> : null}
-          {reachRows.length ? (
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-              reached: {reachRows.join(' · ')}
-            </div>
-          ) : null}
-          {checkpoint ? (
-            <div style={{ color: 'var(--muted)', fontSize: 11 }}>{checkpoint}</div>
-          ) : (
-            <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
-              cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
-            </div>
-          )}
-          {/* `×N` is how many of the call's requests drew the same remark — on a windowed history walk,
+        {pools ? <div style={{ color: 'var(--muted)', fontSize: 11 }}>requests: {pools}</div> : null}
+        {reachRows.length ? (
+          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
+            reached: {reachRows.join(' · ')}
+          </div>
+        ) : null}
+        {checkpoint ? (
+          <div style={{ color: 'var(--muted)', fontSize: 11 }}>{checkpoint}</div>
+        ) : (
+          <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
+            cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
+          </div>
+        )}
+        {/* `×N` is how many of the call's requests drew the same remark — on a windowed history walk,
               "every one of them" reads very differently from "one". */}
-          {(entry.advisories || []).map((a, i) => (
-            <div key={`a${i}`} style={{ color: 'var(--muted)', fontSize: 11, wordBreak: 'break-word' }}>
-              {a.message}{a.count > 1 ? <b style={{ color: 'var(--text)' }}> ×{a.count}</b> : null}
-              {/* The request that drew it. Kept out of the message so the same remark from every window of a
+        {(entry.advisories || []).map((a, i) => (
+          <div key={`a${i}`} style={{ color: 'var(--muted)', fontSize: 11, wordBreak: 'break-word' }}>
+            {a.message}{a.count > 1 ? <b style={{ color: 'var(--text)' }}> ×{a.count}</b> : null}
+            {/* The request that drew it. Kept out of the message so the same remark from every window of a
                   walk stays one counted entry; shown as "first:" alongside a count, since with several
                   occurrences this names one of them rather than all. */}
-              {a.context ? (
-                <span style={{ opacity: 0.75 }}> ({a.count > 1 ? 'first: ' : ''}{a.context})</span>
-              ) : null}
-            </div>
-          ))}
+            {a.context ? (
+              <span style={{ opacity: 0.75 }}> ({a.count > 1 ? 'first: ' : ''}{a.context})</span>
+            ) : null}
+          </div>
+        ))}
       </DetailsToggle>
     </div>
   )
@@ -481,118 +481,118 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
       // — a quick one leaves it still, where the old relabelling button twitched on every pill click.
       refresh={<RefreshButton onRefresh={load} loading={loading} />}
     >
-    <div style={{ display: 'grid', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
-            title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
-            {copied ? 'Copied' : 'Copy for support'}
-          </Button>
-          <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
+              title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
+              {copied ? 'Copied' : 'Copy to clipboard'}
+            </Button>
+            <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
+          </div>
         </div>
-      </div>
-      {/* One pill per subject that has rows here, replacing the old "Showing only X" banner rather than
+        {/* One pill per subject that has rows here, replacing the old "Showing only X" banner rather than
           sitting beside it — two controls for one filter can disagree, and the banner could only ever say
           what the deep link had chosen. Only subjects present in the log are offered: a pill that filters
           to nothing is a dead end. A disconnected connection keeps a pill for as long as its disconnect
           row is in the log, and a provider's failed connects share one. */}
-      {/* A single subject needs no pill — it would filter to what is already on screen. But an active
+        {/* A single subject needs no pill — it would filter to what is already on screen. But an active
           filter always renders the row, so a deep link to a connection with no rows yet still offers a
           way back to everything instead of stranding the user on an empty list. */}
-      {counts.length > 1 || filtered ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          {counts.map(c => {
-            const on = isOn(c)
-            const label = pillLabel(c)
-            return (
-              <button
-                key={c.subject}
-                type="button"
-                aria-pressed={on}
-                onClick={() => togglePill(c)}
-                title={on
-                  ? `Showing ${label}. Click to stop filtering by it.`
-                  : `Show only ${label}${filtered ? ' as well' : ''}.`}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-                  border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-                  background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',
-                  color: on ? 'var(--text)' : 'var(--muted)',
-                  fontWeight: on ? 600 : 400,
-                }}
-              >
-                {label}
-                {/* Rows this log is holding for the subject, not operations ever run: the log keeps only
+        {counts.length > 1 || filtered ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {counts.map(c => {
+              const on = isOn(c)
+              const label = pillLabel(c)
+              return (
+                <button
+                  key={c.subject}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => togglePill(c)}
+                  title={on
+                    ? `Showing ${label}. Click to stop filtering by it.`
+                    : `Show only ${label}${filtered ? ' as well' : ''}.`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
+                    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                    background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface2)',
+                    color: on ? 'var(--text)' : 'var(--muted)',
+                    fontWeight: on ? 600 : 400,
+                  }}
+                >
+                  {label}
+                  {/* Rows this log is holding for the subject, not operations ever run: the log keeps only
                     its retention window, so this is a count of what clicking would show. */}
-                <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.7 }}>{c.count}</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.7 }}>{c.count}</span>
+                </button>
+              )
+            })}
+            {filtered ? (
+              <button
+                type="button"
+                onClick={() => setScope({ subjects: [], providers: [] })}
+                /* "Clear filters", not "Show all": with every pill selected the list is already showing
+                   everything, so a control promising to change that would be describing nothing. What it
+                   does in both states is empty the selection. */
+                style={{ background: 'none', border: 'none', padding: '0 4px', color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
+              >
+                Clear filters
               </button>
-            )
-          })}
-          {filtered ? (
-            <button
-              type="button"
-              onClick={() => setScope({ subjects: [], providers: [] })}
-              /* "Clear filters", not "Show all": with every pill selected the list is already showing
-                 everything, so a control promising to change that would be describing nothing. What it
-                 does in both states is empty the selection. */
-              style={{ background: 'none', border: 'none', padding: '0 4px', color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
-            >
-              Clear filters
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
-      {entries && entries.length === 0 && !loading ? (
-        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {filtered
-            ? `Nothing recorded for ${scopeLabel || 'this connection'} yet.`
-            : 'Nothing recorded yet. Sync or connect a data connection, then Refresh here.'}
-        </div>
-      ) : null}
-      {entries && entries.length ? (
-        <div style={{ display: 'grid', gap: 8, maxHeight: 480, overflowY: 'auto' }}>
-          {entries.map(e => <SyncLogRow key={e.id} entry={e} />)}
-        </div>
-      ) : null}
-      {entries && total > entries.length ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-          Showing the newest {entries.length} of {total}. Filter by a connection to see its older entries.
-        </div>
-      ) : null}
-      {/* The log's one setting, at its foot, in the shape the reimbursements report gives its reminder:
+            ) : null}
+          </div>
+        ) : null}
+        {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
+        {entries && entries.length === 0 && !loading ? (
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+            {filtered
+              ? `Nothing recorded for ${scopeLabel || 'this connection'} yet.`
+              : 'Nothing recorded yet. Sync or connect a data connection, then Refresh here.'}
+          </div>
+        ) : null}
+        {entries && entries.length ? (
+          <div style={{ display: 'grid', gap: 8, maxHeight: 480, overflowY: 'auto' }}>
+            {entries.map(e => <SyncLogRow key={e.id} entry={e} />)}
+          </div>
+        ) : null}
+        {entries && total > entries.length ? (
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Showing the newest {entries.length} of {total}. Filter by a connection to see its older entries.
+          </div>
+        ) : null}
+        {/* The log's one setting, at its foot, in the shape the reimbursements report gives its reminder:
           a sentence around a single number. Rendered once the value is known and keyed on it, because the
           field is uncontrolled and would otherwise keep whatever it first showed. */}
-      {retentionDays != null ? (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-          fontSize: 12.5, color: 'var(--muted)', borderTop: '1px solid var(--border)', paddingTop: 10,
-        }}>
-          <label htmlFor="sync-log-retention-days">Keep entries for</label>
-          <input
-            key={retentionDays}
-            id="sync-log-retention-days"
-            type="number"
-            min="1"
-            max="365"
-            defaultValue={retentionDays}
-            disabled={savingRetention}
-            // On blur rather than per keystroke: shortening the window deletes the older entries at once,
-            // so a request per digit could delete what the finished number would have kept.
-            onBlur={e => {
-              const next = Number(e.target.value)
-              if (Number.isInteger(next) && next !== retentionDays) saveRetention(next)
-            }}
-            style={{
-              font: 'inherit', fontSize: 12.5, width: 64, padding: '3px 6px', borderRadius: 6,
-              border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
-            }}
-          />
-          <span>days</span>
-        </div>
-      ) : null}
-    </div>
+        {retentionDays != null ? (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+            fontSize: 12.5, color: 'var(--muted)', borderTop: '1px solid var(--border)', paddingTop: 10,
+          }}>
+            <label htmlFor="sync-log-retention-days">Keep entries for</label>
+            <input
+              key={retentionDays}
+              id="sync-log-retention-days"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={retentionDays}
+              disabled={savingRetention}
+              // On blur rather than per keystroke: shortening the window deletes the older entries at once,
+              // so a request per digit could delete what the finished number would have kept.
+              onBlur={e => {
+                const next = Number(e.target.value)
+                if (Number.isInteger(next) && next !== retentionDays) saveRetention(next)
+              }}
+              style={{
+                font: 'inherit', fontSize: 12.5, width: 64, padding: '3px 6px', borderRadius: 6,
+                border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+              }}
+            />
+            <span>days</span>
+          </div>
+        ) : null}
+      </div>
     </AppDialog>
   )
 }
