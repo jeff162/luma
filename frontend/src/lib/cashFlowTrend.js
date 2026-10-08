@@ -89,11 +89,15 @@ export function buildCashFlowTrendSeries(rows, selectedYear) {
  * bars the two sides of that year's diagram — summing the monthly rows instead would put a category
  * that went out one month and came back the next on both sides. Same sign contract as the monthly
  * series, and the same continuous axis: a year with no rows is drawn empty rather than closed up.
+ *
+ * `floorYear` is the trend span's earliest year, or null for all of it (`lib/trendSpan.js`). It bounds
+ * the rows the average is taken over as well as the bars, since the figure describes what is drawn.
  */
-export function buildCashFlowAnnualSeries(rows) {
-  const byYear = new Map(
-    (rows || []).filter(r => r && /^\d{4}$/.test(String(r.year))).map(r => [String(r.year), r]),
-  )
+export function buildCashFlowAnnualSeries(rows, floorYear = null) {
+  const inSpan = (rows || []).filter(r => (
+    r && /^\d{4}$/.test(String(r.year)) && (!floorYear || String(r.year) >= floorYear)
+  ))
+  const byYear = new Map(inSpan.map(r => [String(r.year), r]))
   const years = [...byYear.keys()].sort()
   const chartData = []
   for (let y = Number(years[0]); years.length && y <= Number(years[years.length - 1]); y++) {
@@ -112,7 +116,7 @@ export function buildCashFlowAnnualSeries(rows) {
   // The yearly figure had the worst version of the bucket-count defect: the loop above fills every year
   // between the first and the last, so a year the ledger never reached and a part-finished current year
   // both divided as whole years. See `periodAverage.js`.
-  const { firstDate, lastDate } = seriesDateRange(rows)
+  const { firstDate, lastDate } = seriesDateRange(inSpan)
   const total = chartData.reduce((sum, r) => sum + r.net, 0)
   const avgNet = periodAverage(total, firstDate, lastDate, 'year')
   return { chartData, avgNet }

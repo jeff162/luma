@@ -1985,6 +1985,23 @@ A few behavior rules matter across the whole app:
   full by definition of the span. Comparing like with like is the entire point of that mode, and a
   day-rate would undo it
 
+- **How much history a trend chart draws is a setting, not the extent of the ledger.** The Dashboard's
+  three multi-period charts — the single-period trend, the Trends tab's annual totals, the cash-flow
+  frame's yearly trend — ran back to the first transaction, which is unreadable at twenty years of bars
+  and is the wrong denominator for "what does a typical recent year look like". The **trend span**
+  (`frontend/src/lib/trendSpan.js`, persisted at `ui.dashboard.trendSpan`) is one setting across all
+  three, because three charts each remembering their own would let the reports disagree about what an
+  average covers. It is a **floor on where the data starts**, deliberately not a filter on the
+  selection: the single-period trend still widens to the selected period, since a chart captioned with
+  a period it does not contain is the defect. A span of N years is counted in **whole buckets of the
+  grain being drawn** — 5 years is 5 year bars, 20 quarters or 60 months — because counting in months
+  and letting the chart snap outwards draws a sixth bar covering most of a year nobody asked for. A
+  `since:` month is exact instead, and the bucket containing it is drawn whole; that is safe precisely
+  because the span floors the bars rather than the figures, so the averaging rule above still divides a
+  boundary bucket by the days it actually holds. "Last N years" is anchored on the **data's last
+  month**, not on today, which matters only where anchoring on today would answer a ledger that stopped
+  in 2020 with an empty chart — the same choice `resolveTrendsWindowKey` makes
+
 - **every category rollup counts allocations, not transactions.** A split transaction contributes one row per `txn_split` part, carrying that part's category and amount, so the rules above apply *per allocation*: an excluded part leaves the totals while its siblings stay, and an income-typed part negates on its own terms. This is a property of the row source (see *Transaction splits* below), not of each query — a new category aggregation gets it by selecting from that source, and silently loses it by selecting from `txn` directly
 
 If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.

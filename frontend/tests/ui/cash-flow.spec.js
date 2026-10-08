@@ -42,8 +42,15 @@ test('the cash flow trends form opens a year into its months', async ({ page }) 
   await page.getByRole('button', { name: 'Cash flow' }).click()
   await page.getByRole('button', { name: 'Trends' }).click()
 
-  const yearCard = page.getByText('Yearly trend').locator('xpath=..')
-  const monthCard = page.getByText('Monthly trend').locator('xpath=..')
+  // Each card as the innermost element holding both its title and a chart. Taking the title's parent
+  // instead broke the moment the title gained a control beside it (the trend-span chooser) and became a
+  // header row of its own, which is a change to the card's layout rather than to what it draws.
+  const card = title => page.locator('div')
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .filter({ has: page.locator('.recharts-wrapper') })
+    .last()
+  const yearCard = card('Yearly trend')
+  const monthCard = card('Monthly trend')
   const picker = page.locator('select').filter({ has: page.locator('option', { hasText: 'Last 12 months' }) })
   await expect(picker).toHaveValue('last12')
 

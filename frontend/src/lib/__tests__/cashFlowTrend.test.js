@@ -196,4 +196,19 @@ describe('the yearly series', () => {
   it('is empty with no rows', () => {
     expect(buildCashFlowAnnualSeries([]).chartData).toEqual([])
   })
+
+  // The trend span bounds the average as well as the bars: the figure describes what is drawn.
+  it('drops the years before the span floor', () => {
+    const rows = [
+      { year: '2021', inflow: 10, outflow: 0, net: 10, first_date: '2021-01-01', last_date: '2021-12-31' },
+      { year: '2024', inflow: 20, outflow: 0, net: 20, first_date: '2024-01-01', last_date: '2024-12-31' },
+      { year: '2025', inflow: 30, outflow: 0, net: 30, first_date: '2025-01-01', last_date: '2025-12-31' },
+    ]
+    const { chartData, avgNet } = buildCashFlowAnnualSeries(rows, '2024')
+    expect(chartData.map(r => r.year)).toEqual(['2024', '2025'])
+    // 2024-01-01 to 2025-12-31 is 731 days, and the dropped 2021 row neither widens it nor adds to the
+    // total — which the all-data call right below it would.
+    expect(avgNet).toBeCloseTo(50 / (731 / 365.2425), 6)
+    expect(buildCashFlowAnnualSeries(rows).chartData).toHaveLength(5)
+  })
 })

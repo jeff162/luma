@@ -96,7 +96,8 @@ export function resolveTrendsWindowKey(rows, selectedYear, currentMonth) {
 // The chart under the single-period breakdown answers "this kind of slice, over time", and it has two
 // ways of cutting time, picked from its chooser:
 //
-// - **Calendar grains** (month / quarter / year) bucket all of the data's history. The selected period
+// - **Calendar grains** (month / quarter / year) bucket the history the caller passes as `firstMonth` —
+//   all of the data's, floored by the trend span (`trendSpan.js`). The selected period
 //   is highlighted on every bucket it overlaps, so a period that is not itself a calendar unit — Past 12
 //   months, Year to date, a custom range — lights up the run of bars it touches rather than being
 //   squeezed into one. This is the default, at the grain the selection's length suggests.
@@ -215,8 +216,9 @@ export function trendGrainNoun(date) {
 }
 
 /*
- * Calendar buckets over every month from the data's first to its last, widened to take in the selection
- * so it is always on the chart, gaps included so the axis stays uniform. Quarters and years snap to
+ * Calendar buckets over every month from `firstMonth` to `lastMonth`, widened to take in the selection
+ * so it is always on the chart — which is also what keeps a period older than the trend span's floor
+ * drawn — gaps included so the axis stays uniform. Quarters and years snap to
  * their calendar boundaries. A bucket is selected when it overlaps the selection at all.
  */
 export function calendarTrendBuckets({ firstMonth, lastMonth, grain, date, fallbackMonth }) {
@@ -274,8 +276,8 @@ export function sameSpanLabels(rangeStart, rangeEnd, stepMonths) {
 }
 
 /*
- * The selection repeated a step at a time across the data — from the first span reaching the data's
- * first month to the last one starting by the end of its last month or by today, whichever is earlier
+ * The selection repeated a step at a time across the data — from the first span reaching `firstMonth`
+ * (the data's first month, floored by the trend span) to the last one starting by the end of its last month or by today, whichever is earlier
  * (and never short of the selection itself). Built
  * from the selection itself each time, so clicking one of these bars yields the same family around the
  * new selection and the chart does not move. Capped at SAME_SPAN_MAX_BUCKETS, keeping the newest unless

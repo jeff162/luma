@@ -23,6 +23,11 @@ import {
   shiftMonth, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
   TREND_GRAIN_SAME_SPAN, calendarTrendBuckets, sameSpanTrendBuckets, trendGrainOptions, effectiveTrendGrain, trendGrainNoun,
 } from '../lib/trendBuckets.js'
+import {
+  TREND_SPAN_ALL, TREND_SPAN_PREF_KEY,
+  describeTrendSpan, trendSpanFloorMonth, trendSpanFloorYear,
+} from '../lib/trendSpan.js'
+import TrendSpanSelect from '../components/TrendSpanSelect.jsx'
 import { periodReportKey } from '../lib/periodReportScope.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
@@ -1073,11 +1078,16 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
  * Sankey sides rather than a separate gross reading of the same ledger. The net line is
  * `inflow - outflow` by construction, so it cannot drift from the bars it is drawn over.
  */
-function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, loading, onOpenMonth, onOpenSinglePeriod }) {
+function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, span, onSpanChange, loading, onOpenMonth, onOpenSinglePeriod }) {
   // Window selection and row shaping are pure and live in lib/cashFlowTrend.js, where they can be
   // exercised without a chart — the diverging-bar sign contract below depends on them.
   const { yearOptions, effectiveYear, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
-  const annual = buildCashFlowAnnualSeries(annualRows)
+  // The yearly chart is bounded by the shared trend span, the monthly one by the year picker above it.
+  const annualMonths = (rows || []).map(r => r?.month).filter(Boolean).sort()
+  const annual = buildCashFlowAnnualSeries(
+    annualRows,
+    trendSpanFloorYear(span, annualMonths[annualMonths.length - 1] || null),
+  )
 
   const lastClickRef = useRef({ idx: -1, time: 0 })
   function handleMonthClick(idx) {
@@ -1114,7 +1124,16 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, loa
       </div>
 
       <Card>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Yearly trend</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Yearly trend</div>
+          <TrendSpanSelect
+            value={span}
+            onChange={onSpanChange}
+            dataFirstMonth={annualMonths[0] || null}
+            dataLastMonth={annualMonths[annualMonths.length - 1] || null}
+            grain="year"
+          />
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
           {annual.avgNet == null ? null : (
             <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span>{' · '}</>
@@ -1216,7 +1235,7 @@ function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onS
   )
 }
 
-function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pickedGroup = drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
+function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChange, drillGroup, pickedGroup = drillGroup, onDrillGroup, onClearDrill, loading, viewIsIncome, onOpenMonth, onOpenReport, onOpenSinglePeriod }) {
   const lastBarClickRef = useRef({ key: null, time: 0 })
   const lastAreaClickRef = useRef({ idx: -1, time: 0 })
   // Sort state for the "Monthly averages by group" report at the bottom. Defaults to total
@@ -1348,10 +1367,18 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
     return { ...s, avg, total }
   }).sort((a, b) => b.total - a.total)
 
-  // Annual totals always cover every year in the dataset, independent of the Year dropdown
-  // up top. Drilling into one year shouldn't collapse this chart down to a single bar.
+  // Annual totals cover every year in the dataset the span reaches, independent of the Year dropdown up
+  // top. Drilling into one year shouldn't collapse this chart down to a single bar, and the span is the
+  // only thing that narrows it — set on the chart itself, since it is the chart it governs here.
+  // Whole years: a span starting mid-year draws the year containing it (`lib/trendSpan.js`), and the
+  // average below divides by the days those rows actually span, so a part year counts as its own length.
+  const dataLastMonth = allViewRows.reduce((max, r) => (max === null || r.month > max ? r.month : max), null)
+  const annualFloorYear = trendSpanFloorYear(span, dataLastMonth)
+  const annualRows = annualFloorYear
+    ? allViewRows.filter(r => r.month.slice(0, 4) >= annualFloorYear)
+    : allViewRows
   const yearMap = {}
-  for (const r of allViewRows) {
+  for (const r of annualRows) {
     const yr = r.month.slice(0, 4)
     yearMap[yr] = (yearMap[yr] || 0) + r.total
   }
@@ -1361,7 +1388,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
   // Per elapsed year, not per bar. A plain mean breaks every January: the current year is a two-week
   // stub drawn beside full years, and the line whose job is "what a typical year looks like" is dragged
   // down by it, recovering slowly over the next twelve months. For full years the two agree.
-  const { firstDate: annualFirstDate, lastDate: annualLastDate } = seriesDateRange(allViewRows)
+  const { firstDate: annualFirstDate, lastDate: annualLastDate } = seriesDateRange(annualRows)
   const annualAvg = periodAverage(
     annualData.reduce((s, r) => s + r.total, 0), annualFirstDate, annualLastDate, 'year',
   )
@@ -1601,7 +1628,16 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
         </div>
 
         <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{viewIsIncome ? 'Annual income totals' : 'Annual totals'}</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{viewIsIncome ? 'Annual income totals' : 'Annual totals'}</div>
+            <TrendSpanSelect
+              value={span}
+              onChange={onSpanChange}
+              dataFirstMonth={dataStartMonth}
+              dataLastMonth={dataLastMonth}
+              grain="year"
+            />
+          </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>Click a year to focus the charts above on it</div>
           {annualData.length === 0 ? (
             <EmptyState message="Not enough data" />
@@ -1998,6 +2034,10 @@ export default function Dashboard() {
   // where it would describe a different selection. `keepTrendGrainForDateRef` names the date such a
   // chart navigation is about to set, which is how the reset below tells the two apart.
   const [trendGrainChoice, setTrendGrainChoice] = useState(null)
+  // How far back every multi-period chart on the page reaches — the single-period trend here, and the
+  // Annual totals / Yearly trend charts on the Trends tab. One persisted setting for all of them, read
+  // here so the charts in a frame always agree about it (`lib/trendSpan.js`).
+  const [trendSpanPref, setTrendSpanPref] = useUserPreference(TREND_SPAN_PREF_KEY, TREND_SPAN_ALL)
   const keepTrendGrainForDateRef = useRef(undefined)
   const [level, setLevel] = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
@@ -2292,9 +2332,25 @@ export default function Dashboard() {
     const months = (singleTrendRows || []).map(r => r.month).filter(Boolean).sort()
     return { firstMonth: months[0] || null, lastMonth: months[months.length - 1] || null }
   }, [singleTrendRows])
+  // How much history the chart draws, as a floor on where the *data* starts — see `lib/trendSpan.js`.
+  // Both bucket builders take it from `firstMonth`, so one floor governs the calendar grains and the
+  // repeated spans alike, and the same-span request asks the server for only the buckets being drawn.
+  // The selection is deliberately not floored: `calendarTrendBuckets` widens to it either way, so a
+  // period older than the span is still on the chart rather than captioning bars that exclude it.
+  const trendSpanMonths = useMemo(() => {
+    // Whole buckets of the grain on screen, except in same-span mode, whose buckets are the user's own
+    // window and have no calendar width to count in.
+    const floor = trendSpanFloorMonth(
+      trendSpanPref, trendDataMonths.lastMonth, trendIsSameSpan ? 'month' : trendGrain,
+    )
+    const firstMonth = floor && trendDataMonths.firstMonth && floor > trendDataMonths.firstMonth
+      ? floor
+      : trendDataMonths.firstMonth
+    return { firstMonth, lastMonth: trendDataMonths.lastMonth }
+  }, [trendDataMonths, trendSpanPref, trendGrain, trendIsSameSpan])
   const spanBuckets = useMemo(
-    () => (trendIsSameSpan ? sameSpanTrendBuckets({ date: filters.date, ...trendDataMonths }) : []),
-    [trendIsSameSpan, filters.date, trendDataMonths],
+    () => (trendIsSameSpan ? sameSpanTrendBuckets({ date: filters.date, ...trendSpanMonths }) : []),
+    [trendIsSameSpan, filters.date, trendSpanMonths],
   )
   const spanKey = spanBuckets.map(b => `${b.rangeStart}:${b.rangeEnd}`).join(',')
   const spanRequestRef = useRef(0)
@@ -2327,9 +2383,9 @@ export default function Dashboard() {
       if (spanTrend.key !== spanKey) return null
       return trimEmptyTrendBuckets(trendChartRows(spanBuckets, (b, i) => Number(spanTrend.rows[i]?.total) || 0))
     }
-    const buckets = calendarTrendBuckets({ ...trendDataMonths, grain: trendGrain, date: filters.date, fallbackMonth: thisM })
+    const buckets = calendarTrendBuckets({ ...trendSpanMonths, grain: trendGrain, date: filters.date, fallbackMonth: thisM })
     return trimEmptyTrendBuckets(trendChartRows(buckets, monthlyBucketTotal(singleTrendRows)))
-  }, [trendIsSameSpan, spanTrend, spanKey, spanBuckets, trendDataMonths, trendGrain, filters.date, singleTrendRows])
+  }, [trendIsSameSpan, spanTrend, spanKey, spanBuckets, trendSpanMonths, trendGrain, filters.date, singleTrendRows])
   const [heldTrend, setHeldTrend] = useState([])
   useEffect(() => { if (computedTrend) setHeldTrend(computedTrend) }, [computedTrend])
   const trend = computedTrend ?? heldTrend
@@ -3297,6 +3353,13 @@ export default function Dashboard() {
                               View transactions ↗
                             </Button>
                           )}
+                          <TrendSpanSelect
+                            value={trendSpanPref}
+                            onChange={setTrendSpanPref}
+                            dataFirstMonth={trendDataMonths.firstMonth}
+                            dataLastMonth={trendDataMonths.lastMonth}
+                            grain={trendIsSameSpan ? 'month' : trendGrain}
+                          />
                           <select
                             value={trendGrain}
                             onChange={e => setTrendGrainChoice(e.target.value)}
@@ -3314,7 +3377,7 @@ export default function Dashboard() {
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
                         {trendIsSameSpan
                           ? `The selected span, repeated each ${trendGrainNoun(filters.date)}`
-                          : `${grainWord} totals across all data`}
+                          : `${grainWord} totals ${describeTrendSpan(trendSpanPref)}`}
                         {' · click a bar to focus it · scroll horizontally to pan'}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
@@ -3494,6 +3557,8 @@ export default function Dashboard() {
                 annualRows={cashFlowAnnualRows}
                 selectedYear={trendYear}
                 onYearChange={setTrendYear}
+                span={trendSpanPref}
+                onSpanChange={setTrendSpanPref}
                 loading={trendLoading}
                 onOpenMonth={month => openMonthDetail(month, activeFrame)}
                 onOpenSinglePeriod={openSinglePeriodForMonth}
@@ -3506,6 +3571,8 @@ export default function Dashboard() {
                 trendWindow={trendWindow}
                 groups={trendGroups}
                 onYearChange={setTrendYear}
+                span={trendSpanPref}
+                onSpanChange={setTrendSpanPref}
                 drillGroup={shownTrendGroup}
                 pickedGroup={trendGroup}
                 onDrillGroup={g => setTrendGroup(g)}
