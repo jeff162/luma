@@ -4,6 +4,11 @@
 // behind a count, a merged child folded them into its parent. These pin what makes it a question: the
 // two answers are the same two for every row, the parent is the one preselected for a group member,
 // and the answer handed back is the one that was chosen.
+//
+// The rungs are selected by their `value` and the confirm button by its position, not by their labels.
+// A disposition value is the contract with the caller and the button order is deliberate (confirm
+// first); the sentences around them are copy, and matching copy tests nothing the behaviour depends on
+// while turning every wording edit into a red run.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -20,9 +25,11 @@ const retired = {
 }
 const standalone = { id: 'standalone', name: 'Northgate Card', type: 'credit', transaction_count: 7 }
 
+let container = null
+
 function show(account, props = {}) {
   const onSubmit = vi.fn()
-  render(
+  const result = render(
     <AccountRemovalDialog
       account={account}
       accounts={[replacement, other, retired, standalone]}
@@ -31,19 +38,23 @@ function show(account, props = {}) {
       {...props}
     />,
   )
+  container = result.container
   return onSubmit
 }
+
+const rung = value => container.querySelector(`input[name="account-removal-disposition"][value="${value}"]`)
+const confirmButton = () => screen.getAllByRole('button')[0]
 
 describe('AccountRemovalDialog', () => {
   it('offers a merged child and a root the same two answers, moving first', () => {
     show(retired)
     expect(screen.getByText(/42 transactions/)).toBeTruthy()
-    expect(screen.getByRole('radio', { name: /another account/i }).checked).toBe(true)
+    expect(rung('reassign').checked).toBe(true)
     const childRungs = screen.getAllByRole('radio').length
     cleanup()
 
     show(standalone)
-    expect(screen.getByRole('radio', { name: /another account/i }).checked).toBe(true)
+    expect(rung('reassign').checked).toBe(true)
     expect(screen.getAllByRole('radio')).toHaveLength(childRungs)
   })
 
@@ -59,11 +70,11 @@ describe('AccountRemovalDialog', () => {
     const picker = screen.getByLabelText('Account to keep the transactions')
     expect(picker.value).toBe('replacement')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Move and remove' }))
+    await userEvent.click(confirmButton())
     expect(onSubmit).toHaveBeenCalledWith({ mode: 'reassign', targetAccountId: 'replacement' })
   })
 
-  it('never offers the account being removed as its own target', async () => {
+  it('never offers the account being removed as its own target', () => {
     show(standalone)
 
     const options = [...screen.getByLabelText('Account to keep the transactions').options]
@@ -77,11 +88,10 @@ describe('AccountRemovalDialog', () => {
     await userEvent.selectOptions(
       screen.getByLabelText('Account to keep the transactions'), '__new__',
     )
-    const confirm = screen.getByRole('button', { name: 'Move and remove' })
-    expect(confirm.disabled).toBe(true)
+    expect(confirmButton().disabled).toBe(true)
 
     await userEvent.type(screen.getByLabelText('New account name'), 'Northgate Card 2')
-    await userEvent.click(confirm)
+    await userEvent.click(confirmButton())
     expect(onSubmit).toHaveBeenCalledWith({
       mode: 'reassign',
       newAccount: { name: 'Northgate Card 2', type: 'credit' },
@@ -96,14 +106,14 @@ describe('AccountRemovalDialog', () => {
     )
     await userEvent.type(screen.getByLabelText('New account name'), 'Riverstone Checking')
 
-    expect(screen.getByRole('button', { name: 'Move and remove' }).disabled).toBe(true)
+    expect(confirmButton().disabled).toBe(true)
   })
 
   it('hands back the delete answer when it is the one chosen', async () => {
     const onSubmit = show(standalone)
 
-    await userEvent.click(screen.getByRole('radio', { name: /Delete the transactions/i }))
-    await userEvent.click(screen.getByRole('button', { name: /Delete them and remove/ }))
+    await userEvent.click(rung('delete'))
+    await userEvent.click(confirmButton())
 
     expect(onSubmit).toHaveBeenCalledWith({ mode: 'delete' })
   })
@@ -112,7 +122,7 @@ describe('AccountRemovalDialog', () => {
     const onSubmit = show({ ...standalone, transaction_count: 0 })
 
     expect(screen.queryByRole('radio')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await userEvent.click(confirmButton())
     expect(onSubmit).toHaveBeenCalledWith({ mode: 'delete' })
   })
 })

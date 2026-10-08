@@ -2802,6 +2802,7 @@ function AccountRow({
   onSave,
   onOpenRowMenu,
   rowMenuAccountId = null,
+  renameRequest = 0,
   onOpenDetail,
   onCreateOwnerForAccount,
   onRequestRenameOwner,
@@ -2819,7 +2820,6 @@ function AccountRow({
   onCloseTagPicker = () => { },
   onSetAccountTags = () => { },
   onAccountTagCreated = () => { },
-  onAccountContextMenu = () => { },
 }) {
   const [, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
@@ -2860,6 +2860,15 @@ function AccountRow({
   useEffect(() => {
     if (interactionDisabled) setEditingName(false)
   }, [interactionDisabled, setEditingName])
+
+  // The ⋯ menu's Rename drives *this* editor rather than opening one of its own — two routes to one
+  // action are fine, two rename implementations are not. A counter rather than a flag, as the import
+  // picker's new-account field does it, so choosing Rename again on a row already editing re-enters it
+  // instead of being swallowed as "no change".
+  useEffect(() => {
+    if (renameRequest) beginEditingName(account.name || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renameRequest])
 
   useEffect(() => {
     if (!interactionDisabled) return
@@ -2999,7 +3008,6 @@ function AccountRow({
         }} />
       )}
       <div
-        onContextMenu={isChild ? undefined : (event => onAccountContextMenu(account.id, event))}
         style={{
           display: 'grid',
           gridTemplateColumns,
@@ -3383,6 +3391,9 @@ export default function Accounts() {
   const [loading, setLoading] = useState(true)
   // The row whose ⋯ menu is open, and the account whose removal is being decided.
   const [rowMenu, setRowMenu] = useState(null)
+  // A nonce per account rather than a boolean: the row re-enters its name editor whenever this moves,
+  // so picking Rename twice works where a flag already set would do nothing.
+  const [renameRequest, setRenameRequest] = useState(null)
   const [pendingRemoval, setPendingRemoval] = useState(null)
   const [removalBusy, setRemovalBusy] = useState(false)
   const [noticeDialog, setNoticeDialog] = useState(null)
@@ -3392,6 +3403,9 @@ export default function Accounts() {
   const [showCreateAccount, setShowCreateAccount] = useState(false)
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+  // The list's own right-click menu — Collapse all / Expand all, and nothing row-specific since a
+  // row's actions moved into its ⋯ menu. The rows no longer intercept the event, so a right-click
+  // anywhere in the list reaches this, including on a child row, which used to get nothing.
   const [listContextMenu, setListContextMenu] = useState(null) // { x, y }
   const [detailAccounts, setDetailAccounts] = useState([])
   const { dbInstanceId, preferenceSubjectId: userId, currentUser, setCurrentUser, authEnabled } = useAppSession()
@@ -3581,13 +3595,6 @@ export default function Accounts() {
     onCloseTagPicker: () => setTagPickerAccountId(null),
     onSetAccountTags: handleSetAccountTags,
     onAccountTagCreated: handleAccountTagCreated,
-    // Right-click a top-level row opens the shared list context menu carrying this account id, so
-    // "Edit tags…" sits alongside Collapse/Expand all instead of fighting the existing menu.
-    onAccountContextMenu: (accountId, event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      setListContextMenu({ x: event.clientX, y: event.clientY, accountId })
-    },
   }
 
   useEffect(() => { loadData() }, [])
@@ -4267,10 +4274,13 @@ export default function Accounts() {
         />
       ) : null}
 
-      {/* One item, deliberately. The menu exists to put a step in front of an action that cannot be
-          undone, not to collect several — `danger` marks exactly that, and a parent still refuses
-          until its group is broken up, because removing a group root means promoting a member in its
-          place (a separate decision; see `delete_account`). */}
+      {/* The row's actions, in one place. Rename and Edit tags are reachable inline too — by clicking
+          the name, and through the tag cell — and are here anyway because those affordances announce
+          themselves only on hover, which tells a touch user and a keyboard user nothing. Both drive the
+          same editors the inline routes do; what is duplicated is the way in, never the action.
+          Remove is separated and `danger`, the one entry that cannot be undone, and a parent refuses
+          until its group is broken up — removing a group root means promoting a member in its place,
+          which is a separate decision (see `delete_account`). */}
       {rowMenu ? (
         <ActionMenu
           anchorRect={rowMenu.anchorRect}
@@ -4278,8 +4288,22 @@ export default function Accounts() {
           minWidth={200}
           items={[
             {
+              label: 'Rename…',
+              title: 'Edit this account’s name in place.',
+              onClick: () => setRenameRequest(prev => ({
+                accountId: rowMenu.account.id,
+                nonce: (prev?.nonce || 0) + 1,
+              })),
+            },
+            {
+              label: 'Edit tags…',
+              title: 'Choose the tags attached to this account.',
+              onClick: () => setTagPickerAccountId(rowMenu.account.id),
+            },
+            {
               label: 'Remove account…',
               danger: true,
+              separatorBefore: true,
               disabled: accounts.some(a => a.parent_account_id === rowMenu.account.id),
               title: accounts.some(a => a.parent_account_id === rowMenu.account.id)
                 ? 'Remove or ungroup the merged child accounts first.'
@@ -4575,21 +4599,8 @@ export default function Accounts() {
                                 }}
                                 onMouseLeave={() => setListContextMenu(null)}
                               >
-                                {listContextMenu.accountId ? (
-                                  <button type="button" onClick={() => {
-                                    // Open just this row's picker without toggling the page-wide edit
-                                    // mode: the row renders its own "+" anchor while its picker is open
-                                    // (see showControls), so dismissing the picker leaves no lingering
-                                    // "Done" state to clear.
-                                    setTagPickerAccountId(listContextMenu.accountId)
-                                    setListContextMenu(null)
-                                  }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                                    Edit tags…
-                                  </button>
-                                ) : null}
                                 {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) ? (
                                   <>
-                                    {listContextMenu.accountId ? <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} /> : null}
                                     <button type="button" onClick={() => {
                                       setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
                                       setListContextMenu(null)
@@ -4628,6 +4639,7 @@ export default function Accounts() {
                                     onSave={saveAccount}
                                     onOpenRowMenu={openRowMenu}
                                     rowMenuAccountId={rowMenu?.account?.id || null}
+                                    renameRequest={renameRequest?.accountId === root.id ? renameRequest.nonce : 0}
                                     onOpenDetail={openAccountDetail}
                                     onCreateOwnerForAccount={createOwnerForAccount}
                                     onRequestRenameOwner={owner => {
@@ -4657,6 +4669,7 @@ export default function Accounts() {
                                       onSave={saveAccount}
                                       onOpenRowMenu={openRowMenu}
                                       rowMenuAccountId={rowMenu?.account?.id || null}
+                                      renameRequest={renameRequest?.accountId === child.id ? renameRequest.nonce : 0}
                                       onOpenDetail={openAccountDetail}
                                       onCreateOwnerForAccount={createOwnerForAccount}
                                       onRequestRenameOwner={owner => {
