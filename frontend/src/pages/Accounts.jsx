@@ -27,6 +27,7 @@ import {
   providerSummaryLine, relinkCandidates,
 } from '../lib/connectionSummary.js'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
+import AccountRemovalDialog from '../components/accounts/AccountRemovalDialog.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { formatTimestamp } from '../lib/utils.js'
@@ -2799,14 +2800,12 @@ function AccountRow({
   gridTemplateColumns,
   owners,
   onSave,
-  onRequestDelete,
-  confirmingDelete,
-  onCancelDelete,
+  onOpenRowMenu,
+  rowMenuAccountId = null,
   onOpenDetail,
   onCreateOwnerForAccount,
   onRequestRenameOwner,
   onRequestDeleteOwner,
-  onRequestTrash,
   onError = () => { },
   interactionDisabled = false,
   dragDisabled = false,
@@ -2919,10 +2918,6 @@ function AccountRow({
 
   const typeValue = account.type || 'other'
   const displayOwnerId = account.owner_id || ''
-  const transactionCount = Number(account.transaction_count || 0)
-  const deletePrompt = transactionCount > 0
-    ? <>Remove <strong>{account.name}</strong> and {transactionCount} transaction{transactionCount === 1 ? '' : 's'}?</>
-    : <>Remove <strong>{account.name}</strong>?</>
   const assignableOwners = getAssignableOwners(owners)
   // Parents with children may toggle between their personal owner and shared — restricted options
   // are passed in from the parent to enforce this. Children and plain accounts use all assignable owners.
@@ -2933,7 +2928,6 @@ function AccountRow({
   const ownerEditDisabled = interactionDisabled || isChild
   const typeEditDisabled = interactionDisabled || isChild || hasChildren
   const canDrag = !interactionDisabled && !dragDisabled
-  const deleteDisabled = interactionDisabled || (!isChild && hasChildren)
 
   async function savePatch(patch) {
     await onSave(account.id, patch)
@@ -3355,60 +3349,20 @@ function AccountRow({
           onTagCreated={onAccountTagCreated}
         />
 
-        <button
-          type="button"
-          onClick={() => {
-            if (deleteDisabled) return
-            if (isChild) {
-              onRequestTrash?.(account)
-              return
-            }
-            onRequestDelete(account.id)
-          }}
-          title={deleteDisabled ? (!isChild && hasChildren ? 'Trash or ungroup the merged child accounts first' : undefined) : (isChild ? 'Send child account to trash' : 'Delete account')}
-          style={{
-            background: 'none',
-            border: '1px solid var(--border)',
-            color: isChild ? 'var(--danger)' : 'var(--muted)',
-            cursor: deleteDisabled ? 'default' : 'pointer',
-            fontSize: 16,
-            width: 28,
-            height: ACCOUNT_CONTROL_HEIGHT,
-            lineHeight: 1,
-            padding: 0,
-            borderRadius: 6,
-            justifySelf: 'end',
-            opacity: deleteDisabled ? 0.45 : 1,
-          }}
-        >
-          ×
-        </button>
+        {/* An overflow menu where a one-press × used to be, and the extra press is the point rather
+            than tidiness: removing an account is permanent (`AccountRemovalDialog` says why no undo is
+            possible), so the protection has to be the path to it. A single-item menu is the right
+            shape for exactly one rare, irreversible action — `danger` is reserved for those. */}
+        <div style={{ justifySelf: 'end' }}>
+          <ActionMenuButton
+            open={rowMenuAccountId === account.id}
+            disabled={interactionDisabled}
+            title={`Actions for ${account.display_name || account.name}`}
+            onOpen={rect => onOpenRowMenu?.(account, rect)}
+          />
+        </div>
       </div>
 
-      {confirmingDelete && (
-        <div style={{
-          margin: '0 12px 8px 62px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 12,
-          padding: '8px 12px',
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-          boxShadow: '0 12px 30px rgba(0, 0, 0, 0.14)',
-          fontSize: 12,
-        }}>
-          <div style={{ color: 'var(--muted)' }}>
-            {deletePrompt}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button small variant="danger" onClick={() => onCancelDelete(account.id, true)}>Remove</Button>
-            <Button small variant="ghost" onClick={() => onCancelDelete(account.id, false)}>Cancel</Button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -3427,8 +3381,10 @@ export default function Accounts() {
   const [tagPickerAccountId, setTagPickerAccountId] = useState(null)
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
-  const [pendingTrashAccount, setPendingTrashAccount] = useState(null)
+  // The row whose ⋯ menu is open, and the account whose removal is being decided.
+  const [rowMenu, setRowMenu] = useState(null)
+  const [pendingRemoval, setPendingRemoval] = useState(null)
+  const [removalBusy, setRemovalBusy] = useState(false)
   const [noticeDialog, setNoticeDialog] = useState(null)
   const [promoteTagsDialog, setPromoteTagsDialog] = useState(null)
   const [pendingOwnerDelete, setPendingOwnerDelete] = useState(null)
@@ -3860,20 +3816,40 @@ export default function Accounts() {
     notifyAccountsChanged()
   }
 
-  function requestDelete(accountId) {
-    setConfirmDeleteId(accountId)
+  function openRowMenu(account, anchorRect) {
+    setRowMenu({ account, anchorRect })
   }
 
-  async function cancelOrConfirmDelete(accountId, confirm) {
-    if (!confirm) {
-      setConfirmDeleteId(null)
-      return
+  async function submitRemoval({ mode, targetAccountId, newAccount }) {
+    const account = pendingRemoval
+    if (!account?.id) return
+    setRemovalBusy(true)
+    try {
+      if (mode === 'trash') {
+        await api.trashAccount(account.id)
+      } else if (mode === 'reassign') {
+        // Creating the stand-in account first, then naming it as the target: the same two steps the
+        // import mapping takes for "Create new account…", and the reason the endpoint needs no
+        // create-and-reassign mode of its own.
+        const target = targetAccountId
+          || (await api.createAccount({ name: newAccount.name.trim(), type: newAccount.type }))?.id
+        if (!target) throw new Error('Account response did not include an id.')
+        await api.deleteAccount(account.id, { transactions: 'reassign', target_account_id: target })
+      } else {
+        await api.deleteAccount(account.id, { transactions: 'delete' })
+      }
+      setPendingRemoval(null)
+      await reloadAccounts()
+      notifyAccountsChanged()
+    } catch (error) {
+      // The dialog stays open on a refusal so the choice that was refused is still on screen.
+      setNoticeDialog({
+        title: 'Could not remove account',
+        description: error.message,
+      })
+    } finally {
+      setRemovalBusy(false)
     }
-    setConfirmDeleteId(null)
-    setAccounts(prev => prev.filter(a => a.id !== accountId))
-    await api.deleteAccount(accountId)
-    reloadAccounts().catch(() => { })
-    notifyAccountsChanged()
   }
 
   async function saveOwner(ownerId, data) {
@@ -3992,25 +3968,6 @@ export default function Accounts() {
     } finally {
       setMovingAccountId(null)
       clearDragState()
-    }
-  }
-
-  async function confirmTrashChildAccount() {
-    if (!pendingTrashAccount?.id) return
-    const account = pendingTrashAccount
-    setPendingTrashAccount(null)
-    setMovingAccountId(account.id)
-    try {
-      await api.trashAccount(account.id)
-      await reloadAccounts()
-      notifyAccountsChanged()
-    } catch (error) {
-      setNoticeDialog({
-        title: 'Could not send account to trash',
-        description: error.message,
-      })
-    } finally {
-      setMovingAccountId(null)
     }
   }
 
@@ -4310,16 +4267,36 @@ export default function Accounts() {
         />
       ) : null}
 
-      {pendingTrashAccount ? (
-        <AppConfirmDialog
-          title="Send merged account to trash?"
-          description={`Hide "${pendingTrashAccount.name}" for now? It will stay recoverable in Settings until the trash is emptied.`}
-          confirmLabel="Send to trash"
-          confirmVariant="danger"
-          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={confirmTrashChildAccount}
-          onCancel={() => setPendingTrashAccount(null)}
-          width="min(560px, 100%)"
+      {/* One item, deliberately. The menu exists to put a step in front of an action that cannot be
+          undone, not to collect several — `danger` marks exactly that, and a parent still refuses
+          until its group is broken up, because removing a group root means promoting a member in its
+          place (a separate decision; see `delete_account`). */}
+      {rowMenu ? (
+        <ActionMenu
+          anchorRect={rowMenu.anchorRect}
+          onClose={() => setRowMenu(null)}
+          minWidth={200}
+          items={[
+            {
+              label: 'Remove account…',
+              danger: true,
+              disabled: accounts.some(a => a.parent_account_id === rowMenu.account.id),
+              title: accounts.some(a => a.parent_account_id === rowMenu.account.id)
+                ? 'Remove or ungroup the merged child accounts first.'
+                : 'Remove this account, choosing where its transactions go. This cannot be undone.',
+              onClick: () => setPendingRemoval(rowMenu.account),
+            },
+          ]}
+        />
+      ) : null}
+
+      {pendingRemoval ? (
+        <AccountRemovalDialog
+          account={pendingRemoval}
+          accounts={accounts}
+          busy={removalBusy}
+          onCancel={() => setPendingRemoval(null)}
+          onSubmit={submitRemoval}
         />
       ) : null}
 
@@ -4649,9 +4626,8 @@ export default function Accounts() {
                                     })}
                                     owners={owners}
                                     onSave={saveAccount}
-                                    onRequestDelete={requestDelete}
-                                    confirmingDelete={confirmDeleteId === root.id}
-                                    onCancelDelete={cancelOrConfirmDelete}
+                                    onOpenRowMenu={openRowMenu}
+                                    rowMenuAccountId={rowMenu?.account?.id || null}
                                     onOpenDetail={openAccountDetail}
                                     onCreateOwnerForAccount={createOwnerForAccount}
                                     onRequestRenameOwner={owner => {
@@ -4662,7 +4638,6 @@ export default function Accounts() {
                                       })
                                     }}
                                     onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
-                                    onRequestTrash={setPendingTrashAccount}
                                     onError={showAsyncNotice}
                                     interactionDisabled={showCreateAccount || !!movingAccountId}
                                     dragDisabled={rootDragDisabled}
@@ -4680,9 +4655,8 @@ export default function Accounts() {
                                       isLastChild={childIdx === children.length - 1}
                                       owners={owners}
                                       onSave={saveAccount}
-                                      onRequestDelete={requestDelete}
-                                      confirmingDelete={false}
-                                      onCancelDelete={cancelOrConfirmDelete}
+                                      onOpenRowMenu={openRowMenu}
+                                      rowMenuAccountId={rowMenu?.account?.id || null}
                                       onOpenDetail={openAccountDetail}
                                       onCreateOwnerForAccount={createOwnerForAccount}
                                       onRequestRenameOwner={owner => {
@@ -4693,8 +4667,7 @@ export default function Accounts() {
                                         })
                                       }}
                                       onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
-                                      onRequestTrash={setPendingTrashAccount}
-                                      onError={showAsyncNotice}
+                                        onError={showAsyncNotice}
                                       interactionDisabled={showCreateAccount || !!movingAccountId}
                                       dragDisabled={!!movingAccountId}
                                       dropActive={groupMergeActive}

@@ -61,6 +61,6 @@ test('a file report lists the rows the import left out, with the reason for each
     await expect(page.getByText("Invalid date: 'not-a-date'")).toHaveCount(0)
   } finally {
     await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${checking.id}`)
+    await request.delete(`/api/accounts/${checking.id}?transactions=delete`)
   }
 })

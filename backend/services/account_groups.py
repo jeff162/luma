@@ -27,8 +27,8 @@ nothing about the stored row looks wrong when you read it.
 **Resolve at read time; never repoint stored ids at merge time.** Rewriting references when the merge
 happens would make the merge irreversible in exactly the way the parent/child model was designed to
 avoid — detach restores the account but could not restore references that were rewritten away. The
-one place repointing *is* correct is `_finalize_trashed_account`, where the child row is about to be
-deleted for good and the merge is no longer reversible.
+one place repointing *is* correct is `reassign_account_references` (`services/account_references.py`),
+where the account row is about to be deleted for good and the merge is no longer reversible.
 
 **Deliberate exception.** Not every stored account id is a matching scope. `account_tag` attaches a
 tag to one specific account row, and a merged child's own tags are *meant* to lie dormant until it is

@@ -296,23 +296,20 @@ and is unaffected.
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.
 
-## Locked out of sign-in
+## Locked out/Lost password
 
-**A forgotten password is reset from a console, by whoever can reach the data directory.** Run the app
+**A forgotten password can be reset from a terminal window, by anyone who can reach the data directory.** Run the app
 with `--reset-password`, optionally followed by a username:
 
 | Topology | Command |
 | --- | --- |
 | Portable or installed (Windows, Linux) | `luma --reset-password` beside the executable |
 | macOS app | `Luma.app/Contents/Resources/server/luma --reset-password` from Terminal |
-| Checkout | `python -m backend.desktop --reset-password` |
+| Development | `backend/venv/bin/python -m backend.desktop --reset-password` |
 | Containers | `docker compose exec backend python -m backend.desktop --reset-password` |
 
-It names the control database it is about to change before asking anything, which is the line to check
-on a machine with more than one copy. It lists the accounts when no name is given, prompts twice for the
-new password, and exits without starting a server, so it is safe to run beside a running instance. The
-account comes out an active administrator with two-factor sign-in off and every browser signed out of
-it. The vault passphrase is untouched; why this needs no other credential is in `security-model.md` →
+The name of the control database is displayed. A list of account is displayed for the user to choose from and then the new password is entered. It is safe to run beside a running instance. The
+account selected ends up as an active administrator with two-factor sign-in off and current browser sessions are signed out. The vault passphrase is untouched; why this needs no other credential is described in `security-model.md` →
 *Identity and the network perimeter*.
 
 ## Diagnosing a running instance

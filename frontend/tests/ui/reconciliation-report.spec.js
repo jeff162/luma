@@ -45,7 +45,7 @@ test('an Amazon import opens its reconciliation report, which minimizes, restore
     await expect(page.getByText('✓ Reviewed')).toBeVisible()
   } finally {
     await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${account.id}`)
+    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
   }
 })
 
@@ -103,8 +103,8 @@ test('two PayPal transactions cornered on one card charge are one row, settled b
     await expect(page.getByRole('button', { name: /Two transactions, one match/ })).toHaveCount(0)
   } finally {
     await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}`)
-    await request.delete(`/api/accounts/${card.id}`)
+    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
+    await request.delete(`/api/accounts/${card.id}?transactions=delete`)
   }
 })
 
@@ -138,7 +138,7 @@ test('a PayPal import pairs with the card charge, and the review opens from its 
     await expect(page.getByText('PAYPAL *HARBOR RELIEF')).toBeVisible()
   } finally {
     await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}`)
-    await request.delete(`/api/accounts/${card.id}`)
+    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
+    await request.delete(`/api/accounts/${card.id}?transactions=delete`)
   }
 })

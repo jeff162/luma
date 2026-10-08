@@ -479,14 +479,16 @@ export const api = {
     return request(`/accounts${suffix}`)
   },
   createAccount: (data) => request('/accounts', { method: 'POST', body: JSON.stringify(data) }),
-  deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
+  // `transactions` says what happens to the account's own rows — 'reassign' (with
+  // `target_account_id`) or 'delete'. The backend refuses to guess once the account holds any.
+  deleteAccount: (id, params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ''))
+    const suffix = q.toString() ? `?${q}` : ''
+    return request(`/accounts/${id}${suffix}`, { method: 'DELETE' })
+  },
   attachAccount: (id, parent_account_id) =>
     request(`/accounts/${id}/attach`, { method: 'POST', body: JSON.stringify({ parent_account_id }) }),
   detachAccount: (id) => request(`/accounts/${id}/detach`, { method: 'POST' }),
-  trashAccount: (id) => request(`/accounts/${id}/trash`, { method: 'POST' }),
-  restoreAccount: (id) => request(`/accounts/${id}/restore`, { method: 'POST' }),
-  getTrashedAccounts: () => request('/accounts/trash'),
-  emptyAccountTrash: () => request('/accounts/trash/empty', { method: 'POST' }),
   getDistinctAccountPairs: () => request('/accounts/distinct-pairs'),
   assertDistinctAccountPair: (accountIdA, accountIdB) =>
     request('/accounts/distinct-pairs', {

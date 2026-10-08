@@ -154,7 +154,7 @@ def get_db(db_path: str | None = None):
 # v63 lets a data source name a folder the server imports from unattended (`csv_import_profile.watch_*`
 # plus `import_watch_file`, the per-file `(size, mtime)` watermark that keeps a scan off the disk).
 
-CURRENT_VERSION = 63
+CURRENT_VERSION = 64
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1905,6 +1905,7 @@ def _add_watched_import_folders(conn):
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_enabled INTEGER NOT NULL DEFAULT 0")
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_purge_mode TEXT NOT NULL DEFAULT 'never'")
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_purge_days INTEGER NOT NULL DEFAULT 30")
+
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_notice TEXT")
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN watch_last_scan_at TEXT")
     conn.execute(
@@ -1927,6 +1928,39 @@ def _add_watched_import_folders(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_import_watch_file_name ON import_watch_file(profile_id, filename)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_import_watch_file_state ON import_watch_file(state)")
+
+
+@migration(64)
+def _release_accounts_left_in_the_retired_account_trash(conn):
+    # Guarded on the column, for the same reason v63 guards on its table: the per-migration unit tests
+    # hand-build a minimal schema and run the whole chain over it.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if "trashed_at" not in columns:
+        return
+    _restore_trashed_accounts(conn)
+
+
+def _restore_trashed_accounts(conn):
+    """Make any account hidden in the account trash visible again, now that the trash is gone.
+
+    The account trash was retired once removing an account moved behind the row's overflow menu: it
+    could only ever *defer* the move of a child's transactions to its parent, never undo one, and
+    deferring left the removal dialog promising a reassignment the ledger went on contradicting (see
+    `routers/accounts.py` and `docs/ui-patterns.md`). With its Settings view and its endpoints gone, a
+    row still carrying `trashed_at` would be unreachable forever while its transactions stayed live —
+    so the rows come back rather than being cleaned up, and the user removes them deliberately or not
+    at all.
+
+    A trashed account is always a merged child (nothing else could be trashed), so clearing the flag
+    restores exactly the state it had before: a child under its parent, already carrying the parent's
+    display name. The column itself stays — every backup carries it and the read paths still honour it
+    — which is also why this is registered for post-restore replay: restoring a backup taken before
+    the retirement brings trashed rows back with it.
+    """
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if "trashed_at" not in columns:
+        return
+    conn.execute("UPDATE account SET trashed_at = NULL WHERE trashed_at IS NOT NULL")
 
 
 def get_db_version(conn) -> int:
@@ -1966,6 +2000,7 @@ POST_RESTORE_DATA_INIT = {
     25: _widen_unset_csv_terminal_window,
     54: _unlock_trusted_import_categories,
     55: _backfill_import_batch_provider,
+    64: _restore_trashed_accounts,
 }
 
 

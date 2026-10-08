@@ -420,7 +420,7 @@ test('the data source editor can create its account, and saving keeps what impor
     // The last spec here relies on the tenant holding no accounts.
     const accounts = await (await request.get('/api/accounts?include_children=true')).json()
     for (const account of accounts.filter(a => a.name === accountName)) {
-      await request.delete(`/api/accounts/${account.id}`)
+      await request.delete(`/api/accounts/${account.id}?transactions=delete`)
     }
   }
 })

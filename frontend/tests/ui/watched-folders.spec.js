@@ -115,7 +115,7 @@ test('a watched folder imports what it can and hands back what it cannot', async
     if (takenBatchId) await request.delete(`/api/import-export/batches/${takenBatchId}?force=true`)
     await request.delete(`/api/import-export/batches/${proofBatchId}?force=true`)
     await request.delete(`/api/import-export/profiles/${source.id}`)
-    await request.delete(`/api/accounts/${account.id}`)
+    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
     fs.rmSync(folder, { recursive: true, force: true })
   }
 })

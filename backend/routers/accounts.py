@@ -6,7 +6,9 @@ Account records serve two related lifecycle models.
 
 - Active root accounts are the selectable/reportable physical accounts the rest of the app works with.
 - Child accounts keep historical account numbers visible on the Accounts page while sharing a parent display name elsewhere.
-- Trashed child accounts stay recoverable until the trash is emptied, at which point their references are folded into the parent.
+- Removing an account is irreversible and says so; what it asks instead is where its transactions go (`delete_account`).
+  `account.trashed_at` survives as a column — old backups carry it and the read paths still honour it — but nothing
+  sets it any more: the account trash was retired once removal moved behind a deliberate menu (`ui-patterns.md`).
 
 Attach / detach also coordinates with dedupe state — see
 `backend/services/duplicate_detection.py`:
@@ -19,7 +21,6 @@ Attach / detach also coordinates with dedupe state — see
   (`restore_auto_merged_after_detach`). User-Reject decisions (`'user'`) are preserved.
 """
 
-import json
 import uuid
 from typing import Optional
 
@@ -27,7 +28,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
-from backend.time_utils import utcnow_iso
 from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
@@ -42,6 +42,12 @@ from backend.services.duplicate_detection import (
     record_account_pair_distinct,
     restore_auto_merged_after_detach,
     scan_scope_for_cross_account_duplicates,
+)
+from backend.services.account_references import (
+    discard_account_references,
+    reassign_account_references,
+    replace_account_reference_in_batch_snapshots,
+    replace_account_reference_in_profile_column_maps,
 )
 from backend.services.import_batch_totals import delete_transactions
 
@@ -214,82 +220,11 @@ def _list_group_member_ids(conn, account_id: str) -> list[str]:
     return [row["id"] for row in rows]
 
 
-def _replace_account_reference_in_profile_column_maps(conn, source_account_id: str, target_account_id: str):
-    rows = conn.execute(
-        "SELECT id, column_map FROM csv_import_profile"
-    ).fetchall()
-    for row in rows:
-        column_map = {}
-        try:
-            parsed = json.loads(row["column_map"] or "{}")
-            if isinstance(parsed, dict):
-                column_map = parsed
-        except Exception:
-            continue
-        assignments = column_map.get("account_assignments")
-        if not isinstance(assignments, dict):
-            continue
-        changed = False
-        next_assignments = {}
-        for csv_value, account_id in assignments.items():
-            if account_id == source_account_id:
-                next_assignments[csv_value] = target_account_id
-                changed = True
-            else:
-                next_assignments[csv_value] = account_id
-        if changed:
-            column_map["account_assignments"] = next_assignments
-            conn.execute(
-                "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
-                (json.dumps(column_map), row["id"]),
-            )
-
-
-def _replace_account_reference_in_batch_snapshots(conn, source_account_id: str, target_account_id: str):
-    rows = conn.execute(
-        "SELECT id, config_snapshot FROM import_batch WHERE config_snapshot IS NOT NULL AND TRIM(config_snapshot) <> ''"
-    ).fetchall()
-    for row in rows:
-        snapshot = {}
-        try:
-            parsed = json.loads(row["config_snapshot"] or "{}")
-            if isinstance(parsed, dict):
-                snapshot = parsed
-        except Exception:
-            continue
-
-        changed = False
-        if snapshot.get("account_id") == source_account_id:
-            snapshot["account_id"] = target_account_id
-            changed = True
-        account_map = snapshot.get("account_map")
-        if isinstance(account_map, dict):
-            next_account_map = {}
-            map_changed = False
-            for csv_value, account_id in account_map.items():
-                if account_id == source_account_id:
-                    next_account_map[csv_value] = target_account_id
-                    map_changed = True
-                else:
-                    next_account_map[csv_value] = account_id
-            if map_changed:
-                snapshot["account_map"] = next_account_map
-                changed = True
-
-        if changed:
-            conn.execute(
-                "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
-                (json.dumps(snapshot), row["id"]),
-            )
-
-
 def _delete_account_and_import_history(conn, source_account_id: str):
     # Through the shared delete so each card these rows came from is kept true: the rows come off the
     # per-account entries that counted them (which may name another account, for a row moved since it
     # arrived) and the cards' totals are re-derived, dropping a sync card left with nothing.
     delete_transactions(conn, "account_id = ?", (source_account_id,))
-    conn.execute("DELETE FROM category_rule WHERE account_id = ?", (source_account_id,))
-    conn.execute("UPDATE csv_import_profile SET account_id = NULL WHERE account_id = ?", (source_account_id,))
     conn.execute(
         "DELETE FROM import_batch_account WHERE account_id = ? AND was_skipped = 0",
         (source_account_id,),
@@ -298,36 +233,21 @@ def _delete_account_and_import_history(conn, source_account_id: str):
         "UPDATE import_batch_account SET account_id = NULL WHERE account_id = ? AND was_skipped = 1",
         (source_account_id,),
     )
-    _replace_account_reference_in_profile_column_maps(conn, source_account_id, "")
-    _replace_account_reference_in_batch_snapshots(conn, source_account_id, "")
+    # Everything else that named the account, by its declared disposition — rules and series removed,
+    # write targets and mapping decisions released. Without this the foreign keys decide, and two of
+    # them decide wrongly (see services/account_references.py).
+    discard_account_references(conn, source_account_id)
+    # None, not "": the reference is removed rather than blanked, so a saved source carries no entry
+    # that every reader has to treat as absent anyway (`services/account_references.py`).
+    replace_account_reference_in_profile_column_maps(conn, source_account_id, None)
+    replace_account_reference_in_batch_snapshots(conn, source_account_id, None)
     conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
 
 
-def _finalize_trashed_account(conn, account_row):
-    source_account_id = account_row["id"]
-    target_account_id = account_row["parent_account_id"]
-    if target_account_id:
-        conn.execute(
-            "UPDATE txn SET account_id = ? WHERE account_id = ?",
-            (target_account_id, source_account_id),
-        )
-        conn.execute(
-            "UPDATE category_rule SET account_id = ? WHERE account_id = ?",
-            (target_account_id, source_account_id),
-        )
-        conn.execute(
-            "UPDATE csv_import_profile SET account_id = ? WHERE account_id = ?",
-            (target_account_id, source_account_id),
-        )
-        conn.execute(
-            "UPDATE import_batch_account SET account_id = ? WHERE account_id = ?",
-            (target_account_id, source_account_id),
-        )
-        _replace_account_reference_in_profile_column_maps(conn, source_account_id, target_account_id)
-        _replace_account_reference_in_batch_snapshots(conn, source_account_id, target_account_id)
-        conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
-    else:
-        _delete_account_and_import_history(conn, source_account_id)
+def _reassign_account_and_delete(conn, source_account_id: str, target_account_id: str):
+    """Hand the source's transactions and every reference that names it to the target, then remove it."""
+    reassign_account_references(conn, source_account_id, target_account_id)
+    conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
 
 
 def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
@@ -394,32 +314,6 @@ def list_accounts(include_children: bool = False, include_trashed: bool = False)
         rows = _list_account_rows(conn, include_children=include_children, include_trashed=include_trashed)
         accounts = _attach_account_tags(conn, [_serialize_account(r) for r in rows])
     return accounts
-
-
-@router.get("/trash")
-def list_trashed_accounts():
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                a.id,
-                a.name,
-                a.display_name,
-                a.type,
-                a.owner_id,
-                a.parent_account_id,
-                a.trashed_at,
-                p.name AS parent_name,
-                p.display_name AS parent_display_name,
-                o.name AS owner_name
-            FROM account a
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN owner o ON o.id = a.owner_id
-            WHERE a.trashed_at IS NOT NULL
-            ORDER BY a.trashed_at DESC, LOWER(a.name), a.id
-            """
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 @router.post("")
@@ -721,71 +615,78 @@ def detach_account(account_id: str):
     return {"ok": True, "restored_count": restored}
 
 
-@router.post("/{account_id}/trash")
-def trash_account(account_id: str):
-    with get_db() as conn:
-        account = _get_account_row(conn, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        if account["trashed_at"]:
-            return {"ok": True}
-        if not account["parent_account_id"]:
-            raise HTTPException(status_code=400, detail="Only merged child accounts can be sent to trash")
-        conn.execute(
-            "UPDATE account SET trashed_at = ? WHERE id = ?",
-            (utcnow_iso(), account_id),
-        )
-    return {"ok": True}
-
-
-@router.post("/{account_id}/restore")
-def restore_account(account_id: str):
-    with get_db() as conn:
-        account = _get_account_row(conn, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        if not account["trashed_at"]:
-            return {"ok": True}
-
-        if account["parent_account_id"]:
-            parent = _get_account_row(conn, account["parent_account_id"])
-            if parent and not parent["trashed_at"]:
-                conn.execute(
-                    "UPDATE account SET trashed_at = NULL, display_name = ? WHERE id = ?",
-                    (parent["display_name"] or parent["name"], account_id),
-                )
-                return {"ok": True}
-
-        conn.execute(
-            "UPDATE account SET parent_account_id = NULL, display_name = name, trashed_at = NULL WHERE id = ?",
-            (account_id,),
-        )
-    return {"ok": True}
-
-
-@router.post("/trash/empty")
-def empty_account_trash():
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, parent_account_id
-            FROM account
-            WHERE trashed_at IS NOT NULL
-            ORDER BY trashed_at ASC, id ASC
-            """
-        ).fetchall()
-        for row in rows:
-            _finalize_trashed_account(conn, row)
-    return {"ok": True, "emptied": len(rows)}
+# What becomes of the account's transactions. There is no third answer: `txn.account_id` is NOT NULL,
+# so the rows either move to an account the caller names or they are deleted with the account.
+TRANSACTION_DISPOSITIONS = ("reassign", "delete")
 
 
 @router.delete("/{account_id}")
-def delete_account(account_id: str):
+def delete_account(account_id: str, transactions: Optional[str] = None,
+                   target_account_id: Optional[str] = None):
+    """Remove an account, having been told what to do with its transactions.
+
+    `transactions` is **required once the account holds any**, and that is the point of the parameter
+    rather than a validation detail: the disposition used to be implicit, and the implicit answer was
+    `delete` — so removing an account silently destroyed its history with nothing to restore from. An
+    account holding nothing needs no question, which is also why the parameter stays optional rather
+    than becoming mandatory for every caller.
+
+    `reassign` moves the rows, and every other reference that named this account, onto
+    `target_account_id` (`services/account_references.py`); `delete` removes them.
+
+    **Every answer here is permanent, and the protection is the path rather than an undo.** Once the
+    rows have moved, nothing distinguishes them from the ones already on the target, so unwinding would
+    need a per-row record of what moved — an unbounded one, which `scale-and-limits.md` rules out. An
+    account trash was tried and retired for the same reason: it could only defer the move, leaving the
+    dialog promising a reassignment the ledger went on contradicting until someone emptied it. So the
+    accident is prevented at the point of action instead — removal lives behind the row's ⋯ menu, not a
+    one-press ×.
+    """
     with get_db() as conn:
         acc = _get_account_row(conn, account_id)
         if not acc:
             raise HTTPException(status_code=404, detail="Account not found")
         if _get_child_count(conn, account_id) > 0:
-            raise HTTPException(status_code=400, detail="Ungroup or trash child accounts before deleting this account")
+            # Deliberately not offered as a disposition in the dialog: removing a group root means
+            # promoting one of its members in its place, which moves the group's dedupe scope and
+            # reverses the merge's duplicate promotions (see `restore_auto_merged_after_detach`). That
+            # is a separate decision about which account is the real one, not a question about where
+            # these transactions go. The message says what the children's own removal does, because the
+            # order of operations is otherwise only discoverable by trying it.
+            raise HTTPException(
+                status_code=400,
+                detail="Remove or ungroup the merged child accounts first. Removing a child offers this "
+                       "account as the place to keep its transactions.",
+            )
+        transaction_count = int(acc["transaction_count"] or 0)
+        disposition = (transactions or "").strip().lower() or None
+        if disposition is not None and disposition not in TRANSACTION_DISPOSITIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"transactions must be one of: {', '.join(TRANSACTION_DISPOSITIONS)}",
+            )
+        if disposition is None:
+            if transaction_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"This account holds {transaction_count} transaction(s); say what to do with "
+                           f"them ({' or '.join(TRANSACTION_DISPOSITIONS)}).",
+                )
+            disposition = "delete"
+
+        if disposition == "reassign":
+            target_id = (target_account_id or "").strip()
+            if not target_id:
+                raise HTTPException(status_code=400, detail="target_account_id is required to reassign")
+            if target_id == account_id:
+                raise HTTPException(status_code=400, detail="Pick a different account to reassign to")
+            target = _get_account_row(conn, target_id)
+            if not target:
+                raise HTTPException(status_code=404, detail="Target account not found")
+            if target["trashed_at"]:
+                raise HTTPException(status_code=400, detail="Target account is in the trash")
+            _reassign_account_and_delete(conn, account_id, target_id)
+            return {"ok": True, "reassigned": transaction_count, "target_account_id": target_id}
+
         _delete_account_and_import_history(conn, account_id)
-    return {"ok": True}
+    return {"ok": True, "deleted": transaction_count}

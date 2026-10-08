@@ -209,7 +209,7 @@ class SyncPeriodCardTests(unittest.TestCase):
         self.assertEqual(len(self._cards()), 1)
 
         with self._use_db_path():
-            accounts_module.delete_account("a1")
+            accounts_module.delete_account("a1", transactions="delete")
 
         self.assertEqual(self._cards(), [])
         with self._use_db_path(), get_db() as conn:
@@ -715,7 +715,7 @@ class SyncPeriodCardTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute("UPDATE txn SET account_id = 'a2' WHERE external_transaction_id = 't2'")
         with self._use_db_path():
-            accounts_module.delete_account("a2")
+            accounts_module.delete_account("a2", transactions="delete")
         card = self._cards()[0]
         chip = self._card_accounts()[(card["filename"], "Joint Checking ···1188")]
         self.assertEqual(chip["row_count"], 1)

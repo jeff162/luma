@@ -60,6 +60,6 @@ test('a dropped PayPal statement imports into the PayPal account chosen for it',
     batchId = card?.id
   } finally {
     if (batchId) await request.delete(`/api/import-export/batches/${batchId}?force=true`)
-    await request.delete(`/api/accounts/${paypal.id}`)
+    await request.delete(`/api/accounts/${paypal.id}?transactions=delete`)
   }
 })

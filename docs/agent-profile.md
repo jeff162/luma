@@ -653,6 +653,13 @@ for what the *user* can act on.
   asserting the *opposite* of what it claims. Wrap the flag with `mock.patch.dict(os.environ, ...)` in
   `setUp` and assert both directions where the behavior is supposed to be flag-independent.
 
+- **A shell `DATA_DIR` does not isolate an ad-hoc script.** Any entry point loads `.env` with
+  `override=True`, so the file beats the shell, and a "throwaway" `DATA_DIR=<scratch> python -c "from
+  backend import main ..."` lands on whatever the developer's `.env` names — once that was the
+  `testing/` databases a running dev server was using, and the probe turned sign-in on under it. Point
+  `LUMA_ENV_FILE` at a scratch file that sets `DATA_DIR` instead, and print the resolved paths before
+  writing anything.
+
 ## Where Durable Project State Belongs
 
 - Hidden memory is the wrong home for settled product behavior or backlog state. If a conclusion
