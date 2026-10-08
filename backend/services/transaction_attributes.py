@@ -134,6 +134,31 @@ ATTRIBUTES: tuple[Attribute, ...] = (
         description="Not yet settled — the amount or date may still change.",
         sql="t.is_pending = 1",
     ),
+    # Where the row came from. The first two entries here not drawn from the row's marker strip, which
+    # the vocabulary note above makes the rule — allowed because the words are still ones the interface
+    # uses about a row rather than new jargon: the detail panel's Origin block and the merchant hover
+    # card already say which file or connection a row arrived on. What they add is asking *across* rows,
+    # which those surfaces cannot do: "everything that came from a file, before 2015" is the shape of a
+    # cleanup, and until now the only way to express it was one import card at a time.
+    #
+    # `external_transaction_id` is the discriminator rather than the batch's `source_kind` because it is
+    # the provider's own id — definitionally present on a synced row (it is what makes a sync idempotent)
+    # and never written by the file importers. That keeps both predicates on `txn` with no join, and
+    # NULL-free as the note above requires. A synced row also carries an `import_batch_id` (its
+    # per-period sync card), which is why the file test excludes the provider id rather than merely
+    # asking for a batch.
+    Attribute(
+        key="from-connection",
+        label="From a connection",
+        description="Arrived through a data connection's sync rather than a file.",
+        sql="t.external_transaction_id IS NOT NULL",
+    ),
+    Attribute(
+        key="from-file",
+        label="Imported from a file",
+        description="Arrived in an imported file — a statement, an export, a marketplace order file.",
+        sql="t.external_transaction_id IS NULL AND t.import_batch_id IS NOT NULL",
+    ),
 )
 
 ATTRIBUTES_BY_KEY = {attribute.key: attribute for attribute in ATTRIBUTES}

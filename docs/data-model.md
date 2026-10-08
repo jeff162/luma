@@ -401,7 +401,7 @@ The facets above ask what a transaction is *filed under*. The attribute facet
 *is*: carries an attachment, belongs to a recurring series, has money owed back on it, has not been
 looked over yet. The vocabulary is deliberately **the row's own marker strip** plus the two states the
 ledger previously had dedicated toggles for, so that reading a row and filtering for it use one set of
-words.
+words — with the origin pair below the one deliberate departure from that rule.
 
 - **Labels name the distinction, not the mechanism's category.** `purchase` reads *Multi-payment
   purchase* rather than "part of a purchase", because nearly every debit is a purchase so that names
@@ -413,6 +413,20 @@ words.
   asking for either wants the pair side by side, and one row marker already stands for both. A refund pair
   shares the purchase's `🔗` on the row but keeps its own attribute, since "paid in several payments" and
   "money came back" are different questions.
+- **Where a row came from is the one pair not on the marker strip.** `from-connection` (*From a
+  connection*) and `from-file` (*Imported from a file*) are provenance rather than anything the row
+  draws, and they are here because the alternative was expressing a ledger-wide question one import card
+  at a time. The words are still the interface's own — the detail panel's Origin block and the merchant
+  hover card already say which file or connection a row arrived on — so reading and filtering stay in one
+  vocabulary; what the attributes add is asking *across* rows, which neither of those surfaces can do.
+  **The discriminator is `external_transaction_id`, not the batch's `source_kind`**: it is the provider's
+  own id, definitionally present on a synced row (it is what makes a sync idempotent) and never written
+  by a file importer, so both predicates stay on `txn` with no join and NULL-free. A synced row also
+  carries an `import_batch_id` — its per-period sync card — which is why the file predicate excludes the
+  provider id rather than merely asking for a batch. A hand-entered row matches neither, which is the
+  honest answer rather than a third bucket nobody asked for. Together with `date_end` these are what make
+  "everything imported from a file before 2015" a selection the bulk endpoint can resolve; see
+  `backend/tests/test_transaction_origin_attributes.py`, whose last case is that cleanup end to end.
 - **Keys are plain words** (`attachment`, `needs-review`), not the `__sentinel__` shape the category and
   tag facets use. That shape exists to avoid colliding with real ids in a namespace shared with uuids;
   this namespace holds nothing else. The same keys serve as the `?only=<key>` deep link.

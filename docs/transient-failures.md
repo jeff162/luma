@@ -201,6 +201,58 @@ the clock cannot disturb — with their `started_at`, `added`, `skipped` and `ac
 
 ---
 
+## 4. A merchant hover card blocks the context menu it shares a trigger with
+
+**Status: seen once, not instrumented, cause unproven.**
+
+**Last seen: 2026-10-08.**
+
+### Symptom
+
+`documents.spec.js` → *a stored document is named, attached from its transaction, moved back, and
+deleted* times out at 60s on
+
+```js
+await page.getByText('Lakeside Taverna', { exact: true }).first().click({ button: 'right' })
+await page.getByText('✎ Edit transaction…').click()
+```
+
+The menu item is found, visible, enabled and stable; every click attempt is refused with
+`<div role="tooltip">…</div> intercepts pointer events`, retried for the full timeout. Preserved output:
+`ui-all4.log` from the run that produced it (a `npm run ui:test:all`, which then skipped the 25 specs
+behind it).
+
+**Once in a full-lane run, and green in three consecutive runs of that spec alone** — and green in the
+gate's own `app` lane minutes earlier on the same tree, so it needs the lane's timing rather than the
+spec's own steps.
+
+### The mechanism is known; the cause is not
+
+The right-click target is a merchant cell, and hovering that same cell opens
+`MerchantOriginHoverCard` (`components/OriginFields.jsx`), which is deliberately **`interactive`** so the
+pointer can reach the links inside it. Interactive means it does not get out of the way: once it is up
+and overlapping the context menu, it takes the clicks aimed through it.
+
+What is unproven is why it is up *at that moment* in a full-lane run and not in an isolated one — whether
+the card simply had not dismissed yet, or whether it reopened because the right-click left the pointer
+resting on the trigger.
+
+### Worth noting before treating it as a test problem
+
+A person right-clicking a merchant is in exactly the same position as the test: pointer over the trigger,
+hover card open, menu beneath it. **If the card can cover its own trigger's menu for the test, it can do
+it for them**, and the fix would then be the card's (dismiss on `contextmenu`, or never cover the menu)
+rather than the spec's. Reaching for `force: true` in the spec would hide precisely the evidence for that.
+
+### What the next occurrence should capture
+
+Nothing is instrumented yet. The cheap next step, on the next red: read the retained trace
+(`trace: 'retain-on-failure'` is on for the non-lightweight runs) and check whether the hover card's
+element was present *before* the right-click or appeared after it — which separates "had not dismissed"
+from "reopened under the stationary pointer", and those have different fixes.
+
+---
+
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise
