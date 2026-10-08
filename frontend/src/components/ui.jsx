@@ -67,45 +67,66 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   const triggerRef = useRef(null)
   const tipRef = useRef(null)
   const [open, setOpen] = useState(false)
-  // Distinct from `open`: the hover has landed and the dwell timer is running, but nothing is shown yet.
-  // Tracked in state rather than a ref so the scroll effect below can observe it and arm itself.
-  const [pending, setPending] = useState(false)
   const [pos, setPos] = useState(null)
   // `{ content, width }` — the fitted width, keyed to the content it was measured for so a hint whose
   // text changes while open is measured again rather than squeezed into the old one's width.
   const [fit, setFit] = useState(null)
   const closeTimer = useRef(null)
   const openTimer = useRef(null)
-  useEffect(() => () => { clearTimeout(closeTimer.current); clearTimeout(openTimer.current) }, [])
+  // The live scroll/right-click dismissal while this tooltip is armed or showing, held as a ref so it
+  // can be attached the instant a hover lands — see `armDismissal`.
+  const dismissalRef = useRef(null)
+  useEffect(() => () => {
+    clearTimeout(closeTimer.current)
+    clearTimeout(openTimer.current)
+    disarmDismissal()
+  }, [])
 
-  // An open tooltip is positioned once, in fixed coordinates, against where its trigger was at the time.
-  // Scrolling moves the trigger but not the tooltip, so it would hang detached in mid-air until the
-  // pointer left. Close on any scroll instead, and cancel a pending open so a scroll that starts during
-  // the dwell never resolves into a hint. Capture phase because the scroll almost always happens in an
-  // ancestor container and scroll events don't bubble. Only listens while this tooltip is showing or
-  // armed, so the many idle tooltips in a list cost nothing.
-  //
-  // The same dismissal serves a right-click. A context menu opens at the pointer without the pointer
-  // moving, so no `mouseleave` ever fires and the hint stays up — and since this tooltip sits at the top
-  // of the app's stacking order (see `zIndex` below), it paints over the menu; an `interactive` hint also
-  // keeps pointer events, so the menu items it covers stop being clickable. Capture phase and window-wide
-  // because the menu may be opened from an ancestor of the trigger (transaction rows put the handler on
-  // the row, not the cell) or from somewhere else on the page entirely.
-  useEffect(() => {
-    if (!open && !pending) return undefined
-    function dismiss() {
+  /*
+   * An open tooltip is positioned once, in fixed coordinates, against where its trigger was at the time.
+   * Scrolling moves the trigger but not the tooltip, so it would hang detached in mid-air until the
+   * pointer left. Close on any scroll instead, and cancel a pending open so a scroll that starts during
+   * the dwell never resolves into a hint. Capture phase because the scroll almost always happens in an
+   * ancestor container and scroll events don't bubble. Attached only while this tooltip is armed or
+   * showing, so the many idle tooltips in a list cost nothing.
+   *
+   * The same dismissal serves a right-click. A context menu opens at the pointer without the pointer
+   * moving, so no `mouseleave` ever fires and the hint stays up — and since this tooltip sits at the top
+   * of the app's stacking order (see `zIndex` below), it paints over the menu; an `interactive` hint also
+   * keeps pointer events, so the menu items it covers stop being clickable. Capture phase and window-wide
+   * because the menu may be opened from an ancestor of the trigger (transaction rows put the handler on
+   * the row, not the cell) or from somewhere else on the page entirely.
+   *
+   * **This is armed imperatively from `show`, not by an effect keyed on `open`, and that is the whole
+   * difference between dismissing a right-click and missing it.** An effect cannot run until React has
+   * re-rendered, and the events race it: `mouseover` → `contextmenu` on a transaction row measures
+   * **2ms** end to end, so the listener that was going to cancel the dwell is still unattached when the
+   * right-click passes, and the card opens 300ms later over the menu it should have yielded to —
+   * `interactive`, so it then swallows the clicks aimed at the menu items beneath it. It presented as an
+   * intermittent Playwright failure (`transient-failures.md` entry 4) because whether React flushes
+   * inside those 2ms is a matter of load; a person right-clicking a merchant hits the same race, and
+   * loses it as reliably. Nothing here may be made to depend on a render having happened.
+   */
+  function armDismissal() {
+    if (dismissalRef.current) return
+    const dismiss = () => {
       clearTimeout(openTimer.current)
       clearTimeout(closeTimer.current)
-      setPending(false)
       setOpen(false)
+      disarmDismissal()
     }
+    dismissalRef.current = dismiss
     window.addEventListener('scroll', dismiss, true)
     window.addEventListener('contextmenu', dismiss, true)
-    return () => {
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('contextmenu', dismiss, true)
-    }
-  }, [open, pending])
+  }
+
+  function disarmDismissal() {
+    const dismiss = dismissalRef.current
+    if (!dismiss) return
+    dismissalRef.current = null
+    window.removeEventListener('scroll', dismiss, true)
+    window.removeEventListener('contextmenu', dismiss, true)
+  }
   // Position only once the tooltip is mounted, so its real measured size is known. A portaled DOM
   // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
   // fully inside the viewport: clamp horizontally to keep it on-screen, and flip above the trigger
@@ -134,21 +155,26 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   if (!content) return children
   function show() {
     clearTimeout(closeTimer.current)
+    // Before anything that can open, so a right-click arriving in the same frame as the hover is still
+    // caught (see armDismissal).
+    armDismissal()
     if (!openDelay) { setOpen(true); return }
     // Re-entering the same trigger while already open (e.g. crossing a child element) must not drop the
     // hint and re-serve the delay, so only an unopened tooltip arms the dwell timer.
     if (open) return
-    setPending(true)
-    openTimer.current = setTimeout(() => {
-      setPending(false)
-      setOpen(true)
-    }, openDelay)
+    openTimer.current = setTimeout(() => setOpen(true), openDelay)
   }
   function hide() {
     clearTimeout(openTimer.current)
-    setPending(false)
-    if (interactive) closeTimer.current = setTimeout(() => setOpen(false), 140)
-    else setOpen(false)
+    // The dismissal outlives an `interactive` hint's closing grace on purpose: the pointer crossing into
+    // the card keeps it open (the card's own `onMouseEnter` clears this timer), and it still has to get
+    // out of the way of a scroll or a menu while it is up.
+    if (interactive) {
+      closeTimer.current = setTimeout(() => { setOpen(false); disarmDismissal() }, 140)
+    } else {
+      setOpen(false)
+      disarmDismissal()
+    }
   }
   const borderColor = tone === 'warning'
     ? 'color-mix(in srgb, var(--danger) 55%, var(--border))'

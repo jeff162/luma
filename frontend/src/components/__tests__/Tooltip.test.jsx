@@ -92,6 +92,21 @@ describe('Tooltip scroll handling', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  // The dismissal has to be attached by the hover itself, not by the render the hover schedules: on a
+  // transaction row the right-click lands ~2ms after the pointer, with no commit in between. These two
+  // events are dispatched raw, outside `act`, so nothing is flushed between them — an effect-registered
+  // listener is not there yet at that point and the card opens over the menu it should have yielded to.
+  it('cancels a pending open when a right-click lands before React has re-rendered', () => {
+    vi.useFakeTimers()
+    const trigger = renderTooltip({ openDelay: ROW_HOVER_OPEN_DELAY_MS, interactive: true })
+
+    trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }))
+    trigger.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))
+    act(() => { vi.advanceTimersByTime(ROW_HOVER_OPEN_DELAY_MS * 2) })
+
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
   it('cancels a pending open when a scroll starts during the dwell', () => {
     vi.useFakeTimers()
     const trigger = renderTooltip({ openDelay: ROW_HOVER_OPEN_DELAY_MS })
