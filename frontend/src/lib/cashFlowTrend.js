@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { monthLabel } from './utils.js'
+import { periodAverage, seriesDateRange } from './periodAverage.js'
 import { monthsInRange, shiftMonth } from './trendBuckets.js'
 
 /*
@@ -71,9 +72,13 @@ export function buildCashFlowTrendSeries(rows, selectedYear) {
     }
   })
 
-  const avgNet = chartData.length
-    ? chartData.reduce((sum, r) => sum + r.net, 0) / chartData.length
-    : 0
+  // Per elapsed day rather than per drawn bucket, and `null` where the window is under a month — see
+  // `periodAverage.js`. The dates come from the rows in this window only, so the figure describes what
+  // is on screen; the months the loop filled in to keep the axis continuous carry none and are skipped.
+  const windowed = normalized.filter(r => months.includes(r.month))
+  const { firstDate, lastDate } = seriesDateRange(windowed)
+  const total = chartData.reduce((sum, r) => sum + r.net, 0)
+  const avgNet = periodAverage(total, firstDate, lastDate, 'month')
 
   return { yearOptions, effectiveYear, chartData, avgNet }
 }
@@ -104,7 +109,12 @@ export function buildCashFlowAnnualSeries(rows) {
       net: row && Number.isFinite(Number(row.net)) ? Number(row.net) : inflow - outflow,
     })
   }
-  const avgNet = chartData.length ? chartData.reduce((sum, r) => sum + r.net, 0) / chartData.length : 0
+  // The yearly figure had the worst version of the bucket-count defect: the loop above fills every year
+  // between the first and the last, so a year the ledger never reached and a part-finished current year
+  // both divided as whole years. See `periodAverage.js`.
+  const { firstDate, lastDate } = seriesDateRange(rows)
+  const total = chartData.reduce((sum, r) => sum + r.net, 0)
+  const avgNet = periodAverage(total, firstDate, lastDate, 'year')
   return { chartData, avgNet }
 }
 

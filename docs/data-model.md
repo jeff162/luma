@@ -1954,6 +1954,37 @@ A few behavior rules matter across the whole app:
 
 - **a group's total equals the sum of its category slices.** No single bucket can look wrong on its own when this breaks, which is why it is the invariant worth testing (`test_report_sign_filters.py`). It holds because a leaf's type always matches its group's, across creation, moves and retyping (see *Categories*)
 
+- **An average per month or per year divides by elapsed days, never by how many buckets were drawn,
+  and is withheld where the window does not cover a whole one of that unit.** Averaging a series of
+  month or year totals divides by the bucket count, which is wrong three ways at once: a partial bucket
+  at either end counts as whole (a ledger ending in March divides that year by twelve), a bucket
+  manufactured to keep the axis continuous counts as an observation, and even the full buckets are
+  uneven — February and July are not the same amount of time, so treating them as equal terms in a
+  *rate* is an error with no partial-period excuse. Days are the right atom because they are the finest
+  grain the data has: `txn.date` carries no time component. The span is the **first and last transaction
+  in the window**, inclusive, which is why `/summary/monthly-trend`, `/summary/monthly-cash-flow` and
+  `/summary/monthly-by-group` each return `first_date` / `last_date` beside their totals — a bucket key
+  cannot say when within itself the data starts, and on a yearly chart whose first year holds one
+  December transaction the key says "a year" where the truth is one month. Absence at either end
+  therefore shortens the span while a gap in the middle does not, which is the same rule answering both:
+  the empty months between two transactions did elapse. **The withholding half is not presentation.**
+  Four months of spending divided into a yearly rate is not a summary of what happened but a forecast
+  of what has not, and the app does not make one silently — so `periodAverage` returns null, and the
+  caller hides the figure *and any reference line drawn at it* rather than rendering a zero.
+  `frontend/src/lib/periodAverage.js` is the one implementation, and every stated rate and every
+  average **reference line** reads it: the cash-flow frame's per-year and per-month cards, the Trends
+  tab's "Total per month" and its per-group Avg/mo column, the annual-totals chart's line, and the
+  single-period trend's line and axis pill (per month, quarter or year, whichever grain is drawn).
+  **An unlabelled `Avg $X` line is not exempt just because it states no unit.** That was argued once
+  and is wrong: a plain mean of the bars breaks every January, when the current year is a two-week stub
+  drawn beside full years and the line whose whole job is "what a typical year looks like" is dragged
+  down by it, recovering only over the following twelve months. For full buckets the two agree, so the
+  rate is the same line everywhere it was already right. **The one genuine exception is same-span mode**
+  on the single-period trend, which keeps the mean of its buckets: those buckets are the user's own
+  window repeated — Jan 1 to Oct 7 in each year — so they are equal by construction and the newest is
+  full by definition of the span. Comparing like with like is the entire point of that mode, and a
+  day-rate would undo it
+
 - **every category rollup counts allocations, not transactions.** A split transaction contributes one row per `txn_split` part, carrying that part's category and amount, so the rules above apply *per allocation*: an excluded part leaves the totals while its siblings stay, and an income-typed part negates on its own terms. This is a property of the row source (see *Transaction splits* below), not of each query — a new category aggregation gets it by selecting from that source, and silently loses it by selecting from `txn` directly
 
 If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.

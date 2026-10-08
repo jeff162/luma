@@ -6,9 +6,10 @@ import {
   cashFlowTrendYearOptions,
 } from '../cashFlowTrend.js'
 
-// Rows as /summary/monthly-cash-flow emits them: both sides as positive magnitudes, net = in - out.
-function month(m, inflow, outflow) {
-  return { month: m, inflow, outflow, net: inflow - outflow }
+// Rows as /summary/monthly-cash-flow emits them: both sides as positive magnitudes, net = in - out,
+// and the real first/last transaction date in the bucket, which is what the average divides by.
+function month(m, inflow, outflow, { first = `${m}-01`, last = `${m}-28` } = {}) {
+  return { month: m, inflow, outflow, net: inflow - outflow, first_date: first, last_date: last }
 }
 
 const monthsFrom = (startYear, startMonth, count, fn = i => [1000 + i, 500 + i]) =>
@@ -120,21 +121,32 @@ describe('the window', () => {
 })
 
 describe('the average net', () => {
-  it('averages over the months on screen, empty ones included', () => {
-    // An empty month is a real month at zero net, so it pulls the average toward zero. Skipping it would
-    // report the average of the months that happened to have activity, which is a different figure.
+  it('counts the days of a month nothing happened in, because they elapsed', () => {
+    // February holds no rows and still belongs in the denominator: the average is over the span the
+    // chart covers, not over the months that happened to have activity.
     const series = buildCashFlowTrendSeries(
-      [month('2026-01', 300, 100), month('2026-03', 100, 300)], CASH_FLOW_TREND_LAST_12,
+      [month('2026-01', 400, 100), month('2026-03', 400, 100)], CASH_FLOW_TREND_LAST_12,
     )
 
     expect(keys(series)).toHaveLength(3)
-    expect(series.avgNet).toBeCloseTo(0)
+    // 2026-01-01 through 2026-03-28 inclusive is 87 days; the net is 600 over that span.
+    expect(series.avgNet).toBeCloseTo(600 / (87 / 30.436875), 6)
   })
 
-  it('is zero rather than NaN with nothing to average', () => {
+  it('divides by elapsed days rather than by the buckets drawn', () => {
+    // One bucket, but only nine days of it. Dividing by the bucket count would report the whole 900 as
+    // a month's worth; the real rate is more than three times that.
+    const series = buildCashFlowTrendSeries(
+      [month('2026-04', 1000, 100, { first: '2026-04-01', last: '2026-04-09' })], CASH_FLOW_TREND_LAST_12,
+    )
+    expect(series.avgNet).toBeNull()
+  })
+
+  it('has no average at all with nothing to average', () => {
+    // Not zero: an average of nothing is not a figure, and zero reads as one.
     const series = buildCashFlowTrendSeries([], CASH_FLOW_TREND_LAST_12)
     expect(series.chartData).toEqual([])
-    expect(series.avgNet).toBe(0)
+    expect(series.avgNet).toBeNull()
   })
 })
 
@@ -168,13 +180,17 @@ describe('malformed rows', () => {
 describe('the yearly series', () => {
   it('keeps the sign contract and draws a year with no rows as an empty year', () => {
     const { chartData, avgNet } = buildCashFlowAnnualSeries([
-      { year: '2023', inflow: 50000, outflow: 42000, net: 8000 },
-      { year: '2025', inflow: 60000, outflow: 64000, net: -4000 },
+      { year: '2023', inflow: 50000, outflow: 42000, net: 8000,
+        first_date: '2023-01-05', last_date: '2023-12-20' },
+      { year: '2025', inflow: 60000, outflow: 64000, net: -4000,
+        first_date: '2025-01-09', last_date: '2025-11-30' },
     ])
     expect(chartData.map(r => r.year)).toEqual(['2023', '2024', '2025'])
     expect(chartData[0]).toMatchObject({ inflow: 50000, outflow: -42000, outflowMagnitude: 42000, net: 8000 })
     expect(chartData[1]).toMatchObject({ inflow: 0, outflow: -0, net: 0 })
-    expect(avgNet).toBeCloseTo(4000 / 3)
+    // Three year buckets, but 2023-01-05 to 2025-11-30 is 1061 days — a little under three years. The
+    // old mean-of-buckets said 4000/3; the span is what divides now, and the gap year is inside it.
+    expect(avgNet).toBeCloseTo(4000 / (1061 / 365.2425), 6)
   })
 
   it('is empty with no rows', () => {

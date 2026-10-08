@@ -54,6 +54,7 @@ import PanningChartTooltip from '../components/PanningChartTooltip.jsx'
 import {
   trendPlotLayout, centeredScrollLeft, bucketAnchorMonth, bucketIndexAtScroll, trendScrollTargetIndex,
 } from '../lib/trendPlotLayout.js'
+import { periodAverage, seriesDateRange } from '../lib/periodAverage.js'
 import AvgPill from '../components/AvgPill.jsx'
 import { avgPillText, avgPillWidth } from '../lib/axisLabelPlacement.js'
 import AxisAvgPill from '../components/AxisAvgPill.jsx'
@@ -502,7 +503,7 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
                 />
               ))}
             </Bar>
-            {data.length > 1 && (
+            {data.length > 1 && avg != null && (
               <ReferenceLine
                 y={avg}
                 stroke="var(--accent2)"
@@ -1115,8 +1116,10 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, loa
       <Card>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Yearly trend</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
-          Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span>
-          {' · click a year to show its months below'}
+          {annual.avgNet == null ? null : (
+            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(annual.avgNet)}/yr</span>{' · '}</>
+          )}
+          {'click a year to show its months below'}
         </div>
         {annual.chartData.length === 0 ? (
           <EmptyState message="No cash flow for this selection" />
@@ -1136,8 +1139,10 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, loa
       <Card>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Monthly trend</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
-          Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>
-          {' · click a month to open a transaction report'}
+          {avgNet == null ? null : (
+            <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>{' · '}</>
+          )}
+          {'click a month to open a transaction report'}
         </div>
         {chartData.length === 0 ? (
           <EmptyState message="No cash flow for this selection" />
@@ -1202,8 +1207,10 @@ function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onS
           {data.map(d => <Cell key={d[xKey]} fillOpacity={dimmed(d) ? 0.25 : 0.65} />)}
         </Bar>
         <Line type="monotone" dataKey="net" name="Net" stroke="var(--accent)" strokeWidth={2} dot={false} />
-        <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
-          label={<AvgReferenceLabel value={avgNet} />} />
+        {avgNet == null ? null : (
+          <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
+            label={<AvgReferenceLabel value={avgNet} />} />
+        )}
       </ComposedChart>
     </ResponsiveContainer>
   )
@@ -1321,13 +1328,23 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
     return entry
   })
 
+  // Every per-month figure on this tab divides by the days the window covers, not by how many month
+  // buckets were drawn (`periodAverage.js`). The span is the window's — the first and last transaction
+  // anywhere in it — rather than each series' own, deliberately: a column of Avg/mo where one row
+  // divided by three months and the next by twelve would not be comparable down the column, and a group
+  // that bought nothing in a month did have that month. Months the axis filled in carry no dates and so
+  // cannot widen the span.
+  const monthsShown = new Set(allMonths)
+  const { firstDate: windowFirstDate, lastDate: windowLastDate } =
+    seriesDateRange(filteredRows.filter(r => monthsShown.has(r.month)))
+
   const avgBySeries = series.map(s => {
     const totals = allMonths.map(m => {
       const r = filteredRows.find(x => x.month === m && x.series_id === s.id)
       return r ? r.total : 0
     })
-    const avg = totals.reduce((a, b) => a + b, 0) / (totals.length || 1)
     const total = totals.reduce((a, b) => a + b, 0)
+    const avg = periodAverage(total, windowFirstDate, windowLastDate, 'month')
     return { ...s, avg, total }
   }).sort((a, b) => b.total - a.total)
 
@@ -1341,7 +1358,13 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
   const annualData = Object.entries(yearMap)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([year, total]) => ({ year, total }))
-  const annualAvg = annualData.reduce((s, r) => s + r.total, 0) / (annualData.length || 1)
+  // Per elapsed year, not per bar. A plain mean breaks every January: the current year is a two-week
+  // stub drawn beside full years, and the line whose job is "what a typical year looks like" is dragged
+  // down by it, recovering slowly over the next twelve months. For full years the two agree.
+  const { firstDate: annualFirstDate, lastDate: annualLastDate } = seriesDateRange(allViewRows)
+  const annualAvg = periodAverage(
+    annualData.reduce((s, r) => s + r.total, 0), annualFirstDate, annualLastDate, 'year',
+  )
 
   // Trailing-12-month run rate per month, computed over the *full* view series (not the year-filtered
   // view), so the line for the first on-screen month can reach back into prior, off-screen months. A
@@ -1365,7 +1388,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
       runRate,
     }
   })
-  const overallAvg = monthlyTotal.reduce((s, r) => s + r.total, 0) / (monthlyTotal.length || 1)
+  const overallAvg = periodAverage(
+    monthlyTotal.reduce((s, r) => s + r.total, 0), windowFirstDate, windowLastDate, 'month',
+  )
   const latestRunRate = [...monthlyTotal].reverse().find(r => r.runRate != null)?.runRate ?? null
 
   function handleMonthBarClick(d) {
@@ -1493,12 +1518,14 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
                   stroke={s.color} fill={s.color} fillOpacity={0.15}
                   strokeWidth={1.5} stackId="1" name={s.id} />
               ))}
-              <ReferenceLine
-                y={overallAvg}
-                stroke="var(--accent2)"
-                strokeDasharray="4 4"
-                label={<AvgReferenceLabel value={overallAvg} />}
-              />
+              {overallAvg == null ? null : (
+                <ReferenceLine
+                  y={overallAvg}
+                  stroke="var(--accent2)"
+                  strokeDasharray="4 4"
+                  label={<AvgReferenceLabel value={overallAvg} />}
+                />
+              )}
             </AreaChart>
           </ResponsiveContainer>
         )}
@@ -1510,7 +1537,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
             {latestRunRate != null
               ? <>12-mo run rate: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(latestRunRate)}/mo</span></>
-              : <>Avg: {formatSignedMoneyAmount(overallAvg)}/mo</>}
+              : overallAvg == null ? null : <>Avg: {formatSignedMoneyAmount(overallAvg)}/mo</>}
             {' · double-click a bar to open that month'}
           </div>
           {/* Fit the panel (no oversized horizontal scroll) so the tooltip's built-in edge-flip happens at
@@ -1614,7 +1641,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
           const sign = sortDir === 'asc' ? 1 : -1
           return [...avgBySeries].sort((a, b) => {
             if (sortKey === 'name') return sign * String(a.name || '').localeCompare(String(b.name || ''))
-            if (sortKey === 'avg') return sign * (a.avg - b.avg)
+            // `avg` is null where the window is under a month; sort those as zero rather than
+            // letting NaN comparisons shuffle the table into an arbitrary order.
+            if (sortKey === 'avg') return sign * ((a.avg ?? 0) - (b.avg ?? 0))
             return sign * (a.total - b.total)
           })
         })().map(s => {
@@ -1661,7 +1690,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, drillGroup, pick
                   >↗</button>
                 )}
               </div>
-              <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatSignedMoneyAmount(s.avg)}</span>
+              <span style={{ textAlign: 'right', fontWeight: 600 }}>
+                {s.avg == null ? '—' : formatSignedMoneyAmount(s.avg)}
+              </span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{formatSignedMoneyAmount(s.total)}</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{pct}%</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 14 }}>{drillsToCategories ? '›' : null}</span>
@@ -3173,16 +3204,32 @@ export default function Dashboard() {
                 )}
 
                 {level === 'groups' && (() => {
-                  const trendAvg = trend.length > 0
-                    ? trend.reduce((s, r) => s + (Number(r.total) || 0), 0) / trend.length
-                    : 0
+                  const trendTotal = trend.reduce((s, r) => s + (Number(r.total) || 0), 0)
+                  const trendBucketMean = trend.length > 0 ? trendTotal / trend.length : 0
+                  // Per elapsed time at the grain on screen, so a part-finished month, quarter or year
+                  // at the end sits below the line rather than pulling it down (see periodAverage.js).
+                  // **Same-span mode keeps the mean of its buckets**, and that is not an oversight: its
+                  // buckets are the user's own window repeated — Jan 1 to Oct 7 in each year — so they
+                  // are equal by construction and the newest is full by definition of the span.
+                  // Comparing like with like is the whole point of the mode, and a day-rate would undo
+                  // it. `trimEmptyTrendBuckets` already drops an oldest bucket reaching past the data.
+                  const trendSpan = trendIsSameSpan
+                    ? null
+                    : seriesDateRange(
+                      (singleTrendRows || []).filter(r => (
+                        r.month >= trend[0]?.bucketStart && r.month <= trend[trend.length - 1]?.bucketEnd
+                      )),
+                    )
+                  const trendAvg = trendIsSameSpan
+                    ? trendBucketMean
+                    : periodAverage(trendTotal, trendSpan?.firstDate, trendSpan?.lastDate, trendGrain)
                   // One exceptional period would otherwise own the whole axis and flatten every other
                   // bar against zero — a ledger produces those routinely (a house purchase, a tax
                   // settlement, a run of miscategorised transfers). The axis is bounded to what the
                   // ordinary bars can be read against and the outlier is drawn torn off at the frame
                   // with its real figure on it; `total` stays true everywhere it is read. Engages only
                   // when there genuinely is an outlier, so the usual chart is untouched.
-                  const trendClamp = computeClampedDomain(trend.map(r => r.total), { average: trendAvg })
+                  const trendClamp = computeClampedDomain(trend.map(r => r.total), { average: trendAvg ?? trendBucketMean })
                   const trendData = trend.map(r => {
                     const { plotted, clipped } = clampBarValue(r.total, trendClamp.bound)
                     return { ...r, plotted, __clipped: clipped, __clippedValue: r.total }
@@ -3301,7 +3348,7 @@ export default function Dashboard() {
                                 where it would pan out of view and stay out on a long timeline. It
                                 reads the same scale the ticks were drawn from, and steps aside from
                                 any tick label it would otherwise sit on. */}
-                            {trend.length > 1 && (
+                            {trend.length > 1 && trendAvg != null && (
                               <Customized component={
                                 <AxisAvgPill value={trendAvg} columnWidth={TREND_AXIS_COLUMN_WIDTH} />
                               } />
@@ -3378,7 +3425,7 @@ export default function Dashboard() {
                               </Bar>
                               {/* Unlabelled: the pill naming this line is in the sticky axis column,
                                 which is the only part of the chart that does not pan away. */}
-                              {trendData.length > 1 && (
+                              {trendData.length > 1 && trendAvg != null && (
                                 <ReferenceLine y={trendAvg} stroke="var(--accent2)" strokeDasharray="4 4" />
                               )}
                             </BarChart>

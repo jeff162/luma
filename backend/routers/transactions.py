@@ -2737,7 +2737,9 @@ def monthly_trend(
             SELECT
                 strftime('%Y-%m', t.date) AS month,
                 ({sign_factor} * SUM(t.amount)) AS total,
-                COUNT(DISTINCT t.id)      AS count
+                COUNT(DISTINCT t.id)      AS count,
+                MIN(t.date)               AS first_date,
+                MAX(t.date)               AS last_date
             FROM   {_expanded} t
             {join_sql}
             {where}
@@ -2910,12 +2912,16 @@ def monthly_cash_flow(
                 period,
                 SUM(CASE WHEN bucket_net < 0 THEN -bucket_net ELSE 0 END) AS inflow,
                 SUM(CASE WHEN bucket_net > 0 THEN  bucket_net ELSE 0 END) AS outflow,
-                -SUM(bucket_net)                                          AS net
+                -SUM(bucket_net)                                          AS net,
+                MIN(bucket_first) AS first_date,
+                MAX(bucket_last)  AS last_date
             FROM (
                 SELECT
                     {period_sql}  AS period,
                     {bucket_sql}  AS bucket,
-                    SUM(t.amount) AS bucket_net
+                    SUM(t.amount) AS bucket_net,
+                    MIN(t.date)   AS bucket_first,
+                    MAX(t.date)   AS bucket_last
                 FROM   {_expanded} t
                 LEFT JOIN category c ON c.id = t.category_id
                 LEFT JOIN category p ON p.id = c.parent_id
@@ -2929,7 +2935,8 @@ def monthly_cash_flow(
         ).fetchall()
 
     return [
-        {granularity: r["period"], "inflow": r["inflow"], "outflow": r["outflow"], "net": r["net"]}
+        {granularity: r["period"], "inflow": r["inflow"], "outflow": r["outflow"], "net": r["net"],
+         "first_date": r["first_date"], "last_date": r["last_date"]}
         for r in rows
     ]
 
@@ -3016,7 +3023,9 @@ def monthly_by_group(
                 {select_name},
                 {select_col},
                 {select_type},
-                {select_total}
+                {select_total},
+                MIN(t.date) AS first_date,
+                MAX(t.date) AS last_date
             FROM   {_expanded} t
             {join}
             {where}
