@@ -21,11 +21,13 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import ProfileCreate, ProfileUpdate, create_profile, list_profiles, update_profile
 from backend.routers.import_export.core import run_import_core
 from backend.routers.import_export.profiles import get_profile_compatible_batches
-from backend.routers.import_export.profiles import MAX_TERMINAL_WINDOW_DAYS
+from backend.routers.import_export.profiles import MAX_TERMINAL_WINDOW_DAYS, ProfileNewAccount
 from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS
 
 
@@ -278,3 +280,89 @@ class CompatibleBatchesTests(unittest.TestCase):
             batch_id, [b["id"] for b in report["batches"]],
             "a source that does not categorize must not claim a file that was imported categorized",
         )
+
+
+class NewAccountOnSaveTests(unittest.TestCase):
+    """The data source editor's "Create new account…": the account is created with the source.
+
+    The import screen's version instead stores `single_account_new` and creates the account at the next
+    import, which a watched folder refuses to act on — so the editor creates it on save.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "new-account.db"
+        init_db(str(self.db_path))
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _accounts_named(self, name: str) -> list:
+        with get_db(str(self.db_path)) as conn:
+            return conn.execute("SELECT id, type, provider FROM account WHERE name = ?", (name,)).fetchall()
+
+    def _profile_account_id(self, profile_id: str):
+        with self._use_db_path():
+            return {p["id"]: p for p in list_profiles()}[profile_id]["account_id"]
+
+    def test_creating_a_source_with_a_new_account_points_it_at_that_account(self):
+        with self._use_db_path():
+            pid = create_profile(ProfileCreate(
+                name="Riverstone Card", column_map={},
+                new_account=ProfileNewAccount(name="Riverstone Card", type="credit"),
+            ))["id"]
+        [account] = self._accounts_named("Riverstone Card")
+        self.assertEqual((account["type"], account["provider"]), ("credit", "csv"))
+        self.assertEqual(self._profile_account_id(pid), account["id"])
+
+    def test_an_edit_can_create_the_account_too(self):
+        with self._use_db_path():
+            pid = create_profile(ProfileCreate(name="Northgate", column_map={}))["id"]
+            update_profile(pid, ProfileUpdate(new_account=ProfileNewAccount(name="Northgate Savings")))
+        [account] = self._accounts_named("Northgate Savings")
+        self.assertEqual(self._profile_account_id(pid), account["id"])
+
+    def test_a_name_already_in_use_is_refused_and_nothing_is_saved(self):
+        # The editor shows the same refusal before saving; this is the backstop. The import path's
+        # find-or-create would instead point the source at an account the user did not pick.
+        with self._use_db_path():
+            create_profile(ProfileCreate(
+                name="First", column_map={}, new_account=ProfileNewAccount(name="Harborline Checking"),
+            ))
+            with self.assertRaises(HTTPException):
+                create_profile(ProfileCreate(
+                    name="Second", column_map={}, new_account=ProfileNewAccount(name="harborline checking"),
+                ))
+            names = [p["name"] for p in list_profiles()]
+        self.assertEqual(names, ["First"])
+        self.assertEqual(len(self._accounts_named("Harborline Checking")), 1)
+
+    def test_an_import_asked_to_create_an_account_that_exists_uses_it(self):
+        # `single_account_new` naming an existing account resolves to that account. This path used to
+        # read a variable only the create branch assigned, and failed the whole import.
+        with self._use_db_path():
+            create_profile(ProfileCreate(
+                name="Seed", column_map={}, new_account=ProfileNewAccount(name="Harborline Checking"),
+            ))
+            run_import_core(
+                "Date,Description,Amount\n2026-06-02,Corner Market,-18.40\n",
+                {
+                    "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+                    "single_account_new": {"name": "Harborline Checking", "type": "depository"},
+                    "date_format": "%Y-%m-%d",
+                    "amount_convention": "single_signed",
+                },
+                filename="june.csv",
+            )
+        [account] = self._accounts_named("Harborline Checking")
+        with get_db(str(self.db_path)) as conn:
+            landed = conn.execute("SELECT account_id FROM txn").fetchall()
+        self.assertEqual([row["account_id"] for row in landed], [account["id"]])

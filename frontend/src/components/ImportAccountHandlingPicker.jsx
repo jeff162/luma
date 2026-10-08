@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAnchoredPopupLayout, useDismissiblePopup } from '../lib/uiInteractions.js'
 import { getAccountOptionLabel, selectableAccountOptions } from '../lib/importExport/importAccountMatching.js'
+import ImportNewAccountFields from './ImportNewAccountFields.jsx'
 
 // Account mapping is one user decision expressed three different ways: use a
 // CSV column, force every imported row into one existing account, or create one
 // new account for the whole file. Keeping those modes in one picker makes the
-// tradeoff explicit and prevents separate controls from drifting out of sync.
+// tradeoff explicit and prevents separate controls from drifting out of sync. The new account's name
+// and type are edited right under the picker, for the same reason.
 export default function ImportAccountHandlingPicker({
   headers,
   allHeaders = headers,
@@ -20,10 +22,17 @@ export default function ImportAccountHandlingPicker({
   onAcceptSuggestedColumn = null,
   isRequired,
   hint,
-  allowCreateNew = true,
   onChange,
+  onNewAccountChange,
 }) {
   const [open, setOpen] = useState(false)
+  // Choosing "Create new account…" moves the cursor into the name field, so the choice visibly did
+  // something. Counted rather than flagged so choosing it again re-focuses.
+  const [newNameFocusRequest, setNewNameFocusRequest] = useState(0)
+  const newNameInputRef = useRef(null)
+  useEffect(() => {
+    if (newNameFocusRequest) newNameInputRef.current?.focus()
+  }, [newNameFocusRequest])
   const wrapRef = useRef(null)
   const listRef = useRef(null)
   const { openUp } = useDismissiblePopup({
@@ -250,24 +259,31 @@ export default function ImportAccountHandlingPicker({
                   {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
                 </div>
               ))}
-              {allowCreateNew ? (
-                <div
-                  style={itemStyle(!!singleAccountNew?.enabled)}
-                  onMouseDown={e => {
-                    e.preventDefault()
-                    onChange({ acct: '', createNew: true })
-                    setOpen(false)
-                  }}
-                >
-                  <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
-                  <span style={{ flex: 1 }}>Create new account…</span>
-                  {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                </div>
-              ) : null}
+              <div
+                style={itemStyle(!!singleAccountNew?.enabled)}
+                onMouseDown={e => {
+                  e.preventDefault()
+                  onChange({ acct: '', createNew: true })
+                  setOpen(false)
+                  setNewNameFocusRequest(n => n + 1)
+                }}
+              >
+                <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
+                <span style={{ flex: 1 }}>Create new account…</span>
+                {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+              </div>
             </>
           </div>
         )}
       </div>
+      {!colAccount && singleAccountNew?.enabled ? (
+        <ImportNewAccountFields
+          value={singleAccountNew}
+          accounts={accounts}
+          onChange={onNewAccountChange}
+          inputRef={newNameInputRef}
+        />
+      ) : null}
     </div>
   )
 }

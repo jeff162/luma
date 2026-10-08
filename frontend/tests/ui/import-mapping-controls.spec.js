@@ -377,6 +377,54 @@ test('a template suggestion stays a suggestion, and the editor will not save unt
   }
 })
 
+test('the data source editor can create its account, and saving keeps what imports remembered', async ({ page, request }) => {
+  const profileName = uniqueDataSourceName('PW new account source')
+  const accountName = uniqueDataSourceName('PW Harborline')
+  // What an earlier import wrote back into the source: the editor shows none of it, and must not drop it.
+  const accountAssignments = { 'Old Card': 'acct-from-an-earlier-import' }
+  const profileId = await createImportProfile(request, {
+    name: profileName,
+    columnMap: {
+      date: 'Date',
+      amount: 'Amount',
+      description: 'Description',
+      notes: 'Notes',
+      account_assignments: accountAssignments,
+    },
+  })
+
+  try {
+    await page.goto('/import-export')
+    await page.getByRole('button', { name: 'Manage sources' }).click()
+    await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
+
+    await page.getByText('— Select account or column —').click()
+    await page.getByText('Create new account…').click()
+    const saveButton = page.getByRole('button', { name: 'Save changes' })
+    await expect(saveButton).toBeDisabled()
+    const newAccountName = page.locator('input[name="single-new-account-name"]')
+    await expect(newAccountName).toBeFocused()
+    await newAccountName.fill(accountName)
+    await saveButton.click()
+    await expect(page.getByText(`Edit: ${profileName}`)).toHaveCount(0)
+
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    const created = accounts.find(account => account.name === accountName)
+    expect(created, 'saving the source creates the account').toBeTruthy()
+    const profiles = await (await request.get('/api/import-export/profiles')).json()
+    const saved = profiles.find(profile => profile.id === profileId)
+    expect(saved.account_id).toBe(created.id)
+    expect(saved.column_map.account_assignments).toEqual(accountAssignments)
+  } finally {
+    await deleteImportProfile(request, profileId)
+    // The last spec here relies on the tenant holding no accounts.
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    for (const account of accounts.filter(a => a.name === accountName)) {
+      await request.delete(`/api/accounts/${account.id}`)
+    }
+  }
+})
+
 test('deleting a data source from the manager updates the import page list immediately', async ({ page, request }) => {
   const profileName = uniqueDataSourceName('PW delete source')
   const profileId = await createImportProfile(request, { name: profileName })

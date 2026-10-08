@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.routers.accounts import resolve_default_owner_id
 from backend.json_utils import safe_json_dict
 from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS, MIN_TERMINAL_WINDOW_DAYS
 
@@ -32,10 +33,16 @@ from .core import (
     _annotate_imported_category_settings,
     _get_imported_category_settings,
     _store_imported_category_settings,
+    insert_csv_account,
     save_batch_snapshot,
 )
 
 router = APIRouter()
+
+
+class ProfileNewAccount(BaseModel):
+    name: str
+    type: str = "depository"
 
 
 class ProfileCreate(BaseModel):
@@ -46,6 +53,7 @@ class ProfileCreate(BaseModel):
     template_file_hash:   Optional[str] = None
     column_map:           dict
     account_id:           Optional[str] = None
+    new_account:          Optional[ProfileNewAccount] = None
     date_format:          str = "%m/%d/%Y"
     amount_convention:    str = "single_signed"
     skip_rows:            int = 0
@@ -66,6 +74,7 @@ class ProfileUpdate(BaseModel):
     template_file_hash:   Optional[str] = None
     column_map:           Optional[dict] = None
     account_id:           Optional[str] = None
+    new_account:          Optional[ProfileNewAccount] = None
     date_format:          Optional[str] = None
     amount_convention:    Optional[str] = None
     skip_rows:            Optional[int] = None
@@ -288,11 +297,28 @@ def list_profiles():
     return result
 
 
+def _create_profile_account(conn, new_account: ProfileNewAccount) -> str:
+    # The data source editor's "Create new account…": the account is made with the source, in the same
+    # transaction, so the source names a real account from the start (a watched folder cannot act on
+    # one that only says "create this at the next import"). Unlike the import path's find-or-create,
+    # an existing name is refused — the editor asks the user to pick that account instead.
+    name = new_account.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Enter a name for the new account.")
+    if conn.execute(
+        "SELECT 1 FROM account WHERE LOWER(name) = LOWER(?) AND trashed_at IS NULL", (name,)
+    ).fetchone():
+        raise HTTPException(status_code=400, detail=f'An account named "{name}" already exists. Select it instead.')
+    account_type = (new_account.type or "depository").strip() or "depository"
+    return insert_csv_account(conn, name, account_type, resolve_default_owner_id(conn, None))
+
+
 @router.post("/profiles")
 def create_profile(body: ProfileCreate):
     pid = str(uuid.uuid4())
     with get_db() as conn:
         normalized_name = _assert_profile_name_available(conn, body.name)
+        account_id = _create_profile_account(conn, body.new_account) if body.new_account else body.account_id
         column_map = _store_imported_category_settings(
             body.column_map,
             {
@@ -311,7 +337,7 @@ def create_profile(body: ProfileCreate):
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (pid, normalized_name, body.filename_pattern, body.header_fingerprint,
               body.template_filename, body.template_file_hash,
-              json.dumps(column_map), body.account_id, body.date_format,
+              json.dumps(column_map), account_id, body.date_format,
               body.amount_convention, body.skip_rows,
               1 if body.apply_categorization else 0,
               1 if body.enrich_from_source else 0,
@@ -335,7 +361,8 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         if body.header_fingerprint   is not None: fields.append("header_fingerprint = ?");   params.append(body.header_fingerprint)
         if body.template_filename    is not None: fields.append("template_filename = ?");    params.append(body.template_filename)
         if body.template_file_hash   is not None: fields.append("template_file_hash = ?");   params.append(body.template_file_hash)
-        if body.account_id           is not None: fields.append("account_id = ?");           params.append(body.account_id)
+        if body.new_account          is not None: fields.append("account_id = ?");           params.append(_create_profile_account(conn, body.new_account))
+        elif body.account_id         is not None: fields.append("account_id = ?");           params.append(body.account_id)
         if body.date_format          is not None: fields.append("date_format = ?");          params.append(body.date_format)
         if body.amount_convention    is not None: fields.append("amount_convention = ?");    params.append(body.amount_convention)
         if body.skip_rows            is not None: fields.append("skip_rows = ?");            params.append(body.skip_rows)

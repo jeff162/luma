@@ -15,6 +15,7 @@ import {
 } from '../lib/importColumnInference.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatTimestamp } from '../lib/utils.js'
+import { findExactAccountNameMatch } from '../lib/importExport/importAccountMatching.js'
 import {
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
   IMPORT_CATEGORY_USAGE_MODE_ALL,
@@ -60,6 +61,34 @@ function clampSourceLagDays(value) {
 }
 
 const ADD_PANEL_WIDTH = 900
+
+// The column_map keys this form edits. Everything else in a saved column_map — the per-value account
+// map an import writes back (`account_assignments` / `account_skips` / `account_new`), category
+// assignments, imported-category settings — belongs to other flows and must survive an edit here.
+// `single_account_new` is listed because the form resolves it: to the existing account of that name,
+// or to an account created on save.
+const FORM_OWNED_COLUMN_MAP_KEYS = [
+  'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency',
+  'category', 'notes', 'account', 'evidence_columns', 'single_account_new',
+]
+
+const NO_NEW_ACCOUNT = { enabled: false, name: '', type: 'depository' }
+
+// A source saved from the import screen may say "create this account at the next import" instead of
+// naming one. Once that account exists (every import after the first), the source means it; otherwise
+// the form carries the request into its own create-on-save editor.
+function resolveInitialAccount(profile, accounts) {
+  const pending = profile?.column_map?.single_account_new
+  if (profile?.account_id || !pending?.name) {
+    return { accountId: profile?.account_id || '', newAccount: NO_NEW_ACCOUNT }
+  }
+  const existing = findExactAccountNameMatch(accounts, pending.name)
+  if (existing) return { accountId: existing.id, newAccount: NO_NEW_ACCOUNT }
+  return {
+    accountId: '',
+    newAccount: { enabled: true, name: pending.name, type: pending.type || 'depository' },
+  }
+}
 
 function getBlankSuggestedColumns() {
   return {
@@ -124,7 +153,9 @@ function ProfileForm({
   const [headerFp, setHeaderFp] = useState(profile?.header_fingerprint || '')
   const [templateFileName, setTemplateFileName] = useState(profile?.template_filename || '')
   const [templateFileHash, setTemplateFileHash] = useState(profile?.template_file_hash || '')
-  const [accountId, setAccountId] = useState(profile?.account_id || '')
+  const [initialAccount] = useState(() => resolveInitialAccount(profile, accounts))
+  const [accountId, setAccountId] = useState(initialAccount.accountId)
+  const [newAccount, setNewAccount] = useState(initialAccount.newAccount)
   const [dateFormat, setDateFormat] = useState(profile?.date_format || DEFAULT_IMPORT_DATE_FORMAT)
   const [amtConv, setAmtConv] = useState(profile?.amount_convention || 'single_signed')
   const [skipRows] = useState(profile?.skip_rows ?? 0)
@@ -188,14 +219,16 @@ function ProfileForm({
     const base = evidenceColumns == null ? defaultEvidenceColumns(evidenceColumnOptions) : evidenceColumns
     return base.filter(header => optionHeaders.has(header))
   }, [evidenceColumns, evidenceColumnOptions])
+  const newAccountReady = newAccount.enabled && !!newAccount.name.trim() &&
+    !findExactAccountNameMatch(accounts, newAccount.name)
   const canSave = !!(
     name.trim() &&
     colDate.trim() &&
     colDesc.trim() &&
     (amtConv === 'two_column' ? colDebit.trim() && colCredit.trim() : colAmount.trim()) &&
-    (colAccount.trim() || accountId)
+    (colAccount.trim() || accountId || newAccountReady)
   )
-  const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId
+  const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !newAccount.enabled
     ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
     : ''
   const savedTemplateHeaders = formatTemplateHeaderList(profile?.header_fingerprint)
@@ -290,8 +323,10 @@ function ProfileForm({
 
   function handleSave() {
     if (!canSave) return
-    const existingImportedCategorySettings = profile?.column_map?.imported_category_settings
+    const preservedColumnMap = { ...cm }
+    for (const key of FORM_OWNED_COLUMN_MAP_KEYS) delete preservedColumnMap[key]
     const column_map = {
+      ...preservedColumnMap,
       date: colDate,
       description: colDesc,
       ...(amtConv === 'two_column'
@@ -308,8 +343,8 @@ function ProfileForm({
       ...(samplePreview
         ? { evidence_columns: resolvedEvidenceColumns }
         : (Array.isArray(cm.evidence_columns) ? { evidence_columns: cm.evidence_columns } : {})),
-      ...(existingImportedCategorySettings ? { imported_category_settings: existingImportedCategorySettings } : {}),
     }
+    const creatingAccount = !colAccount && newAccount.enabled
     onSave(
       {
         name: name.trim(),
@@ -317,7 +352,9 @@ function ProfileForm({
         header_fingerprint: headerFp.trim() || null,
         template_filename: templateFileName.trim() || null,
         template_file_hash: templateFileHash.trim() || null,
-        column_map, account_id: accountId || null,
+        column_map,
+        account_id: creatingAccount ? null : (accountId || null),
+        new_account: creatingAccount ? { name: newAccount.name.trim(), type: newAccount.type } : null,
         date_format: dateFormat, amount_convention: amtConv,
         skip_rows: parseInt(skipRows) || 0,
         apply_categorization: applyCat,
@@ -737,27 +774,30 @@ function ProfileForm({
           accounts,
           colAccount,
           accountId,
-          singleAccountNew: { enabled: false, name: '', type: 'depository' },
+          singleAccountNew: newAccount,
           suggestedColumn: mappingSuggestions.account,
           onAcceptSuggestedColumn: nextValue => {
             clearMappingSuggestion('account')
             setColAccount(nextValue)
             setAccountId('')
+            setNewAccount(NO_NEW_ACCOUNT)
           },
-          isRequired: !colAccount && !accountId,
+          isRequired: !colAccount && !accountId && !newAccount.enabled,
           hint: accountSelectHint,
-          allowCreateNew: false,
-          onChange: ({ col, acct }) => {
+          onChange: ({ col, acct, createNew }) => {
             if (col !== undefined) {
               if (col) clearMappingSuggestion('account')
               setColAccount(col || '')
               setAccountId('')
+              setNewAccount(NO_NEW_ACCOUNT)
             } else {
-              if (acct) clearMappingSuggestion('account')
+              if (acct || createNew) clearMappingSuggestion('account')
               setColAccount('')
               setAccountId(acct || '')
+              setNewAccount(createNew ? { ...NO_NEW_ACCOUNT, enabled: true } : NO_NEW_ACCOUNT)
             }
           },
+          onNewAccountChange: setNewAccount,
         }}
       />
 

@@ -1373,7 +1373,10 @@ imported, when
   maps to an account in the trash;
 - the source's map carries an `account_new` entry for a value present in the file, which is a standing
   instruction to create an account;
-- the source has no account column and no `account_id`, or would create its single account;
+- the source has no account column and no `account_id`, or would create its single account (only a source
+  saved from the import screen can be in that state: the data source editor resolves the request on save,
+  to the existing account of that name or by creating the account there and then — `new_account` on the
+  profile endpoints);
 - the source's `header_fingerprint` disagrees with the file's, meaning the columns are not the ones this
   source is set up for;
 - **the source has no completed batch yet.** A source imports unattended only once one file has been

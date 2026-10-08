@@ -96,8 +96,8 @@ export default function ImportColumnMappingSection({
           onAcceptSuggestedColumn={accountField.onAcceptSuggestedColumn}
           isRequired={accountField.isRequired}
           hint={accountField.hint}
-          allowCreateNew={accountField.allowCreateNew}
           onChange={accountField.onChange}
+          onNewAccountChange={accountField.onNewAccountChange}
         />
       ) : null}
     </ImportMappingFieldGrid>

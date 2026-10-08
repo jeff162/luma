@@ -770,7 +770,15 @@ def _normalize_account_type(value: Optional[str]) -> str:
     return str(value or "").strip().lower()
 
 
-
+def insert_csv_account(conn, name: str, account_type: str, owner_id: Optional[str]) -> str:
+    """Create a file-import account (`provider='csv'`) and return its id. Callers own name checks."""
+    account_id = str(uuid.uuid4())
+    conn.execute("""
+        INSERT INTO account
+          (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
+        VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
+    """, (account_id, f"csv_{account_id}", name, name, account_type, "checking", owner_id))
+    return account_id
 
 def _owners_are_group_compatible(source_owner_id: Optional[str], target_owner_id: Optional[str]) -> bool:
     source_owner = str(source_owner_id or "").strip()
@@ -3090,17 +3098,10 @@ def run_import_parsed(
                 existing = conn.execute(
                     "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (single_name,)
                 ).fetchone()
-                if existing:
-                    created_account_ids["__single_account__"] = existing["id"]
-                else:
-                    new_acc_id = str(uuid.uuid4())
-                    conn.execute("""
-                        INSERT INTO account
-                          (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
-                        VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
-            """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_name, single_type, "checking",
-                  default_owner_id))
-            created_account_ids["__single_account__"] = new_acc_id
+                created_account_ids["__single_account__"] = (
+                    existing["id"] if existing
+                    else insert_csv_account(conn, single_name, single_type, default_owner_id)
+                )
         # What the user ruled out by giving a CSV account value its own new account: every existing
         # account the mapping row offered as a possible match. Recorded after the loop so every account
         # named in them exists. The user compared the account names and said they are different accounts;
@@ -3137,13 +3138,7 @@ def run_import_parsed(
                     (existing["id"], declined) for declined in declined_match_ids if declined != existing["id"]
                 )
                 continue
-            new_acc_id = str(uuid.uuid4())
-            conn.execute("""
-                INSERT INTO account
-                  (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
-                VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
-            """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
-                  default_owner_id))
+            new_acc_id = insert_csv_account(conn, acc_name, acc_type, default_owner_id)
             created_account_ids[csv_val] = new_acc_id
             declined_matches.extend(
                 (new_acc_id, declined) for declined in declined_match_ids if declined != new_acc_id

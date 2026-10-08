@@ -555,8 +555,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   // keeps a stable identity — otherwise its load effect re-fires on every parent render, which the manager
   // triggers by calling back here, and the two ping-pong into an infinite accounts/batches/profiles
   // refetch loop. setState functions are stable, so `[]` deps are correct.
-  const handleManagerDataChange = useCallback(({ profiles: nextProfiles, batches: nextBatches } = {}) => {
+  const handleManagerDataChange = useCallback(({ profiles: nextProfiles, accounts: nextAccounts, batches: nextBatches } = {}) => {
     if (Array.isArray(nextProfiles)) setProfiles(nextProfiles)
+    // Saving a data source can create its account, and the source is applied here right afterwards.
+    if (Array.isArray(nextAccounts)) setAccounts(nextAccounts)
     if (Array.isArray(nextBatches)) setBatches(nextBatches)
   }, [])
 
@@ -3885,6 +3887,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                       : { enabled: false, name: '', type: 'depository' })
                   }
                 },
+                onNewAccountChange: setSingleAccountNew,
               }}
             />
             <ImportEvidenceColumnsSection
@@ -3893,48 +3896,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
               forced={forcedEvidenceCols}
               onChange={setEvidenceColumns}
             />
-            {!colAccount && singleAccountNew.enabled && (
-              <div style={{
-                marginTop: -7, marginBottom: 14, marginLeft: 42, padding: '8px 10px',
-                background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
-                border: '1px solid color-mix(in srgb, var(--border) 55%, transparent)', borderRadius: 999,
-                display: 'inline-flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
-                maxWidth: '100%',
-                boxShadow: '0 1px 1px rgba(0,0,0,0.04)',
-              }}>
-                <input
-                  name="single-new-account-name"
-                  value={singleAccountNew.name}
-                  onChange={e => setSingleAccountNew(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="New account name"
-                  style={{
-                    width: 200, maxWidth: '100%', background: 'var(--surface)', color: 'var(--text)',
-                    border: `1px solid ${accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) ? 'var(--danger)' : 'var(--accent)'}`,
-                    borderRadius: 999, padding: '4px 8px', fontSize: 12, outline: 'none',
-                  }}
-                />
-                <select
-                  name="single-new-account-type"
-                  value={singleAccountNew.type}
-                  onChange={e => setSingleAccountNew(prev => ({ ...prev, type: e.target.value }))}
-                  style={{
-                    width: 96,
-                    background: 'var(--surface)', color: 'var(--text)',
-                    border: '1px solid var(--border)', borderRadius: 999,
-                    padding: '4px 8px', fontSize: 11,
-                  }}
-                >
-                  {GENERIC_IMPORT_ACCOUNT_TYPES.map(option => (
-                    <option key={option.value} value={option.value}>{option.shortLabel}</option>
-                  ))}
-                </select>
-                {accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) && (
-                  <div style={{ width: '100%', fontSize: 11, color: 'var(--danger)' }}>
-                    Account name already exists. Select it from the list instead.
-                  </div>
-                )}
-              </div>
-            )}
 
           </Card>
 
