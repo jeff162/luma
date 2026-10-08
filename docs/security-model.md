@@ -271,6 +271,17 @@ Left out, each for a reason:
 **Accepted cost: anyone who knows a username can keep that account's password sign-in paused.** That is
 the price of keying by account, and a registered passkey is the way around it.
 
+**A lost sign-in is recovered from the files, with no other credential.** `--reset-password`
+(`backend/account_recovery.py`) sets a password from a console and never serves. Asking for nothing more
+is correct rather than lax: sign-in is a perimeter around data the files hold in the clear, so whoever can
+run it against the databases can already read the ledger, and it grants nothing they lacked. It clears
+everything else that could keep the account out — the second factor and its recovery codes, a disabled
+status, a member role that cannot reach the settings — and ends the account's sessions, in one
+transaction (`control_database.restore_admin_access`). **The vault is the boundary it does not cross**:
+a slot opens only with its own secret, so the reset reaches the perimeter and nothing behind it. Nor can
+it reach a running server's memory, where an attempt-limiter pause lives — that still runs out, or ends
+with a restart.
+
 ## Passkeys and the second factor
 
 **A passkey signs in, and it also stands in for the authenticator code.** The ceremony runs with user

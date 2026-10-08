@@ -448,3 +448,42 @@ def test_the_watch_is_declared_rather_than_inferred():
     finally:
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_reset_password_runs_the_recovery_tool_instead_of_starting_a_server():
+    """Without a console the launcher would send the prompts to a log, and past the recovery check it
+    would bind a port; `--reset-password` has to stop before either."""
+    with mock.patch.object(desktop.account_recovery, "run", return_value=0) as recover, \
+         mock.patch.object(desktop, "_has_console", return_value=False), \
+         mock.patch.object(desktop, "_redirect_output_to_log") as redirect, \
+         mock.patch.object(desktop, "_GracefulServer") as server_class:
+        assert desktop.main(["--reset-password"]) == 0
+        assert desktop.main(["--reset-password", "Admin"]) == 0
+
+    assert [call.args for call in recover.call_args_list] == [(None,), ("Admin",)]
+    assert redirect.call_count == 0 and server_class.call_count == 0
+
+
+def test_the_launcher_reads_database_locations_from_the_env_file():
+    """The database modules read their paths once, at first import, so the launcher has to load `.env`
+    before anything reaches them. It once imported `app_config` first, and a portable copy's `DATA_DIR`
+    was silently ignored. A fresh interpreter, because in this one the modules are long since imported.
+    The shell's `DATA_DIR` names a decoy, so a regression lands there rather than on a real database."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target, decoy = Path(tmp) / "from-env-file", Path(tmp) / "from-shell"
+        env_file = Path(tmp) / "test.env"
+        env_file.write_text(f"DATA_DIR={target}\n")
+        env = {key: value for key, value in os.environ.items() if key not in {"DB_PATH", "CONTROL_DB_PATH"}}
+        env.update(LUMA_ENV_FILE=str(env_file), DATA_DIR=str(decoy))
+
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import backend.desktop\n"
+             "from backend.db import control_database, database\n"
+             "print(control_database.CONTROL_DB_PATH)\n"
+             "print(database.DB_PATH)"],
+            cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True, check=True,
+        )
+
+    control_path, data_path = result.stdout.strip().splitlines()[-2:]
+    assert Path(control_path).parent == target and Path(data_path).parent == target

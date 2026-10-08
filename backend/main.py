@@ -16,14 +16,8 @@ half of the configuration lives in it. See `app_config.py` for the layering.
 
 import sys
 
-from dotenv import load_dotenv
-
-from backend.runtime_config import env_file_path
-
-# The `.env` file is optional — an install without one runs on defaults plus stored settings. When one
-# is present it stays authoritative over a stale shell environment (override=True), which is also what
-# lets the Playwright harness redirect LUMA_ENV_FILE at an isolated file and get its throwaway DB paths.
-load_dotenv(dotenv_path=env_file_path(), override=True)
+# First, before anything that can reach the database modules (see the module).
+import backend.load_env_file  # noqa: F401
 
 # Verify TLS against the operating system's trust store rather than a CA bundle pinned in this
 # repository. Not a preference: a packaged macOS build has no usable CA file at all, because the OpenSSL

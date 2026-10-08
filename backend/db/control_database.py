@@ -1696,6 +1696,32 @@ def update_user(
     return get_user_by_id(user_id)
 
 
+def restore_admin_access(user_id: str, password: str) -> dict:
+    """The command-line way back in (`backend/account_recovery.py`): set the password and remove
+    everything else that could still keep this account out — a disabled status, a member role that cannot
+    reach the settings, a second factor whose authenticator is gone — and sign it out everywhere. One
+    transaction, so a failure leaves the account exactly as it was. The vault is untouched: a slot opens
+    only with its own secret, which nothing here has."""
+    validate_password_for_policy(password)
+    # Hashed before the write begins, so the key stretching is not spent holding the write lock.
+    password_hash = _hash_password(password)
+    with get_control_db() as conn:
+        updated = conn.execute(
+            """
+            UPDATE user_account
+            SET password_hash = ?, must_change_password = 0, role = 'admin', status = 'active',
+                totp_secret = NULL, totp_enabled = 0, totp_last_step = NULL
+            WHERE id = ?
+            """,
+            (password_hash, user_id),
+        ).rowcount
+        if not updated:
+            raise ValueError("user not found")
+        conn.execute("DELETE FROM user_recovery_code WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM sign_in_session WHERE user_id = ?", (user_id,))
+    return get_user_by_id(user_id)
+
+
 def delete_user(user_id: str):
     current = get_user_by_id(user_id)
     if not current:

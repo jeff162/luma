@@ -417,6 +417,12 @@ an isolated file and get its throwaway databases. Because an override is invisib
 the Settings → Configuration report names the layer each effective value came from rather than showing a
 form that silently would not take effect.
 
+**`.env` is loaded by an import that every entry point makes first** (`backend/load_env_file.py`). The
+database locations are read from the environment once, when the database modules are first imported, so
+an entry point that reaches them through anything else fixes the paths without the file and nothing
+corrects them later. The launcher did that through `app_config` and ignored a portable copy's `DATA_DIR`
+while honoring its port; `test_desktop_launcher.py` now pins the order in a fresh interpreter.
+
 The panel leads with the three settings an ordinary install might change (the data directory and the two
 ports) and files the rest under a collapsed **Advanced** group. Placement is declared per setting rather
 than inferred from whether a value currently equals its default — placement that moved with the value

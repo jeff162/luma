@@ -59,7 +59,9 @@ from pathlib import Path
 
 import uvicorn
 
-from backend import app_config, app_log_file, runtime_config, spa
+# First, before anything that can reach the database modules (see the module). `app_config` below does.
+import backend.load_env_file  # noqa: F401
+from backend import account_recovery, app_config, app_log_file, runtime_config, spa
 from backend.main import app, spa_mounted
 from backend.routers import app_control
 
@@ -368,7 +370,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Start the server and print its URL without opening a browser.",
     )
+    parser.add_argument(
+        "--reset-password",
+        nargs="?",
+        const="",
+        metavar="USERNAME",
+        help="Set a new password for an account locked out of sign-in, then exit without starting the "
+             "server. Asks which account when USERNAME is left out.",
+    )
     args = parser.parse_args(argv)
+
+    # A recovery tool, not a launch: it needs the console it was typed into, so it runs before any
+    # redirect to the log, and it never touches the port or the lockfile.
+    if args.reset_password is not None:
+        return account_recovery.run(args.reset_password or None)
 
     # Before anything that can fail, so that what fails is written down somewhere.
     if not _has_console():
