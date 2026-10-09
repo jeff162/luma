@@ -91,7 +91,12 @@ from backend.services.duplicate_detection import (
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
-from backend.services.import_batch_totals import IMPORT_SUMMARY_KEY, refresh_batch_totals
+from backend.services.import_batch_totals import (
+    IMPORT_SUMMARY_KEY,
+    STATEMENT_SNAPSHOT_KEY,
+    refresh_batch_coverage,
+    refresh_batch_totals,
+)
 from backend.services.import_progress import import_progress, tracked_import
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
@@ -546,7 +551,6 @@ def _classify_evidence_column_role(values: list[str]) -> str:
 # `Type`-based money-movement categorization".
 _PAYPAL_HEADER_MARKERS = frozenset({"timezone", "type", "status", "currency", "receipt id", "transaction id"})
 PAYPAL_SOURCE_KIND = "source:paypal"
-STATEMENT_SNAPSHOT_KEY = "statement"
 # Fields always worth keeping from a PayPal export regardless of what the user mapped/checked: `Type`
 # drives money-movement categorization; `Item Title` is the richest enrichment detail; `Transaction ID` is
 # the one identifier the activity CSV shares with a monthly statement, which is what lets a statement's
@@ -3763,6 +3767,7 @@ def run_import_parsed(
             if emptied:
                 refresh_unexplained_coverage_candidates(conn, batch_id)
             save_batch_rejected_rows(conn, batch_id, stored_rejected_entries)
+            refresh_batch_coverage(conn, [batch_id])
             # Per-source auto-enrich: for a trusted source, fold each hard-rejected duplicate's novel
             # detail into the existing row it matched — silently, but reported. Only unambiguous rows are
             # touched and only a non-empty delta counts (so a re-import of the same file is a no-op).
@@ -4465,12 +4470,18 @@ def list_batches():
         # — and because the cap was global-most-recent, an actively-fed source could push another source's
         # cards (and their Undo/rename/review affordances) entirely out of the window with no indication.
         # Cardinality is one row per imported *file* (not per transaction), so returning all of them is
-        # tolerable in the interim. The real bound belongs per-source with a reachable "Older imports"
-        # archive — see docs/backlog/import-history-windowing.md — which will reintroduce paging here.
+        # tolerable: the *rendered* history is bounded per source by the client's recency window and its
+        # by-year archive. Re-bounding the fetch itself waits on the consumers that read this list as an
+        # aggregate over all history — see docs/scale-and-limits.md -> Import history: retention.
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
                    b.connection_id, p.name AS profile_name,
+                   -- What period the card covers, and whether that is a statement's declared period or
+                   -- the span of the rows it carried. This is what the history orders and groups by —
+                   -- import time answers "when did I press the button", which stops being the useful
+                   -- question as soon as a historical backfill is involved.
+                   b.covers_start, b.covers_end, b.covers_source,
                    -- Connection provenance for data-source (sync) cards: the provider disambiguates two
                    -- connections at the same institution (e.g. one "Northgate" via Plaid, another via a
                    -- different provider), and institution is the stable label the group header shows.

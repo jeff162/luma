@@ -45,6 +45,7 @@ from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
+from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
 from backend.services.txn_summaries import txn_summaries
 from backend.services.amazon_import import (
@@ -817,6 +818,7 @@ def _import_group_to_batch(
         "UPDATE import_batch SET row_count = ? WHERE id = ?",
         (counts["orders_imported"] + counts["non_cash"], batch_id),
     )
+    refresh_batch_coverage(conn, [batch_id])
     # The orders cards this items-only card enriched (distinct batches of the order rows it attached to) — the
     # orchestrator folds this card into that orders card when they're all one.
     enriched_into_batches: set = set()

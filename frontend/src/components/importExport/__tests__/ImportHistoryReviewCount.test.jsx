@@ -128,6 +128,18 @@ describe('a collapsed data-source row', () => {
     expect(setExpanded.mock.calls[0][0]({})).toEqual({ 'connection:c1': true })
   })
 
+  // A card's own duplicates pill counts advisory rejections in its "(N to review)". Summing only the
+  // soft-flag suspects here left a source whose entire outstanding workload was of that kind — every
+  // PayPal card in a real ledger — reading as completely clean while its cards showed amber.
+  it('counts rejections still flagged amber, not only the soft-flag suspects', () => {
+    renderSection([connectionRow([
+      { ...card('August 2026', 0), advisory_review_count: 5 },
+      { ...card('September 2026', 0), suspect_duplicate_count: 1, advisory_review_count: 2 },
+    ])])
+
+    expect(screen.getByRole('button', { name: '⚠ 8 duplicates' })).toBeTruthy()
+  })
+
   it('points its review count at the connection\'s cards rather than at imported files', () => {
     renderSection([connectionRow([card('August 2026', 2)])])
     expect(screen.getByRole('button', { name: '2 to review' }).getAttribute('title'))

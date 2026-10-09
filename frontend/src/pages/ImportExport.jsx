@@ -63,6 +63,7 @@ import { MarketplaceImportHistory } from '../components/importExport/Marketplace
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { useReconciliationViewer } from '../contexts/ReconciliationViewerContext.jsx'
+import { byCoverage } from '../lib/importExport/importHistoryWindow.js'
 import {
   getBlankImportSnapshot,
   getBlankMappingSuggestions,
@@ -162,16 +163,6 @@ function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerW
 //   Closed (column mode):  "↔ Column  AccountName"
 //   Closed (account mode): "AccountName ···mask"
 //   Open list:             plain "AccountName" and plain "HeaderName" (no prefix)
-
-// Order marketplace file cards by the data they cover — newest transaction first — so a multi-year
-// historical drop reads as if each file had been imported when its purchases happened, rather than by
-// import time (which ties within one drop). A card with no dated rows ('') sorts last; ties break on the
-// most-recent import so a same-period re-import still leads.
-function byMarketplaceCardRecency(a, b) {
-  const ka = a.newest_txn_date || '', kb = b.newest_txn_date || ''
-  if (ka !== kb) return ka < kb ? 1 : -1
-  return String(a.imported_at || '') < String(b.imported_at || '') ? 1 : -1
-}
 
 // A PayPal monthly statement arrives as a PDF, or several in a zip; neither is a file the CSV importer
 // could read, so the name decides where it goes and the statement import says what is in it.
@@ -785,8 +776,10 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
 
   const dataSourceRows = useMemo(() => {
     const savedSourceRows = profiles.map(profile => {
-      const profileBatches = batches.filter(batch => batch.profile_id === profile.id).sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
-      const latestBatch = profileBatches[0] || null
+      // Cards run by the period they cover (`byCoverage`); `latestBatch` stays the most recently
+      // imported, since "Last used" is a fact about the source rather than about its newest data.
+      const profileBatches = batches.filter(batch => batch.profile_id === profile.id).sort(byCoverage)
+      const latestBatch = [...profileBatches].sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0] || null
       return {
         key: `profile:${profile.id}`,
         kind: 'profile',
@@ -808,8 +801,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     }
     for (const [vendor, vendorBatches] of marketplaceByVendor) {
       const byImport = vendorBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
-      // Cards ordered by data recency (see byMarketplaceCardRecency); latestBatch stays the most recently
-      // imported so "Last used" is unaffected.
+      // Cards ordered by the data they cover; latestBatch stays the most recently imported so
+      // "Last used" is unaffected.
       savedSourceRows.push({
         key: `marketplace:${vendor}`,
         kind: 'marketplace',
@@ -817,7 +810,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         label: vendor.charAt(0).toUpperCase() + vendor.slice(1),
         profile: null,
         hasImportedCategories: byImport.some(b => b.has_imported_categories),
-        batches: [...byImport].sort(byMarketplaceCardRecency),
+        batches: [...byImport].sort(byCoverage),
         latestBatch: byImport[0],
         manualDraftRecord: null,
       })
@@ -848,6 +841,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     }
     for (const [groupKey, connBatches] of connectionGroups) {
       const byImport = connBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+      const byPeriod = [...byImport].sort(byCoverage)
       // Absent for a disconnected group, which is what tells the row it is history rather than a live
       // connection — there is no connection left for its actions to act on.
       const connectionId = byImport[0]?.connection_id || null
@@ -864,7 +858,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         provider: byImport[0]?.connection_provider || null,
         profile: null,
         hasImportedCategories: false,
-        batches: byImport,
+        batches: byPeriod,
         latestBatch: byImport[0],
         // The connection's own last sync, which is what "recent" means for it. The newest card's imported_at
         // is only when that card was created — a monthly card keeps receiving rows for weeks afterwards.
@@ -898,8 +892,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     const unknownSourceBatches = [
       ...olderManualBatches,
       ...fallbackUnknownBatches,
-    ]
-      .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+    ].sort(byCoverage)
 
     if (unknownSourceBatches.length > 0) {
       savedSourceRows.push({
@@ -908,7 +901,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         profile: null,
         hasImportedCategories: unknownSourceBatches.some(batch => batch.has_imported_categories),
         batches: unknownSourceBatches,
-        latestBatch: unknownSourceBatches[0],
+        latestBatch: [...unknownSourceBatches].sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0],
         manualDraftRecord: null,
       })
     }
@@ -5072,7 +5065,7 @@ function AmazonImportTab({ initialFiles }) {
   // (newest transaction first), so a multi-year historical drop reads the way it would have if each file
   // had been imported as its purchases happened — not by import time (which ties for one drop). `latestBatch`
   // stays the most-recently-*imported* one (the source list is imported_at-DESC) so "Last used" is unaffected.
-  const amazonBatchesByRecency = useMemo(() => [...amazonBatches].sort(byMarketplaceCardRecency), [amazonBatches])
+  const amazonBatchesByRecency = useMemo(() => [...amazonBatches].sort(byCoverage), [amazonBatches])
   const amazonHistoryRow = { key: 'marketplace:amazon', vendor: 'amazon', label: 'Amazon', batches: amazonBatchesByRecency, latestBatch: amazonBatches[0] || null }
 
   return (

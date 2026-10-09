@@ -1129,6 +1129,19 @@ CSV import creates supporting records for workflow and recovery:
 
 - **Import batches:** one record per import run so imported transactions can be undone
 
+- **What a batch covers** (`covers_start`, `covers_end`, `covers_source`): the span of transaction dates
+  the file carried, which is what the import history orders and groups by. It is written when the card's
+  rows are written rather than re-derived on read — once per import rather than per card per page load —
+  and that is also the more correct place, because coverage is a property of the *file*: trashing one of
+  its transactions a year later does not change what the file contained. `covers_source` names which kind
+  of answer it is. `'statement'` is a declared period and takes precedence where one exists, since a
+  February statement covers February however few dates its rows land on; `'rows'` is read from the batch's
+  transactions **and its deduplicated rows together**, because a file whose every row matched an earlier
+  import still covers those dates and `txn` alone would answer "nothing" for it; `'items'` is a
+  marketplace items-only card, whose parked items are the only dates it has. `import_batch_rejected_row`
+  is deliberately not a source — it is capped (`MAX_STORED_REJECTED_ROWS`), so it cannot be relied on to
+  widen a span, and measured over a real ledger it never did.
+
 Imports use exact content hashing first for duplicate detection, then can fall back to narrower cross-source heuristics when an import explicitly links a new account to an existing account/group for duplicate comparison.
 
 Important import-batch behavior:

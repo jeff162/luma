@@ -153,8 +153,10 @@ def get_db(db_path: str | None = None):
 # — the uploaded file is unrecoverable, so a count was the whole record of what a file left behind.
 # v63 lets a data source name a folder the server imports from unattended (`csv_import_profile.watch_*`
 # plus `import_watch_file`, the per-file `(size, mtime)` watermark that keeps a scan off the disk).
+# v65 records what period each import card covers (`import_batch.covers_*`) and backfills it, so the
+# history organizes by the transactions a file carried rather than by when it was imported.
 
-CURRENT_VERSION = 64
+CURRENT_VERSION = 65
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1963,6 +1965,45 @@ def _restore_trashed_accounts(conn):
     conn.execute("UPDATE account SET trashed_at = NULL WHERE trashed_at IS NOT NULL")
 
 
+def _table_names(conn) -> set[str]:
+    return {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+@migration(65)
+def _add_import_batch_coverage(conn):
+    # Guarded for the same reason v63/v64 guard: the per-migration unit tests hand-build a minimal
+    # schema and run the whole chain over it, so neither the table nor the rows this reads are a given.
+    if "import_batch" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "covers_start" not in columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN covers_start TEXT")
+        conn.execute("ALTER TABLE import_batch ADD COLUMN covers_end TEXT")
+        conn.execute("ALTER TABLE import_batch ADD COLUMN covers_source TEXT")
+    _backfill_import_batch_coverage(conn)
+
+
+def _backfill_import_batch_coverage(conn):
+    """Derive what every existing card covers, so the history has something to order and group by.
+
+    The reasoning for the field itself is in `services/import_batch_totals.refresh_batch_coverage`.
+    Backfilling reads the rows a card still holds, which for a card that has had transactions deleted
+    since is narrower than what the file actually contained — unavoidable, since the file is gone, and
+    the duplicate report (never deleted) usually carries the span anyway.
+
+    Registered for post-restore replay: restoring a backup taken before this version brings cards across
+    with the columns empty, and a history with no coverage falls back to import time for every card.
+    """
+    if not {"import_batch", "txn", "import_batch_duplicate"} <= _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if not {"covers_start", "config_snapshot"} <= columns:
+        return
+    from backend.services.import_batch_totals import refresh_batch_coverage
+
+    refresh_batch_coverage(conn, [row["id"] for row in conn.execute("SELECT id FROM import_batch")])
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2001,6 +2042,7 @@ POST_RESTORE_DATA_INIT = {
     54: _unlock_trusted_import_categories,
     55: _backfill_import_batch_provider,
     64: _restore_trashed_accounts,
+    65: _backfill_import_batch_coverage,
 }
 
 
@@ -2866,7 +2908,16 @@ def init_db(db_path: str | None = None):
                 -- the batch's epoch trails the current one; see amazon.reconciliation_attention_count and the
                 -- recon-epoch triggers created after run_migrations. NULL = never computed.
                 recon_attention_count INTEGER,
-                recon_epoch      INTEGER
+                recon_epoch      INTEGER,
+                -- The period this card covers and which kind of answer that is ('statement' = a
+                -- statement's declared period, 'rows' = the span of the dates its rows carried,
+                -- 'items' = a marketplace items-only card's parked items). Written when the card's rows
+                -- are, by services/import_batch_totals.refresh_batch_coverage, because it is a fact
+                -- about the file rather than about the ledger's current contents. It is what the import
+                -- history orders and groups by.
+                covers_start     TEXT,
+                covers_end       TEXT,
+                covers_source    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
 

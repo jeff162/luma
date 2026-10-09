@@ -5,7 +5,7 @@
 // section heading, the rounded data-source/account selector pill (with its
 // recommended/secondary emphasis treatments and "possible match" badge), the
 // superscript filter pill, the imported-category usage sentence that hosts it,
-// and the count badge used on import action chips. These are page-local product
+// the history's attention pill and date cell, and the count badge used on import action chips. These are page-local product
 // chrome, not shared primitives — they encode this page's specific copy and
 // emphasis vocabulary.
 
@@ -13,6 +13,7 @@ import {
   IMPORTED_CATEGORY_FILTER_PILL_LABEL,
   IMPORTED_CATEGORY_USAGE_SENTENCE,
 } from '../../lib/importExport/constants.js'
+import { coverageSourceLabel, formatCoverageRange } from '../../lib/importExport/importHistoryWindow.js'
 
 export function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
@@ -168,6 +169,60 @@ export function ImportedCategoryUsageInline({ showFilter = false, filterDisabled
           title={filterTitle}
         />
       ) : null}
+    </span>
+  )
+}
+
+// The import history's "something in here still wants doing" pill, in the two tones the history speaks
+// in: `warning` for a duplicate or a reconciliation item to resolve, `review` for transactions still
+// waiting to be reviewed. Rendered as a button where it can take the reader somewhere (a collapsed
+// source row expands to the cards it counts) and as plain text where the surrounding control already
+// does (the archive disclosure's own toggle).
+export function HistoryAttentionPill({ tone = 'warning', title = '', onClick = null, children }) {
+  const palette = tone === 'review'
+    ? {
+      background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))',
+      color: 'var(--review-marker-color)',
+      border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))',
+    }
+    : {
+      background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+      color: 'var(--warning)',
+      border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
+    }
+  const style = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 4,
+    padding: '1px 7px',
+    borderRadius: 99,
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: 1.5,
+    cursor: onClick ? 'pointer' : 'default',
+    ...palette,
+  }
+  if (!onClick) return <span title={title} style={style}>{children}</span>
+  return (
+    <button type="button" onClick={onClick} title={title} style={style}>
+      {children}
+    </button>
+  )
+}
+
+// An import card's date cell. The period the card covers leads, because that is what the card is about
+// and what the history is ordered by; the import timestamp stays underneath it, muted, since it is still
+// the answer to "which of these did I just load" and the provenance Undo acts on. A card with no
+// recorded span — one that predates the field and whose rows are gone — shows the import time alone.
+export function BatchCoverageCell({ batch }) {
+  const range = formatCoverageRange(batch)
+  const imported = String(batch?.imported_at || '').slice(0, 16).replace('T', ' ')
+  if (!range) return <span style={{ fontSize: 12, color: 'var(--muted)' }}>{imported}</span>
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <span style={{ fontSize: 12, color: 'var(--text)' }} title={coverageSourceLabel(batch)}>{range}</span>
+      <span style={{ fontSize: 11, color: 'var(--muted)' }} title="When this file was imported">imported {imported}</span>
     </span>
   )
 }

@@ -55,6 +55,7 @@ from backend.services.categorizer import (
     rule_scalar_effects,
 )
 from backend.services.connection_dedupe import build_connection_dedupe
+from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.source_capabilities import (
     CURRENCY_PER_TRANSACTION,
     ZERO_AMOUNT_REJECTION_KIND,
@@ -1762,6 +1763,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 imported=card_added.get(card_id, 0), deduped=card_dupes.get(card_id, 0),
                 account_skipped=counts.get("account_skipped", 0), rejected=counts.get("rejected", 0),
             )
+        refresh_batch_coverage(conn, {*card_added, *card_dupes, *card_skipped})
         for (card_id, csv_value), info in card_accounts.items():
             # `csv_value` is the provider account's LABEL (e.g. "CREDIT CARD ···6612"), not its opaque
             # provider id: it is the connection's "source value", it reads like a CSV card's account

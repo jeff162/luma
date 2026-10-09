@@ -111,9 +111,19 @@ the interim.
 asymmetry is deliberate: it *writes* on every load, so running it over all history would rewrite every
 batch on each call and worsen lock contention.
 
-**Re-bounding the fetch is blocked on the archive existing first**, and the order matters. Paging that
-hides rows with no way to reach them would simply recreate the lossy cap under a new name. The archive
-UX is deferred — see *Open*.
+**The list is windowed per source rather than globally**: an expanded data source shows its recent
+cards and files the rest into a reachable by-year archive (`docs/ui-patterns.md` → the recency-window
+pattern). That is what bounds the *rendered* history; the fetch is still unbounded behind it.
+
+**Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
+no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
+it has. The second is less obvious and is the larger half: **five consumers of `GET /import-export/batches`
+read the whole list as an aggregate rather than as a page of history** — the Rules page's pending
+rule-suggestion count, the per-connection suspect rollups on Accounts and the connections panel, and the
+data-source manager's lifetime per-profile totals *and its set of known template hashes*, which guards
+against re-importing a file already imported. Page the endpoint and each of those silently answers from
+the first page; the hash guard becomes wrong rather than merely stale. They need their own aggregate
+endpoints before the list response can change shape. See *Open*.
 
 **The rows a file left behind are capped per batch, and the cap is visible rather than silent** — the
 distinction the paragraph above turns on. `import_batch_rejected_row` keeps what an import refused
@@ -288,10 +298,9 @@ every assertion.
 
 ## Open
 
-- **The import-history archive UX** — a per-source recent window with a reachable "Older imports"
-  disclosure grouped by year, the re-bound on the fetch that it unblocks, and an explicit
-  batch-history deletion strategy that purges records rather than the transactions they describe.
-  → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
+- **Re-bounding the import-history fetch**, now that the archive exists — which means moving the five
+  aggregate consumers above off the whole-list payload first. The batch-history deletion strategy is
+  owed alongside it. → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
 - **Whether the document delta is worth building**, now that both its prerequisites exist. The ledger
   half needs nothing; the open part is restoring a chain.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)

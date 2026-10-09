@@ -56,9 +56,10 @@ has an obvious second application here that was deliberately **not** taken in th
 - **The page rename comes last, and that ordering is the point.** "Import / Export" is already wrong (it
   carries Backup/Restore and Amazon) and gets wronger with connections on it — but the right name is
   downstream of what is left on the page, so naming it before Backup/Restore leaves would be guessing.
-- **The import history's own organization** is a separate, already-designed job:
-  [`import-history-windowing.md`](import-history-windowing.md). It is the half of the page that gets
-  worse as the top gets denser, so it pairs naturally with this.
+- **The import history's own organization** is a separate job, now partly built — the per-source
+  recency window and its by-year archive are in; what is left there is the fetch re-bound and a
+  deletion strategy ([`import-history-windowing.md`](import-history-windowing.md)). It is the half of
+  the page that gets worse as the top gets denser, so it pairs naturally with this.
 
 **Why deferred.** The connections split was already touching the two largest files in the repo. Bundling
 a second page reorganization into it would have made one change nobody could review.

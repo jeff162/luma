@@ -159,14 +159,16 @@ scale — rather than by feature.
   on a group/category report deserves the same note. It is deliberately not flagged today (a transaction
   has one category, so an include is ordinary focusing) and the behavior is correct without it; it is held
   for a larger tag-report pass rather than a one-off.
-- [import-history-windowing.md](import-history-windowing.md) — **reduced 2026-09-02; the archive UX
-  has not started.** The retention story — the silent global `LIMIT 50` that hid older imports and let
-  one active source crowd out another, why the display query is now unbounded, and why the writing
-  reconcile pass on the same endpoint stays capped — is in
-  [`../scale-and-limits.md`](../scale-and-limits.md). What stays: the per-source recency window with an
-  "Older imports" archive grouped by year, the fetch re-bound it unblocks (**and only in that order** —
-  paging before the archive recreates the lossy cap), and a deletion strategy that purges history
-  records rather than transactions.
+- [import-history-windowing.md](import-history-windowing.md) — **reduced again 2026-10-08; the
+  per-source window, the by-year archive and the move onto transaction coverage are built.** The retention story — the silent global
+  `LIMIT 50` that hid older imports and let one active source crowd out another, why the display query
+  is unbounded, and why the writing reconcile pass on the same endpoint stays capped — is in
+  [`../scale-and-limits.md`](../scale-and-limits.md); the window and archive as built are in
+  [`../ui-patterns.md`](../ui-patterns.md) and [`../data-model.md`](../data-model.md). What stays: the
+  fetch re-bound, now blocked on the five
+  consumers that read the batch list as an aggregate rather than as a page, and a deletion strategy —
+  whose real question turns out to be what a purged batch does to the transactions still pointing at
+  it, not whether to purge.
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
@@ -278,7 +280,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/multi-payment-purchases.md` | 2026-09-02 | **E** — its hand-rolled *three neighbours* table, generalized into the index; data-model — the four reasoned exclusions | **No** — deleted |
 | `docs/backlog/list-virtualization.md` | 2026-09-02 | **C** (`scale-and-limits.md`) — the unwindowed list and its four obstacles, the measurement method, the rejected hand-rolled windower and document-scroller mode | **No** — deleted. The windowing rules were already in `ui-patterns.md`; `ImportRuleSuggestionReview.jsx` repointed to C |
 | `docs/backlog/transaction-list-limits.md` | 2026-09-02 | **C** — the accepted caps as a table (cost, and the condition for revisiting each) | **No** — deleted. The `limit` contract was already in `data-model.md` |
-| `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 — the archive UX has not started, and re-bounding the fetch is blocked on it |
+| `docs/backlog/import-history-windowing.md` | 2026-09-02 (partial) | **C** — the lossy-cap retention story and the write-on-load reconcile asymmetry | **Yes**, 52 → 36 at the time; the window and archive landed 2026-10-08 and fed `ui-patterns.md`, leaving the fetch re-bound and the deletion strategy |
 | `docs/backlog/dashboard-reporting.md` | 2026-09-02 (partial) | ui-patterns — the charts body was already folded in; this added only the frame-vs-fourth-mode rejection. data-model — `exclude_from_totals` as the sole exclusion axis, the three rejected schemes, sides-by-net, the netted atom, the calendar-month window, tag reports having no reading | **Yes**, 374 → 95 — `cash_date`, Compare, trend bucketing and the Trends-tab audit have not started. Citations in `Dashboard.jsx` and `routers/transactions.py` repointed |
 | `docs/backlog/deployment-topologies.md` | 2026-09-02 (partial) | **B** (`operations.md`) — shapes, binds, data location, rejected shell/packaging options; **A** — the host-name constraint; `releasing.md` — macOS build detail | **Yes**, 300 → 57 — Shape A is unbuilt and Shape B step 3 has a remainder CI cannot reach. Cited from `backend/desktop.py`, repointed to `operations.md` |
 | `docs/backlog/tag-report-exclude-warning.md` | 2026-09-03 (partial) | ui-patterns — nothing new: the shipped note was already folded in as the work landed, so the disposal was deletion of the second copy rather than authorship | **Yes**, 44 → 22 — include narrowing on group/category reports is unstarted. `lib/reportFilterConflicts.js` repointed to `ui-patterns.md` |

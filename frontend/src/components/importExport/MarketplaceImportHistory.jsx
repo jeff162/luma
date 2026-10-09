@@ -4,6 +4,9 @@
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
 import { useReconciliationViewer } from '../../contexts/ReconciliationViewerContext.jsx'
 import { useAmazonImportDetailViewer } from '../../contexts/AmazonImportDetailViewerContext.jsx'
+import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
+import { BatchCoverageCell } from './importPresentational.jsx'
+import { partitionImportHistory } from '../../lib/importExport/importHistoryWindow.js'
 
 // The shared import-history card for one marketplace vendor (Amazon, and any future AliExpress/Temu-style
 // vendor), rendered both in the generic Import tab's data-sources section and on the vendor's own import
@@ -139,6 +142,100 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
   // Actionable reconciliation items across this vendor's files (duplicates to resolve, split matches to
   // confirm), surfaced as a warning chip on the collapsed card so it's visible without expanding.
   const totalAttention = batches.reduce((sum, b) => sum + Number(b.recon_attention_count || 0), 0)
+  // Only the recent cards are listed, the rest reachable through the year archive under them.
+  const { recent: recentBatches, archive: archivedBatches } = partitionImportHistory(batches)
+  const renderBatchCard = b => {
+    const summary = summarizeImportOutcome(b)
+    const needsReview = Number(b.needs_review_count || 0)
+    const attention = Number(b.recon_attention_count || 0)
+    // All the per-file action pills (the reconciliation entry + the review group) share one box; it
+    // goes warning-toned when the file has actionable reconciliation items or transactions to review.
+    const showVendorAction = RowAction && summary.importedCount > 0
+    const showDetailPills = hasImportDetailPills(row.vendor, b.import_summary)
+    // Warn-tone the box only while items are still unmatched; a resolved (auto-attached) orphan card
+    // is informational, not actionable. `unmatched_item_count` is the live count from the ledger.
+    const detailWarn = (b.unmatched_item_count == null
+      ? Number(b.import_summary?.items_discarded || 0)
+      : Number(b.unmatched_item_count)) > 0
+    const showBox = showVendorAction || showDetailPills || needsReview > 0
+    const boxWarn = attention > 0 || detailWarn || needsReview > 0
+    return (
+      <div key={b.id}>
+        <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: showBox ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px 90px', gap: 12, alignItems: 'start' }}>
+            <div style={{ minWidth: 0 }}>
+              {/* The ledger arrow leads the name: with the list clamped to 3 lines, a trailing arrow
+                  gets clipped whenever the names overflow into the ellipsis — the head is the only
+                  spot that's always visible. Full name list is on hover. */}
+              <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }} title={b.filename}>
+                {summary.importedCount > 0 ? (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onOpenLedger(b)}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenLedger(b) } }}
+                    title="View imported transactions from this file"
+                    aria-label="View imported transactions from this file"
+                    style={{ color: 'var(--accent2)', cursor: 'pointer', fontSize: 11, marginRight: 6 }}
+                  >
+                    ↗
+                  </span>
+                ) : null}
+                <BatchFileNames batch={b} />
+              </div>
+            </div>
+            <BatchCoverageCell batch={b} />
+            <span style={{ textAlign: 'center' }}>
+              {b.row_count > 0
+                ? `${b.row_count} rows`
+                : (importItemsCount(b.import_summary) > 0 ? `${importItemsCount(b.import_summary)} items` : '0 rows')}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+            <button onClick={() => onUndo(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+          </div>
+        </div>
+
+        {showBox ? (
+          <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderRadius: 10, padding: '6px 10px',
+              border: boxWarn
+                ? '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))'
+                : '1px dashed color-mix(in srgb, var(--border) 80%, transparent)',
+              background: boxWarn ? 'color-mix(in srgb, var(--warning) 8%, var(--surface2))' : 'transparent',
+            }}>
+              {showVendorAction ? <RowAction batch={b} count={summary.importedCount} attention={attention} /> : null}
+              {showDetailPills ? <AmazonImportDetailPills batch={b} summary={b.import_summary} /> : null}
+              {needsReview > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    // Opens on the rows the pill counts; the report's own quick filter turns it off.
+                    onClick={() => onOpenLedger({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
+                    title="Review the transactions imported from this file"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))', color: 'var(--review-marker-color)', border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    <span>{needsReview} to review</span>
+                    <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onMarkReviewed(b.id)}
+                    title="Mark every transaction in this file reviewed"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                  >
+                    ✓ Mark all reviewed
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -178,98 +275,8 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
 
       {canExpand && expanded ? (
         <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
-          {batches.map(b => {
-            const summary = summarizeImportOutcome(b)
-            const needsReview = Number(b.needs_review_count || 0)
-            const attention = Number(b.recon_attention_count || 0)
-            // All the per-file action pills (the reconciliation entry + the review group) share one box; it
-            // goes warning-toned when the file has actionable reconciliation items or transactions to review.
-            const showVendorAction = RowAction && summary.importedCount > 0
-            const showDetailPills = hasImportDetailPills(row.vendor, b.import_summary)
-            // Warn-tone the box only while items are still unmatched; a resolved (auto-attached) orphan card
-            // is informational, not actionable. `unmatched_item_count` is the live count from the ledger.
-            const detailWarn = (b.unmatched_item_count == null
-              ? Number(b.import_summary?.items_discarded || 0)
-              : Number(b.unmatched_item_count)) > 0
-            const showBox = showVendorAction || showDetailPills || needsReview > 0
-            const boxWarn = attention > 0 || detailWarn || needsReview > 0
-            return (
-              <div key={b.id}>
-                <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: showBox ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px 90px', gap: 12, alignItems: 'start' }}>
-                    <div style={{ minWidth: 0 }}>
-                      {/* The ledger arrow leads the name: with the list clamped to 3 lines, a trailing arrow
-                          gets clipped whenever the names overflow into the ellipsis — the head is the only
-                          spot that's always visible. Full name list is on hover. */}
-                      <div style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }} title={b.filename}>
-                        {summary.importedCount > 0 ? (
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => onOpenLedger(b)}
-                            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenLedger(b) } }}
-                            title="View imported transactions from this file"
-                            aria-label="View imported transactions from this file"
-                            style={{ color: 'var(--accent2)', cursor: 'pointer', fontSize: 11, marginRight: 6 }}
-                          >
-                            ↗
-                          </span>
-                        ) : null}
-                        <BatchFileNames batch={b} />
-                      </div>
-                    </div>
-                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>{b.imported_at.slice(0, 16).replace('T', ' ')}</span>
-                    <span style={{ textAlign: 'center' }}>
-                      {b.row_count > 0
-                        ? `${b.row_count} rows`
-                        : (importItemsCount(b.import_summary) > 0 ? `${importItemsCount(b.import_summary)} items` : '0 rows')}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-                    <button onClick={() => onUndo(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
-                  </div>
-                </div>
-
-                {showBox ? (
-                  <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
-                    <div style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderRadius: 10, padding: '6px 10px',
-                      border: boxWarn
-                        ? '1px solid color-mix(in srgb, var(--warning) 45%, var(--border))'
-                        : '1px dashed color-mix(in srgb, var(--border) 80%, transparent)',
-                      background: boxWarn ? 'color-mix(in srgb, var(--warning) 8%, var(--surface2))' : 'transparent',
-                    }}>
-                      {showVendorAction ? <RowAction batch={b} count={summary.importedCount} attention={attention} /> : null}
-                      {showDetailPills ? <AmazonImportDetailPills batch={b} summary={b.import_summary} /> : null}
-                      {needsReview > 0 ? (
-                        <>
-                          <button
-                            type="button"
-                            // Opens on the rows the pill counts; the report's own quick filter turns it off.
-                            onClick={() => onOpenLedger({ ...b, _attributeFilter: { attribute: 'needs-review', active: true } })}
-                            title="Review the transactions imported from this file"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))', color: 'var(--review-marker-color)', border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))', cursor: 'pointer', fontWeight: 600 }}
-                          >
-                            <span>{needsReview} to review</span>
-                            <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onMarkReviewed(b.id)}
-                            title="Mark every transaction in this file reviewed"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 7px', borderRadius: 99, background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
-                          >
-                            ✓ Mark all reviewed
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
+          {recentBatches.map(renderBatchCard)}
+          <ImportHistoryArchive archive={archivedBatches} renderBatch={renderBatchCard} />
         </div>
       ) : null}
     </div>

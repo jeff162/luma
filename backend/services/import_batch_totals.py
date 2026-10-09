@@ -21,6 +21,9 @@ import json
 from backend.json_utils import safe_json_dict
 
 IMPORT_SUMMARY_KEY = "import_summary"
+# The statement header a PDF statement import records (`routers/import_export/paypal_statement.py`),
+# whose declared period is the authoritative answer to what that file covers.
+STATEMENT_SNAPSHOT_KEY = "statement"
 
 
 def _batch_has_duplicates(conn, batch_id: str) -> bool:
@@ -156,3 +159,91 @@ def delete_transactions(conn, where_sql: str, params=(), *, drop_emptied_sync_ca
         conn, {row["batch_id"] for row in released}, drop_emptied_sync_cards=drop_emptied_sync_cards,
     )
     return removed
+
+
+def _coverage_from_rows(conn, batch_id: str):
+    """The span of transaction dates a card's rows carry, landed or not.
+
+    Read from `txn` and `import_batch_duplicate` together, because a file whose every row deduped
+    against an earlier import still *covers* those dates — which is the common case for a statement
+    re-stating a period an activity export already brought in, and the case where asking `txn` alone
+    answers "nothing". `import_batch_rejected_row` is deliberately left out: it is capped
+    (`MAX_STORED_REJECTED_ROWS`), so it cannot be relied on to widen a span, and measured over a real
+    ledger it never did — every batch's span came from the two uncapped sources.
+    """
+    row = conn.execute(
+        """
+        SELECT MIN(d) AS lo, MAX(d) AS hi FROM (
+            SELECT date AS d
+            FROM   txn
+            WHERE  import_batch_id = ?
+            UNION ALL
+            SELECT json_extract(txn_payload_json, '$.date')
+            FROM   import_batch_duplicate
+            WHERE  batch_id = ?
+        )
+        WHERE d IS NOT NULL AND d <> ''
+        """,
+        (batch_id, batch_id),
+    ).fetchone()
+    return (row["lo"], row["hi"]) if row and row["lo"] and row["hi"] else (None, None)
+
+
+def _coverage_from_parked_items(snapshot: dict):
+    """A marketplace items-only card holds no transactions and no duplicate report — its still-waiting
+    item rows are the only dates it has. Without this such a card is the one kind with no span at all."""
+    summary = snapshot.get(IMPORT_SUMMARY_KEY)
+    if not isinstance(summary, dict):
+        return (None, None)
+    dates = sorted(
+        str(item["date"]) for item in (summary.get("discarded_items") or [])
+        if isinstance(item, dict) and item.get("date")
+    )
+    return (dates[0], dates[-1]) if dates else (None, None)
+
+
+def resolve_batch_coverage(conn, batch_id: str, snapshot: dict):
+    """What period a card covers, as `(start, end, source)` — `source` naming which of the two answers
+    it is, because they are different facts and the card says which it is showing.
+
+    A statement *declares* its period, and that declaration is the file's true scope: a February
+    statement covers February even where the four transactions in it fall across four days. Everything
+    else is read from the rows, which is the only answer available for an activity export.
+    """
+    statement = snapshot.get(STATEMENT_SNAPSHOT_KEY)
+    if isinstance(statement, dict) and statement.get("period_start") and statement.get("period_end"):
+        return (str(statement["period_start"]), str(statement["period_end"]), "statement")
+    start, end = _coverage_from_rows(conn, batch_id)
+    if start and end:
+        return (start, end, "rows")
+    start, end = _coverage_from_parked_items(snapshot)
+    if start and end:
+        return (start, end, "items")
+    return (None, None, None)
+
+
+def refresh_batch_coverage(conn, batch_ids) -> None:
+    """Record what each card covers, so the history can order and group by period rather than by when
+    someone happened to press import.
+
+    Written when a card's rows are written rather than re-derived on every history load: it costs a
+    scan of the card's duplicate report, which is affordable once per import and not affordable fifty
+    times per page load. It is also the more correct place — coverage is a property of the *file*, so
+    trashing one of its transactions a year later does not change what the file contained. The one
+    exception is a marketplace card whose parked items attach later, which recomputes with them.
+
+    Writes only what changed, matching `refresh_batch_totals`.
+    """
+    for batch_id in sorted({str(value).strip() for value in (batch_ids or []) if str(value or "").strip()}):
+        batch = conn.execute(
+            "SELECT config_snapshot, covers_start, covers_end, covers_source FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            continue
+        resolved = resolve_batch_coverage(conn, batch_id, safe_json_dict(batch["config_snapshot"]))
+        if resolved != (batch["covers_start"], batch["covers_end"], batch["covers_source"]):
+            conn.execute(
+                "UPDATE import_batch SET covers_start = ?, covers_end = ?, covers_source = ? WHERE id = ?",
+                (*resolved, batch_id),
+            )
