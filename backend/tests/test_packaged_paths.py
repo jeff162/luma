@@ -13,6 +13,10 @@ The distribution form is the same kind of problem one level up. Portable and ins
 same binary and differ only in where writable data defaults to, so the answer is declared at build time
 and every branch that reads it — including all three per-OS user-data directories — is reachable from
 any one platform only by faking `sys.platform`.
+
+The build stamp is that shape again — declared into a file at build time, so the only way to read one
+here is to be faked into a frozen copy, and the only way to show a checkout refuses a stray one is to
+put a stray one there.
 """
 
 import os
@@ -172,6 +176,29 @@ def test_an_undeclared_build_falls_back_to_what_the_platform_supports():
 def test_an_unrecognized_declaration_is_not_trusted():
     with _two_roots() as (install, bundle), _frozen(install, bundle, form="beside-the-executable"):
         assert runtime_config.distribution_form() == runtime_config.DIST_FORM_PORTABLE
+
+
+def test_a_build_reports_the_commit_it_was_made_from():
+    with _two_roots() as (install, bundle), _frozen(install, bundle):
+        (bundle / runtime_config.BUILD_STAMP_FILENAME).write_text("v0.3.0-14-ga1b2c3d\n", encoding="utf-8")
+        assert runtime_config.build_stamp() == "v0.3.0-14-ga1b2c3d"
+
+
+def test_a_build_with_no_stamp_reports_none():
+    """What a build assembled from an export looks like: git could not be asked, so the spec wrote no
+    stamp. Reporting no build is the answer; the About row is then left out."""
+    with _two_roots() as (install, bundle), _frozen(install, bundle):
+        assert runtime_config.build_stamp() is None
+
+
+def test_a_checkout_reports_no_build_even_with_a_stamp_lying_around():
+    """The frozen check, which is the whole reason it is there. A stamp is only true of the build that
+    wrote it, so a file that found its way into a working copy would name a commit the code no longer
+    matches — and a wrong build id is worse than none."""
+    with _two_roots() as (_install, bundle):
+        (bundle / runtime_config.BUILD_STAMP_FILENAME).write_text("v0.3.0-14-ga1b2c3d\n", encoding="utf-8")
+        with mock.patch.object(runtime_config, "bundle_root", lambda: bundle):
+            assert runtime_config.build_stamp() is None
 
 
 # ── Where each form keeps its data ───────────────────────────────────────────────────────────────

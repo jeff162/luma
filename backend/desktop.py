@@ -168,7 +168,11 @@ def _redirect_output_to_log() -> Path | None:
         except (AttributeError, OSError, ValueError):
             pass
 
-    print(f"\n--- {runtime_config.app_name()} {runtime_config.APP_VERSION} starting {time.asctime()} ---")
+    # Stamped like the other log's start marker, and for the same reason: this file is what a report
+    # about a macOS build arrives with, and the version does not identify the build on its own.
+    stamp = runtime_config.build_stamp()
+    build = f" ({stamp})" if stamp else ""
+    print(f"\n--- {runtime_config.app_name()} {runtime_config.APP_VERSION}{build} starting {time.asctime()} ---")
     return log
 
 

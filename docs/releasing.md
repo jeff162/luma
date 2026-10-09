@@ -213,6 +213,39 @@ backend/venv/bin/python scripts/release.py                       # gate, build, 
 The gates are that every version declaration agrees and that the working tree is clean, so an artifact
 can be traced back to a commit. `--allow-dirty` skips the second for a throwaway build.
 
+### What identifies a build
+
+The version is bumped by hand, so it names a *release* rather than a build: every artifact produced
+between 0.3.0 and 0.3.1 reports `0.3.0`, however far apart two of them are. So each build also carries
+the commit it was made from, which is what makes "is the bug in this copy already fixed?" answerable
+about the artifact somebody is actually running.
+
+`scripts/build_stamp.py` derives it with `git describe --tags --always --dirty`, and
+`scripts/luma.spec` writes the answer into the bundle as a one-line `build-stamp` file — the same
+mechanism as the `distribution-form` marker beside it, and for the same reason: a build knows this and a
+running copy cannot work it out. `runtime_config.build_stamp()` reads it back.
+
+`v0.3.0-14-ga1b2c3d` is the shape to expect: fourteen commits past the `v0.3.0` tag, at `a1b2c3d`.
+Readable without a lookup, which a bare revision is not — and the distance is usually the whole answer.
+Comparing it to a fix is `git log v0.3.0-14-ga1b2c3d..main` or
+`git merge-base --is-ancestor <commit> a1b2c3d`.
+
+Two degradations, both silent and both fine:
+
+- **No tags reachable from HEAD** and `describe` falls back to the bare abbreviated revision. This is
+  why the release workflow checks out with `fetch-depth: 0`: the default shallow fetch has no tags, and
+  `fetch-tags` alone is not enough either, since counting the distance needs the commits in between.
+- **No repository at all** — a build from an exported tree — and there is no stamp. The artifact still
+  builds; it reports its version alone.
+
+A **copy run from source carries no stamp**, deliberately: its commit is a `git` command away, and a
+file in a working copy would be stale as soon as anything was committed. `build_stamp()` therefore
+refuses to report one unless the copy is frozen, even if a `build-stamp` file is sitting there.
+
+Where it shows up: Settings → About (the **Build** row, absent when there is no stamp), the start marker
+in `luma.log`, and the startup line in `luma-desktop.log`. `release.py` also prints it beside the
+version when its gates pass, which is what the clean-tree gate above was for.
+
 ### What CI does, and the two things it deliberately does not
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`: tests first, then parallel builds on both

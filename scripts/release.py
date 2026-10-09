@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_desktop  # noqa: E402  (needs scripts/ on the path first)
+import build_stamp  # noqa: E402  (same)
 from backend import runtime_config, version_sources  # noqa: E402
 
 
@@ -123,7 +124,10 @@ def main() -> int:
         print("\n".join(problems), file=sys.stderr)
         return 1
 
-    print(f"Version {runtime_config.APP_VERSION}, gates passed.\n")
+    # The stamp is named here as well as by the spec that writes it, because it is what the clean-tree
+    # gate above was for: the commit this artifact will claim, printed before the build output buries it.
+    stamp = build_stamp.describe()
+    print(f"Version {runtime_config.APP_VERSION}{f' ({stamp})' if stamp else ''}, gates passed.\n")
     if args.check:
         return 0
 

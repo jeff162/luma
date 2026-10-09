@@ -321,6 +321,7 @@ What exists today, and what each actually tells you:
 | `GET /api/health` | is a server listening and answering on this port |
 | Settings → Configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
+| Settings → About | the version, and for a packaged build the commit it was built from |
 | The connection sync log (**Sync log** on Import / Export → Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
@@ -331,6 +332,14 @@ line reports the paths read from the modules that hold them, so it cannot name a
 opened. It arms itself by default where the question is live — the databases are somewhere other than
 this build's default, or this copy is a checkout, or developer options are on — and the paths are shown
 only to a session that could read them in Settings anyway.
+
+**"Which build is this?" is the other question a report has to answer**, and the version does not: it
+is set by hand at release time, so every build made between two releases claims the same one. The
+**Build** row in Settings → About names the commit instead — `v0.3.0-14-ga1b2c3d`, fourteen commits past
+the 0.3.0 tag — which is what says whether a fix landed before or after the copy in front of someone was
+built. Both log files repeat it on their startup line, so a report that arrives as a log answers it too.
+A copy run from source has no such row: its commit is a `git` command away. See
+`docs/releasing.md` → *What identifies a build*.
 
 **Every open browser learns that the backend stopped, without polling.** A request to a port nothing is
 listening on is refused immediately, so every call the app makes is already its own liveness check. One

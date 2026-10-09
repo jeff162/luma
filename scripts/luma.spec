@@ -3,7 +3,7 @@
 # Entry point is `backend/desktop.py` — the same launcher a checkout runs with `python -m backend.desktop`.
 # Step 2 of the packaging plan changes how it is shipped, not what it does.
 #
-# Four things here are not boilerplate:
+# What is not boilerplate here:
 #
 # - **The built frontend is bundled as data.** `runtime_config.bundle_root()` resolves to PyInstaller's
 #   unpack directory in a frozen build, so `frontend/dist` has to land at that same relative path or the
@@ -11,6 +11,10 @@
 # - **The distribution form is baked in here.** Portable and installed builds are the same binary and
 #   differ only in where writable data defaults to, so the artifact has to carry the answer rather than
 #   work it out at runtime. `LUMA_DIST_FORM` selects it and a one-word file in the bundle records it.
+# - **The build stamp is written here too**, for the same reason and into the same kind of file: the
+#   commit an artifact came from is knowable at build time and nowhere else, and `APP_VERSION` alone
+#   does not distinguish two builds made between one release and the next. Derived rather than chosen,
+#   so unlike the form it arrives from `scripts/build_stamp.py` rather than from the environment.
 # - **macOS gets a different layout, and is not the application.** Everywhere else this is a onefile
 #   binary. On macOS it is a onedir *tree* that `scripts/build_desktop.py` places inside an application
 #   bundle built around the native wrapper in `macos/` — that wrapper is what macOS launches, owns the
@@ -41,6 +45,7 @@ ROOT = Path(SPECPATH).resolve().parent
 # build whose declaration the application cannot read.
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
+import build_stamp  # noqa: E402  (needs scripts/ on the path first)
 import third_party_notices  # noqa: E402  (needs scripts/ on the path first)
 from backend import runtime_config  # noqa: E402  (needs ROOT on the path first)
 
@@ -79,18 +84,35 @@ form_marker = ROOT / "build" / "dist-form" / runtime_config.DIST_FORM_FILENAME
 form_marker.parent.mkdir(parents=True, exist_ok=True)
 form_marker.write_text(f"{dist_form}\n", encoding="utf-8")
 
+# The commit this build came from, recorded the same way and in the same place for the same reason — a
+# fact only the build knows, that the artifact has to carry because nothing about a running copy reveals
+# it. `None` when git cannot answer (see `scripts/build_stamp.py`), and the file is then simply absent,
+# which is what a checkout looks like too.
+stamp = build_stamp.describe()
+stamp_marker = ROOT / "build" / "stamp" / runtime_config.BUILD_STAMP_FILENAME
+if stamp:
+    stamp_marker.parent.mkdir(parents=True, exist_ok=True)
+    stamp_marker.write_text(f"{stamp}\n", encoding="utf-8")
+    print(f"Build stamp: {stamp}")
+else:
+    print("No build stamp: git could not describe this tree.")
+
+datas = [
+    (str(ROOT / "frontend" / "dist"), "frontend/dist"),
+    (str(form_marker), "."),
+    # A packaged build is a *conveyed* copy, and the AGPL requires the license to accompany one.
+    # The repository copy covers a checkout; nothing covered the binary until this line. It lands at
+    # the bundle root, which is where `runtime_config.bundled_license_path` looks for it.
+    (str(ROOT / "LICENSE"), "."),
+]
+if stamp:
+    datas.append((str(stamp_marker), "."))
+
 analysis = Analysis(
     [str(ROOT / "backend" / "desktop.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[
-        (str(ROOT / "frontend" / "dist"), "frontend/dist"),
-        (str(form_marker), "."),
-        # A packaged build is a *conveyed* copy, and the AGPL requires the license to accompany one.
-        # The repository copy covers a checkout; nothing covered the binary until this line. It lands at
-        # the bundle root, which is where `runtime_config.bundled_license_path` looks for it.
-        (str(ROOT / "LICENSE"), "."),
-    ],
+    datas=datas,
     hiddenimports=(
         collect_submodules("uvicorn")
         + collect_submodules("plaid")

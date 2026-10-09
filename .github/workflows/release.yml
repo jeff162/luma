@@ -139,7 +139,14 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.targets) }}
 
     steps:
+      # Full history, not the default shallow fetch: `scripts/build_stamp.py` stamps the artifact with
+      # `git describe`, and that needs both the tags and the commits between the newest one and HEAD to
+      # count the distance. `fetch-tags` alone is not enough — with a depth-1 clone the tag is present
+      # but unreachable from HEAD, and describe falls back to the bare revision. The failure is silent
+      # either way: a stamp that reads `a1b2c3d` instead of `v0.3.0-14-ga1b2c3d` still builds.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:

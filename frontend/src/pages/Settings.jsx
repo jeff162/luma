@@ -2904,7 +2904,7 @@ function AboutRow({ label, value, help = '' }) {
 // which link to show; that cost an outbound request nobody asked for on every visit to this panel,
 // which contradicts the promise the README makes about network access. Both remaining links are plain
 // anchors: nothing is fetched from anywhere until the user clicks.
-function AboutSection({ dbInstanceId, bundledLicenseAvailable, thirdPartyNoticesScope }) {
+function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, thirdPartyNoticesScope }) {
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>
@@ -2922,6 +2922,17 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable, thirdPartyNotices
             label="Version"
             value={`v${APP_VERSION}`}
           />
+          {/* The version is set by hand at release time, so every build made between two releases
+              reports the same one. This row is what separates them, and what makes "has this been fixed
+              since?" answerable about a build rather than about a release. Only a packaged build carries
+              it: a copy run from source has its commit on hand already, and the row is left out. */}
+          {buildStamp ? (
+            <AboutRow
+              label="Build"
+              value={buildStamp}
+              help="The commit this build was made from: the release it followed, and how far past it."
+            />
+          ) : null}
           <AboutRow
             label="License"
             value={(
@@ -3162,6 +3173,7 @@ export default function Settings() {
     developerOptionsEnabled,
     dbInstanceId,
     bundledLicenseAvailable,
+    buildStamp,
     thirdPartyNoticesScope,
     activeLocalProfile,
     setSecurityProfile,
@@ -3377,6 +3389,7 @@ export default function Settings() {
             <AboutSection
               dbInstanceId={dbInstanceId}
               bundledLicenseAvailable={bundledLicenseAvailable}
+              buildStamp={buildStamp}
               thirdPartyNoticesScope={thirdPartyNoticesScope}
             />
           </StickySection>

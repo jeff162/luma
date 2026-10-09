@@ -162,6 +162,36 @@ def third_party_notices() -> tuple[Path, str] | None:
     return (web, "web") if web.is_file() else None
 
 
+# The commit a build was made from, written at build time by `scripts/luma.spec` and placed at the
+# bundle root. Named here because the spec and the app both have to reach the one filename.
+BUILD_STAMP_FILENAME = "build-stamp"
+
+
+def build_stamp() -> str | None:
+    """Which commit this copy was built from, phrased the way `git describe` phrases it —
+    `v0.3.0-14-ga1b2c3d` for a build fourteen commits past the `v0.3.0` tag.
+
+    `APP_VERSION` is bumped by hand at release time, so every build made between two releases reports
+    the same version however far apart they are. This is what tells them apart, and therefore what
+    answers the question a bug report raises: whether the fix is already in the build the report came
+    from. Kept separate from the version rather than suffixed onto it, because that constant names the
+    artifact and is what the packaging manifests are checked against — nothing that compares versions
+    should have to parse past a build id.
+
+    `None` is a real answer and the usual one. A checkout carries no stamp: its commit is a `git`
+    command away, and a file left in a working copy would be a stale answer the moment anything is
+    committed. Neither does a build assembled from an export with no git history. The frozen check is
+    what makes the first of those reliable — a stamp that somehow landed in a working copy still cannot
+    be reported as one."""
+    if not is_frozen():
+        return None
+    try:
+        stamped = (bundle_root() / BUILD_STAMP_FILENAME).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return stamped or None
+
+
 def install_root() -> Path:
     """Where the application *sits* — the directory a portable copy keeps its data and its `.env` beside.
 

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import app_config
-from backend.runtime_config import env_file_path
+from backend.runtime_config import build_stamp, env_file_path
 from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
@@ -369,6 +369,10 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         # Whether a local license copy exists to fall back on when the published one is unreachable.
         "bundled_license_available": bundled_license_available(),
         "third_party_notices_scope": third_party_notices_scope(),
+        # Which commit a packaged build came from, for the About panel. Ungated, unlike the data
+        # location below: a commit of a published repository describes the software rather than the
+        # machine it is running on. Null in a checkout, where the row is left out.
+        "build_stamp": build_stamp(),
         "db_instance_id": db_instance_id,
     }
     # The current identity always comes from the session (both modes). A perimeter-off session is
