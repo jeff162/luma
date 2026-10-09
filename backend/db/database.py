@@ -159,6 +159,10 @@ def get_db(db_path: str | None = None):
 # `import_batch.detail_cleared_at` once that action stopped removing the card from the history and
 # became maintenance over the detail alone. Nothing to backfill in either.
 
+# Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
+# running under `--reload` applies the new version the moment this file is saved, against whichever
+# database it is pointed at — including the developer's own. Land everything the migration reads or
+# writes first, then come back here.
 CURRENT_VERSION = 67
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
