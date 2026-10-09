@@ -176,6 +176,15 @@ scale — rather than by feature.
   credential **is the bank login** and cannot be revoked from inside the app, so both the connect and
   disconnect flows have to say so. Parked on
   **coverage**: the bundled FI list matched none of the institutions actually in use here.
+- [provider-candidates.md](provider-candidates.md) — **research, nothing started (2026-10-09).** Which
+  provider to add next, and what each would cost. The structural half is the finding worth acting on:
+  SimpleFIN is a protocol with several independent servers — four of the seven services checked expose one
+  — and the adapter isolates the protocol *mapping* cleanly while keeping every Bridge-specific policy in
+  module constants no subclass can reach, so a second server costs a parameterizing refactor before it
+  costs anything else. Records what each service actually is, the two that sell direct access to
+  individuals (Akahu, Enable Banking's restricted production), the **server profile** that makes "named
+  server" and "paste any token" one mechanism rather than two, and why accepting an unlisted host leaks
+  nothing — so the fixed host allowlist is not re-imposed out of caution.
 
 ### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
 

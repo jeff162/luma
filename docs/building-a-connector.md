@@ -666,3 +666,10 @@ Decisions owed on this topic, each naming the live backlog item that will feed i
   remove call to build one from, so what disconnect does and does not do is a disclosure question to
   settle before an adapter is written.
   → [`backlog/ofx-direct-connect.md`](backlog/ofx-direct-connect.md)
+- **Whether a SimpleFIN *server* other than the Bridge may be connected.** The protocol defines many
+  independent servers and several third-party aggregators expose one, while the host allowlist above is
+  fixed to the Bridge's two hosts and every other per-server fact — window width, budget shape, pacing key,
+  account-id namespace, zero-amount policy — sits in a module constant no subclass can reach. The direction
+  is a **server profile** holding those values, with an unprofiled server taking conservative ones; what is
+  owed is the values themselves and what a connection walked on guesses should disclose.
+  → [`backlog/provider-candidates.md`](backlog/provider-candidates.md)

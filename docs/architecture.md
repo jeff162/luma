@@ -762,11 +762,12 @@ came of leaving it unstated, in `docs/data-model.md`.
   several of its traits turned out not to be universal. Each is now a class attribute an adapter declares,
   so a caller asks the adapter rather than knowing which providers are special: `connect_spec` (a Link-style
   widget vs. a pasted token — it also drives what the connect UI renders), `requires_app_config`,
-  `has_cursor`, `max_history_days`, `routine_lookback_days`, `revokes_on_disconnect`, `zero_amount_rows`,
-  and `connect_requires_production_vault(payload)`. Adding a provider means declaring these; it should not
-  mean editing the routers, the sync loop, or the Connections tab. `zero_amount_rows` is the one with **no
-  default** — what a $0 row means does not generalize between sources, so an undeclared one must fail
-  rather than inherit. It also spans beyond adapters: the CSV and Amazon importers are data sources with no
+  `has_cursor`, `max_history_days`, `routine_lookback_days`, `revokes_on_disconnect`, `connect_noun`,
+  `reissues_credential`, `stable_external_id`, `zero_amount_rows` and `currency_scope`. Adding a provider
+  means declaring these; it should not mean editing the routers, the sync loop, or the Connections tab. The
+  last two are the ones with **no default** — what a $0 row means, and whether a currency is stated per
+  account or per transaction, do not generalize between sources, so an undeclared one must fail rather than
+  inherit. It also spans beyond adapters: the CSV and Amazon importers are data sources with no
   class to hold an attribute, so they declare through the registry in `services/source_capabilities.py`.
   **See `docs/building-a-connector.md`** for the full checklist of provider traits that turned out not to
   be universal (id uniqueness, currency, budgets, coverage claims, reporting refusals) and the failures

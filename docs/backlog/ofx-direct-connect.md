@@ -7,7 +7,7 @@ must be settled before any future pick-up.
 
 ## Why it is interesting at all
 
-Every aggregator on the connection roadmap — Plaid, Teller, SimpleFIN — is a middleman: a third party
+Every aggregator on the connection roadmap — Plaid, SimpleFIN — is a middleman: a third party
 that holds a credential and sees the ledger. **OFX Direct Connect is the only transaction-pull protocol
 that talks to the institution directly.** For a local-first, self-hosted app that is a real
 philosophical fit, and it is the only reason this is worth revisiting rather than dismissing.
@@ -89,11 +89,12 @@ the shared `establish_connection`, the base adapter's range-pull `fetch_transact
 `requires_app_config = False`. OFX would declare the same capabilities rather than add new ones, which
 removes most of what made this look expensive.
 
-Two of its remaining differences are also already modelled. `revokes_on_disconnect = False` is exactly
+One of its remaining differences is also already modelled: `revokes_on_disconnect = False` is exactly
 the SimpleFIN case — a provider whose disconnect deletes only the local copy — so the confirm-dialog
-disclosure comes for free. And `connect_requires_production_vault` already gates a provider with no
-sandbox, which OFX is. What is **not** modelled is a connect flow that has to
-tell the user it is taking their banking login.
+disclosure comes for free. Having no sandbox needs no declaration either, since the passphrase floor is
+unconditional and there is no weak tier left for a sandbox to qualify for
+([`../security-model.md`](../security-model.md) → *Secret custody*). What is **not**
+modelled is a connect flow that has to tell the user it is taking their banking login.
 
 Assuming that seam work exists, what is left is a `ProviderAdapter` over `ofxtools`, normalizing to the
 neutral contract in `backend/services/providers/base.py`. Notes, not a spec:
