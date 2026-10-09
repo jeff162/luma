@@ -115,6 +115,15 @@ batch on each call and worsen lock contention.
 cards and files the rest into a reachable by-year archive (`docs/ui-patterns.md` → the recency-window
 pattern). That is what bounds the *rendered* history; the fetch is still unbounded behind it.
 
+**The largest thing the history stores is the duplicate reports**, not the cards: one row per refused
+row, each holding the raw values, the matched transaction and the payload that would have been inserted.
+Measured on a real ledger that was **34 MB of JSON against a 73 MB database** — more than every
+transaction put together — and it rides every backup. A maintenance screen (*Free up import space*, served by
+`services/import_detail_storage.py`) attributes that space per source and clears it on request, leaving
+the cards, their counts, their coverage claims and their file hashes in place. There is deliberately no
+retention *policy*: an automatic sweep would be the silent cap again, and the clearing cannot be undone.
+See `data-model.md` → *Import batches and profiles*.
+
 **Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
 no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
 it has. The second is less obvious and is the larger half: **five consumers of `GET /import-export/batches`
@@ -299,8 +308,8 @@ every assertion.
 ## Open
 
 - **Re-bounding the import-history fetch**, now that the archive exists — which means moving the five
-  aggregate consumers above off the whole-list payload first. The batch-history deletion strategy is
-  owed alongside it. → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
+  aggregate consumers above off the whole-list payload first.
+  → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
 - **Whether the document delta is worth building**, now that both its prerequisites exist. The ledger
   half needs nothing; the open part is restoring a chain.
   → [`backlog/backup-restore-scope-and-secrets.md`](backlog/backup-restore-scope-and-secrets.md)

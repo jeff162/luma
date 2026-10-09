@@ -53,7 +53,7 @@ function sourceRow(batches) {
   }
 }
 
-function renderExpanded(row) {
+function renderExpanded(row, extra = {}) {
   render(
     <ImportHistorySection
       dataSourceRows={[row]}
@@ -66,6 +66,7 @@ function renderExpanded(row) {
       hasSystemRuleSuggestionWork={false}
       pendingSystemRuleSuggestionCount={0}
       getSourceNameEditKey={() => ''}
+      {...extra}
     />,
   )
 }
@@ -206,5 +207,45 @@ describe('a marketplace vendor whose history arrived as one multi-year drop', ()
     expect(screen.getByRole('button', { name: /2022 · 1 import/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /2020 · 1 import/ })).toBeTruthy()
     expect(screen.getByText('amazon-2022.csv')).toBeTruthy()
+  })
+})
+
+// Clearing a card's stored detail leaves the card and its counts, so what it must not leave is a pill
+// offering to open a report that no longer has anything in it.
+describe('a card whose stored detail has been cleared', () => {
+  const cleared = {
+    id: 'cleared',
+    filename: 'activity-2019.csv',
+    imported_at: '2026-07-26 20:09:00',
+    covers_start: '2019-07-05',
+    covers_end: '2019-12-31',
+    row_count: 112,
+    deduped_count: 112,
+    detail_cleared_at: '2026-10-09 09:00:00',
+    accounts: [],
+  }
+
+  it('says why its duplicates are no longer listed', () => {
+    renderExpanded(sourceRow([cleared, ...monthlyCards()]))
+
+    expect(screen.getByText(/Stored detail cleared/)).toBeTruthy()
+  })
+
+  it('stops offering a report with nothing left in it', () => {
+    renderExpanded(sourceRow([cleared, ...monthlyCards()]))
+
+    expect(screen.queryByRole('button', { name: /112 duplicates/ })).toBeNull()
+  })
+
+  it('keeps offering the rows that survive the clear, which the report can still show', () => {
+    renderExpanded(sourceRow([{ ...cleared, removed_duplicate_count: 4 }, ...monthlyCards()]))
+
+    expect(screen.getByRole('button', { name: /4 duplicates/ })).toBeTruthy()
+  })
+
+  it('still says the import added nothing, which the clear does not change', () => {
+    renderExpanded(sourceRow([cleared, ...monthlyCards()]))
+
+    expect(screen.getByText(/No new transactions — every row was already in the ledger/)).toBeTruthy()
   })
 })

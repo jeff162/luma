@@ -159,16 +159,15 @@ scale — rather than by feature.
   on a group/category report deserves the same note. It is deliberately not flagged today (a transaction
   has one category, so an include is ordinary focusing) and the behavior is correct without it; it is held
   for a larger tag-report pass rather than a one-off.
-- [import-history-windowing.md](import-history-windowing.md) — **reduced again 2026-10-08; the
-  per-source window, the by-year archive and the move onto transaction coverage are built.** The retention story — the silent global
+- [import-history-windowing.md](import-history-windowing.md) — **reduced again 2026-10-09; the
+  per-source window, the by-year archive, the move onto transaction coverage and the stored-detail
+  maintenance screen are all built.** The retention story — the silent global
   `LIMIT 50` that hid older imports and let one active source crowd out another, why the display query
   is unbounded, and why the writing reconcile pass on the same endpoint stays capped — is in
   [`../scale-and-limits.md`](../scale-and-limits.md); the window and archive as built are in
   [`../ui-patterns.md`](../ui-patterns.md) and [`../data-model.md`](../data-model.md). What stays: the
   fetch re-bound, now blocked on the five
-  consumers that read the batch list as an aggregate rather than as a page, and a deletion strategy —
-  whose real question turns out to be what a purged batch does to the transactions still pointing at
-  it, not whether to purge.
+  consumers that read the batch list as an aggregate rather than as a page.
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers

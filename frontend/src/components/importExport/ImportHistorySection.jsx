@@ -16,7 +16,7 @@ import { SourceAccountChip } from './SourceAccountChip.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
-import { partitionImportHistory, summarizeBatchAttention } from '../../lib/importExport/importHistoryWindow.js'
+import { describeDataSourceRow, partitionImportHistory, summarizeBatchAttention } from '../../lib/importExport/importHistoryWindow.js'
 import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
@@ -63,6 +63,7 @@ export function ImportHistorySection({
   onReviewMoneyMovement,
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
+  openDetailStorage,
 }) {
   return (
         <>
@@ -115,23 +116,20 @@ export function ImportHistorySection({
                     variant="ghost"
                     onClick={() => openRuleSuggestionReview()}
                     disabled={!hasSystemRuleSuggestionWork}
-                    style={hasSystemRuleSuggestionWork
-                      ? {
-                        background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
-                        border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
-                        boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
-                      }
-                      : {
-                        background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                        color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
-                        border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                        boxShadow: 'none',
-                      }}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                       <span>Generate rules</span>
                       <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
                     </span>
+                  </Button>
+                </Tooltip>
+                {/* Grouped with the other two because it acts on the import cards below, not on the
+                    data-source concept that "Manage sources" is a subscript to. It carries no count:
+                    the figure it would show costs a scan of the duplicate-report table, which is not
+                    worth paying on every page load to answer a question nobody has asked yet. */}
+                <Tooltip content="See what each import stored beyond its transactions, and clear it">
+                  <Button small variant="ghost" onClick={openDetailStorage}>
+                    Free up import space
                   </Button>
                 </Tooltip>
               </div>
@@ -211,7 +209,12 @@ export function ImportHistorySection({
                     // unreviewed forever behind a muted total. They stay out of the Tasks page,
                     // which counts only what is in the ledger awaiting a decision.
                     const advisoryReview = Number(b.advisory_review_count || 0)
-                    const settledDuplicates = summary.dedupedCount + Number(b.removed_duplicate_count || 0)
+                    // A cleared card's `deduped_count` stays true as a fact about the import but no
+                    // longer names rows the report can show, so it leaves this total — the pill's
+                    // contract is the report's own count, and offering to open an empty report is
+                    // worse than not offering. What survives a clear is counted from `txn`.
+                    const settledDuplicates = (b.detail_cleared_at ? 0 : summary.dedupedCount)
+                      + Number(b.removed_duplicate_count || 0)
                     const duplicateTotal = settledDuplicates + suspectDuplicates
                     // The card's share of the PayPal reconciliation (a PayPal file, or a sync that
                     // includes a PayPal account), offered only when it lists something and tinted
@@ -264,7 +267,14 @@ export function ImportHistorySection({
                               statements over an activity export, so it is stated plainly, and stated as
                               what it did rather than as a failure: the rows it could not add are usually
                               the same rows whose detail it folded into the ledger. */}
-                          {summary.importedCount === 0 && Number(b.duplicate_row_count || 0) > 0 ? (
+                          {/* Why a card that refused rows now shows no duplicates pill. Without it a
+                              cleared card is indistinguishable from an import that found nothing. */}
+                          {b.detail_cleared_at ? (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
+                              Stored detail cleared — the duplicate report this import kept has been freed
+                            </div>
+                          ) : null}
+                          {summary.importedCount === 0 && summary.dedupedCount > 0 ? (
                             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
                               No new transactions — every row was already in the ledger
                               {Number(b.enriched_duplicate_count || 0) > 0
@@ -640,9 +650,7 @@ export function ImportHistorySection({
                                 // beside the real one — two rows under the same institution name, one of
                                 // them history. Its cards are kept because they are the provenance of
                                 // transactions still in the ledger.
-                                <span>{row.disconnected
-                                  ? 'Disconnected · import history kept'
-                                  : row.provider ? `${providerLabel(row.provider)} connection` : 'Data connection'}</span>
+                                <span>{describeDataSourceRow(row, providerLabel).qualifier}</span>
                               ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
                                 <TransientTextInput
                                   value={sourceDescriptionDraft}

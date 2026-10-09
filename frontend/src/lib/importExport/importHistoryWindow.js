@@ -133,3 +133,25 @@ export function summarizeBatchAttention(batches) {
     paypalAttention: new Set(list.flatMap(batch => batch?.paypal_recon_attention_ids || [])).size,
   }
 }
+
+/**
+ * How a data-source row names itself: the heading, and the qualifier that sits under it.
+ *
+ * Shared because the qualifier is the only thing telling two connections at one institution apart —
+ * the row's own label is just the institution — so a second surface rendering the heading without it
+ * shows two identical groups for two different sources.
+ */
+export function describeDataSourceRow(row, providerLabel) {
+  if (row?.kind === 'connection') {
+    return {
+      name: row.label || 'Data connection',
+      qualifier: row.disconnected
+        ? 'Disconnected · import history kept'
+        : row.provider ? `${providerLabel(row.provider)} connection` : 'Data connection',
+    }
+  }
+  if (row?.kind === 'manual') return { name: 'Temporary draft', qualifier: null }
+  if (row?.kind === 'unknown') return { name: 'Unknown data source', qualifier: null }
+  if (row?.kind === 'marketplace') return { name: row.label || 'Marketplace', qualifier: null }
+  return { name: row?.profile?.name || 'Data source', qualifier: null }
+}

@@ -1129,6 +1129,40 @@ CSV import creates supporting records for workflow and recovery:
 
 - **Import batches:** one record per import run so imported transactions can be undone
 
+- **Clearing a card's stored detail** (`detail_cleared_at`): an import keeps a **duplicate report** —
+  one row per row it refused, holding the raw values, the transaction it matched and the payload it
+  would have inserted — and that report is by a wide margin the largest thing the import history
+  stores. Measured on a real ledger it was 34 MB against a 73 MB database, more than every transaction
+  put together, and it rides every backup. Clearing it is maintenance over stored diagnostics, so the
+  card **stays in the history** and says its detail was cleared; nothing disappears, which is what
+  keeps the action from needing a destructive vocabulary that would misdescribe it.
+
+  Everything else on the card survives, and each survivor is load-bearing somewhere a removal would
+  break silently: the `import_batch` row, because `txn.import_batch_id` is `ON DELETE SET NULL` and its
+  presence is how the ledger knows a transaction was not entered by hand; `file_content_hash` and
+  `status`, because together they are the re-import guard, which is why the marker is a column of its
+  own rather than a `status` value; `import_batch_account`, because its `coverage_*` columns are the
+  claim duplicate detection reads for a terminal-day window, and dropping it would let a later import
+  of an already-covered period bring those rows in again as new; and `config_snapshot`, because a
+  PayPal statement finds its account by reading the snapshots of the statements before it.
+
+  **`deduped_count` outlives the rows it counted**, and that is the one place a cleared card has to be
+  read carefully: the column stays true as a fact about the import, but it no longer names rows any
+  report can show, so it is excluded from the card's duplicates pill once `detail_cleared_at` is set
+  (see `removed_duplicate_count`, whose contract is that a count never names a row the report cannot
+  show). What survives a clear is counted from `txn` instead.
+
+- **A confirmed duplicate's owner follows its undo path.** A row trashed as a confirmed duplicate is
+  hidden from Settings → Trash while the originating card's duplicate report exists, because that report
+  is where it is restorable from (see `rejection_reason` below). Clearing the report closes that door, so
+  it hands the row to the Trash in the same write: `rejection_reason` and `dedupe_resolved_by` are
+  cleared and the row becomes ordinary trash, restorable and emptiable there. `suspect_duplicate_of` is
+  kept as the audit trail. This is the one path that makes `rejection_reason = NULL` on a row the user
+  did not delete by hand — it is accurate, because the row is now theirs to restore or purge, and the
+  alternative was a fourth `rejection_reason` value every reader of the column would have to learn. Rows
+  resolved by an account merge (`dedupe_resolved_by = 'auto_merge'`) are **not** released: their undo is
+  detaching the accounts, a path the clear does not disturb.
+
 - **What a batch covers** (`covers_start`, `covers_end`, `covers_source`): the span of transaction dates
   the file carried, which is what the import history orders and groups by. It is written when the card's
   rows are written rather than re-derived on read — once per import rather than per card per page load —

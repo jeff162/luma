@@ -91,6 +91,11 @@ from backend.services.duplicate_detection import (
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
+from backend.services.import_detail_storage import (
+    clear_batch_detail,
+    detail_storage,
+    summarize_detail_clearing,
+)
 from backend.services.import_batch_totals import (
     IMPORT_SUMMARY_KEY,
     STATEMENT_SNAPSHOT_KEY,
@@ -268,6 +273,10 @@ class ImportRunRequest(BaseModel):
 
 class BatchCategoryMappingApplyRequest(BaseModel):
     assignments: dict[str, str]
+
+
+class BatchDetailClearRequest(BaseModel):
+    batch_ids: list[str]
 
 
 def _normalize_imported_category_scope_mode(value: Optional[str]) -> str:
@@ -4482,6 +4491,9 @@ def list_batches():
                    -- import time answers "when did I press the button", which stops being the useful
                    -- question as soon as a historical backfill is involved.
                    b.covers_start, b.covers_end, b.covers_source,
+                   -- When this card's detail records were cleared, so the card can say so rather than
+                   -- look like an import that refused nothing.
+                   b.detail_cleared_at,
                    -- Connection provenance for data-source (sync) cards: the provider disambiguates two
                    -- connections at the same institution (e.g. one "Northgate" via Plaid, another via a
                    -- different provider), and institution is the stable label the group header shows.
@@ -4626,6 +4638,31 @@ def list_batches():
                 d["paypal_recon_rows"] = card["rows"]
                 d["paypal_recon_attention_ids"] = card["attention_ids"]
         return result
+
+
+@router.get("/batches/detail-storage")
+def get_batch_detail_storage():
+    """How much each card's duplicate report and rejected-row record hold, for the maintenance screen
+    that offers to clear them. Read on demand rather than with the history, which would pay for a scan
+    of the report table on every page load to answer a question nobody has asked yet."""
+    with get_db() as conn:
+        return detail_storage(conn)
+
+
+@router.post("/batches/clear-detail-preview")
+def preview_batch_detail_clearing(body: BatchDetailClearRequest):
+    """What clearing these cards' detail would remove and what it would leave — the figures the
+    confirmation states. Separate from the write so the sentence and the write come from one counter."""
+    with get_db() as conn:
+        return summarize_detail_clearing(conn, body.batch_ids)
+
+
+@router.post("/batches/clear-detail")
+def clear_batch_detail_records(body: BatchDetailClearRequest):
+    """Clear these cards' detail records, keeping the cards and every transaction they imported. See
+    `services/import_detail_storage.py` for what survives and why each survivor has to."""
+    with get_db() as conn:
+        return clear_batch_detail(conn, body.batch_ids, cleared_at=utcnow_iso())
 
 
 @router.get("/batches/{batch_id}/edited")

@@ -64,6 +64,7 @@ import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerC
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { useReconciliationViewer } from '../contexts/ReconciliationViewerContext.jsx'
 import { byCoverage } from '../lib/importExport/importHistoryWindow.js'
+import { ImportDetailStorageDialog } from '../components/importExport/ImportDetailStorageDialog.jsx'
 import {
   getBlankImportSnapshot,
   getBlankMappingSuggestions,
@@ -250,6 +251,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const [compatibleBatchPrompt, setCompatibleBatchPrompt] = useState(null)
   const [attachingCompatibleBatches, setAttachingCompatibleBatches] = useState(false)
   const [showDataSourceManager, setShowDataSourceManager] = useState(false)
+  const [showDetailStorage, setShowDetailStorage] = useState(false)
   const [dataSourceManagerInitialMode, setDataSourceManagerInitialMode] = useState('list')
   const [dataSourceManagerEditing, setDataSourceManagerEditing] = useState(false)
   const [dataSourceManagerPos, setDataSourceManagerPos] = useState(null)
@@ -4613,6 +4615,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
           handleUndoClick={openUndo}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}
           openReconciliationViewer={reconciliationViewer.open}
+          openDetailStorage={() => setShowDetailStorage(true)}
         />
       )}
 
@@ -4624,6 +4627,14 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         <ConnectionSyncLogDialog
           initialConnectionIds={syncLogConnectionId ? [syncLogConnectionId] : []}
           onClose={() => setSyncLogOpen(false)}
+        />
+      ) : null}
+
+      {showDetailStorage ? (
+        <ImportDetailStorageDialog
+          dataSourceRows={dataSourceRows}
+          onClose={() => setShowDetailStorage(false)}
+          onCleared={() => api.listBatches().then(setBatches).catch(() => { })}
         />
       ) : null}
 

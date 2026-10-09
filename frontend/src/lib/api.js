@@ -1035,6 +1035,12 @@ export const api = {
   getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),
   saveCategoryWorkspaceDraft: (draft, baseRevision = 0) => request('/import-export/category-workspace-draft', { method: 'PUT', body: JSON.stringify({ draft, base_revision: baseRevision }) }),
   listBatches:      ()      => request('/import-export/batches'),
+  // The maintenance screen over what each import stored beyond its transactions. The preview states
+  // what the confirmation promises and the clear reports what it did — both counted server-side, so
+  // the sentence and the write cannot disagree.
+  getBatchDetailStorage:      ()          => request('/import-export/batches/detail-storage'),
+  previewBatchDetailClearing: (batchIds)  => request('/import-export/batches/clear-detail-preview', { method: 'POST', body: JSON.stringify({ batch_ids: batchIds }) }),
+  clearBatchDetail:           (batchIds)  => request('/import-export/batches/clear-detail', { method: 'POST', body: JSON.stringify({ batch_ids: batchIds }) }),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
   getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),

@@ -47,18 +47,21 @@ has an obvious second application here that was deliberately **not** taken in th
 
 **Decided, not yet done.** The user's call on each, from that session:
 
-- **Backup / Restore should move to Settings.** It is install administration: it acts on the whole
+- **Backup / Restore should move off this page.** It is install administration: it acts on the whole
   database, restore is destructive and gated, and it has nothing to do with transactions arriving.
-  Settings is the permanent home for what describes the install, and moving it there costs no
-  navigation slot — which matters, since the pane is at ten entries plus the sync control.
+  **Where it goes is undecided, and Settings is not the answer by default** — Settings has been a
+  parking spot for things built before their home existed rather than a destination, and most of what
+  sits there is expected to move too. A *System administration* area with Settings as one member is
+  the shape under consideration. This move therefore waits on that decision rather than leading it.
 - **Export stays put for now.** It is a data operation on the ledger rather than admin, and its pairing
   with Import is at least defensible. Revisit only if the page is still crowded afterwards.
 - **The page rename comes last, and that ordering is the point.** "Import / Export" is already wrong (it
   carries Backup/Restore and Amazon) and gets wronger with connections on it — but the right name is
   downstream of what is left on the page, so naming it before Backup/Restore leaves would be guessing.
-- **The import history's own organization** is a separate job, now partly built — the per-source
-  recency window and its by-year archive are in; what is left there is the fetch re-bound and a
-  deletion strategy ([`import-history-windowing.md`](import-history-windowing.md)). It is the half of
+- **The import history's own organization** is a separate job, now largely built — the per-source
+  recency window, its by-year archive, coverage-based ordering and the stored-detail maintenance screen
+  are all in; what is left there is the fetch re-bound
+  ([`import-history-windowing.md`](import-history-windowing.md)). It is the half of
   the page that gets worse as the top gets denser, so it pairs naturally with this.
 
 **Why deferred.** The connections split was already touching the two largest files in the repo. Bundling

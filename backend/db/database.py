@@ -155,8 +155,11 @@ def get_db(db_path: str | None = None):
 # plus `import_watch_file`, the per-file `(size, mtime)` watermark that keeps a scan off the disk).
 # v65 records what period each import card covers (`import_batch.covers_*`) and backfills it, so the
 # history organizes by the transactions a file carried rather than by when it was imported.
+# v66 adds the marker for a card whose stored detail has been cleared, and v67 renames it to
+# `import_batch.detail_cleared_at` once that action stopped removing the card from the history and
+# became maintenance over the detail alone. Nothing to backfill in either.
 
-CURRENT_VERSION = 65
+CURRENT_VERSION = 67
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2004,6 +2007,31 @@ def _backfill_import_batch_coverage(conn):
     refresh_batch_coverage(conn, [row["id"] for row in conn.execute("SELECT id FROM import_batch")])
 
 
+@migration(66)
+def _add_import_batch_history_purge(conn):
+    # Guarded like v65: the per-migration unit tests hand-build a minimal schema and run the chain.
+    if "import_batch" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "history_purged_at" not in columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN history_purged_at TEXT")
+
+
+@migration(67)
+def _rename_history_purge_marker(conn):
+    """v66's marker hid the card from the history; the action it marks now only clears the card's detail
+    records and leaves the card in place, so the old name describes something that no longer happens."""
+    if "import_batch" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "detail_cleared_at" in columns:
+        return
+    if "history_purged_at" in columns:
+        conn.execute("ALTER TABLE import_batch RENAME COLUMN history_purged_at TO detail_cleared_at")
+    else:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN detail_cleared_at TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2917,7 +2945,12 @@ def init_db(db_path: str | None = None):
                 -- history orders and groups by.
                 covers_start     TEXT,
                 covers_end       TEXT,
-                covers_source    TEXT
+                covers_source    TEXT,
+                -- When this card's detail records (its duplicate report and its stored rejected rows)
+                -- were cleared by the maintenance screen — see services/import_detail_storage.py. The
+                -- card itself stays in the history and says so; what the marker is for is telling a
+                -- card that refused nothing from one whose record of refusing has been freed.
+                detail_cleared_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
 
