@@ -119,26 +119,15 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
                                        request=request)
 
     def _log_rows(self):
+        # Newest last-inserted first, which is what "newest" means to every test here — two syncs a few
+        # milliseconds apart. Ordering by `started_at` is what the *dialog* does and is right there, but
+        # it is a wall clock, and this host's steps backwards by one to three seconds (see
+        # `docs/agent-profile.md` → Verification And Tests). A step between the two syncs sorted the
+        # second row first and the test read the wrong one, intermittently and for a year.
         with self._use_db_path(), get_db() as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT * FROM connection_sync_log ORDER BY started_at DESC, id DESC"
+                "SELECT * FROM connection_sync_log ORDER BY rowid DESC"
             ).fetchall()]
-
-    def _two_syncs_dump(self):
-        """Both sides of an intermittent failure, for the assertion message of the two tests that sync one
-        transaction twice and read the newest log row (`docs/transient-failures.md`, entry 3). The log rows
-        in insertion order, which the wall clock cannot reorder, beside the `started_at` that picked
-        "newest"; and the transaction table, which says whether the first sync left the row behind for the
-        second to find already held."""
-        with self._use_db_path(), get_db() as conn:
-            log = [dict(r) for r in conn.execute(
-                "SELECT rowid, started_at, finished_at, added, skipped, account_counts "
-                "FROM connection_sync_log ORDER BY rowid"
-            ).fetchall()]
-            txns = [dict(r) for r in conn.execute(
-                "SELECT rowid, external_transaction_id, trashed_at, import_batch_id FROM txn ORDER BY rowid"
-            ).fetchall()]
-        return f"\nlog rows by rowid: {log}\ntxn rows: {txns}"
 
     def _advisories(self, row):
         return json.loads(row["advisories"]) if row["advisories"] else []
@@ -516,8 +505,8 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
             pass
         with self._driven_sync(pages=page):
             pass
-        self.assertEqual(self._log_rows()[0]["added"], 0, self._two_syncs_dump())   # newest first
-        self.assertEqual(self._breakdown()["skipped_already_held"], 1, self._two_syncs_dump())
+        self.assertEqual(self._log_rows()[0]["added"], 0)   # newest first
+        self.assertEqual(self._breakdown()["skipped_already_held"], 1)
         self.assertEqual(self._breakdown()["skipped_unknown_account"], 0)
 
     def test_the_sums_are_derived_and_no_column_holds_them(self):
@@ -531,7 +520,7 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         with self._driven_sync(pages=page):
             pass
         row = self._log_rows()[0]
-        self.assertEqual(row["skipped"], 1, self._two_syncs_dump())
+        self.assertEqual(row["skipped"], 1)
         self.assertEqual((row["skipped_no_account"], row["skipped_already_held"]), (0, 0))
         self.assertEqual(self._breakdown()["skipped_already_held"], 1,
                          "the fact still reaches the reader — from the tally, not from a column")

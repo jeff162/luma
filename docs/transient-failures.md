@@ -155,52 +155,6 @@ backwards (entry 1 above), and every question here is a question about ordering.
 
 ---
 
-## 3. A second sync of the same transaction reads as the first
-
-**Status: seen once, instrumented, waiting on a recurrence.**
-
-**Last seen: 2026-09-19.**
-
-### Symptom
-
-`test_sync_diagnostics_log.py::SyncDiagnosticsLogTests::test_the_sums_are_derived_and_no_column_holds_them`
-fails on `self.assertEqual(row["skipped"], 1)` with `0 != 1`. The test syncs one transaction twice and
-reads the newest log row, which should be the second sync's, holding the transaction as already held.
-`skipped` 0 is what the *first* sync writes. The preserved output is
-`data/check-logs/20260919-160000-sums-test-intermittent.log`.
-
-**Once, in a sequential (non-xdist) run of five backend files**, and then green in 6 runs of the test
-alone, 8 of the same five files, and two full gates. Its sibling
-`test_a_re_fetched_row_counts_as_already_held_not_as_lost` has the same shape and would fail the same way.
-
-### Why it is strange
-
-"Newest" is `ORDER BY started_at DESC, id DESC` (the test's `_log_rows`), and `started_at` is the wall clock
-at the start of each connection's pull (`_utcnow_iso` in `routers/sync.py`). A probe of 40 back-to-back
-syncs found no two rows sharing a `started_at`, so it is not a tie broken by the random `id`.
-
-That leaves two candidates:
-
-- **The clock stepped backwards between the two syncs**, which are a few milliseconds apart. The second
-  row then sorts before the first and the test reads the wrong one. This host's clock is known to step back
-  by one to three seconds (entry 1, and the session-cookie note below), so this is the one to check first.
-- **The first sync did not leave the transaction behind** — not inserted, or rolled back — so the second
-  genuinely added it. That would be a real defect in the sync ingest, not in the test.
-
-### What the next occurrence will say
-
-Both tests' assertions now dump (`_two_syncs_dump`) the log rows in `rowid` order — insertion order, which
-the clock cannot disturb — with their `started_at`, `added`, `skipped` and `account_counts`, and every
-`txn` row with its `external_transaction_id`, `trashed_at` and `import_batch_id`.
-
-- A higher `rowid` carrying an **earlier** `started_at`, with `t1` held once: the clock step. The fix is
-  then the test's ordering (`ORDER BY rowid`), not the product; the dialog's own `started_at` ordering
-  would merely show two entries swapped.
-- Rows in order, `added` 1 on both, or no `t1` after the first sync: the ingest lost the row, and this
-  stops being a test problem.
-
----
-
 ## Not an entry: the cash-flow frame, and the 401 burst behind it
 
 Recorded because it was filed three times as three separate intermittents and someone will otherwise

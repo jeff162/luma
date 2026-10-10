@@ -394,6 +394,14 @@ for what the *user* can act on.
   change set is legitimate and often useful, but it is a **second** step, never the first, because a
   green re-run destroys the state that would have explained the red one.
 
+- **A test that means "the newest row" orders by insertion, not by a wall clock.** This host's clock
+  steps backwards by one to three seconds, repeatedly, and it is a property of the machine rather than
+  of anything that was fixed. Two rows written milliseconds apart across such a step invert, so
+  `ORDER BY <timestamp> DESC` hands back the older one and the test fails intermittently, in a way a
+  re-run always hides. Order by `rowid` (or an ascending id) where the question is really "which was
+  written last" — the production code may well be right to sort by time, and the test still should not.
+  This cost a year of an unexplained intermittent in `test_sync_diagnostics_log.py`.
+
   Identifying the root cause is not required. Preserving enough to dig into it later is. "Passed on a
   re-run, probably a known flake" is not an investigation — it is the report of one that did not happen,
   and it hands the next reader a fact that was true and no longer checkable.

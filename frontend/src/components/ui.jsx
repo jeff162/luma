@@ -103,7 +103,7 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
    * **2ms** end to end, so the listener that was going to cancel the dwell is still unattached when the
    * right-click passes, and the card opens 300ms later over the menu it should have yielded to —
    * `interactive`, so it then swallows the clicks aimed at the menu items beneath it. It presented as an
-   * intermittent Playwright failure (`transient-failures.md` entry 4) because whether React flushes
+   * intermittent Playwright failure because whether React flushes
    * inside those 2ms is a matter of load; a person right-clicking a merchant hits the same race, and
    * loses it as reliably. Nothing here may be made to depend on a render having happened.
    */
