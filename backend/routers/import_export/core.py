@@ -80,6 +80,7 @@ from backend.services.duplicate_detection import (
     coverage_review_substate,
     evaluate_duplicate,
     get_effective_account_row,
+    ADVISORY_REVIEW_SUBSTATES,
     is_settled_source_restatement,
     list_unified_batch_duplicates,
     mark_import_suspects,
@@ -4698,14 +4699,16 @@ def list_batches():
             # Rejected rows still wanting a look, for the card's "to review" suffix. Only the two
             # sub-states that ask something: a cross-account match is settled (the coverage rule made the
             # verdict and the probe only named what it matched), so counting it here would bury the
-            # handful that matter under thousands that do not.
-            d["advisory_review_count"] = int(conn.execute("""
+            # handful that matter under thousands that do not. The list is shared with the decision about
+            # which refusals are worth a record at all (`is_settled_source_restatement`) — a row this
+            # count ignores is one that never needed storing.
+            d["advisory_review_count"] = int(conn.execute(f"""
                 SELECT COUNT(*) AS n
                 FROM   import_batch_duplicate
                 WHERE  batch_id = ?
                   AND  reviewed_at IS NULL
-                  AND  review_substate IN ('no_match', 'matched_near_date')
-            """, (b["id"],)).fetchone()["n"] or 0)
+                  AND  review_substate IN ({", ".join("?" * len(ADVISORY_REVIEW_SUBSTATES))})
+            """, (b["id"], *ADVISORY_REVIEW_SUBSTATES)).fetchone()["n"] or 0)
             # Settled like an import-time reject, so the card's duplicates pill counts it with those: it is
             # what makes the report — and its Restore — reachable from a card whose only duplicates were
             # decided after the import.

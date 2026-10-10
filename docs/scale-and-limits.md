@@ -126,8 +126,8 @@ See `data-model.md` → *Import batches and profiles*.
 
 **What stopped that growing back is a decision about what to write, not a sweep over what is held.** The
 population above was overwhelmingly one thing: a source restating its own prior import, which is what a
-re-export with an overlapping window is. On the measured ledger that was **98.7% of the report rows and
-99% of the bytes**, and not one of them was flagged as wanting a look. Those refusals are now counted
+re-export with an overlapping window is. On the measured ledger that was **89% of the report's bytes**,
+and of those rows only 172 — fewer than one in 150 — were ever flagged as wanting a look. Those refusals are now counted
 (`import_batch.ignored_count`) and not recorded (`is_settled_source_restatement`,
 `prune_source_restatements`), because there is nothing in such a record to read — the transaction each
 one duplicates is in the ledger and *is* the record. The distinction from a retention policy is the

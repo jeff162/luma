@@ -94,16 +94,19 @@ class ImportDetailClearingTests(unittest.TestCase):
             )
         return txn_id
 
-    def _insert_duplicate(self, row_number: int, *, enriched: bool = False):
+    def _insert_duplicate(self, row_number: int, *, enriched: bool = False,
+                          substate: str | None = None):
+        """`substate` is what makes a row count as flagged for review: NULL (and `transfer_match`) are
+        settled labels the cards never ask anyone to look at."""
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """
                 INSERT INTO import_batch_duplicate
                   (batch_id, row_number, reason, values_json, matched_transaction_json,
-                   txn_payload_json, enriched_at)
-                VALUES (?, ?, 'Matches an existing transaction', '{}', '{}', '{"date": "2019-08-01"}', ?)
+                   txn_payload_json, enriched_at, review_substate)
+                VALUES (?, ?, 'Matches an existing transaction', '{}', '{}', '{"date": "2019-08-01"}', ?, ?)
                 """,
-                (self.batch_id, row_number, '2026-01-01 00:00:00' if enriched else None),
+                (self.batch_id, row_number, '2026-01-01 00:00:00' if enriched else None, substate),
             )
 
     def _clear(self):
@@ -187,7 +190,9 @@ class ImportDetailClearingTests(unittest.TestCase):
             stored = detail_storage(conn)
 
         self.assertEqual(stored[self.batch_id]["report_rows"], 2)
-        self.assertEqual(stored[self.batch_id]["unreviewed_rows"], 2)
+        # Both are settled, so neither is "still flagged for review" — the figure means what the cards'
+        # amber count means, not "has nobody clicked this".
+        self.assertEqual(stored[self.batch_id]["unreviewed_rows"], 0)
         self.assertGreater(stored[self.batch_id]["bytes"], 0)
 
     # ---- nothing is left stranded ----------------------------------------
@@ -220,16 +225,20 @@ class ImportDetailClearingTests(unittest.TestCase):
         self._insert_txn()
         self._insert_txn()
         self._insert_txn(trashed=True, resolved_by="user")
-        self._insert_duplicate(1)
+        self._insert_duplicate(1, substate="no_match")
         self._insert_duplicate(2, enriched=True)
+        self._insert_duplicate(3, substate="transfer_match")
 
         with self._use_db_path(), get_db() as conn:
             preview = summarize_detail_clearing(conn, [self.batch_id])
 
         self.assertEqual(preview["cards"], 1)
         self.assertEqual(preview["transactions_kept"], 2)
-        self.assertEqual(preview["report_rows"], 2)
-        self.assertEqual(preview["unreviewed_rows"], 2)
+        self.assertEqual(preview["report_rows"], 3)
+        # Only the `no_match` row. The sentence this feeds is the last thing read before an
+        # irreversible delete, so it counts what the cards call flagged — not every row nobody clicked.
+        # Counted the other way this said 30,632 on a real ledger where the answer was 75.
+        self.assertEqual(preview["unreviewed_rows"], 1)
         self.assertEqual(preview["enrichment_undos"], 1)
         self.assertEqual(preview["trashed_released"], 1)
         self.assertGreater(preview["bytes"], 0)

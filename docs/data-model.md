@@ -1140,8 +1140,11 @@ CSV import creates supporting records for workflow and recovery:
   what the duplicates pill offers to open. Three conditions narrow it, and each is load-bearing — the
   claim must be **Rule 1** (this source's own coverage, not a sibling's under the same linked group),
   the source label must be **non-empty** (a single-account import's empty label is never indexed as
-  coverage, so a match wearing one came from Rule 2), and `coverage_review_substate` must find **nothing
-  to ask about**. A row that enriched its match keeps its record regardless, since that record is how
+  coverage, so a match wearing one came from Rule 2), and the rejection must not be one of the two
+  sub-states that **ask something** (`ADVISORY_REVIEW_SUBSTATES`: a covered date that paired with
+  nothing, or paired only two days out). A `transfer_match` is not among them — its verdict was the
+  coverage rule's and the probe only named a twin on another account — and that list is shared with the
+  card's "to review" count, so what the card ignores and what is never stored cannot drift apart. A row that enriched its match keeps its record regardless, since that record is how
   the enrichment is undone, which is why the pruning runs after auto-enrich rather than instead of
   writing. **`deduped` counts these until the report is written**: a wholly-restated file would
   otherwise trip the empty-batch delete and take its `file_content_hash` — half the re-import guard —

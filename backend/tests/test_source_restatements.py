@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import unittest
 
-from backend.services.duplicate_detection import is_settled_source_restatement
+from backend.services.duplicate_detection import (
+    ADVISORY_REVIEW_SUBSTATES,
+    coverage_review_substate,
+    is_settled_source_restatement,
+)
 
 
 def coverage_match(*, source: str = "Travel Rewards", candidates=None) -> dict:
@@ -56,10 +60,26 @@ class WhichRefusalsAreWorthNoRecordTests(unittest.TestCase):
         self.assertFalse(is_settled_source_restatement(
             coverage_match(candidates=[{"id": "txn-1", "day_offset": 2}]), csv_value="Travel Rewards"))
 
-    def test_candidates_all_on_other_accounts_keep_their_row(self):
-        self.assertFalse(is_settled_source_restatement(
+    def test_candidates_all_on_other_accounts_are_still_a_restatement(self):
+        # `transfer_match`. The coverage rule made the verdict and the probe only named a twin on
+        # another account, so it asks nothing — which is what the card has always said about it, and
+        # the two now read the same list. On a real ledger this was 1,727 further records.
+        self.assertTrue(is_settled_source_restatement(
             coverage_match(candidates=[{"id": "txn-1", "day_offset": 0, "cross_account": True}]),
             csv_value="Travel Rewards"))
+
+    def test_the_kept_sub_states_are_exactly_the_ones_the_card_flags(self):
+        # The invariant this predicate and the card's "to review" count share: a row the count ignores
+        # is a row that never needed storing. Stated here so widening one without the other fails.
+        for substate in ADVISORY_REVIEW_SUBSTATES:
+            self.assertIn(substate, ("no_match", "matched_near_date"))
+        kept = {
+            "no_match": coverage_match(candidates=[]),
+            "matched_near_date": coverage_match(candidates=[{"id": "txn-1", "day_offset": 2}]),
+        }
+        for substate, matched in kept.items():
+            self.assertEqual(coverage_review_substate(matched), substate)
+            self.assertFalse(is_settled_source_restatement(matched, csv_value="Travel Rewards"))
 
     def test_a_rejection_that_is_not_a_coverage_hit_is_not_a_restatement(self):
         self.assertFalse(is_settled_source_restatement(

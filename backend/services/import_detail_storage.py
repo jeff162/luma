@@ -28,12 +28,23 @@ detaching the accounts, which has nothing to do with the report.
 
 from __future__ import annotations
 
+from backend.services.duplicate_detection import ADVISORY_REVIEW_SUBSTATES
+
 # Resolutions whose only undo lives in the originating card's duplicate report. `auto_merge` is absent
 # on purpose: those rows come back by detaching the accounts that were merged, a path this does not
 # disturb. See `routers/transactions.py` for the Trash view's matching exclusion.
 REPORT_RESTORABLE_RESOLUTIONS = ("user", "auto_cross_source")
 
 _PLACEHOLDERS = ", ".join("?" * len(REPORT_RESTORABLE_RESOLUTIONS))
+
+# What "still flagged for review" means, taken from the one definition rather than restated here. The
+# figure this screen shows is the last thing read before an irreversible delete, so it has to mean what
+# the cards mean by it: `reviewed_at IS NULL` alone counts every settled restatement and cross-account
+# twin nothing ever asked anyone to look at, which on a real ledger read 30,632 where the answer was 75.
+_ADVISORY_PLACEHOLDERS = ", ".join("?" * len(ADVISORY_REVIEW_SUBSTATES))
+_UNREVIEWED_SQL = f"""
+    CASE WHEN reviewed_at IS NULL AND review_substate IN ({_ADVISORY_PLACEHOLDERS}) THEN 1 ELSE 0 END
+"""
 
 # The columns that make each kind of record large. Summed rather than estimated, because saying where
 # the space actually is is the whole point of the screen this feeds. Both kinds are counted, and both
@@ -63,10 +74,10 @@ def detail_storage(conn) -> dict:
         SELECT batch_id,
                COUNT(*) AS report_rows,
                COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes,
-               COALESCE(SUM(CASE WHEN reviewed_at IS NULL THEN 1 ELSE 0 END), 0) AS unreviewed_rows
+               COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS unreviewed_rows
         FROM   import_batch_duplicate
         GROUP  BY batch_id
-    """):
+    """, ADVISORY_REVIEW_SUBSTATES):
         by_batch[row["batch_id"]] = {
             "report_rows": int(row["report_rows"] or 0),
             "bytes": int(row["bytes"] or 0),
@@ -109,12 +120,12 @@ def summarize_detail_clearing(conn, batch_ids) -> dict:
             f"""
             SELECT COUNT(*) AS report_rows,
                    COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes,
-                   COALESCE(SUM(CASE WHEN reviewed_at IS NULL THEN 1 ELSE 0 END), 0) AS unreviewed,
+                   COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS unreviewed,
                    COALESCE(SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS enriched
             FROM   import_batch_duplicate
             WHERE  batch_id = ?
             """,
-            (batch_id,),
+            (*ADVISORY_REVIEW_SUBSTATES, batch_id),
         ).fetchone()
         rejected_row = conn.execute(
             f"""

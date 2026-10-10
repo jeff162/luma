@@ -1130,6 +1130,14 @@ def find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str,
     return None
 
 
+# The sub-states that ask a human for something, as against those that merely label a settled verdict.
+# One definition, because two readers of it disagreeing is exactly the bug: the card's "to review" count
+# and the decision about which refusals are worth storing have to mean the same thing by "needs a look".
+# `transfer_match` is deliberately absent — the coverage rule had already made that verdict and the
+# candidate probe only named what it matched on another account.
+ADVISORY_REVIEW_SUBSTATES = ("no_match", "matched_near_date")
+
+
 def coverage_review_substate(matched: Optional[dict]) -> Optional[str]:
     """Which advisory sub-state a coverage reject's candidate list amounts to, or None when the rejection
     is settled and asks nothing of anyone.
@@ -1179,8 +1187,12 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
       - a **non-empty** source label. A single-account import carries `csv_value = ''`, which Rule 1
         cannot fire on at all (an empty label is never indexed as coverage), so an empty match here
         would be Rule 2 wearing Rule 1's shape.
-      - **settled**: `coverage_review_substate` finds nothing to ask about. A covered date that paired
-        with nothing, or only two days out, is the one case worth investigating and keeps its row.
+      - **settled**: the rejection is not one of the two sub-states that ask something
+        (`ADVISORY_REVIEW_SUBSTATES`) — a covered date that paired with nothing, or paired only two days
+        out. A `transfer_match` is not among them: its verdict was made by the coverage rule and the
+        candidate probe only named a twin on another account, which is the same settled story as an
+        unlabelled hit told about a different account. The card has always counted it that way, and this
+        reads the same list so the two cannot drift apart.
 
     Enrichment is deliberately not asked about here: whether a row folded detail into its match is not
     known until after the report is written, so the caller excludes the enriched ones (their undo lives
@@ -1191,7 +1203,7 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
     source = str(matched.get("covered", {}).get("source_csv_value") or "").strip()
     if not source or source != str(csv_value or "").strip():
         return False
-    return coverage_review_substate(matched) is None
+    return coverage_review_substate(matched) not in ADVISORY_REVIEW_SUBSTATES
 
 
 def get_effective_account_row(conn, account_id: Optional[str]):
