@@ -15,6 +15,7 @@ export function summarizeImportOutcome(source) {
       importedCount: 0,
       skippedCount: 0,
       dedupedCount: 0,
+      updatedCount: 0,
       accountSkippedCount: 0,
       zeroAmountCount: 0,
       currencyRejectedCount: 0,
@@ -32,10 +33,15 @@ export function summarizeImportOutcome(source) {
   const rawSummary = source.import_summary && typeof source.import_summary === 'object'
     ? source.import_summary
     : null
+  // Rows that corrected a transaction already held instead of adding one. Subtracted in the
+  // `row_count` fallback below for the same reason skipped and deduped are: row_count counts every row
+  // the file accounted for, and only one of those outcomes created a transaction.
+  const updatedCount = Number(rawSummary?.updated_count ?? source.updated ?? source.updated_count) || 0
   const importedCount = Number(
     rawSummary?.imported_count
     ?? source.imported
-    ?? (Number(source.row_count || 0) - Number(source.skipped_count || 0) - Number(source.deduped_count || 0)),
+    ?? (Number(source.row_count || 0) - Number(source.skipped_count || 0) - Number(source.deduped_count || 0)
+        - Number(source.updated_count || 0)),
   ) || 0
   const skippedCount = Number(rawSummary?.skipped_count ?? source.skipped ?? source.skipped_count) || 0
   const dedupedCount = Number(rawSummary?.deduped_count ?? source.deduped ?? source.deduped_count) || 0
@@ -52,7 +58,7 @@ export function summarizeImportOutcome(source) {
   const totalRows = Number(
     rawSummary?.total_rows
     ?? source.row_count
-    ?? (importedCount + skippedCount + dedupedCount),
+    ?? (importedCount + skippedCount + dedupedCount + updatedCount),
   ) || 0
   const otherSkippedCount = Math.max(
     0,
@@ -80,6 +86,7 @@ export function summarizeImportOutcome(source) {
     importedCount,
     skippedCount,
     dedupedCount,
+    updatedCount,
     enrichedCount,
     accountSkippedCount,
     zeroAmountCount,

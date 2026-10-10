@@ -4518,6 +4518,13 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                     New detail added from {summary.enrichedCount} duplicate row{summary.enrichedCount === 1 ? '' : 's'}.
                   </div>
                 ) : null}
+                {/* A changed amount on an existing row is the one outcome here that leaves no trace of
+                    itself: no row appears, and the row that moved looks like it always held that figure. */}
+                {summary.updatedCount > 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount.
+                  </div>
+                ) : null}
                 {summary.skippedCount > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                     {summary.skippedCount} row{summary.skippedCount === 1 ? '' : 's'} couldn&rsquo;t be imported

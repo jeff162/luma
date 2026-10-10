@@ -373,6 +373,111 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["imported"], 0)
         self.assertEqual(result["deduped"], 1)
 
+    async def _import_base_then(self, rewards_id: str, later_rows: str) -> dict:
+        """The base export, then a second export of the same source carrying `later_rows`."""
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+        upload = UploadFile(filename="later_export.csv",
+                            file=io.BytesIO(later_rows.encode("utf-8")))
+        new_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        with self._use_db_path():
+            return await run_import(file=upload, config=json.dumps(new_config))
+
+    def _rows_on(self, date: str) -> list[dict]:
+        with self._use_db_path():
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT id, amount, category_source, import_batch_id FROM txn "
+                    "WHERE date = ? AND rejection_reason IS NULL ORDER BY amount",
+                    (date,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    async def test_a_revised_amount_corrects_the_held_row_instead_of_adding_a_second(self):
+        # The gap this closes. A tip settling onto a restaurant charge changes the amount between two
+        # exports of one source, so the row matches neither the exact-hash tier nor the amount-only
+        # tier, and before this it passed the whole chain and landed as a second copy — the state three
+        # pairs of a real ledger were found in.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        result = await self._import_base_then(
+            rewards_id,
+            "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+            "2025-12-05,BLUE BOTTLE,Dining,Travel Rewards,BLUE BOTTLE,,-8.25,,Alex\n",
+        )
+        self.assertEqual(result["imported"], 0, "nothing was added — a row already held was corrected")
+        self.assertEqual(result["deduped"], 0, "and it is not a duplicate: the ledger figure was wrong")
+        self.assertEqual(result["updated"], 1)
+        held = self._rows_on("2025-12-05")
+        self.assertEqual(len(held), 1, "the whole point: one transaction, not two")
+        # Stored sign follows the amount convention — a credit-card charge is held positive.
+        self.assertEqual(f"{held[0]['amount']:.2f}", "8.25")
+
+    async def test_the_corrected_row_keeps_its_own_identity_and_its_batch(self):
+        # Why this is an in-place update rather than a reject-and-replace: the row carries the user's
+        # curation. It also keeps its original batch — this import corrected a row it did not create,
+        # so undoing this import must not delete it.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        first = await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+        original = self._rows_on("2025-12-05")[0]
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                    (original["id"],),
+                )
+        upload = UploadFile(
+            filename="later_export.csv",
+            file=io.BytesIO((
+                "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+                "2025-12-05,BLUE BOTTLE,Dining,Travel Rewards,BLUE BOTTLE,,-8.25,,Alex\n"
+            ).encode("utf-8")),
+        )
+        new_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        with self._use_db_path():
+            await run_import(file=upload, config=json.dumps(new_config))
+        corrected = self._rows_on("2025-12-05")
+        self.assertEqual(len(corrected), 1)
+        self.assertEqual(corrected[0]["id"], original["id"])
+        self.assertEqual(corrected[0]["category_source"], "manual")
+        self.assertEqual(corrected[0]["import_batch_id"], first["batch_id"])
+
+    async def test_a_file_carrying_both_amounts_revised_nothing(self):
+        # The safeguard. Two charges from one merchant on one day at different amounts are ordinary,
+        # so the group is reconciled as a set: the held amount pairs off and its neighbour imports as
+        # the new charge it is. Row-at-a-time matching fails here — whichever row went first would
+        # take the held row on the descriptor alone and push the error onto the other.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        result = await self._import_base_then(
+            rewards_id,
+            "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+            "2025-12-05,BLUE BOTTLE,Dining,Travel Rewards,BLUE BOTTLE,,-6.75,,Alex\n"
+            "2025-12-05,BLUE BOTTLE,Dining,Travel Rewards,BLUE BOTTLE,,-8.25,,Alex\n",
+        )
+        self.assertEqual(result["updated"], 0, "nothing was revised")
+        self.assertEqual(result["deduped"], 1, "the matching amount is the duplicate it looks like")
+        self.assertEqual(result["imported"], 1, "and the other is a second charge")
+        self.assertEqual([f"{row['amount']:.2f}" for row in self._rows_on("2025-12-05")],
+                         ["6.75", "8.25"])
+
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
         self._insert_existing_transaction(

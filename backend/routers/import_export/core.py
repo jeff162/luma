@@ -82,6 +82,7 @@ from backend.services.duplicate_detection import (
     get_effective_account_row,
     list_unified_batch_duplicates,
     mark_import_suspects,
+    match_terminal_amount_revision,
     record_account_pair_distinct,
     unresolved_account_pairs,
     MIN_TERMINAL_WINDOW_DAYS,
@@ -3037,6 +3038,7 @@ def run_import_parsed(
     imported = 0
     skipped  = 0
     deduped  = 0
+    updated  = 0
     errors   = []
     row_results = []
     imported_category_counts: dict[str, int] = {}
@@ -3427,6 +3429,21 @@ def run_import_parsed(
         # Imported category labels repeat across a file, and resolving one reads the whole category table,
         # so each distinct label is resolved once per import (normalized name -> row, None included).
         imported_category_by_name: dict = {}
+        # Every amount the file carries per (source, date, descriptor). The amount-revision tier in the
+        # row loop reconciles a group as a set rather than row by row, which it cannot do from one row —
+        # see `match_terminal_amount_revision`. Keys use the same accessors the loop does; a row whose
+        # date or amount will not parse is absent here and cannot reach the tier either.
+        incoming_amounts_by_group: dict = {}
+        for pre_row in data_rows:
+            pre_date = parse_date(str(pre_row.get(col.date, "")).strip(), date_format)
+            pre_amount = parse_amount(pre_row, amount_convention, col)
+            if not pre_date or pre_amount is None:
+                continue
+            incoming_amounts_by_group.setdefault((
+                str(pre_row.get(col.account, "")).strip() if use_account_col else "",
+                pre_date,
+                str(pre_row.get(col.description, "")).strip().lower(),
+            ), []).append(pre_amount)
         for i, row in enumerate(data_rows):
             if on_progress:
                 on_progress(i, len(data_rows))
@@ -3563,6 +3580,33 @@ def run_import_parsed(
                 existing_pending_rows.pop(pending_match_key, None)
                 imported += 1
                 row_results.append({"row": row_num, "status": "imported"})
+                reset_footer_detection()
+                continue
+
+            # The same conversion for a row the source *revised* between exports rather than one that
+            # settled from pending — a tip posting onto a restaurant charge is the ordinary case, and
+            # without this the revised row passes the whole dedupe chain (its hash and its amount both
+            # differ from what is held) and lands as a second copy. Same-source only: a cross-source
+            # amount disagreement is a reconciliation question, not a settlement, and belongs in the
+            # duplicate report rather than being resolved by overwriting. The row is NOT re-homed to
+            # this batch, unlike the pending conversion above — this import corrected a row it did not
+            # create, and undoing it should not delete that row.
+            revision_match = None
+            if dedupe_context.coverage_strategy_enabled and raw_desc:
+                revision_match = match_terminal_amount_revision(
+                    dedupe_context.terminal_day_candidates_by_csv_day.get((csv_val, parsed_date), []),
+                    amount=amount,
+                    incoming_amounts=incoming_amounts_by_group.get(
+                        (csv_val, parsed_date, raw_desc.lower()), []),
+                    incoming_text=raw_desc,
+                )
+            if revision_match:
+                conn.execute(
+                    "UPDATE txn SET amount = ?, content_hash = ? WHERE id = ?",
+                    (amount, content_hash, revision_match["id"]),
+                )
+                updated += 1
+                row_results.append({"row": row_num, "status": "updated"})
                 reset_footer_detection()
                 continue
 
@@ -3715,8 +3759,8 @@ def run_import_parsed(
         bump_rule_effect_dates(conn, _rule_effect_dates)
 
         conn.execute(
-            "UPDATE import_batch SET row_count = ?, skipped_count = ?, deduped_count = ? WHERE id = ?",
-            (imported + skipped + deduped, skipped, deduped, batch_id)
+            "UPDATE import_batch SET row_count = ?, skipped_count = ?, deduped_count = ?, updated_count = ? WHERE id = ?",
+            (imported + skipped + deduped + updated, skipped, deduped, updated, batch_id)
         )
 
         trailing_non_transaction_count = (
@@ -3755,10 +3799,11 @@ def run_import_parsed(
                 "amount": None,
             })
         import_summary = {
-            "total_rows": imported + skipped + deduped,
+            "total_rows": imported + skipped + deduped + updated,
             "imported_count": imported,
             "skipped_count": skipped,
             "deduped_count": deduped,
+            "updated_count": updated,
             "account_skipped_count": sum(skip_counts.values()),
             "zero_amount_count": zero_amount_count,
             "currency_rejected_count": currency_rejected_count,
@@ -3869,6 +3914,7 @@ def run_import_parsed(
         "imported":             imported,
         "skipped":              skipped,
         "deduped":              deduped,
+        "updated":              updated,
         "duplicate_sets":       [],
         "account_skipped":      account_skipped,
         "zero_amount_count":    zero_amount_count,
@@ -4498,7 +4544,12 @@ def list_batches():
         # aggregate over all history — see docs/scale-and-limits.md -> Import history: retention.
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
-                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
+                   b.deduped_count,
+                   -- Rows this import corrected rather than added (a source revising an amount between
+                   -- exports). Reported on the card because the change is otherwise invisible: no row
+                   -- appears, and the one that changed looks like it always held that figure.
+                   b.updated_count,
+                   b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
                    b.connection_id, p.name AS profile_name,
                    -- What period the card covers, and whether that is a statement's declared period or
                    -- the span of the rows it carried. This is what the history orders and groups by —

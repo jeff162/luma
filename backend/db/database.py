@@ -157,13 +157,15 @@ def get_db(db_path: str | None = None):
 # history organizes by the transactions a file carried rather than by when it was imported.
 # v66 adds the marker for a card whose stored detail has been cleared, and v67 renames it to
 # `import_batch.detail_cleared_at` once that action stopped removing the card from the history and
-# became maintenance over the detail alone. Nothing to backfill in either.
+# became maintenance over the detail alone. Nothing to backfill in either. v68 adds `import_batch.updated_count`,
+# the rows an import corrected rather than added — a source revising an amount between two exports was
+# previously counted as neither imported nor deduped, so the ledger changed and nothing said so.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 67
+CURRENT_VERSION = 68
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2036,6 +2038,18 @@ def _rename_history_purge_marker(conn):
         conn.execute("ALTER TABLE import_batch ADD COLUMN detail_cleared_at TEXT")
 
 
+@migration(68)
+def _add_import_batch_updated_count(conn):
+    """A row that corrected a transaction already held is neither imported nor deduped, and before this
+    it was counted as neither — the ledger changed and nothing said so. Guarded like v65/v66: the
+    per-migration unit tests hand-build a minimal schema and run the chain."""
+    if "import_batch" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "updated_count" not in columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN updated_count INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2920,6 +2934,11 @@ def init_db(db_path: str | None = None):
                 row_count        INTEGER NOT NULL DEFAULT 0,
                 skipped_count    INTEGER NOT NULL DEFAULT 0,
                 deduped_count    INTEGER NOT NULL DEFAULT 0,
+                -- Rows that corrected a transaction already held rather than adding one: the source
+                -- revised an amount between two exports (see `match_terminal_amount_revision`). Counted
+                -- apart from imported and deduped because it is neither — the ledger changed, but no row
+                -- was created — and because a silent amount change is exactly what wants reporting.
+                updated_count    INTEGER NOT NULL DEFAULT 0,
                 status           TEXT NOT NULL DEFAULT 'completed',
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 config_snapshot  TEXT,

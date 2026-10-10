@@ -282,6 +282,14 @@ export function ImportHistorySection({
                                 : ''}
                             </div>
                           ) : null}
+                          {/* An amount this import corrected on a row it did not create. It survives on
+                              the card rather than only in the completion screen because nothing else
+                              records it: the row shows its revised figure and no longer says it moved. */}
+                          {summary.updatedCount > 0 ? (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
+                              {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount
+                            </div>
+                          ) : null}
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', marginTop: 8 }}>
                             <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start' }}>

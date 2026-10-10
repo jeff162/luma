@@ -121,6 +121,7 @@ import difflib
 import json
 import re
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -801,6 +802,58 @@ def match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: st
         amount_match["_consumed"] = True
         return amount_match
     return None
+
+
+def match_terminal_amount_revision(candidate_rows: list[dict], *, amount: float,
+                                   incoming_amounts: list[float], incoming_text: str) -> Optional[dict]:
+    """The candidate this row *revises* rather than duplicates, or None.
+
+    The tier `match_terminal_day_candidate` has no symmetric half. That matcher pairs on exact hash and
+    then on amount alone, so a row whose descriptor was rewritten between two exports still finds its
+    twin — but a row whose **amount** was revised matches neither, and passes through as a second copy
+    of a transaction already held. Measured on a real ledger of seven consecutive aggregator exports,
+    every amount revision was a restaurant or cafe charge settling with its tip added, 0-2 days inside
+    the trailing window, and each one had landed in the ledger twice.
+
+    The descriptor is the only thing left to match on, and on its own it is too weak: two charges from
+    one merchant on one day at different amounts are ordinary. So the group is reconciled as a **set**
+    instead of row by row. Equal amounts pair off first; only when that leaves exactly one unpaired row
+    on each side is the leftover pair a revision, because any other shape has more than one reading.
+
+    `incoming_amounts` is every amount the file carries for this (source, date, descriptor) group —
+    which is why this cannot be decided row-at-a-time. Consumption order would otherwise settle it: the
+    revised row might be evaluated before the ordinary row that owns the candidate by amount, take the
+    candidate on a text match, and push the error onto its neighbour instead of removing it.
+    """
+    normalized_incoming = normalize_evidence_text(incoming_text)
+    if not normalized_incoming:
+        return None
+    pool = [
+        candidate for candidate in candidate_rows
+        if not candidate.get("_consumed")
+        and normalized_incoming in {
+            normalize_evidence_text(text) for text in (candidate.get("match_texts") or [])
+        }
+    ]
+    if not pool:
+        return None
+    held = Counter(round(float(candidate.get("amount") or 0), 2) for candidate in pool)
+    arriving = Counter(round(float(value), 2) for value in incoming_amounts)
+    unmatched_held = held - arriving
+    unmatched_arriving = arriving - held
+    if sum(unmatched_held.values()) != 1 or sum(unmatched_arriving.values()) != 1:
+        return None
+    if round(float(amount), 2) not in unmatched_arriving:
+        return None
+    superseded_amount = next(iter(unmatched_held))
+    revised = next(
+        (candidate for candidate in pool
+         if round(float(candidate.get("amount") or 0), 2) == superseded_amount),
+        None,
+    )
+    if revised:
+        revised["_consumed"] = True
+    return revised
 
 
 # ---------------------------------------------------------------------------

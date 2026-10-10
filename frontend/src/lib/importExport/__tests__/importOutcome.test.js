@@ -22,6 +22,14 @@ describe('summarizeImportOutcome', () => {
     expect(s.dedupedCount).toBe(15)
   })
 
+  it('keeps corrected rows out of importedCount in the batch-record fallback', () => {
+    // row_count counts every row the file accounted for, and a corrected row created no transaction —
+    // left in, it would inflate "imported" by exactly the rows that were quietly updated instead.
+    const s = summarizeImportOutcome({ row_count: 100, skipped_count: 10, deduped_count: 15, updated_count: 2 })
+    expect(s.importedCount).toBe(73)
+    expect(s.updatedCount).toBe(2)
+  })
+
   it('uses the live-result shape fields directly', () => {
     const s = summarizeImportOutcome({ imported: 42, skipped: 8, deduped: 3 })
     expect(s.importedCount).toBe(42)
