@@ -124,6 +124,18 @@ the cards, their counts, their coverage claims and their file hashes in place. T
 retention *policy*: an automatic sweep would be the silent cap again, and the clearing cannot be undone.
 See `data-model.md` → *Import batches and profiles*.
 
+**What stopped that growing back is a decision about what to write, not a sweep over what is held.** The
+population above was overwhelmingly one thing: a source restating its own prior import, which is what a
+re-export with an overlapping window is. On the measured ledger that was **98.7% of the report rows and
+99% of the bytes**, and not one of them was flagged as wanting a look. Those refusals are now counted
+(`import_batch.ignored_count`) and not recorded (`is_settled_source_restatement`,
+`prune_source_restatements`), because there is nothing in such a record to read — the transaction each
+one duplicates is in the ledger and *is* the record. The distinction from a retention policy is the
+whole of why this is allowed: nothing accumulated is touched, no record is removed after the fact, and
+a refusal that asks anything of anyone — a covered date that paired with nothing, a twin two days out,
+any claim from a *different* source — still writes its row and keeps its place in the report. Reports
+written before this remain, and remain the clearing screen's to remove.
+
 **Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
 no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
 it has. The second is less obvious and is the larger half: **five consumers of `GET /import-export/batches`

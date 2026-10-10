@@ -80,6 +80,7 @@ from backend.services.duplicate_detection import (
     coverage_review_substate,
     evaluate_duplicate,
     get_effective_account_row,
+    is_settled_source_restatement,
     list_unified_batch_duplicates,
     mark_import_suspects,
     match_terminal_amount_revision,
@@ -896,6 +897,32 @@ def save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -
             for entry in duplicate_rows
         ],
     )
+
+
+def prune_source_restatements(conn, batch_id: str, row_numbers: set) -> int:
+    """Drop the report rows for a source's settled re-states of its own prior import, returning how
+    many went.
+
+    These are not kept, rather than kept and later cleared, because there is nothing in them to read:
+    the transaction each one duplicates is in the ledger, which is the record. That is what separates
+    this from a retention policy over what is held — nothing accumulated is swept, and the maintenance
+    screen still owns the reports written before this (`services/import_detail_storage.py`).
+
+    Run **after** auto-enrich, and skips any row that enriched something: an enriched row's record is
+    how that detail is undone, so it is kept however ordinary the rejection was.
+    """
+    if not row_numbers:
+        return 0
+    ordered = sorted(int(value) for value in row_numbers)
+    placeholders = ", ".join("?" * len(ordered))
+    cursor = conn.execute(
+        f"""
+        DELETE FROM import_batch_duplicate
+        WHERE  batch_id = ? AND enriched_at IS NULL AND row_number IN ({placeholders})
+        """,
+        (batch_id, *ordered),
+    )
+    return cursor.rowcount or 0
 
 
 def select_stored_rejected_rows(entries: list[dict]) -> list[dict]:
@@ -3039,6 +3066,7 @@ def run_import_parsed(
     skipped  = 0
     deduped  = 0
     updated  = 0
+    ignored  = 0
     errors   = []
     row_results = []
     imported_category_counts: dict[str, int] = {}
@@ -3756,6 +3784,14 @@ def run_import_parsed(
                     f"Rows {first_error_row} onward contain validation errors. The file viewer has been opened so you can inspect the bad rows."
                 )
 
+        # Which of the refusals are this source restating its own prior import. Classified here, from
+        # the verdicts as they were made, rather than re-derived later from what was stored.
+        restatement_rows = {
+            int(entry.get("row") or 0) for entry in duplicate_rows
+            if is_settled_source_restatement(
+                entry.get("matched_transaction"), csv_value=entry.get("csv_value") or "")
+        }
+
         bump_rule_effect_dates(conn, _rule_effect_dates)
 
         conn.execute(
@@ -3804,6 +3840,7 @@ def run_import_parsed(
             "skipped_count": skipped,
             "deduped_count": deduped,
             "updated_count": updated,
+            "ignored_count": ignored,
             "account_skipped_count": sum(skip_counts.values()),
             "zero_amount_count": zero_amount_count,
             "currency_rejected_count": currency_rejected_count,
@@ -3845,6 +3882,19 @@ def run_import_parsed(
                 )
                 enriched_count = len(auto_enriched)
             import_summary["enriched_count"] = enriched_count
+            # The rows this source restated from its own prior import, kept out of the report now that
+            # enrichment (which reads them) has had its pass. `deduped` counted them until here on
+            # purpose: it is what keeps a wholly-restated file from tripping the empty-batch delete
+            # above and taking its re-import guard with it.
+            ignored = prune_source_restatements(conn, batch_id, restatement_rows)
+            if ignored:
+                deduped -= ignored
+                import_summary["deduped_count"] = deduped
+                import_summary["ignored_count"] = ignored
+                conn.execute(
+                    "UPDATE import_batch SET deduped_count = ?, ignored_count = ? WHERE id = ?",
+                    (deduped, ignored, batch_id),
+                )
             # Suppress wallet funding legs: a nameless deposit paired with its equal-and-opposite same-day
             # purchase (both rows this batch just imported) is money movement, not income — move the leg
             # into the excluded "Money movement" category and link it to the purchase. Always on; safe
@@ -3915,6 +3965,7 @@ def run_import_parsed(
         "skipped":              skipped,
         "deduped":              deduped,
         "updated":              updated,
+        "ignored":              ignored,
         "duplicate_sets":       [],
         "account_skipped":      account_skipped,
         "zero_amount_count":    zero_amount_count,
@@ -4549,6 +4600,9 @@ def list_batches():
                    -- exports). Reported on the card because the change is otherwise invisible: no row
                    -- appears, and the one that changed looks like it always held that figure.
                    b.updated_count,
+                   -- Rows refused as this source restating its own prior import. They hold no report
+                   -- row, so the card states them as a count and offers nothing to open.
+                   b.ignored_count,
                    b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
                    b.connection_id, p.name AS profile_name,
                    -- What period the card covers, and whether that is a statement's declared period or

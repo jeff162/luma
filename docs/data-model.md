@@ -1129,6 +1129,26 @@ CSV import creates supporting records for workflow and recovery:
 
 - **Import batches:** one record per import run so imported transactions can be undone
 
+- **What an import *recognized* rather than refused** (`import_batch.ignored_count`): rows turned away
+  as this source restating its own prior import — a re-export with an overlapping window, which is the
+  commonest thing an import does. They are counted here and **not written to the duplicate report**
+  (`is_settled_source_restatement`, `prune_source_restatements`), because the transaction each one
+  duplicates is in the ledger and is the record; a second copy of it plus the payload that would have
+  inserted it buys nothing, and on a real ledger that was 99% of the report's bytes
+  (`scale-and-limits.md`). The count is kept **apart from `deduped_count`** rather than folded into it,
+  so that count's contract holds by construction: it counts rows the report can actually show, which is
+  what the duplicates pill offers to open. Three conditions narrow it, and each is load-bearing — the
+  claim must be **Rule 1** (this source's own coverage, not a sibling's under the same linked group),
+  the source label must be **non-empty** (a single-account import's empty label is never indexed as
+  coverage, so a match wearing one came from Rule 2), and `coverage_review_substate` must find **nothing
+  to ask about**. A row that enriched its match keeps its record regardless, since that record is how
+  the enrichment is undone, which is why the pruning runs after auto-enrich rather than instead of
+  writing. **`deduped` counts these until the report is written**: a wholly-restated file would
+  otherwise trip the empty-batch delete and take its `file_content_hash` — half the re-import guard —
+  with it. What is given up is "Import anyway" for these rows, which is the deliberate re-adding of a
+  row already held, and the raw material a later auto-restore (`backlog/import-dedupe-followups.md`)
+  would have replayed after an undo; the recovery there is re-importing the file.
+
 - **What an import *changed* rather than added** (`import_batch.updated_count`): rows that corrected a
   transaction already held, counted apart from imported and deduped because they are neither — the
   ledger moved and no row was created. It is reported on the card and not only on the completion screen

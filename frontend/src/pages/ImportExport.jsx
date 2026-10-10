@@ -4473,9 +4473,15 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
             // rather than reporting "0 transactions imported", which reads as a failure. The row counts
             // then appear once each, in their own lines, instead of a combined breakdown whose
             // "0 imported, 0 not imported, 59 deduped" arithmetic contradicted itself.
+            // Both ways a row can already be held: refused with a report row, and refused as this
+            // source restating its own prior import, which keeps no report row at all. The headline
+            // reads the same to the user either way, so it counts them together — keyed on only one of
+            // them, a wholly-restated file reported "No new transactions imported", which is the
+            // failure-reading this headline exists to avoid.
+            const alreadyHeldCount = summary.dedupedCount + summary.ignoredCount
             const everyRowDuplicate = summary.importedCount === 0
-              && summary.dedupedCount > 0
-              && summary.dedupedCount === summary.totalRows
+              && alreadyHeldCount > 0
+              && alreadyHeldCount === summary.totalRows
             const headline = summary.importedCount > 0
               ? `${summary.importedCount} transaction${summary.importedCount === 1 ? '' : 's'} imported.`
               : everyRowDuplicate
@@ -4523,6 +4529,13 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                 {summary.updatedCount > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                     {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount.
+                  </div>
+                ) : null}
+                {/* Stated only when the headline above has not already said it, which it does for a file
+                    that landed nothing at all. */}
+                {summary.ignoredCount > 0 && !everyRowDuplicate ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    {summary.ignoredCount} row{summary.ignoredCount === 1 ? '' : 's'} already in the ledger.
                   </div>
                 ) : null}
                 {summary.skippedCount > 0 ? (

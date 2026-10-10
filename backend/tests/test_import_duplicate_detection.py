@@ -478,6 +478,69 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([f"{row['amount']:.2f}" for row in self._rows_on("2025-12-05")],
                          ["6.75", "8.25"])
 
+    async def test_a_sources_restatement_of_its_own_import_is_counted_and_not_stored(self):
+        # The same source re-exported with an overlapping window — the commonest thing an import does.
+        # Its restated rows are refused as before; what changes is that nothing is written down about
+        # them, because the transaction each one duplicates is in the ledger and is the record.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        result = await self._import_base_then(
+            rewards_id,
+            "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+            "2025-11-26,AMAZON MKTPLACE,Shopping,Travel Rewards,AMAZON MKTPLACE,,-19.99,,Alex\n"
+            "2025-11-28,NETFLIX.COM,Streaming,Travel Rewards,NETFLIX.COM,,-7.99,,Alex\n",
+        )
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["ignored"], 2)
+        self.assertEqual(result["deduped"], 0, "they are not counted where the report's count is")
+        with self._use_db_path():
+            with get_db() as conn:
+                stored = conn.execute(
+                    "SELECT COUNT(*) AS n FROM import_batch_duplicate WHERE batch_id = ?",
+                    (result["batch_id"],),
+                ).fetchone()["n"]
+                batch = conn.execute(
+                    "SELECT row_count, deduped_count, ignored_count, file_content_hash "
+                    "FROM import_batch WHERE id = ?",
+                    (result["batch_id"],),
+                ).fetchone()
+        self.assertEqual(stored, 0, "no report rows for rows that need no report")
+        # The card survives with its re-import guard intact — a wholly-restated file must not trip the
+        # empty-batch delete, which is why `deduped` counts these until after the report is written.
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch["ignored_count"], 2)
+        self.assertEqual(batch["deduped_count"], 0)
+        self.assertEqual(batch["row_count"], 2, "every row the file accounted for is still counted")
+        self.assertTrue(batch["file_content_hash"])
+
+    async def test_a_second_sources_coverage_claim_still_writes_its_report(self):
+        # Rule 2, not Rule 1: a different source label describing the same account. That is a
+        # cross-source question, so the refusal keeps its record and its place in the report.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+        upload = UploadFile(
+            filename="other_source.csv",
+            file=io.BytesIO((
+                "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+                "2025-11-26,AMAZON MKTPLACE,Shopping,CREDIT CARD (...1234),AMAZON MKTPLACE,,-19.99,,Alex\n"
+            ).encode("utf-8")),
+        )
+        other_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"CREDIT CARD (...1234)": rewards_id},
+        )
+        with self._use_db_path():
+            result = await run_import(file=upload, config=json.dumps(other_config))
+        self.assertEqual(result["ignored"], 0)
+        self.assertEqual(result["deduped"], 1)
+        self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 1)
+
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
         self._insert_existing_transaction(

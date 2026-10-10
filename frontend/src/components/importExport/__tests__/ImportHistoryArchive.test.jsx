@@ -248,4 +248,25 @@ describe('a card whose stored detail has been cleared', () => {
 
     expect(screen.getByText(/No new transactions — every row was already in the ledger/)).toBeTruthy()
   })
+
+  it('says the same for a file whose rows were all restatements, which keep no report', () => {
+    // These never reach `deduped_count` — keyed on that alone, a wholly-restated file reported
+    // nothing at all, which reads as a failed import rather than the ordinary outcome it is.
+    const restated = {
+      ...cleared, id: 'restated', detail_cleared_at: null, deduped_count: 0, ignored_count: 112,
+    }
+    renderExpanded(sourceRow([restated, ...monthlyCards()]))
+
+    expect(screen.getByText(/No new transactions — every row was already in the ledger/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /duplicates/ })).toBeNull()
+  })
+
+  it('states restated rows as a count beside what a mixed file did import', () => {
+    const mixed = {
+      ...cleared, id: 'mixed', detail_cleared_at: null, row_count: 120, deduped_count: 0, ignored_count: 112,
+    }
+    renderExpanded(sourceRow([mixed, ...monthlyCards()]))
+
+    expect(screen.getByText(/112 rows already in the ledger/)).toBeTruthy()
+  })
 })

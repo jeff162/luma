@@ -274,7 +274,7 @@ export function ImportHistorySection({
                               Stored detail cleared — the duplicate report this import kept has been freed
                             </div>
                           ) : null}
-                          {summary.importedCount === 0 && summary.dedupedCount > 0 ? (
+                          {summary.importedCount === 0 && (summary.dedupedCount + summary.ignoredCount) > 0 ? (
                             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
                               No new transactions — every row was already in the ledger
                               {Number(b.enriched_duplicate_count || 0) > 0
@@ -288,6 +288,15 @@ export function ImportHistorySection({
                           {summary.updatedCount > 0 ? (
                             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
                               {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount
+                            </div>
+                          ) : null}
+                          {/* Rows this source restated from its own prior import. Stated as a count with
+                              nothing to open, which is the whole point — the transaction each one
+                              duplicates is in the ledger, so there is no second copy to go and read. The
+                              line above already says it for a file that landed nothing. */}
+                          {summary.ignoredCount > 0 && summary.importedCount > 0 ? (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
+                              {summary.ignoredCount} row{summary.ignoredCount === 1 ? '' : 's'} already in the ledger
                             </div>
                           ) : null}
 

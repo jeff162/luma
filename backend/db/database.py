@@ -159,13 +159,15 @@ def get_db(db_path: str | None = None):
 # `import_batch.detail_cleared_at` once that action stopped removing the card from the history and
 # became maintenance over the detail alone. Nothing to backfill in either. v68 adds `import_batch.updated_count`,
 # the rows an import corrected rather than added — a source revising an amount between two exports was
-# previously counted as neither imported nor deduped, so the ledger changed and nothing said so.
+# previously counted as neither imported nor deduped, so the ledger changed and nothing said so. v69 adds
+# `import_batch.ignored_count` for the rows a source restated from its own prior import, which stop being
+# written to the duplicate report at all.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 68
+CURRENT_VERSION = 69
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2050,6 +2052,19 @@ def _add_import_batch_updated_count(conn):
         conn.execute("ALTER TABLE import_batch ADD COLUMN updated_count INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(69)
+def _add_import_batch_ignored_count(conn):
+    """Rows a source restated from its own prior import stop being stored as duplicate-report rows, so
+    they need a count of their own: `deduped_count` has to go on meaning "rows the report can show".
+    Nothing to backfill — reports written before this are still complete, and are the clearing screen's
+    to remove. Guarded like v65-v68."""
+    if "import_batch" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    if "ignored_count" not in columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN ignored_count INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2939,6 +2954,11 @@ def init_db(db_path: str | None = None):
                 -- apart from imported and deduped because it is neither — the ledger changed, but no row
                 -- was created — and because a silent amount change is exactly what wants reporting.
                 updated_count    INTEGER NOT NULL DEFAULT 0,
+                -- Rows refused as this source restating its own prior import: counted, but holding no
+                -- report row, because the transaction each duplicates is in the ledger and is the record
+                -- (see `is_settled_source_restatement`). Kept apart from `deduped_count`, whose contract
+                -- is that it counts rows the duplicate report can actually show.
+                ignored_count    INTEGER NOT NULL DEFAULT 0,
                 status           TEXT NOT NULL DEFAULT 'completed',
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 config_snapshot  TEXT,

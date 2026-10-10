@@ -22,6 +22,15 @@ describe('summarizeImportOutcome', () => {
     expect(s.dedupedCount).toBe(15)
   })
 
+  it('keeps restated rows out of importedCount in the batch-record fallback', () => {
+    // Restated rows are accounted for in row_count but created nothing and hold no report row, so they
+    // belong to neither importedCount nor dedupedCount.
+    const s = summarizeImportOutcome({ row_count: 100, skipped_count: 0, deduped_count: 5, ignored_count: 90 })
+    expect(s.importedCount).toBe(5)
+    expect(s.ignoredCount).toBe(90)
+    expect(s.dedupedCount).toBe(5)
+  })
+
   it('keeps corrected rows out of importedCount in the batch-record fallback', () => {
     // row_count counts every row the file accounted for, and a corrected row created no transaction —
     // left in, it would inflate "imported" by exactly the rows that were quietly updated instead.

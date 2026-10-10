@@ -16,6 +16,7 @@ export function summarizeImportOutcome(source) {
       skippedCount: 0,
       dedupedCount: 0,
       updatedCount: 0,
+      ignoredCount: 0,
       accountSkippedCount: 0,
       zeroAmountCount: 0,
       currencyRejectedCount: 0,
@@ -37,11 +38,14 @@ export function summarizeImportOutcome(source) {
   // `row_count` fallback below for the same reason skipped and deduped are: row_count counts every row
   // the file accounted for, and only one of those outcomes created a transaction.
   const updatedCount = Number(rawSummary?.updated_count ?? source.updated ?? source.updated_count) || 0
+  // Rows the source restated from its own prior import. They hold no duplicate-report row, which is
+  // why they are not part of `dedupedCount` — that count's contract is the report's own.
+  const ignoredCount = Number(rawSummary?.ignored_count ?? source.ignored ?? source.ignored_count) || 0
   const importedCount = Number(
     rawSummary?.imported_count
     ?? source.imported
     ?? (Number(source.row_count || 0) - Number(source.skipped_count || 0) - Number(source.deduped_count || 0)
-        - Number(source.updated_count || 0)),
+        - Number(source.updated_count || 0) - Number(source.ignored_count || 0)),
   ) || 0
   const skippedCount = Number(rawSummary?.skipped_count ?? source.skipped ?? source.skipped_count) || 0
   const dedupedCount = Number(rawSummary?.deduped_count ?? source.deduped ?? source.deduped_count) || 0
@@ -58,7 +62,7 @@ export function summarizeImportOutcome(source) {
   const totalRows = Number(
     rawSummary?.total_rows
     ?? source.row_count
-    ?? (importedCount + skippedCount + dedupedCount + updatedCount),
+    ?? (importedCount + skippedCount + dedupedCount + updatedCount + ignoredCount),
   ) || 0
   const otherSkippedCount = Math.max(
     0,
@@ -87,6 +91,7 @@ export function summarizeImportOutcome(source) {
     skippedCount,
     dedupedCount,
     updatedCount,
+    ignoredCount,
     enrichedCount,
     accountSkippedCount,
     zeroAmountCount,
@@ -115,6 +120,8 @@ export function buildMultiFileResult(perFile) {
     perFile: entries,
     imported: sum('imported'),
     deduped: sum('deduped'),
+    updated: sum('updated'),
+    ignored: sum('ignored'),
     skipped: sum('skipped'),
     enriched_count: sum('enriched_count'),
     money_movement_suppressed_count: sum('money_movement_suppressed_count'),

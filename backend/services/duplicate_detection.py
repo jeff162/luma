@@ -1161,6 +1161,39 @@ def coverage_review_substate(matched: Optional[dict]) -> Optional[str]:
     return None
 
 
+def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) -> bool:
+    """Is this hard-reject a settled re-state of the source's **own** prior import?
+
+    The commonest thing an import does, and the one worth no record. A source re-exported with an
+    overlapping window restates rows it already published; each one is refused, and on a real ledger
+    those refusals were 98.7% of every report row and 99% of the bytes — more than every transaction
+    put together. The row they duplicate is sitting in the ledger and *is* the record, so keeping a
+    second copy of it, plus the payload that would have inserted it, buys nothing.
+
+    Three conditions, all structural rather than read off the reason text:
+
+      - the rejection is a **coverage** hit (`covered`) whose claim came from this row's own source
+        label, which is Rule 1 and only Rule 1. Rule 2's claim belongs to a sibling under the same
+        linked group — a different source describing the same account — and that is a cross-source
+        question the report should keep.
+      - a **non-empty** source label. A single-account import carries `csv_value = ''`, which Rule 1
+        cannot fire on at all (an empty label is never indexed as coverage), so an empty match here
+        would be Rule 2 wearing Rule 1's shape.
+      - **settled**: `coverage_review_substate` finds nothing to ask about. A covered date that paired
+        with nothing, or only two days out, is the one case worth investigating and keeps its row.
+
+    Enrichment is deliberately not asked about here: whether a row folded detail into its match is not
+    known until after the report is written, so the caller excludes the enriched ones (their undo lives
+    in the record) when it acts on this.
+    """
+    if not isinstance(matched, dict) or "covered" not in matched:
+        return False
+    source = str(matched.get("covered", {}).get("source_csv_value") or "").strip()
+    if not source or source != str(csv_value or "").strip():
+        return False
+    return coverage_review_substate(matched) is None
+
+
 def get_effective_account_row(conn, account_id: Optional[str]):
     """Walk `parent_account_id` to the top-level account row — the linked group's identity. Returns
     None for an unknown id or a cycle."""
