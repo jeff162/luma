@@ -57,8 +57,10 @@ SOURCE_AMAZON = "amazon"
 SOURCE_PAYPAL_STATEMENT = "paypal_statement"
 
 _NON_ADAPTER_SOURCE_POLICY: dict[str, ZeroAmountPolicy] = {
-    # Reason 1 does not apply: a CSV carries no identity between files, so a later file's settled row is
-    # an ordinary new row and nothing can ever revise the placeholder. Reason 2 does not either — a $0
+    # Reason 1 does not apply: most CSVs carry no identity between files, so a later file's settled row is
+    # an ordinary new row and nothing can ever revise the placeholder. (A source that maps a transaction-ID
+    # column is the exception — its later file corrects the held row by id — but the policy is declared
+    # per importer, not per mapping, so such a source is still refused here.) Reason 2 does not either — a $0
     # line in a statement export is a pending charge or a non-transaction (a footer, a balance-forward),
     # never a meaningful zero. This covers PayPal, which is this same importer under a source kind.
     SOURCE_CSV: REJECT_ZERO_AMOUNT,

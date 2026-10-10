@@ -608,7 +608,7 @@ BACKUP_SECTIONS = (
     # the ledger as a live transaction. The coverage test compares this list with the table, column by
     # column, so a column added later fails the suite until it is named here.
     ("transactions", "txn",
-     "SELECT id, external_transaction_id, account_id, owner_id, "
+     "SELECT id, external_transaction_id, source_transaction_id, account_id, owner_id, "
      "category_id, amount, merchant_name, display_name, display_name_source, raw_name, date, "
      "posted_date, is_pending, category_overridden, category_source, imported_category, notes, "
      "content_hash, import_evidence_json, needs_review, recurring_series_id, is_split, import_batch_id, "

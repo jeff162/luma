@@ -149,6 +149,22 @@ other than the ledger's are then not imported and are listed under **Not importe
 since an amount in pounds would otherwise count as dollars in every total. A row with the currency cell left blank imports
 as the ledger's currency, and a file with no currency column needs nothing.
 
+### A file gives every transaction its own ID
+
+Map the file's **Transaction ID** column — the mapper suggests a column headed *Id* or *Transaction ID*.
+Each later file from the same data source then recognizes the transactions already imported by their ID,
+even when a description was reworded or an amount changed (a tip added after a charge settled corrects
+the amount in place rather than adding a second copy), and a second identical charge with a different ID
+is imported as the separate transaction it is. PayPal files are read this way without any mapping.
+
+The IDs are compared only with transactions imported through the same data source, so keep one data
+source per provider, and when the provider changes its export's columns, continue with the existing data
+source rather than creating a new one — it takes on the new layout. Transactions imported before the
+provider added the column receive their IDs when the first file carrying it is imported; importing an
+older file without the column afterwards changes nothing. When one provider's files have ended up under
+two data sources, delete one: its files move to *unknown data source*, and **Assign to data source** on
+each card places them under the other.
+
 ### An imported file is under "unknown data source" or "temporary draft"
 
 On that file's card: **Assign to data source** (pick an existing one) or **+ New data source from

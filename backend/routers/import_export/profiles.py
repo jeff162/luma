@@ -195,6 +195,9 @@ def _normalize_import_source_signature(source: dict) -> dict:
         "apply_categorization": _flag_defaulting_true(source.get("apply_categorization")),
         "enrich_from_source": bool(source.get("enrich_from_source")),
         "account_id": str(source.get("account_id") or "").strip(),
+        # `transaction_id` is deliberately not compared: it changes nothing about how a file reads into
+        # rows, and a file imported before its source mapped the column is exactly the one that should
+        # still be offered to that source, so its rows join the source's id scope.
         "column_map": {
             key: str(column_map.get(key) or "").strip()
             for key in ("date", "amount", "debit", "credit", "direction", "description", "category", "notes", "pending", "currency", "account")

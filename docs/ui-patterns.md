@@ -1576,7 +1576,12 @@ picker renders a mapped value verbatim, so restoring it would name a column that
 read blank cells from it; cleared, the field falls to the suggestion engine, and the mapping
 screen's column-change notice says why it went empty. Suggestions are built from what is actually
 mapped afterwards, not from what the source stored, or a field just cleared reads as mapped and is
-offered nothing.
+offered nothing. **The drop is for this file, not for the source**: saving the source after the import
+keeps a stored mapping whose column the file did not carry (`keepMappingsForAbsentColumns`), since a file
+without a column says nothing about it — typically an export from before the vendor added it. Taking the
+file's empty field instead would let one older file quietly un-map a transaction-ID column, and every
+later file would arrive without ids until someone noticed. A column the file does carry is the user's to
+clear.
 
 ### Sections on the transaction detail panel
 

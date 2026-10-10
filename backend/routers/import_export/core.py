@@ -109,6 +109,12 @@ from backend.services.import_batch_totals import (
     refresh_batch_totals,
 )
 from backend.services.import_progress import import_progress, tracked_import
+from backend.services.source_transaction_ids import (
+    AMBIGUOUS_ID_MATCH_REASON,
+    ID_MATCH_REASON,
+    SourceTransactionIds,
+    held_row_summary,
+)
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.runtime_config import app_name
 from backend.services.source_capabilities import (
@@ -256,6 +262,9 @@ class ColumnMap(AmountColumnMap):
     category:     Optional[str] = None
     notes:        Optional[str] = None
     account:      Optional[str] = None
+    # The column holding the identifier the source gives each row, where it gives one. Matched only within
+    # the data source that issued it — see services/source_transaction_ids.py.
+    transaction_id: Optional[str] = None
     # Headers the user explicitly picked to capture into import evidence beyond the keyword auto-detect
     # (e.g. PayPal "Item Title"). Honored over MAX_IMPORT_EVIDENCE_TEXT_FIELDS; each is role-classified.
     evidence_columns: Optional[list[str]] = None
@@ -577,6 +586,7 @@ _PAYPAL_FORCED_EVIDENCE = ("type", "item title", "transaction id")
 # names nothing two sources would both write, which is what the categorical role is for (see
 # services/import_evidence.py). The statement declares the same column the same way.
 _PAYPAL_FORCED_CATEGORICAL = frozenset({"transaction id"})
+_PAYPAL_TRANSACTION_ID_HEADERS = frozenset({"transaction id"})
 
 
 def _clean_header_key(header) -> str:
@@ -845,8 +855,8 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, posted_date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, needs_review)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           display_name, raw_name, date, posted_date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, source_transaction_id, needs_review)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -869,6 +879,7 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         category_lock_for(payload.get("category_source"), payload.get("category_overridden")),
         payload.get("category_source"),
         payload.get("display_name_source") or "import",
+        payload.get("source_transaction_id") or None,
     ))
     return txn_id
 
@@ -3044,8 +3055,17 @@ def run_import_parsed(
         category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
         account     = cm_dict.get("account"),
+        transaction_id = cm_dict.get("transaction_id"),
         evidence_columns = cm_dict.get("evidence_columns"),
     )
+    # A recognized PayPal file always carries its Transaction ID, the identifier the activity CSV and the
+    # monthly statement share, so it is read whether or not the saved mapping names it — the same footing
+    # as the forced evidence columns below.
+    if is_paypal and not col.transaction_id:
+        col.transaction_id = next(
+            (str(header).strip() for header in headers if _clean_header_key(header) in _PAYPAL_TRANSACTION_ID_HEADERS),
+            None,
+        )
 
     date_format       = cfg.get("date_format", "%m/%d/%Y")
     amount_convention = cfg.get("amount_convention", "single_signed")
@@ -3421,6 +3441,11 @@ def run_import_parsed(
             coverage_strategy_enabled=coverage_strategy_enabled,
             text_strategy_enabled=text_strategy_enabled,
         )
+        # The data source's own transaction ids: the rung ahead of the ladder, and what withholds from the
+        # ladder the rows an id says are other transactions. None without a data source to scope ids to.
+        source_ids = SourceTransactionIds.load(conn, profile_id)
+        # Id matches that restate a held row, pruned from the report like the ladder's own restatements.
+        id_restatement_rows: set[int] = set()
 
         def reset_footer_detection():
             nonlocal consecutive_error_rows, footer_error_start_index, footer_error_start_data_index, footer_error_start_row
@@ -3548,10 +3573,10 @@ def run_import_parsed(
                 continue
             # Declared rather than decided here: a $0 row means different things from different sources,
             # and the rule (plus what goes wrong either way) lives in `services/source_capabilities.py`.
-            # For a CSV it is a pending charge published before it settled, and nothing can ever revise it
-            # — no identity carries between files — so the settled charge arrives in a later file as an
-            # ordinary new row while the placeholder lingers as a permanent near-miss for duplicate
-            # detection. Refused, and reported on the card rather than silently discarded.
+            # For a CSV it is a pending charge published before it settled, and without a transaction id
+            # nothing can revise it — no identity carries between files — so the settled charge arrives in
+            # a later file as an ordinary new row while the placeholder lingers as a permanent near-miss
+            # for duplicate detection. Refused, and reported on the card rather than silently discarded.
             if reject_zero_amount_rows and amount == 0:
                 skipped += 1
                 zero_amount_rows.append(_rejected_row_entry(
@@ -3596,8 +3621,49 @@ def run_import_parsed(
                 batch_account_stat["account_id"] = acc["id"]
             batch_account_stat["coverage_dates"].add(parsed_date)
 
+            source_txn_id = str(row.get(col.transaction_id, "")).strip() if col.transaction_id else ""
+            source_txn_id = source_txn_id or None
+
+            def refuted(txn_id) -> bool:
+                return source_ids is not None and source_ids.refutes(txn_id, source_txn_id)
+
             pending_match_key = (acc["id"], parsed_date, raw_desc.lower())
-            pending_match = existing_pending_rows.get(pending_match_key)
+
+            # The id rung, ahead of everything else: a row this source already gave this id is this
+            # transaction, whatever else about it changed. A restatement is filed as a duplicate (and
+            # pruned with the other restatements), a settled pending row converts in place as below, and
+            # a changed amount corrects the held row as the revision tier does — without needing the
+            # descriptor to have survived, or the row to sit in the trailing window.
+            id_match = source_ids.claim(source_txn_id, amount=amount, is_pending=is_pending) if source_ids else None
+            if id_match:
+                held = id_match.row
+                if id_match.kind == "posted":
+                    conn.execute(
+                        "UPDATE txn SET is_pending = 0, amount = ?, content_hash = ?, import_batch_id = ? WHERE id = ?",
+                        (amount, make_hash(held["date"], amount, held["raw_name"] or ""), batch_id, held["id"]),
+                    )
+                    existing_pending_rows = {
+                        key: value for key, value in existing_pending_rows.items() if value["id"] != held["id"]
+                    }
+                    imported += 1
+                    row_results.append({"row": row_num, "status": "imported"})
+                elif id_match.kind == "revised":
+                    conn.execute(
+                        "UPDATE txn SET amount = ?, content_hash = ? WHERE id = ?",
+                        (amount, make_hash(held["date"], amount, held["raw_name"] or ""), held["id"]),
+                    )
+                    updated += 1
+                    row_results.append({"row": row_num, "status": "updated"})
+                if id_match.kind in ("posted", "revised"):
+                    reset_footer_detection()
+                    continue
+            # A restatement still needs the payload a duplicate report row carries (what "Import anyway"
+            # inserts and enrichment reads), so it is recorded below, where that payload is built.
+            id_duplicate = id_match
+
+            pending_match = existing_pending_rows.get(pending_match_key) if id_duplicate is None else None
+            if pending_match and refuted(pending_match["id"]):
+                pending_match = None
             if pending_match and not is_pending:
                 # A posted row supersedes a pending one imported earlier (matched by account + date + source
                 # text). Convert that row in place — clear pending, take the posted amount + refreshed hash,
@@ -3605,10 +3671,16 @@ def run_import_parsed(
                 # row survive, instead of deleting it and inserting a fresh row that would drop them. The row
                 # is a known transaction transitioning state, so it skips the dedupe chain below. (Mirrors the
                 # provider-sync pending→posted conversion, which matches on the explicit pending id.)
+                # Re-homing makes the row this source's, so its id becomes this row's — or, with none
+                # incoming, keeps only an id this same source issued it.
+                kept_source_id = source_txn_id or (source_ids.held_id(pending_match["id"]) if source_ids else None)
                 conn.execute(
-                    "UPDATE txn SET is_pending = 0, amount = ?, content_hash = ?, import_batch_id = ? WHERE id = ?",
-                    (amount, content_hash, batch_id, pending_match["id"]),
+                    "UPDATE txn SET is_pending = 0, amount = ?, content_hash = ?, import_batch_id = ?, "
+                    "source_transaction_id = ? WHERE id = ?",
+                    (amount, content_hash, batch_id, kept_source_id, pending_match["id"]),
                 )
+                if source_ids:
+                    source_ids.note_held(pending_match["id"], kept_source_id)
                 existing_pending_rows.pop(pending_match_key, None)
                 imported += 1
                 row_results.append({"row": row_num, "status": "imported"})
@@ -3624,9 +3696,11 @@ def run_import_parsed(
             # this batch, unlike the pending conversion above — this import corrected a row it did not
             # create, and undoing it should not delete that row.
             revision_match = None
-            if dedupe_context.coverage_strategy_enabled and raw_desc:
+            if id_duplicate is None and dedupe_context.coverage_strategy_enabled and raw_desc:
                 revision_match = match_terminal_amount_revision(
-                    dedupe_context.terminal_day_candidates_by_csv_day.get((csv_val, parsed_date), []),
+                    [candidate for candidate in
+                     dedupe_context.terminal_day_candidates_by_csv_day.get((csv_val, parsed_date), [])
+                     if not refuted(candidate["id"])],
                     amount=amount,
                     incoming_amounts=incoming_amounts_by_group.get(
                         (csv_val, parsed_date, raw_desc.lower()), []),
@@ -3637,6 +3711,8 @@ def run_import_parsed(
                     "UPDATE txn SET amount = ?, content_hash = ? WHERE id = ?",
                     (amount, content_hash, revision_match["id"]),
                 )
+                if source_ids:
+                    source_ids.stamp(conn, revision_match["id"], source_txn_id)
                 updated += 1
                 row_results.append({"row": row_num, "status": "updated"})
                 reset_footer_detection()
@@ -3718,7 +3794,25 @@ def run_import_parsed(
                 "category_overridden": category_overridden,
                 "category_source": category_source,
                 "csv_value": csv_val,
+                "source_transaction_id": source_txn_id,
             }
+
+            if id_duplicate is not None:
+                deduped += 1
+                if id_duplicate.kind == "same":
+                    id_restatement_rows.add(row_num)
+                duplicate_rows.append({
+                    "row": row_num,
+                    "kind": "duplicate",
+                    "reason": ID_MATCH_REASON if id_duplicate.kind == "same" else AMBIGUOUS_ID_MATCH_REASON,
+                    "values": _normalize_import_row_values(row, headers),
+                    "matched_transaction": held_row_summary(id_duplicate.row),
+                    "txn_payload": txn_payload,
+                    "csv_value": csv_val,
+                })
+                row_results.append({"row": row_num, "status": "duplicate"})
+                reset_footer_detection()
+                continue
 
             # Run the consolidated dedupe rule chain. The verdict carries either a hard-reject
             # decision (with matched row + reason text) or a passthrough decision. The rule chain
@@ -3734,10 +3828,18 @@ def run_import_parsed(
                 amount=amount,
                 scope_id=dedupe_context.scope_id_for(acc["id"], csv_val),
                 txn_payload=txn_payload,
+                refuted=refuted if source_ids else None,
             )
             duplicate_existing = verdict.matched if verdict.hard_reject else None
             duplicate_reason = verdict.reason if verdict.hard_reject else ""
             if duplicate_existing:
+                # The row this rejection names, where it names one precisely, is the same transaction —
+                # so it takes the incoming id. This is how rows imported before the source carried ids
+                # are given theirs (services/source_transaction_ids.py).
+                if source_ids:
+                    adopted = source_ids.adoption_target(duplicate_existing)
+                    if adopted:
+                        source_ids.stamp(conn, adopted, source_txn_id)
                 deduped += 1
                 duplicate_rows.append({
                     "row": row_num,
@@ -3790,7 +3892,7 @@ def run_import_parsed(
 
         # Which of the refusals are this source restating its own prior import. Classified here, from
         # the verdicts as they were made, rather than re-derived later from what was stored.
-        restatement_rows = {
+        restatement_rows = id_restatement_rows | {
             int(entry.get("row") or 0) for entry in duplicate_rows
             if is_settled_source_restatement(
                 entry.get("matched_transaction"), csv_value=entry.get("csv_value") or "")

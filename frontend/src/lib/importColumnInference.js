@@ -186,6 +186,15 @@ function scoreHeaderName(header, type) {
   return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
 }
 
+// A source's own row identifier, recognized by an exact header name only: a substring test would claim
+// the many identifier columns that are not the transaction's own (a receipt id, an order id, the id of
+// the transaction a refund refers to). Lower-case, as `normalizeImportHeaderName` leaves it.
+const TRANSACTION_ID_HEADER_NAMES = new Set(['id', 'transaction id', 'transaction_id', 'transactionid', 'txn id', 'fitid'])
+
+function isTransactionIdHeader(header) {
+  return TRANSACTION_ID_HEADER_NAMES.has(normalizeImportHeaderName(header))
+}
+
 export function formatLikelyMatchLabel(count) {
   if (!count) return ''
   return `${count} likely ${count === 1 ? 'match' : 'matches'}`
@@ -395,6 +404,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       directionCandidates: [],
       pendingCandidates: [],
       currencyCandidates: [],
+      transactionIdCandidates: [],
       dateAnalysisByHeader: {},
       amountAnalysisByHeader: {},
     }
@@ -413,6 +423,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     directionCandidates: [],
     pendingCandidates: [],
     currencyCandidates: [],
+    transactionIdCandidates: [],
     dateAnalysisByHeader: {},
     amountAnalysisByHeader: {},
   }
@@ -491,9 +502,13 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     if (currencyBoost > 0) {
       analyses.currencyCandidates.push({ header, score: currencyBoost })
     }
+
+    if (isTransactionIdHeader(header)) {
+      analyses.transactionIdCandidates.push({ header, score: 1 })
+    }
   })
 
-  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates', 'currencyCandidates']) {
+  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates', 'currencyCandidates', 'transactionIdCandidates']) {
     analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
     analyses[key] = analyses[key].map(entry => entry.header)
   }
@@ -632,6 +647,7 @@ export function inferUnambiguousImportMappingFromPreview(preview, skipRows = 0) 
       notes: pickUnambiguousHeader(analysis.notesCandidates),
       pending: pickUnambiguousHeader(analysis.pendingCandidates),
       currency: pickUnambiguousHeader(analysis.currencyCandidates),
+      transaction_id: pickUnambiguousHeader(analysis.transactionIdCandidates),
       account: pickUnambiguousHeader(analysis.accountCandidates),
     },
     analysis,
@@ -669,6 +685,7 @@ export function inferImportMappingFromPreview(preview, skipRows = 0) {
       notes: analysis.notesCandidates[0] || '',
       pending: analysis.pendingCandidates[0] || '',
       currency: analysis.currencyCandidates[0] || '',
+      transaction_id: analysis.transactionIdCandidates[0] || '',
       account: analysis.accountCandidates[0] || '',
     },
     analysis,

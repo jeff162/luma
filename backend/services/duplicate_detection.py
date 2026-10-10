@@ -31,6 +31,10 @@ order:
   5.   Terminal-day reconciliation, then
   6.   a fuzzy-text fallback (medium confidence).
 
+A file import whose data source maps a transaction-ID column runs one rung ahead of all six — a row whose
+id the source already holds is that transaction — and withholds from the six any held row the source gave
+a different id (`refuted`). Both live in `services/source_transaction_ids.py`.
+
 Soft-flag (imported with a suspect pointer for review): the cross-SOURCE match by (date-window,
 amount, source text) comes from the post-batch sweep (`mark_import_suspects`), not the ladder above; the
 user resolves it with Keep (assert the two accounts are distinct) or Reject (confirm a duplicate). The
@@ -1338,7 +1342,8 @@ def _far_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
 def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
                                           parsed_date: str, amount: float,
                                           scope_id: Optional[str],
-                                          incoming_texts: Optional[RowMatchTexts] = None) -> list[dict]:
+                                          incoming_texts: Optional[RowMatchTexts] = None,
+                                          refuted: Optional[Callable[[str], bool]] = None) -> list[dict]:
     """For a coverage-window hit, look up actual same-account candidate rows by (date, amount).
     Returns a list of compact dicts the unified report renders directly. Empty list means
     'covered date but no specific match' — the report flags those for manual review.
@@ -1367,6 +1372,10 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     descriptor with `classify_source_text_relation`, recording the result on `text_relation`. This
     function only *labels*; `_display_candidates` decides what to hide. Keeping the two apart is what
     lets the verdict path go on seeing the complete list — see `_coverage_reject_verdict`.
+
+    `refuted` withholds rows the incoming row's own source id says are other transactions (see
+    `evaluate_duplicate`). It applies to this account and its linked group only: the transfer lookup at the
+    end names a *different* transaction by design, so an id cannot refute it.
     """
     seen_ids: set[str] = set()
     out: list[dict] = []
@@ -1421,13 +1430,15 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     def _probe(offsets) -> None:
         for day, day_offset in offsets:
             key = duplicate_amount_key(day, amount)
-            for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
-                _append(candidate, day_offset)
+            pools = [context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, [])]
             if scope_id:
                 # Linked-group rows too — the sibling/child account a second source files the same
                 # charge under is exactly what the receiving-account index above cannot see.
-                for candidate in context.existing_rows_by_effective_account_amount.get(scope_id, {}).get(key, []):
-                    _append(candidate, day_offset)
+                pools.append(context.existing_rows_by_effective_account_amount.get(scope_id, {}).get(key, []))
+            for pool in pools:
+                for candidate in pool:
+                    if refuted is None or not refuted(candidate.get("id")):
+                        _append(candidate, day_offset)
 
     _probe(_adjacent_date_offsets(parsed_date))
     # Only reach to ±2 when exact/±1 produced nothing, so a real exact/±1 match is never diluted
@@ -1607,7 +1618,8 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
 def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_account_id: str,
                              parsed_date: str, amount: float, scope_id: Optional[str],
                              incoming_merchant, reason: str,
-                             incoming_texts: Optional[RowMatchTexts] = None):
+                             incoming_texts: Optional[RowMatchTexts] = None,
+                             refuted: Optional[Callable[[str], bool]] = None):
     """The verdict for a coverage-window hit: a hard-reject, carrying any same-account/transfer candidates
     for the report. One exception keeps real spending from being silently dropped: a **named** row (a real
     payment, not a nameless money-movement leg) with no such candidate is only treated as a duplicate when
@@ -1625,7 +1637,7 @@ def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_acco
     The ledger probe then runs a **second** time when the tiering empties the reported list, purely to
     name the match — see the comment on that branch."""
     candidates = _candidate_summary_rows_for_coverage(
-        context, receiving_account_id, parsed_date, amount, scope_id, incoming_texts,
+        context, receiving_account_id, parsed_date, amount, scope_id, incoming_texts, refuted,
     )
     if not candidates and incoming_merchant and context.conn is not None:
         payment_match = find_ledger_payment_match(
@@ -1674,6 +1686,7 @@ def evaluate_duplicate(
     scope_id: Optional[str],
     txn_payload: dict,
     posted_date: Optional[str] = None,
+    refuted: Optional[Callable[[str], bool]] = None,
 ) -> DedupeVerdict:
     """Run the dedupe rule chain for a single incoming row. See module docstring for the rule
     ladder. The caller builds `context` once per import via `build_dedupe_context` (or constructs
@@ -1685,7 +1698,15 @@ def evaluate_duplicate(
     applies, because two sources routinely date the same charge differently — one reports the
     transaction date and the other the posted date. Without this a row reads as outside a covered
     range that morally contains it, and the coverage rule never engages at all.
+
+    `refuted(txn_id)` names held rows this row cannot be: ones its own source gave a different transaction
+    id, or already claimed earlier in the same import (`services/source_transaction_ids.py`). Each rung
+    that names a held row skips them, so a refuted row is never the match — and when it was the only
+    candidate, the row is read as new rather than as a duplicate of something it provably is not.
     """
+    def _available(candidate) -> bool:
+        return refuted is None or not refuted((candidate or {}).get("id"))
+
     incoming_merchant = txn_payload.get("merchant_name")
     # Every date this row could legitimately be filed under, most-authoritative first.
     row_dates = [d for d in (parsed_date, posted_date) if d]
@@ -1727,6 +1748,7 @@ def evaluate_duplicate(
             verdict = _coverage_reject_verdict(
                 context, cov, receiving_account_id, parsed_date, amount,
                 scope_id=scope_id, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
+                refuted=refuted,
                 reason="Falls within the fully covered date range from an earlier import for this source account",
             )
             if verdict is not None:
@@ -1754,6 +1776,7 @@ def evaluate_duplicate(
             verdict = _coverage_reject_verdict(
                 context, cov, receiving_account_id, parsed_date, amount,
                 scope_id=scope_id, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
+                refuted=refuted,
                 reason="Falls within the fully covered date range from an earlier import in this account scope",
             )
             if verdict is not None:
@@ -1764,7 +1787,7 @@ def evaluate_duplicate(
     # differing explicit check number means this is NOT the same row — let it fall through to the
     # lower-confidence rules (which route it to review) instead.
     matched = context.existing_hashes_by_account.get(receiving_account_id, {}).get(content_hash)
-    if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+    if matched and (are_distinct_checks(incoming_merchant, matched.get("merchant_name")) or not _available(matched)):
         matched = None
     if matched:
         return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
@@ -1774,7 +1797,7 @@ def evaluate_duplicate(
     compare_target_id = context.account_duplicate_compare_targets.get(csv_value)
     if compare_target_id:
         matched = context.existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
-        if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+        if matched and (are_distinct_checks(incoming_merchant, matched.get("merchant_name")) or not _available(matched)):
             matched = None
         if matched:
             return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
@@ -1786,14 +1809,16 @@ def evaluate_duplicate(
     terminal_day_reconciled = False
     if context.coverage_strategy_enabled:
         same_source = [c for d in row_dates
-                       for c in context.terminal_day_candidates_by_csv_day.get((csv_value, d), [])]
+                       for c in context.terminal_day_candidates_by_csv_day.get((csv_value, d), [])
+                       if _available(c)]
         receiving_account_is_known = (
             receiving_account_id in context.accounts_with_prior_history
             or csv_value in context.explicit_alias_csv_values
         )
         scope_terminal = (
             [c for d in row_dates
-             for c in context.terminal_day_candidates_by_scope_day.get((scope_id or "", d), [])]
+             for c in context.terminal_day_candidates_by_scope_day.get((scope_id or "", d), [])
+             if _available(c)]
             if receiving_account_is_known else []
         )
         terminal_day_reconciled = bool(same_source) or any(
@@ -1828,7 +1853,7 @@ def evaluate_duplicate(
         seen_candidate_ids = set()
         for d in row_dates:
             for c in by_amount.get(duplicate_amount_key(d, amount), []):
-                if c["id"] not in seen_candidate_ids:
+                if c["id"] not in seen_candidate_ids and _available(c):
                     seen_candidate_ids.add(c["id"])
                     candidate_rows.append(c)
         receiving_account_is_known = (
@@ -1839,7 +1864,7 @@ def evaluate_duplicate(
             scope_by_amount = context.existing_rows_by_effective_account_amount.get(compare_target_id, {})
             for d in row_dates:
                 for c in scope_by_amount.get(duplicate_amount_key(d, amount), []):
-                    if c["id"] not in seen_candidate_ids:
+                    if c["id"] not in seen_candidate_ids and _available(c):
                         seen_candidate_ids.add(c["id"])
                         candidate_rows.append(c)
         heuristic = find_textual_duplicate_candidate(candidate_rows, txn_payload)
@@ -2845,6 +2870,12 @@ _CROSS_ACCOUNT_CANDIDATE_SQL = """
                     AND COALESCE(b2.connection_id, t2.import_batch_id) IS NOT NULL
                     AND COALESCE(b1.connection_id, t1.import_batch_id)
                         != COALESCE(b2.connection_id, t2.import_batch_id)))
+          -- Two files of ONE data source still count as two origins above, which is right when neither
+          -- carries ids — but where the source gave each row its own id and the two differ, the source has
+          -- said outright that these are two transactions (services/source_transaction_ids.py).
+          AND  NOT (    b1.profile_id IS NOT NULL AND b1.profile_id = b2.profile_id
+                    AND t1.source_transaction_id IS NOT NULL AND t2.source_transaction_id IS NOT NULL
+                    AND t1.source_transaction_id != t2.source_transaction_id)
           {id_clause}
 """
 
@@ -2952,6 +2983,9 @@ def count_active_suspects(conn: sqlite3.Connection) -> int:
 # until the table is extended; this prevents silent grouping under "unknown" if a rule reason text
 # is tweaked without updating the map.
 _RULE_REASON_CLASSIFIERS = (
+    # Both id-rung reasons (`services/source_transaction_ids.py`) share the prefix.
+    ("Same transaction ID as",
+     "source_transaction_id", "high"),
     ("Matches an existing transaction in the linked account group",
      "exact_hash_linked_group", "high"),
     ("Matches an existing transaction",
@@ -2998,6 +3032,8 @@ _SOFT_FLAG_CLASSIFIERS = {
 # independently of the rule chain's own wording. Keep keys here in sync with the classifiers
 # above and with the `_confirmed` suffix used for graduated soft-flags.
 _RULE_LABELS = {
+    "source_transaction_id":           ("Same transaction ID",
+                                        "The source gave this row the same transaction ID as a transaction already imported from this data source."),
     "exact_hash_same_account":         ("Exact match (same account)",
                                         "Identical date, amount, and payee already exist on the receiving account."),
     "exact_hash_linked_group":         ("Exact match (linked group)",
@@ -4138,6 +4174,16 @@ def _same_origin(row_a, row_b) -> bool:
     return not origin_a or not origin_b or origin_a == origin_b
 
 
+def _distinct_by_source_id(row_a, row_b) -> bool:
+    """Whether one data source gave the two rows different transaction ids, and so has said they are two
+    transactions however alike they look (services/source_transaction_ids.py)."""
+    return bool(
+        row_a["profile_id"] and row_a["profile_id"] == row_b["profile_id"]
+        and row_a["source_transaction_id"] and row_b["source_transaction_id"]
+        and row_a["source_transaction_id"] != row_b["source_transaction_id"]
+    )
+
+
 def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                                             account_ids: Iterable[str]) -> int:
     """Fresh existing-vs-existing cross-source scan within a set of accounts (a just-merged group).
@@ -4174,6 +4220,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                COALESCE(t.needs_review, 0) AS needs_review,
                t.suspect_duplicate_of,
                COALESCE(b.imported_at, '') AS imported_at,
+               b.profile_id, t.source_transaction_id,
                -- What reported this row: the connection if it came from one, else the file. NULL for a
                -- manual entry, which asserts nothing and therefore pairs with nothing on its own account.
                COALESCE(b.connection_id, t.import_batch_id) AS origin_id
@@ -4227,7 +4274,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
-                if _same_origin(a, b):
+                if _same_origin(a, b) or _distinct_by_source_id(a, b):
                     continue  # one source does not report a charge twice — a legitimate repeat
                 if _sorted_pair(a["id"], b["id"]) in judged:
                     continue  # the user has already decided these two are not the same charge

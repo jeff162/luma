@@ -54,8 +54,25 @@ export function getBlankMappingSuggestions() {
     notes: '',
     pending: '',
     currency: '',
+    transaction_id: '',
     account: '',
   }
+}
+
+// A file without a column the source maps says nothing about that mapping — typically an export from
+// before the vendor added the column — so saving the source after importing it keeps the stored mapping
+// rather than taking the file's empty field. Otherwise one older file would quietly un-map a
+// transaction-ID column and every later file would arrive without ids until someone noticed. A column
+// the file does carry is the user's to clear, and with no headers there is nothing to judge absence by.
+export function keepMappingsForAbsentColumns(columnMap, storedColumnMap, fileHeaders) {
+  const headers = new Set(fileHeaders || [])
+  if (headers.size === 0) return columnMap
+  const kept = { ...columnMap }
+  for (const key of Object.keys(getBlankMappingSuggestions())) {
+    const stored = storedColumnMap?.[key]
+    if (!kept[key] && stored && !headers.has(stored)) kept[key] = stored
+  }
+  return kept
 }
 
 export function stableSerialize(value) {

@@ -199,13 +199,14 @@ def compact_database(db_path: str | None = None) -> int:
 # the rows an import corrected rather than added — a source revising an amount between two exports was
 # previously counted as neither imported nor deduped, so the ledger changed and nothing said so. v69 adds
 # `import_batch.ignored_count` for the rows a source restated from its own prior import, which stop being
-# written to the duplicate report at all.
+# written to the duplicate report at all. v70 adds `txn.source_transaction_id`, the identifier a file source
+# gives each row, matched only within the data source that issued it.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 69
+CURRENT_VERSION = 70
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2103,6 +2104,18 @@ def _add_import_batch_ignored_count(conn):
         conn.execute("ALTER TABLE import_batch ADD COLUMN ignored_count INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(70)
+def _add_txn_source_transaction_id(conn):
+    """The identifier a file source gives each row, where its export carries one (see
+    services/source_transaction_ids.py). Nothing to backfill: rows already held receive theirs the next
+    time an import of the same source matches them. Guarded like v65-v69."""
+    if "txn" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if "source_transaction_id" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN source_transaction_id TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2627,6 +2640,12 @@ def init_db(db_path: str | None = None):
                 -- following plaid_account_id -> external_account_id in v20); NULL for rows from a file
                 -- import or entered by hand.
                 external_transaction_id TEXT UNIQUE,
+                -- The identifier a *file* source gave this row, where its export carries one. Unlike the
+                -- provider id above it is unique only within the data source that issued it, so it is
+                -- deliberately not UNIQUE and is only ever matched through the row's batch
+                -- (import_batch.profile_id) — see services/source_transaction_ids.py. NULL for synced
+                -- and hand-entered rows, and for files whose source names no id column.
+                source_transaction_id TEXT,
                 account_id           TEXT NOT NULL REFERENCES account(id),
                 category_id          TEXT REFERENCES category(id) ON DELETE SET NULL,
                 amount               REAL NOT NULL,

@@ -24,7 +24,7 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 | The adapter interface · Capability declarations · Where the connection handle comes from | ✅ | — | — |
 | Adding a file importer | — | ✅ | partly (the downstream rules; not the CSV parse seam) |
 | Adding a marketplace importer | — | — | ✅ |
-| Transaction ids must be globally unique | ✅ | — (a file carries no identity between imports; dedupe keys on content) | — (an order id joins a vendor's own files; it is not a ledger identity) |
+| Transaction ids must be globally unique | ✅ | partly (a file's own row id is scoped to its data source, not the ledger — see the section's end) | — (an order id joins a vendor's own files; it is not a ledger identity) |
 | Zero-amount rows | ✅ | ✅ | ✅ (and the one current source that answers `keep` for reason 2) |
 | Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) | ✅ |
 | Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) | ✅ (the one-currency rule) |
@@ -290,6 +290,17 @@ first's on the unscoped lookup and were dropped as already held. The account imp
 the sync reported success. Namespace at the adapter boundary, which is the layer that knows; do not weaken
 the lookups. The signature of this regression is `added == skipped` exactly, with one account empty
 (`test_two_accounts_issuing_the_same_transaction_ids_both_import`).
+
+**A file importer's ids are the other case, and deliberately not this column.** Some exports give each
+row an id the source assigned, and those go in `txn.source_transaction_id`, which is neither unique nor
+looked up ledger-wide: it is matched only within the data source that imported it, read through the row's
+batch (`services/source_transaction_ids.py`; semantics in [`data-model.md`](data-model.md) →
+`txn.source_transaction_id`). Two reasons it cannot share `external_transaction_id`: that column's being
+set is how the ledger tells a synced row from a file row, and a file source's ids are unique only within
+their issuer — two sources can both number their rows from 1, and one export can give two of its lines a
+single id.
+A new file importer whose format carries a row id should map it to `transaction_id` rather than to
+evidence; a recognized format can read it without a mapping, as the PayPal importer does.
 
 ## Zero-amount rows
 

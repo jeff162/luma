@@ -2492,6 +2492,31 @@ export const HELP_TOPICS = [
           be used to create new data sources. Deleting a data source does not remove any files,
           just the mapping template.
         </p>
+        <h4>Transaction IDs</h4>
+        <p>*needs review*</p>
+        <p>
+          Some exports give every transaction its own ID, in a column headed something
+          like <em>Id</em> or <em>Transaction ID</em>. Mapping that column (<strong>Transaction
+          ID</strong> on the mapping screen) lets each later file from the same data source recognize
+          the transactions already imported, even when a description has been reworded or an amount
+          has changed &mdash; a tip added after a charge settled, for instance, corrects the amount in
+          place instead of adding a second copy. A second identical charge with a different ID is
+          imported as the separate transaction it is. PayPal files are read this way without any
+          mapping.
+        </p>
+        <p>
+          The IDs are compared only with transactions imported through the same data source, so this
+          works best with one data source per provider. When a provider changes the columns in its
+          export, continue with the existing data source rather than creating a new one; it takes on
+          the new layout. Transactions imported before the provider added an ID column receive their
+          IDs when the first file carrying the column is imported, and importing an older file without
+          the column afterwards changes nothing.
+        </p>
+        <p>
+          When one provider&apos;s files have ended up under two data sources, delete one of them: its
+          files move to <strong>unknown data source</strong>, and <strong>Assign to data
+          source</strong> on each file card places them under the other.
+        </p>
       </>
     ),
   },

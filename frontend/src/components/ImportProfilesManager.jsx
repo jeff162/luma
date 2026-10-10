@@ -69,7 +69,7 @@ const ADD_PANEL_WIDTH = 900
 // `single_account_new` is listed because the form resolves it: to the existing account of that name,
 // or to an account created on save.
 const FORM_OWNED_COLUMN_MAP_KEYS = [
-  'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency',
+  'date', 'description', 'amount', 'debit', 'credit', 'direction', 'pending', 'currency', 'transaction_id',
   'category', 'notes', 'account', 'evidence_columns', 'single_account_new',
 ]
 
@@ -103,6 +103,7 @@ function getBlankSuggestedColumns() {
     notes: '',
     pending: '',
     currency: '',
+    transaction_id: '',
     account: '',
   }
 }
@@ -177,6 +178,7 @@ function ProfileForm({
   const [colNotes, setColNotes] = useState(cm.notes || '')
   const [colPending, setColPending] = useState(cm.pending || '')
   const [colCurrency, setColCurrency] = useState(cm.currency || '')
+  const [colTransactionId, setColTransactionId] = useState(cm.transaction_id || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
   // Capture picks (headers), or null = derive the default set. Seeded from the saved profile.
   const [evidenceColumns, setEvidenceColumns] = useState(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
@@ -196,8 +198,8 @@ function ProfileForm({
     [samplePreview, skipRowsValue],
   )
   const mappedHeaders = useMemo(
-    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount].filter(Boolean),
-    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colAccount],
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colCurrency, colTransactionId, colAccount],
   )
   // "Imports from this data source have been categorized" only makes sense with a Category column mapped;
   // clear it if that mapping is removed.
@@ -256,6 +258,7 @@ function ProfileForm({
     setColNotes(preserveOrSuggest(colNotes, 'notes'))
     setColPending(preserveOrSuggest(colPending, 'pending'))
     setColCurrency(preserveOrSuggest(colCurrency, 'currency'))
+    setColTransactionId(preserveOrSuggest(colTransactionId, 'transaction_id'))
     setColAccount(preserveOrSuggest(colAccount, 'account'))
 
     if (nextAmountConvention === 'two_column') {
@@ -329,6 +332,7 @@ function ProfileForm({
       ...(amtConv === 'single_unsigned' && colDir ? { direction: colDir } : {}),
       ...(colPending ? { pending: colPending } : {}),
       ...(colCurrency ? { currency: colCurrency } : {}),
+      ...(colTransactionId ? { transaction_id: colTransactionId } : {}),
       ...(colCategory ? { category: colCategory } : {}),
       ...(colNotes ? { notes: colNotes } : {}),
       ...(colAccount ? { account: colAccount } : {}),
@@ -760,6 +764,25 @@ function ProfileForm({
             placeholder: 'optional',
             inputId: `${fid}-mapping-notes`,
             inputName: 'data-source-notes-column',
+          },
+          {
+            key: 'transaction_id',
+            label: 'Transaction ID column',
+            headers: columnAnalysis.transactionIdCandidates,
+            allHeaders: sampleHeaders,
+            value: colTransactionId,
+            onChange: nextValue => {
+              if (nextValue) clearMappingSuggestion('transaction_id')
+              setColTransactionId(nextValue)
+            },
+            suggestedValue: mappingSuggestions.transaction_id,
+            onAcceptSuggestion: nextValue => {
+              clearMappingSuggestion('transaction_id')
+              setColTransactionId(nextValue)
+            },
+            hint: columnAnalysis.transactionIdCandidates.length > 0 && !colTransactionId ? formatLikelyMatchLabel(columnAnalysis.transactionIdCandidates.length) : '',
+            placeholder: 'optional',
+            inputId: `${fid}-mapping-transaction-id`,
           },
         ]}
         accountField={{

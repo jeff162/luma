@@ -15,6 +15,7 @@ import {
   getSuggestedDataSourceName,
   groupFilesBySource,
   unionPreviewColumnValues,
+  keepMappingsForAbsentColumns,
 } from '../importDraft.js'
 import { IMPORTED_CATEGORY_SETTINGS_KEY } from '../constants.js'
 
@@ -261,5 +262,30 @@ describe('importColumnDelta', () => {
   it('reports nothing when either side has no fingerprint to compare', () => {
     expect(importColumnDelta({}, { header_fingerprint: 'Date|Amount' })).toEqual({ added: [], removed: [] })
     expect(importColumnDelta(source, null)).toEqual({ added: [], removed: [] })
+  })
+})
+
+describe('keepMappingsForAbsentColumns', () => {
+  // The source learned a transaction-ID column from a newer export; then an older export without it is
+  // imported. Saving the source afterwards must not un-map the column, or the next current file would
+  // arrive with no ids and nothing would say why.
+  const stored = { date: 'Date', description: 'Merchant', amount: 'Amount', transaction_id: 'Id' }
+
+  it('keeps a mapping whose column the file does not carry', () => {
+    const fromOlderFile = { date: 'Date', description: 'Merchant', amount: 'Amount', transaction_id: null }
+    expect(keepMappingsForAbsentColumns(fromOlderFile, stored, ['Date', 'Merchant', 'Amount']).transaction_id)
+      .toBe('Id')
+  })
+
+  it('lets the user clear a mapping whose column the file does carry', () => {
+    const cleared = { date: 'Date', description: 'Merchant', amount: 'Amount', transaction_id: null }
+    expect(keepMappingsForAbsentColumns(cleared, stored, ['Date', 'Merchant', 'Amount', 'Id']).transaction_id)
+      .toBeNull()
+  })
+
+  it('takes a new mapping over the stored one', () => {
+    const remapped = { ...stored, transaction_id: 'Transaction ID' }
+    expect(keepMappingsForAbsentColumns(remapped, stored, ['Date', 'Merchant', 'Amount', 'Transaction ID']).transaction_id)
+      .toBe('Transaction ID')
   })
 })

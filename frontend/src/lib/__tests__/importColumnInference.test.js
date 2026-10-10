@@ -246,6 +246,23 @@ describe('column mapping', () => {
     expect(inferUnambiguousImportMappingFromPreview(bank).columnMap.currency).toBe('')
   })
 
+  it('suggests a transaction id column only by its exact name', () => {
+    // A substring test would claim identifiers that are not the row's own: a receipt id, or the id of the
+    // transaction a refund refers to — and mapping one of those would make distinct rows read as one.
+    const aggregator = preview(['Date', 'Merchant', 'Amount', 'Id'], [
+      { Date: '2026-03-01', Merchant: 'Netflix', Amount: '-15.49', Id: '253256346289605337' },
+    ])
+    expect(inferUnambiguousImportMappingFromPreview(aggregator).columnMap.transaction_id).toBe('Id')
+    const wallet = preview(['Date', 'Name', 'Receipt ID', 'Reference Txn ID', 'Transaction ID', 'Total'], [
+      { Date: '05/09/2026', Name: 'Subscription', 'Receipt ID': '', 'Reference Txn ID': '', 'Transaction ID': '4AB12', Total: '-10.00' },
+    ])
+    expect(inferUnambiguousImportMappingFromPreview(wallet).columnMap.transaction_id).toBe('Transaction ID')
+    const orders = preview(['Date', 'Description', 'Order ID', 'Amount'], [
+      { Date: '2026-03-01', Description: 'Order', 'Order ID': '112-3', Amount: '-5.00' },
+    ])
+    expect(inferUnambiguousImportMappingFromPreview(orders).columnMap.transaction_id).toBe('')
+  })
+
   it('returns safe defaults for an empty preview', () => {
     expect(inferImportFileCharacteristicsFromPreview({}).amountConvention).toBe('single_signed')
     expect(inferImportMappingFromPreview({}).columnMap.date).toBe('')
