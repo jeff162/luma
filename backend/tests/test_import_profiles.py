@@ -366,3 +366,123 @@ class NewAccountOnSaveTests(unittest.TestCase):
         with get_db(str(self.db_path)) as conn:
             landed = conn.execute("SELECT account_id FROM txn").fetchall()
         self.assertEqual([row["account_id"] for row in landed], [account["id"]])
+
+
+class ImportSourceLearnsItsLayoutTests(unittest.TestCase):
+    """A source takes the columns of each file imported through it.
+
+    Matching a file to a saved source is exact string equality on the header, so a vendor adding one
+    column used to orphan every later export: the source went on describing a layout that no file
+    had any more, and the only way forward was a second source per generation. The import is where
+    that is corrected, and deliberately not the moment the warning was dismissed — only a completed
+    import proves the source's mapping still reads the file.
+    """
+
+    HEADER = "Date,Description,Amount,Account\n"
+    ROW = "2026-06-02,Corner Market,-18.40,Checking\n"
+    COLUMN_MAP = {"date": "Date", "description": "Description", "amount": "Amount", "account": "Account"}
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "layout.db"
+        init_db(str(self.db_path))
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO account
+                  (id, external_account_id, provider, name, display_name, type, subtype,
+                   mask, owner_id, parent_account_id, trashed_at)
+                VALUES ('acc-chk', 'fixture-chk', 'fixture', 'Checking', 'Checking', 'depository',
+                        'checking', NULL, ?, NULL, NULL)
+                """,
+                (SHARED_OWNER_ID,),
+            )
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _create_source(self, *, source_kind: str | None = None) -> str:
+        with self._use_db_path():
+            profile_id = create_profile(ProfileCreate(
+                name="Harborline Checking",
+                column_map=dict(self.COLUMN_MAP),
+                header_fingerprint="Date|Description|Amount|Account",
+                date_format="%Y-%m-%d",
+                amount_convention="single_signed",
+                apply_categorization=False,
+            ))["id"]
+        if source_kind:
+            with get_db(str(self.db_path)) as conn:
+                conn.execute("UPDATE csv_import_profile SET source_kind = ? WHERE id = ?",
+                             (source_kind, profile_id))
+        return profile_id
+
+    def _import(self, profile_id: str, csv: str, filename: str = "june.csv"):
+        with self._use_db_path():
+            return run_import_core(
+                csv,
+                {
+                    "profile_id": profile_id,
+                    "account_map": {"Checking": "acc-chk"},
+                    "column_map": dict(self.COLUMN_MAP),
+                    "date_format": "%Y-%m-%d",
+                    "amount_convention": "single_signed",
+                    "apply_categorization": False,
+                },
+                filename=filename,
+            )
+
+    def _fingerprint(self, profile_id: str) -> str:
+        with get_db(str(self.db_path)) as conn:
+            return conn.execute(
+                "SELECT header_fingerprint FROM csv_import_profile WHERE id = ?", (profile_id,)
+            ).fetchone()["header_fingerprint"]
+
+    def test_a_column_the_vendor_added_becomes_the_sources_own_layout(self):
+        profile_id = self._create_source()
+        self._import(profile_id, "Date,Description,Amount,Account,Reference\n"
+                                 "2026-06-02,Corner Market,-18.40,Checking,R-1\n")
+        self.assertEqual(self._fingerprint(profile_id), "Date|Description|Amount|Account|Reference")
+
+    def test_importing_an_older_file_takes_the_source_back_to_that_layout(self):
+        """Accepted rather than guarded against: the next current file moves it forward again, and a
+        rule to stop it would have to decide which of two real layouts is the newer one."""
+        profile_id = self._create_source()
+        self._import(profile_id, "Date,Description,Amount,Account,Reference\n"
+                                 "2026-06-02,Corner Market,-18.40,Checking,R-1\n", "june.csv")
+        self._import(profile_id, self.HEADER + "2026-01-04,Bakery,-4.25,Checking\n", "january.csv")
+        self.assertEqual(self._fingerprint(profile_id), "Date|Description|Amount|Account")
+
+    def test_a_recognized_source_keeps_the_fingerprint_it_was_given(self):
+        """One recognized source serves two file shapes — the activity CSV and the PDF statement —
+        and is matched on the recognized kind rather than on this value. Letting each import claim it
+        would leave the two rewriting each other."""
+        profile_id = self._create_source(source_kind="source:paypal")
+        self._import(profile_id, "Date,Description,Amount,Account,Reference\n"
+                                 "2026-06-02,Corner Market,-18.40,Checking,R-1\n")
+        self.assertEqual(self._fingerprint(profile_id), "Date|Description|Amount|Account")
+
+    def test_a_file_imported_without_a_source_changes_no_source(self):
+        profile_id = self._create_source()
+        with self._use_db_path():
+            run_import_core(
+                "Date,Description,Amount,Account,Reference\n"
+                "2026-06-02,Corner Market,-18.40,Checking,R-1\n",
+                {
+                    "account_map": {"Checking": "acc-chk"},
+                    "column_map": dict(self.COLUMN_MAP),
+                    "date_format": "%Y-%m-%d",
+                    "amount_convention": "single_signed",
+                    "apply_categorization": False,
+                },
+                filename="orphan.csv",
+            )
+        self.assertEqual(self._fingerprint(profile_id), "Date|Description|Amount|Account")

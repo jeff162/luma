@@ -16,7 +16,9 @@ the answer to it is always the same — open this one by hand.
 
 Parking is also how the source's setup gets proven before anything runs alone: a source imports
 unattended only once it owns a completed batch, and a file whose header does not match the source's
-fingerprint is parked rather than read through a column map built for a different layout.
+fingerprint is parked rather than read through a column map built for a different layout. That one is
+recoverable without touching the source's settings — an import by hand updates the stored fingerprint
+(`core.run_import_parsed`), so the folder resumes once a person has seen the new columns.
 
 **Scans are request-driven.** There is deliberately no scheduler — the app is multi-tenant with
 per-identity database paths, so a timer thread would have no tenant to run as and no way to choose
@@ -449,8 +451,12 @@ def _import_ready_file(profile: dict, candidate: dict) -> dict:
 
     fingerprint = str(profile.get("header_fingerprint") or "").strip()
     if fingerprint and fingerprint != parsed.fingerprint:
+        # The way out is stated because there is one and it is not obvious: an import by hand teaches
+        # the source the columns it was shown, after which this folder resumes on its own.
         return {"state": WATCH_STATE_PARKED, "content_hash": content_hash,
-                "reason": "This file's columns are not the ones this source is set up for."}
+                "reason": "This file's columns are not the ones this source is set up for. "
+                          "Import one of these files by hand and the source will learn the new "
+                          "columns, after which this folder runs on its own again."}
 
     with get_db() as conn:
         if not _source_has_completed_batch(conn, profile["id"]):

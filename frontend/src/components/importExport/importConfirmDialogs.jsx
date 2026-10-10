@@ -4,8 +4,10 @@
 // Small confirmation/choice dialogs for the import flow, each driven entirely by
 // props from ImportTab:
 //   - DataSourceMismatchDialog: a saved profile's header signature differs from
-//     the dropped file; offers OK / change source / cancel, with an inline
-//     data-source chooser sub-state.
+//     the dropped file; offers continue / change source / cancel, with an inline
+//     data-source chooser sub-state. Continuing is not a one-off override: the
+//     source takes this file's columns once the import completes, and the mapping
+//     screen marks which ones changed (see run_import_parsed).
 //   - CompatibleBatchAttachDialog: a just-saved profile looks compatible with
 //     existing uncategorized imports; offers to attach them or leave them.
 //   - DuplicateImportConfirmDialog: confirm re-importing N skipped duplicate rows.
@@ -53,9 +55,11 @@ export function DataSourceMismatchDialog({
               </>
             ) : (
               <>
-                <div style={{ fontSize: 16, fontWeight: 600 }}>Mismatch detected</div>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>The file header has changed</div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-                  <span style={{ color: 'var(--text)', fontWeight: 600 }}>{profileName}</span> has a different header signature and may not match this file.
+                  The <span style={{ color: 'var(--text)', fontWeight: 600 }}>{profileName}</span> data source maps a
+                  different set of columns. Continuing updates the data source based on the file
+                  being imported. The changes will be indicated on the mapping screen.
                 </div>
               </>
             )}
@@ -104,7 +108,7 @@ export function DataSourceMismatchDialog({
               Change data source
             </Button>
             <Button variant="ghost" onClick={onConfirm}>
-              OK
+              Continue
             </Button>
             <Button variant="ghost" onClick={onCancel}>
               Cancel

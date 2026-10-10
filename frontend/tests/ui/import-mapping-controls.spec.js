@@ -20,8 +20,8 @@ import { expect, test } from '@playwright/test'
 // starts with no saved sources and no accounts, which is what lets the "no match" and "+New account"
 // cases below be about the flow rather than about leftovers.
 
-// Header fingerprints are pipe-joined by the backend (`"|".join(headers)`, routers/import_export/
-// preview.py) and matched by exact string equality. A profile saved with any other separator matches
+// Header fingerprints are pipe-joined by the backend (`ParsedFile.fingerprint`, the one definition
+// the preview, the import and the watched-folder scan share) and matched by exact string equality. A profile saved with any other separator matches
 // nothing at all, which is a silent pass for a spec asserting "no source was detected" — so the
 // fingerprint constants are derived from the header lines right next to them.
 const SAMPLE_HEADER = 'Date,Description,Amount,Account,Notes'
@@ -54,7 +54,17 @@ function csvFile(name, body) {
   return { name, mimeType: 'text/csv', buffer: Buffer.from(body, 'utf8') }
 }
 
+// The case the whole mismatch flow exists for: the same export with one column added. Everything the
+// saved source maps is still here, so continuing must keep its mapping rather than re-infer.
+const EXTENDED_HEADER = `${SAMPLE_HEADER},Reference`
+
+const EXTENDED_CSV = `${EXTENDED_HEADER}
+2026-04-03,Coffee Shop,-4.75,Checking,Morning run,R-1
+2026-04-04,Paycheck,1200.00,Checking,Payroll,R-2
+`
+
 const sampleCsvFile = () => csvFile('sample-transactions.csv', SAMPLE_CSV)
+const extendedCsvFile = () => csvFile('extended-transactions.csv', EXTENDED_CSV)
 const mismatchedCsvFile = () => csvFile('mismatched-transactions.csv', MISMATCHED_CSV)
 const newAccountCsvFile = () => csvFile('new-account-transactions.csv', NEW_ACCOUNT_CSV)
 
@@ -293,7 +303,7 @@ test('an explicitly chosen source overrides detection and warns when the header 
 
     // Detection would have found nothing for this header; the explicit choice is applied anyway, and
     // the verification step is what tells the user the two do not agree.
-    await expect(page.getByText('Mismatch detected')).toBeVisible()
+    await expect(page.getByText('The file header has changed')).toBeVisible()
     await page.getByRole('button', { name: 'Change data source' }).click()
     // In the mismatch chooser, "Skip" is the take-a-temporary-draft choice.
     await page.getByRole('button', { name: 'Skip' }).click()
@@ -305,6 +315,33 @@ test('an explicitly chosen source overrides detection and warns when the header 
     await expect(page.getByText('Accept Description')).toBeVisible()
     await expect(page.getByText('Accept Amount (in $)')).toBeVisible()
     await expect(page.getByText('Accept Account Name')).toBeVisible()
+  } finally {
+    await deleteImportProfile(request, profileId)
+  }
+})
+
+test('a header that gained a column keeps the source mapping and marks what is new', async ({ page, request }) => {
+  const profileName = uniqueDataSourceName('PW extended source')
+  const profileId = await createImportProfile(request, { name: profileName })
+
+  try {
+    await page.goto('/import-export')
+    const chooser = await openSourceChooser(page)
+    await chooser.getByRole('button', { name: profileName, exact: true }).click()
+    await page.locator('#csv-file-input').setInputFiles(extendedCsvFile())
+
+    await expect(page.getByText('The file header has changed')).toBeVisible()
+    await page.getByRole('button', { name: 'Continue' }).click()
+
+    // Continuing applies the source whole. The absence of any "Accept X" is the discriminator:
+    // suggestions are only offered for a field with no value, so one appearing would mean the saved
+    // mapping had been dropped and the columns guessed back — which is what used to happen.
+    await expect(page.getByRole('button', { name: profileName, exact: true })).toBeVisible()
+    await expect(page.getByText(/^Accept /)).toHaveCount(0)
+
+    // And the added column is named rather than left to be spotted among the ones always there.
+    await expect(page.getByText('The columns in this file are different from what is expected by the data source.')).toBeVisible()
+    await expect(page.getByText('Reference', { exact: false }).first()).toBeVisible()
   } finally {
     await deleteImportProfile(request, profileId)
   }

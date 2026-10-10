@@ -16,6 +16,7 @@ import {
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatTimestamp } from '../lib/utils.js'
 import { findExactAccountNameMatch } from '../lib/importExport/importAccountMatching.js'
+import { splitHeaderFingerprint } from '../lib/importExport/importDraft.js'
 import {
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
   IMPORT_CATEGORY_USAGE_MODE_ALL,
@@ -104,13 +105,6 @@ function getBlankSuggestedColumns() {
     currency: '',
     account: '',
   }
-}
-
-function formatTemplateHeaderList(headerFingerprint) {
-  return String(headerFingerprint || '')
-    .split('|')
-    .map(value => value.trim())
-    .filter(Boolean)
 }
 
 function resolveExistingMappedHeader(currentValue, headers) {
@@ -231,7 +225,7 @@ function ProfileForm({
   const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !newAccount.enabled
     ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
     : ''
-  const savedTemplateHeaders = formatTemplateHeaderList(profile?.header_fingerprint)
+  const savedTemplateHeaders = splitHeaderFingerprint(profile?.header_fingerprint)
   const selectedTemplateHash = String(samplePreview?.file_content_hash || '').trim()
   const showTemplateHashWarning = !!(
     profile?.id &&

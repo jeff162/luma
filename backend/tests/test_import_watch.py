@@ -243,6 +243,34 @@ class ImportWatchTests(unittest.TestCase):
         self.assertEqual(parked["state"], watch.WATCH_STATE_PARKED)
         self.assertIn("columns", parked["reason"])
 
+    def test_a_vendor_adding_a_column_costs_one_hand_import_rather_than_a_new_source(self):
+        """The parked reason names the way out, and this is it: a hand import teaches the source the
+        columns it was shown, so the folder resumes without its settings being touched."""
+        header_v2 = "Date,Description,Amount,Account,Reference\n"
+        self._create_source()
+        self._prove_source()
+        self._drop("february.csv", header_v2 + "2026-02-03,Corner Market,12.50,Checking,R-1\n")
+        self._scan(); self._scan()
+        self.assertEqual(self._files()["february.csv"]["state"], watch.WATCH_STATE_PARKED)
+
+        with self._use_db_path():
+            run_import_core(
+                header_v2 + "2026-01-09,Bakery,4.25,Checking,R-0\n",
+                {"profile_id": "src-1", "account_map": {"Checking": "acc-chk"},
+                 "column_map": self._column_map(), "date_format": "%Y-%m-%d",
+                 "amount_convention": "single_signed", "apply_categorization": False},
+                filename="by-hand.csv",
+            )
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT header_fingerprint FROM csv_import_profile WHERE id = 'src-1'")
+                    .fetchone()["header_fingerprint"],
+                "Date|Description|Amount|Account|Reference",
+            )
+
+        self._scan()
+        self.assertEqual(self._files()["february.csv"]["state"], watch.WATCH_STATE_IMPORTED)
+
     def test_a_blank_account_cell_does_not_park_the_whole_file(self):
         """A trailing footer line has no account value, and the import already refuses such a row and
         records it on the card. Parking for one would make every export with a footer a Task."""

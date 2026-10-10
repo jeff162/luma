@@ -21,9 +21,13 @@ const SHAPE_LABEL = {
  * categorical columns are pre-checked (see computeEvidenceColumnOptions); the user can adjust freely.
  * The checked set is authoritative: whatever is checked is exactly what gets captured.
  */
-export default function ImportEvidenceColumnsSection({ options = [], checked = [], forced = [], onChange, title = 'Capture extra detail' }) {
+export default function ImportEvidenceColumnsSection({ options = [], checked = [], forced = [], newColumns = [], onChange, title = 'Capture extra detail' }) {
   if (!options.length) return null
   const forcedSet = new Set(forced)
+  // Columns this file has that the data source had not seen before. They are listed here like any
+  // other unmapped column, which is exactly why one went unnoticed: without the marker a column that
+  // appeared this month is indistinguishable from the ones that were always there.
+  const newSet = new Set(newColumns)
   // Forced columns (e.g. PayPal's Type / Item Title) are always captured — reflect that in the checked set.
   const checkedSet = new Set([...checked, ...forced])
 
@@ -66,6 +70,9 @@ export default function ImportEvidenceColumnsSection({ options = [], checked = [
             />
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {option.header}
+              {newSet.has(option.header) ? (
+                <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: 'var(--accent2)' }}>new</span>
+              ) : null}
             </span>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
               {forcedSet.has(option.header)

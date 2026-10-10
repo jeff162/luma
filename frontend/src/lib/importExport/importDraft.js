@@ -236,6 +236,31 @@ export function formatImportBatchTimestamp(value) {
   return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
 }
 
+// A header fingerprint as the list of column names it stands for.
+export function splitHeaderFingerprint(value) {
+  return String(value || '')
+    .split('|')
+    .map(header => header.trim())
+    .filter(Boolean)
+}
+
+// Which columns this file has gained or lost since the data source last recorded its layout. The
+// source's fingerprint is rewritten by every import it is used for (backend `run_import_parsed`), so
+// this is the change since the *previous* file rather than since the source was created — which is
+// the comparison worth showing, because each change is then surfaced exactly once, on the file that
+// introduced it. Empty on either side means there is nothing to compare, not that nothing changed.
+export function importColumnDelta(profile, previewLike) {
+  const before = splitHeaderFingerprint(profile?.header_fingerprint)
+  const after = splitHeaderFingerprint(previewLike?.header_fingerprint)
+  if (!before.length || !after.length) return { added: [], removed: [] }
+  const beforeSet = new Set(before)
+  const afterSet = new Set(after)
+  return {
+    added: after.filter(header => !beforeSet.has(header)),
+    removed: before.filter(header => !afterSet.has(header)),
+  }
+}
+
 export function profileHeaderClearlyMismatches(profile, previewLike) {
   const profileHeader = String(profile?.header_fingerprint || '').trim()
   const previewHeader = String(previewLike?.header_fingerprint || '').trim()

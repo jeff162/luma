@@ -98,14 +98,19 @@ async def preview_csv(file: UploadFile = File(...)):
     raw_lines = all_lines[:20]
     raw_tail_lines, raw_tail_start_line = _summarize_tail_lines(all_lines)
     header_row_index = parsed.first_row_number - 2   # the header is the line above the first row
-    # Every header cell, blank ones included: a saved source's fingerprint is built from these.
+    # Every header cell, blank ones included: the mapping UI lists what the file literally has.
     headers = parsed.header_cells
     all_rows = parsed.rows
     rows = all_rows[:10]
     total_rows = len(all_rows)
 
     filename  = file.filename or ""
-    header_fp = "|".join(headers)
+    # One definition of the fingerprint, shared with the import and the watched-folder scan
+    # (`ParsedFile.fingerprint`), which drop blank header cells. Building it here from
+    # `header_cells` instead meant a file with a trailing comma on its header row auto-matched a
+    # source in the UI and was parked by the scan, or the reverse, depending on which path had
+    # created the source — and a source now rewrites this value itself on every import.
+    header_fp = parsed.fingerprint
     file_content_hash = parsed.content_hash
 
     column_distinct_values: dict = {}

@@ -79,6 +79,7 @@ import {
   doesDraftMatchPreview,
   getSuggestedDataSourceName,
   profileHeaderClearlyMismatches,
+  importColumnDelta,
   findProfilesMatchingPreview,
   groupFilesBySource,
   unionPreviewColumnValues,
@@ -942,6 +943,14 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     [preview, evidenceColumnOptions],
   )
 
+  // What this file's columns are doing that the applied data source has not seen. The source learns
+  // the file's layout on a completed import, so this is the one screen on which a vendor's added
+  // column can still be mapped or ticked for capture before it stops being news.
+  const sourceColumnDelta = useMemo(
+    () => importColumnDelta(profiles.find(p => p.id === selectedProfile), preview),
+    [profiles, selectedProfile, preview],
+  )
+
   const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
   const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
   const sourceCategoryValues = useMemo(() => {
@@ -1613,10 +1622,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
   }
 
-  function resetToInferredImportMapping(profileId, previewLike = preview) {
-    resetToSuggestedImportMapping(profileId, previewLike)
-  }
-
   function resetImportMappingState() {
     setSelectedProfile('')
     setShowMappingSourceChooser(false)
@@ -1661,6 +1666,17 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setSelectedProfile(profileId)
     setMappingSuggestions(getBlankMappingSuggestions())
     const cm = p.column_map || {}
+    // A column the file no longer carries cannot be mapped to anything. Restoring the stored name
+    // would show a picker naming a column that is not there (the picker renders the raw value) and
+    // read blank cells from it, so it is dropped and the field falls to the suggestion engine below;
+    // the mapping screen's column-change notice is what says why it went empty. An empty header set
+    // means there is nothing to check against, not that every mapping is stale.
+    const fileHeaders = new Set(previewLike?.headers || [])
+    const mapped = key => {
+      const header = cm[key] || null
+      if (!header) return null
+      return fileHeaders.size === 0 || fileHeaders.has(header) ? header : null
+    }
     const existingSingleAccount = cm.single_account_new?.name
       ? findExactAccountNameMatch(accounts, cm.single_account_new.name)
       : null
@@ -1674,31 +1690,33 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     setEnrichFromSource(!!p.enrich_from_source)
     setUseImportedCategories(!!p.use_imported_categories)
     setImportedCategorySettings(extractImportedCategorySettings(p))
-    setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
-    setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColCurrency(cm.currency || null)
+    setColDate(mapped('date')); setColAmount(mapped('amount')); setColDebit(mapped('debit'))
+    setColCredit(mapped('credit')); setColDir(mapped('direction'))
+    setColDesc(mapped('description')); setColCategory(mapped('category')); setColNotes(mapped('notes')); setColPending(mapped('pending')); setColCurrency(mapped('currency'))
+    // The suggestions are built from what is actually mapped, not from what the source stored: a
+    // field just dropped for a missing column has to read as unmapped here or it is offered nothing.
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
       skipRowsValue: p.skip_rows || 0,
       amountConvention: p.amount_convention || 'single_signed',
       currentValues: {
-        date: cm.date || '',
-        amount: cm.amount || '',
-        debit: cm.debit || '',
-        credit: cm.credit || '',
-        direction: cm.direction || '',
-        description: cm.description || '',
-        category: cm.category || '',
-        notes: cm.notes || '',
-        pending: cm.pending || '',
-        currency: cm.currency || '',
-        account: cm.account || '',
+        date: mapped('date') || '',
+        amount: mapped('amount') || '',
+        debit: mapped('debit') || '',
+        credit: mapped('credit') || '',
+        direction: mapped('direction') || '',
+        description: mapped('description') || '',
+        category: mapped('category') || '',
+        notes: mapped('notes') || '',
+        pending: mapped('pending') || '',
+        currency: mapped('currency') || '',
+        account: mapped('account') || '',
       },
     }))
     setCategoryAssignments(cm.category_assignments || {})
     setSingleAccountNew(cm.single_account_new && !existingSingleAccount
       ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
-    const newColAccount = cm.account || null
+    const newColAccount = mapped('account')
     setAccountMap({})
     setColAccount(newColAccount)
     // A saved list restores the user's picks; its absence keeps null so the default set is derived
@@ -2121,7 +2139,11 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
     const { profileId, previewLike, context } = pendingProfileMismatch
     setPendingProfileMismatch(null)
     setShowProfileMismatchChooser(false)
-    resetToInferredImportMapping(profileId, previewLike)
+    // Continuing applies the source, mapping and all — a header that gained a column is the same data
+    // source, and re-inferring from the file threw away exactly the account assignments and column
+    // picks the source exists to hold. "This is the wrong source" has its own way out: Change data
+    // source -> Skip takes a temporary draft with an inferred mapping.
+    applyProfile(profileId, { bypassMismatchWarning: true, previewLike, mismatchContext: context })
 
     if (context === 'upload') {
       setStage('mapping')
@@ -3736,6 +3758,36 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
               </div>
             )}
 
+            {(sourceColumnDelta.added.length > 0 || sourceColumnDelta.removed.length > 0) && (
+              <div style={{
+                marginBottom: 14,
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))',
+                border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent2)' }}>
+                  The columns in this file are different from what is expected by the data source.
+                </div>
+                {sourceColumnDelta.added.length > 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>New:</span>{' '}
+                    {sourceColumnDelta.added.join(', ')} — can be mapped, captured with{' '}
+                    <span style={{ color: 'var(--text)' }}>Capture extra detail</span>, or ignored.
+                  </div>
+                ) : null}
+                {sourceColumnDelta.removed.length > 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>No longer present:</span>{' '}
+                    {sourceColumnDelta.removed.join(', ')} — any mapping that named one needs a new column.
+                  </div>
+                ) : null}
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                  The data source will be updated with the new header layout if the import completes.
+                </div>
+              </div>
+            )}
+
             <ImportColumnMappingSection
               fields={[
                 buildMappingFieldConfig({
@@ -3889,6 +3941,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
               options={evidenceColumnOptions}
               checked={resolvedEvidenceColumns}
               forced={forcedEvidenceCols}
+              newColumns={sourceColumnDelta.added}
               onChange={setEvidenceColumns}
             />
 

@@ -1565,6 +1565,19 @@ When a profile matches, it should carry reusable import workspace state, includi
 
 The local draft must not override a matched profile. It exists only so a manual/no-profile import session can resume later if the next file is still compatible.
 
+**Continuing past the header warning applies the source whole, mapping included.** The warning fires
+when a file's columns are not the ones the source recorded, which is nearly always the same export
+with a column added — the same data source, not a different one. Continuing used to re-infer the
+mapping from the file, so the account assignments and column picks the source exists to hold were
+discarded while its name stayed in the header, which reads as applied and is not. "This is the wrong
+source" already has its own exit: *Change data source → Skip* takes a temporary draft with an
+inferred mapping. **A stored column the file no longer carries is the one thing dropped** — the
+picker renders a mapped value verbatim, so restoring it would name a column that is not there and
+read blank cells from it; cleared, the field falls to the suggestion engine, and the mapping
+screen's column-change notice says why it went empty. Suggestions are built from what is actually
+mapped afterwards, not from what the source stored, or a field just cleared reads as mapped and is
+offered nothing.
+
 ### Sections on the transaction detail panel
 
 `DocumentsPanel`, `PurchasePanel` and `ReimbursementPanel` are the family, and they portion two rules and

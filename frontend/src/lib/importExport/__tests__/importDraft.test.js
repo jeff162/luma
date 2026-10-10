@@ -10,6 +10,7 @@ import {
   buildProfileBodyFromSnapshot,
   doesDraftMatchPreview,
   profileHeaderClearlyMismatches,
+  importColumnDelta,
   findProfilesMatchingPreview,
   getSuggestedDataSourceName,
   groupFilesBySource,
@@ -235,5 +236,30 @@ describe('unionPreviewColumnValues', () => {
     expect(unionPreviewColumnValues([preview(['CHK'], {})], null)).toEqual({ values: [], counts: {} })
     expect(unionPreviewColumnValues([preview(['CHK'], { CHK: 2 })], 'Account'))
       .toEqual({ values: ['CHK'], counts: { CHK: 2 } })
+  })
+})
+
+
+describe('importColumnDelta', () => {
+  const source = { header_fingerprint: 'Date|Merchant|Amount|Account' }
+
+  it('names the column a vendor added, which is the case the source has to be told about', () => {
+    expect(importColumnDelta(source, { header_fingerprint: 'Date|Merchant|Amount|Account|Id' }))
+      .toEqual({ added: ['Id'], removed: [] })
+  })
+
+  it('names a column that is gone, since a mapping may still point at it', () => {
+    expect(importColumnDelta(source, { header_fingerprint: 'Date|Merchant|Amount' }))
+      .toEqual({ added: [], removed: ['Account'] })
+  })
+
+  it('reports nothing for a reordered header — the same columns are the same layout', () => {
+    expect(importColumnDelta(source, { header_fingerprint: 'Account|Amount|Merchant|Date' }))
+      .toEqual({ added: [], removed: [] })
+  })
+
+  it('reports nothing when either side has no fingerprint to compare', () => {
+    expect(importColumnDelta({}, { header_fingerprint: 'Date|Amount' })).toEqual({ added: [], removed: [] })
+    expect(importColumnDelta(source, null)).toEqual({ added: [], removed: [] })
   })
 })

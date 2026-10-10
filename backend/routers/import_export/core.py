@@ -3297,11 +3297,12 @@ def run_import_parsed(
             "category_assignments": category_assignments_cfg,
             "account_map":         account_map_cfg,
             "skip_accounts":       list(skip_set),
-            # Persist the header fingerprint (same "|".join(headers) form the preview/profiles use)
-            # so a data source later created from this batch can auto-match future files by column
-            # structure, matching the "Save as data source" flow. Older batches imported before this
-            # was stored simply won't have it (the raw header isn't otherwise recoverable).
-            "header_fingerprint":  "|".join(headers),
+            # Persist the header fingerprint (`ParsedFile.fingerprint`, the one definition the
+            # preview and the watched-folder scan also use) so a data source later created from this
+            # batch can auto-match future files by column structure, matching the "Save as data
+            # source" flow. Older batches imported before this was stored simply won't have it (the
+            # raw header isn't otherwise recoverable).
+            "header_fingerprint":  parsed.fingerprint,
             "date_format":         date_format,
             "amount_convention":   amount_convention,
             "skip_rows":           skip_rows,
@@ -3331,6 +3332,19 @@ def run_import_parsed(
             VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
         """, (batch_id, profile_id, filename, file_content_hash, 1 if use_imported_categories else 0, json.dumps(config_snapshot),
               PAYPAL_SOURCE_KIND if is_paypal else None))
+
+        if profile_id:
+            # The batch keeps an immutable replay record, while the linked source learns the layout it
+            # was just shown — so a vendor adding a column costs one dismissed warning rather than
+            # orphaning every later file. Written at the import rather than when the warning was
+            # dismissed: only a completed import proves the source's mapping still reads this file.
+            # A recognized source (PayPal) is excluded because one such source serves two file shapes
+            # — the activity CSV and the PDF statement — and matches on the recognized kind, not on
+            # this value; letting each import claim it would flip the source between them.
+            conn.execute(
+                "UPDATE csv_import_profile SET header_fingerprint = ? WHERE id = ? AND source_kind IS NULL",
+                (parsed.fingerprint, profile_id),
+            )
 
         if not profile_id:
             previous_profileless_batches = conn.execute(
