@@ -28,7 +28,13 @@ detaching the accounts, which has nothing to do with the report.
 
 from __future__ import annotations
 
-from backend.services.duplicate_detection import ADVISORY_REVIEW_SUBSTATES
+import json
+from typing import Optional
+
+from backend.services.duplicate_detection import (
+    ADVISORY_REVIEW_SUBSTATES,
+    is_settled_source_restatement,
+)
 
 # Resolutions whose only undo lives in the originating card's duplicate report. `auto_merge` is absent
 # on purpose: those rows come back by detaching the accounts that were merged, a path this does not
@@ -97,6 +103,143 @@ def detail_storage(conn) -> dict:
         entry["rejected_rows"] = int(row["rejected_rows"] or 0)
         entry["bytes"] += int(row["bytes"] or 0)
     return by_batch
+
+
+def _account_header(config_snapshot: Optional[str]) -> str:
+    """The file header the import read each row's source label from, or "" when there is none.
+
+    No header means no way to know which source a stored row was mapped under, which is the one fact
+    the restatement test turns on — a single-account file (nothing to read) and a sync card (no column
+    map at all) both land here, and both are left alone rather than guessed about.
+    """
+    try:
+        snapshot = json.loads(config_snapshot) if config_snapshot else {}
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(snapshot, dict):
+        return ""
+    column_map = snapshot.get("column_map")
+    if not isinstance(column_map, dict):
+        return ""
+    return str(column_map.get("account") or "").strip()
+
+
+def restatement_rows(conn, batch_id: str) -> list[int]:
+    """The rows of this card's report that an import running today would never have written.
+
+    The same test the import path applies (`is_settled_source_restatement`), asked after the fact. It
+    needs the source label each row was mapped under, which the report has no column for — so it is
+    read back out of the row's own stored cells, which is exact rather than approximate: a file mapping
+    several accounts at once (an aggregator export is always one) would otherwise have a second source's
+    claim mistaken for the card's own.
+
+    `review_substate` is what the sub-state is read from rather than recomputing it, and it is
+    trustworthy both ways: the one thing that rewrites it after the fact
+    (`refresh_unexplained_coverage_candidates`) keeps it in step with the candidates it rewrites, and it
+    only ever moves a row *out of* `no_match`. So a row settled today cannot become flagged tomorrow,
+    which is what makes removing it safe.
+    """
+    batch = conn.execute(
+        "SELECT config_snapshot FROM import_batch WHERE id = ?", (batch_id,),
+    ).fetchone()
+    if not batch:
+        return []
+    header = _account_header(batch["config_snapshot"])
+    if not header:
+        return []
+    found: list[int] = []
+    for row in conn.execute(
+        """
+        SELECT row_number, values_json, matched_transaction_json, review_substate
+        FROM   import_batch_duplicate
+        WHERE  batch_id = ? AND enriched_at IS NULL
+        """,
+        (batch_id,),
+    ):
+        try:
+            values = json.loads(row["values_json"]) if row["values_json"] else {}
+            matched = json.loads(row["matched_transaction_json"]) if row["matched_transaction_json"] else {}
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(values, dict) or not isinstance(matched, dict):
+            continue
+        if row["review_substate"] in ADVISORY_REVIEW_SUBSTATES:
+            continue
+        csv_value = str(values.get(header, "") or "").strip()
+        if is_settled_source_restatement(matched, csv_value=csv_value):
+            found.append(int(row["row_number"]))
+    return found
+
+
+def summarize_restatement_removal(conn, batch_ids) -> dict:
+    """What bringing these cards in line with how imports work now would remove, and what would stay.
+
+    Counted by the code that performs the write, like the clearing preview beside it, so the sentence
+    agreed to is the one carried out.
+    """
+    summary = {"cards": 0, "rows": 0, "bytes": 0, "rows_kept": 0, "flagged_kept": 0}
+    for batch_id in _clean_ids(batch_ids):
+        rows = restatement_rows(conn, batch_id)
+        if not rows:
+            continue
+        placeholders = ", ".join("?" * len(rows))
+        counts = conn.execute(
+            f"""
+            SELECT COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes
+            FROM   import_batch_duplicate
+            WHERE  batch_id = ? AND row_number IN ({placeholders})
+            """,
+            (batch_id, *rows),
+        ).fetchone()
+        kept = conn.execute(
+            f"""
+            SELECT COUNT(*) AS rows_kept,
+                   COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS flagged_kept
+            FROM   import_batch_duplicate
+            WHERE  batch_id = ? AND row_number NOT IN ({placeholders})
+            """,
+            (*ADVISORY_REVIEW_SUBSTATES, batch_id, *rows),
+        ).fetchone()
+        summary["cards"] += 1
+        summary["rows"] += len(rows)
+        summary["bytes"] += int(counts["bytes"] or 0)
+        summary["rows_kept"] += int(kept["rows_kept"] or 0)
+        summary["flagged_kept"] += int(kept["flagged_kept"] or 0)
+    return summary
+
+
+def remove_batch_restatements(conn, batch_ids) -> dict:
+    """Remove the report rows an import running today would not have written, and move each card's
+    counts to match.
+
+    Deliberately **not** the clearing path with a narrower WHERE, because two of that path's steps would
+    be wrong here. It does not release the card's trashed confirmed-duplicates to the Trash: that happens
+    because the report they are restorable from is going away, and here it stays. And it does not set
+    `detail_cleared_at`: nothing was cleared in the sense that marker records, and a card wearing it
+    would say its detail had been freed while still holding a report. What moves instead is the pair of
+    counts, out of `deduped_count` and into `ignored_count` — which is the whole point, since that is
+    the shape the same file would have produced had it been imported today.
+    """
+    done = summarize_restatement_removal(conn, batch_ids)
+    for batch_id in _clean_ids(batch_ids):
+        rows = restatement_rows(conn, batch_id)
+        if not rows:
+            continue
+        placeholders = ", ".join("?" * len(rows))
+        conn.execute(
+            f"DELETE FROM import_batch_duplicate WHERE batch_id = ? AND row_number IN ({placeholders})",
+            (batch_id, *rows),
+        )
+        conn.execute(
+            """
+            UPDATE import_batch
+            SET    deduped_count = MAX(0, deduped_count - ?),
+                   ignored_count = ignored_count + ?
+            WHERE  id = ?
+            """,
+            (len(rows), len(rows), batch_id),
+        )
+    return done
 
 
 def summarize_detail_clearing(conn, batch_ids) -> dict:

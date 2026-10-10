@@ -15,10 +15,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import (
+    compact_database,
     SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path,
 )
 from backend.routers.import_export.core import list_batches
 from backend.services.import_detail_storage import (
+    remove_batch_restatements,
+    restatement_rows,
+    summarize_restatement_removal,
     clear_batch_detail,
     detail_storage,
     summarize_detail_clearing,
@@ -243,6 +247,141 @@ class ImportDetailClearingTests(unittest.TestCase):
         self.assertEqual(preview["trashed_released"], 1)
         self.assertGreater(preview["bytes"], 0)
         self.assertEqual(self._clear(), preview)
+
+    # ---- bringing older imports in line with today's rules ----------------
+
+    SOURCE = "Rewards Card"
+
+    def _insert_mapped_batch(self) -> str:
+        """A card from a file that mapped its rows by an account column, which is what makes a stored
+        row's own source label recoverable — an aggregator export always is one."""
+        batch_id = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO import_batch (id, filename, file_content_hash, status, row_count,
+                                          skipped_count, deduped_count, config_snapshot)
+                VALUES (?, 'rewards-2026.csv', 'hash-mapped', 'completed', 5, 0, 5,
+                        '{"column_map": {"account": "Account"}}')
+                """,
+                (batch_id,),
+            )
+        return batch_id
+
+    def _insert_report_row(self, batch_id, row_number, *, source, substate=None,
+                           candidates=None, enriched=False):
+        import json as _json
+        matched = {
+            "covered": {"start_date": "2026-08-01", "end_date": "2026-08-20",
+                        "source_batch_id": "earlier", "source_csv_value": source},
+            "candidates": candidates if candidates is not None else [{"id": "t1", "day_offset": 0}],
+        }
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO import_batch_duplicate
+                  (batch_id, row_number, reason, values_json, matched_transaction_json,
+                   txn_payload_json, review_substate, enriched_at)
+                VALUES (?, ?, 'Falls within the fully covered date range', ?, ?, '{}', ?, ?)
+                """,
+                (batch_id, row_number, _json.dumps({"Account": self.SOURCE}), _json.dumps(matched),
+                 substate, '2026-01-01 00:00:00' if enriched else None),
+            )
+
+    def _seed_mixed_report(self) -> str:
+        batch_id = self._insert_mapped_batch()
+        self._insert_report_row(batch_id, 1, source=self.SOURCE)
+        self._insert_report_row(batch_id, 2, source=self.SOURCE, substate="transfer_match",
+                                candidates=[{"id": "t2", "day_offset": 0, "cross_account": True}])
+        self._insert_report_row(batch_id, 3, source=self.SOURCE, substate="no_match", candidates=[])
+        self._insert_report_row(batch_id, 4, source="Harborline Checking ...8130")
+        self._insert_report_row(batch_id, 5, source=self.SOURCE, enriched=True)
+        return batch_id
+
+    def test_it_finds_only_the_rows_an_import_today_would_not_have_written(self):
+        batch_id = self._seed_mixed_report()
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(restatement_rows(conn, batch_id), [1, 2])
+
+    def test_a_card_with_no_account_column_is_left_alone(self):
+        """No column map means no way to know which source a row was mapped under, and that is the one
+        fact the test turns on. A single-account file and a sync card both land here."""
+        self._insert_duplicate(1)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(restatement_rows(conn, self.batch_id), [])
+
+    def test_the_preview_says_what_goes_and_what_stays(self):
+        batch_id = self._seed_mixed_report()
+        with self._use_db_path(), get_db() as conn:
+            preview = summarize_restatement_removal(conn, [batch_id])
+        self.assertEqual(preview["cards"], 1)
+        self.assertEqual(preview["rows"], 2)
+        self.assertEqual(preview["rows_kept"], 3)
+        self.assertEqual(preview["flagged_kept"], 1)
+        self.assertGreater(preview["bytes"], 0)
+
+    def test_the_counts_move_so_the_card_reads_as_it_would_have(self):
+        # The whole point: afterwards the card says what the same file would have said had it been
+        # imported under today's rules — the rows are accounted for, as recognized rather than refused.
+        batch_id = self._seed_mixed_report()
+        with self._use_db_path(), get_db() as conn:
+            done = remove_batch_restatements(conn, [batch_id])
+            row = conn.execute(
+                "SELECT deduped_count, ignored_count, detail_cleared_at, row_count"
+                " FROM import_batch WHERE id = ?", (batch_id,),
+            ).fetchone()
+            left = [r["row_number"] for r in conn.execute(
+                "SELECT row_number FROM import_batch_duplicate WHERE batch_id = ? ORDER BY row_number",
+                (batch_id,),
+            )]
+        self.assertEqual(done["rows"], 2)
+        self.assertEqual(left, [3, 4, 5], "the flagged row, another source's claim, and the enrichment")
+        self.assertEqual(row["deduped_count"], 3)
+        self.assertEqual(row["ignored_count"], 2)
+        self.assertEqual(row["row_count"], 5, "every row the file accounted for is still counted")
+        # Not the clearing path with a narrower WHERE: the card still holds a report, so a marker saying
+        # its detail had been freed would be a lie, and the pill it suppresses still has rows to open.
+        self.assertIsNone(row["detail_cleared_at"])
+
+    def test_it_does_not_hand_the_cards_trashed_duplicates_to_the_trash(self):
+        """The clear releases them because the report they are restorable from is going away. Here it
+        stays, so that door stays open and the rows must not move."""
+        batch_id = self._seed_mixed_report()
+        txn_id = self._insert_txn(trashed=True, resolved_by="user")
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET import_batch_id = ? WHERE id = ?", (batch_id, txn_id))
+            remove_batch_restatements(conn, [batch_id])
+            row = conn.execute(
+                "SELECT rejection_reason, dedupe_resolved_by FROM txn WHERE id = ?", (txn_id,),
+            ).fetchone()
+        self.assertEqual(row["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(row["dedupe_resolved_by"], "user")
+
+    # ---- giving the space back to the filesystem --------------------------
+
+    def test_compaction_returns_the_pages_a_removal_freed(self):
+        """Without this the file is exactly the size it was, and a screen called *Free up import
+        space* has freed none that anyone can see."""
+        for row_number in range(1, 400):
+            self._insert_duplicate(row_number)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("DELETE FROM import_batch_duplicate")
+        before = self.db_path.stat().st_size
+
+        with self._use_db_path():
+            freed = compact_database()
+
+        self.assertGreater(freed, 0)
+        self.assertEqual(self.db_path.stat().st_size, before - freed)
+
+    def test_compaction_that_cannot_run_is_not_the_removals_failure(self):
+        """The deletion it follows has already committed, so a database it cannot open — busy, full
+        disk, or in this case not a database at all — decides only whether the filesystem hears about
+        it today, never whether the work succeeded."""
+        unreadable = Path(self.tempdir.name) / "not-a-database.db"
+        unreadable.write_bytes(b"certainly not SQLite")
+        self.assertEqual(compact_database(str(unreadable)), 0)
+        self.assertEqual(compact_database(str(Path(self.tempdir.name) / "missing.db")), 0)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,8 @@ vi.mock('../../../lib/api.js', () => ({
     getBatchDetailStorage: vi.fn(),
     previewBatchDetailClearing: vi.fn(),
     clearBatchDetail: vi.fn(),
+    previewBatchRestatements: vi.fn(),
+    removeBatchRestatements: vi.fn(),
   },
 }))
 
@@ -122,7 +124,9 @@ describe('the stored-detail screen', () => {
     renderDialog()
     await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
 
-    expect(screen.getByRole('button', { name: /^Free/ }).disabled).toBe(true)
+    // Both removals, since both act on the selection and there is none.
+    expect(screen.getByRole('button', { name: /^Clear all detail/ }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: /Remove rows already in the ledger/ }).disabled).toBe(true)
   })
 
   it('offers the size of what is selected, and selects a whole source at once', async () => {
@@ -177,5 +181,48 @@ describe('the stored-detail screen', () => {
     render(<ImportDetailStorageDialog dataSourceRows={rows} onClose={vi.fn()} onCleared={vi.fn()} />)
 
     await waitFor(() => expect(screen.getByText('No import is holding detail records')).toBeTruthy())
+  })
+})
+
+describe('removing only what an import today would not have stored', () => {
+  const select = async () => {
+    renderDialog()
+    await screen.findByText('activity-2019.csv')
+    await userEvent.click(screen.getAllByRole('checkbox')[1])
+  }
+
+  it('states the server\'s own figures, and what survives, before removing anything', async () => {
+    api.previewBatchRestatements.mockResolvedValue({
+      cards: 1, rows: 104, bytes: 2 * 1024 * 1024, rows_kept: 8, flagged_kept: 3,
+    })
+    await select()
+    await userEvent.click(screen.getByRole('button', { name: /Remove rows already in the ledger/ }))
+
+    expect(await screen.findByText(/104 rows recorded only because a source restated/)).toBeTruthy()
+    // The reason to prefer this over clearing everything, so it is stated rather than implied.
+    expect(screen.getByText(/8 rows stay in the reports, including 3 rows still flagged for review/)).toBeTruthy()
+    expect(api.removeBatchRestatements).not.toHaveBeenCalled()
+  })
+
+  it('says so plainly when the selection holds nothing of the kind, and offers no removal', async () => {
+    api.previewBatchRestatements.mockResolvedValue({ cards: 0, rows: 0, bytes: 0, rows_kept: 0, flagged_kept: 0 })
+    await select()
+    await userEvent.click(screen.getByRole('button', { name: /Remove rows already in the ledger/ }))
+
+    expect(await screen.findByText(/Nothing in the selected imports was stored as a restatement/)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(api.removeBatchRestatements).not.toHaveBeenCalled()
+  })
+
+  it('removes only the cards that were selected', async () => {
+    api.previewBatchRestatements.mockResolvedValue({
+      cards: 1, rows: 104, bytes: 2 * 1024 * 1024, rows_kept: 8, flagged_kept: 3,
+    })
+    api.removeBatchRestatements.mockResolvedValue({ cards: 1, rows: 104 })
+    await select()
+    await userEvent.click(screen.getByRole('button', { name: /Remove rows already in the ledger/ }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove rows' }))
+
+    await waitFor(() => expect(api.removeBatchRestatements).toHaveBeenCalledWith(['b2019']))
   })
 })

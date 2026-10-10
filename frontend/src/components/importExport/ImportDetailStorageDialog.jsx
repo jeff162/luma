@@ -84,6 +84,7 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
   const [storage, setStorage] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   const [preview, setPreview] = useState(null)
+  const [restatementPreview, setRestatementPreview] = useState(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
@@ -116,11 +117,20 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
     const result = await api.previewBatchDetailClearing([...selected]).catch(() => null)
     if (result?.cards) setPreview(result)
   }
-  const confirmClear = async () => {
+  // Counted on demand rather than alongside the space figures, which the screen reads on open: deciding
+  // whether a stored row is a restatement means parsing its cells and its match, and paying for that
+  // across every import to answer a question nobody has asked yet is the wrong trade.
+  const askToRemoveRestatements = async () => {
+    const result = await api.previewBatchRestatements([...selected]).catch(() => null)
+    if (result?.cards) setRestatementPreview(result)
+    else setRestatementPreview({ cards: 0 })
+  }
+  const runAndRefresh = async action => {
     setBusy(true)
     try {
-      await api.clearBatchDetail([...selected])
+      await action()
       setPreview(null)
+      setRestatementPreview(null)
       setSelected(new Set())
       await load()
       await onCleared?.()
@@ -128,6 +138,8 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
       setBusy(false)
     }
   }
+  const confirmClear = () => runAndRefresh(() => api.clearBatchDetail([...selected]))
+  const confirmRemoveRestatements = () => runAndRefresh(() => api.removeBatchRestatements([...selected]))
 
   return (
     <AppDialog
@@ -137,8 +149,13 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
       actions={(
         <>
           <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button onClick={askToClear} disabled={selected.size === 0}>
-            {selected.size === 0 ? 'Free 0 KB' : `Free ${formatBytes(selectedBytes)}`}
+          {/* Two removals with different objects, so neither label is a verb alone: one takes the rows
+              that would not be stored at all today, the other takes the report entire. */}
+          <Button variant="ghost" onClick={askToClear} disabled={selected.size === 0}>
+            {`Clear all detail${selected.size === 0 ? '' : ` · ${formatBytes(selectedBytes)}`}`}
+          </Button>
+          <Button onClick={askToRemoveRestatements} disabled={selected.size === 0}>
+            Remove rows already in the ledger
           </Button>
         </>
       )}
@@ -151,6 +168,13 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
           what the duplicates view shows, what makes <em>Import anyway</em> possible, and what
           is used to apply or undo enrichment. Rejected rows (e.g. for a skipped account or
           an unreadable date) are also part of this record. Clearing frees this space.
+        </p>
+        <p style={{ margin: '0 0 8px' }}>
+          Most of what is held is a source restating its own earlier import — a re-export covering a
+          period already imported. An import does not record those any more, because the transaction
+          each one duplicates is in the ledger. <em>Remove rows already in the ledger</em> takes those
+          out of imports made before that change, leaving every refusal that still needs a look and
+          every match from a different source.
         </p>
         <p style={{ margin: 0, color: 'var(--muted)' }}>
           Imported transactions are not affected.
@@ -220,7 +244,49 @@ export function ImportDetailStorageDialog({ dataSourceRows, onClose, onCleared }
           onCancel={() => setPreview(null)}
         />
       ) : null}
+
+      {restatementPreview ? (
+        <RestatementConfirm
+          preview={restatementPreview}
+          busy={busy}
+          onConfirm={confirmRemoveRestatements}
+          onCancel={() => setRestatementPreview(null)}
+        />
+      ) : null}
     </AppDialog>
+  )
+}
+
+// The narrower removal's confirmation. Same two questions in the same order as the clear's — what is
+// lost, then what stays — but the answer to the second is the reason to prefer this one, so it is
+// stated even when nothing is kept, rather than dropped as an empty clause.
+function RestatementConfirm({ preview, busy, onConfirm, onCancel }) {
+  const nothingToDo = !preview.cards
+  const lines = nothingToDo ? [
+    'Nothing in the selected imports was stored as a restatement. Every row they hold is a refusal that still needs a look, a match claimed by a different source, or an enrichment that can still be undone.',
+  ] : [
+    `${plural(preview.rows, 'row')} recorded only because a source restated its own earlier import ${preview.rows === 1 ? 'goes' : 'go'} permanently, freeing ${formatBytes(preview.bytes)}.`,
+    preview.rows_kept > 0
+      ? `${plural(preview.rows_kept, 'row')} ${preview.rows_kept === 1 ? 'stays' : 'stay'} in the reports${preview.flagged_kept > 0 ? `, including ${plural(preview.flagged_kept, 'row')} still flagged for review` : ''}.`
+      : 'The reports keep nothing else — every row in them was a restatement.',
+    `The ${plural(preview.cards, 'import')} ${preview.cards === 1 ? 'keeps its card' : 'keep their cards'}, every transaction, and a count of what was already held.`,
+  ].filter(Boolean)
+
+  return (
+    <AppConfirmDialog
+      title={nothingToDo ? 'Nothing to remove' : 'Remove rows already in the ledger?'}
+      confirmLabel={nothingToDo ? 'OK' : busy ? 'Removing…' : 'Remove rows'}
+      confirmVariant={nothingToDo ? 'primary' : 'danger'}
+      confirmDisabled={busy}
+      cancelDisabled={busy}
+      onConfirm={nothingToDo ? onCancel : onConfirm}
+      onCancel={onCancel}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+        {lines.map(line => <span key={line}>{line}</span>)}
+        {nothingToDo ? null : <span style={{ color: 'var(--muted)' }}>This cannot be undone.</span>}
+      </div>
+    </AppConfirmDialog>
   )
 }
 

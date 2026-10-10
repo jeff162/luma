@@ -131,10 +131,31 @@ and of those rows only 172 — fewer than one in 150 — were ever flagged as wa
 (`import_batch.ignored_count`) and not recorded (`is_settled_source_restatement`,
 `prune_source_restatements`), because there is nothing in such a record to read — the transaction each
 one duplicates is in the ledger and *is* the record. The distinction from a retention policy is the
-whole of why this is allowed: nothing accumulated is touched, no record is removed after the fact, and
-a refusal that asks anything of anyone — a covered date that paired with nothing, a twin two days out,
-any claim from a *different* source — still writes its row and keeps its place in the report. Reports
-written before this remain, and remain the clearing screen's to remove.
+whole of why this is allowed: no sweep runs on its own, no record is removed without being asked for,
+and a refusal that asks anything of anyone — a covered date that paired with nothing, a twin two days
+out, any claim from a *different* source — still writes its row and keeps its place in the report.
+
+**Reports written before the change are brought into line on request, not swept.** The maintenance
+screen's second action (*Remove rows already in the ledger*,
+`import_detail_storage.remove_batch_restatements`) applies the same test after the fact, so a database
+loaded before the change can be put in the shape it would have had if loaded after. It needs one thing
+the report has no column for — the source label each stored row was mapped under — and reads it back
+out of the row's own stored cells via the batch's `config_snapshot.column_map`, which is exact rather
+than approximate: an aggregator export maps many accounts in one file, and a looser test would mistake
+a second source's claim for the card's own. A card whose snapshot carries no column map (a
+single-account file, or a sync card) is left alone rather than guessed about. Measured on a real
+ledger it removed 27,299 of 30,745 rows and 39.25 MB, leaving all 172 rows flagged for review.
+
+**Both removals compact the file afterwards** (`db.database.compact_database`). SQLite keeps freed pages
+on a free list and reuses them, so without this a large deletion changes nothing anyone can check: the
+file stays the size it was, and a screen named *Free up import space* has freed none that is visible.
+VACUUM cannot run inside a transaction, so it runs on a connection of its own after the write commits;
+it needs roughly twice the file's size in free disk while it rebuilds, and it is cheap enough not to
+need offering as a choice (0.16s on an 88 MB database). A failure is logged and swallowed, because the
+deletion it follows has already committed and compaction only decides whether the filesystem hears
+about it today. On the measured ledger the removal plus compaction took the file from 84.3 MB to
+26.3 MB — more than the reports themselves, since the free list had also accumulated slack from every
+earlier delete, undo and restore.
 
 **Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
 no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —

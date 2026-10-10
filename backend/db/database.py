@@ -113,6 +113,44 @@ def get_db(db_path: str | None = None):
         conn.close()
 
 
+def compact_database(db_path: str | None = None) -> int:
+    """Rebuild the file so the pages a deletion freed go back to the filesystem. Returns the bytes
+    given back, or 0 if nothing was reclaimed or the rebuild could not run.
+
+    SQLite keeps freed pages on a free list and reuses them, so a large deletion changes nothing a
+    user can see: the file stays exactly the size it was. That is fine for a database that will grow
+    back into the space, and wrong for a screen whose name is *Free up import space* — someone who
+    clears 39 MB, looks at the file and finds it unchanged has been told something untrue.
+
+    It must run on a connection of its own: VACUUM cannot execute inside a transaction, so it cannot
+    be appended to the write it follows. It takes a brief exclusive lock (measured at 0.16s on an 88 MB
+    database) and needs roughly twice the file's size in free disk while it rebuilds.
+
+    **A failure here is never the caller's failure.** The deletion it follows has already committed;
+    this only decides whether the filesystem hears about it today or the next time one runs. So a busy
+    database or a full disk is logged and swallowed rather than turned into an error for work that
+    actually succeeded.
+    """
+    resolved_path = _normalize_db_path(db_path)
+    try:
+        before = Path(resolved_path).stat().st_size
+    except OSError:
+        return 0
+    try:
+        with get_db(resolved_path) as conn:
+            conn.execute("VACUUM")
+    except sqlite3.Error as exc:
+        log_info(f"[db] compaction skipped: {exc}")
+        return 0
+    try:
+        freed = max(0, before - Path(resolved_path).stat().st_size)
+    except OSError:
+        return 0
+    if freed:
+        log_info(f"[db] compacted {resolved_path}: freed {freed} bytes")
+    return freed
+
+
 # Fresh installs are created directly at `CURRENT_VERSION` from the full schema in `init_db` and
 # stamped there without replaying migrations. Existing databases are advanced in place by
 # `run_migrations`, which applies every registered migration newer than the DB's recorded version.

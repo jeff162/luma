@@ -49,7 +49,8 @@ from pydantic import BaseModel, Field
 
 from backend import app_config
 from backend.app_logging import log_error, log_warning
-from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
+from backend.db.database import (SHARED_OWNER_ID, compact_database, get_db,
+                                 get_tenant_workflow_state, set_tenant_workflow_state)
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
 from backend.json_utils import safe_json_dict
@@ -97,7 +98,9 @@ from backend.services.transaction_tags import sync_rule_tags_for_transaction
 from backend.services.import_detail_storage import (
     clear_batch_detail,
     detail_storage,
+    remove_batch_restatements,
     summarize_detail_clearing,
+    summarize_restatement_removal,
 )
 from backend.services.import_batch_totals import (
     IMPORT_SUMMARY_KEY,
@@ -4784,7 +4787,29 @@ def clear_batch_detail_records(body: BatchDetailClearRequest):
     """Clear these cards' detail records, keeping the cards and every transaction they imported. See
     `services/import_detail_storage.py` for what survives and why each survivor has to."""
     with get_db() as conn:
-        return clear_batch_detail(conn, body.batch_ids, cleared_at=utcnow_iso())
+        done = clear_batch_detail(conn, body.batch_ids, cleared_at=utcnow_iso())
+    # Outside the write's own connection, which is the only way VACUUM can run. Without it the file
+    # stays exactly the size it was and the screen's name is a claim the filesystem contradicts.
+    done["freed_bytes"] = compact_database()
+    return done
+
+
+@router.post("/batches/remove-restatements-preview")
+def preview_batch_restatement_removal(body: BatchDetailClearRequest):
+    """What bringing these cards in line with today's import rules would remove, and what stays."""
+    with get_db() as conn:
+        return summarize_restatement_removal(conn, body.batch_ids)
+
+
+@router.post("/batches/remove-restatements")
+def remove_batch_restatement_records(body: BatchDetailClearRequest):
+    """Remove the report rows an import running today would not have written, leaving every refusal
+    that still asks something and every claim from another source. See
+    `services/import_detail_storage.py` for why this is not the clearing path with a narrower WHERE."""
+    with get_db() as conn:
+        done = remove_batch_restatements(conn, body.batch_ids)
+    done["freed_bytes"] = compact_database()
+    return done
 
 
 @router.get("/batches/{batch_id}/edited")
