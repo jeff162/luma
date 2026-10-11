@@ -772,8 +772,13 @@ class RecurringDetectionTests(unittest.TestCase):
             res = suppress_series(series["id"])
         self.assertTrue(res.get("deleted"))
         self.assertIsNone(self._series_for_rule(rule_id))
-        # A recurring-only rule with its flag cleared is actionless, so it is removed entirely.
-        self.assertIsNone(self._rule_is_recurring(rule_id))
+        # A recurring-only rule would be actionless without its flag, so it goes to the rules trash —
+        # flag intact, so restoring it brings the series back.
+        with self._use_db_path():
+            with get_db() as conn:
+                row = conn.execute("SELECT is_recurring, deleted_at FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+        self.assertIsNotNone(row["deleted_at"])
+        self.assertEqual(row["is_recurring"], 1)
 
     def test_end_keeps_rule_flag_live(self):
         self._add_txn(payee="Patreon", category="Streaming", amount=5.0, d=date.today().isoformat())

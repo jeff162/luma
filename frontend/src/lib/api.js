@@ -830,8 +830,9 @@ export const api = {
   getRecurringSignals: (horizonDays) =>
     request(`/recurring/signals${horizonDays ? `?horizon_days=${horizonDays}` : ''}`),
   getDismissedRecurringSignals: () => request('/recurring/signals/dismissed'),
-  dismissRecurringSignal: (key, kind) =>
-    request('/recurring/signals/dismiss', { method: 'POST', body: JSON.stringify({ key, kind }) }),
+  // `oneOff` (Amount changed only): fine this time, but the usual amount is still expected.
+  dismissRecurringSignal: (key, kind, { oneOff = false } = {}) =>
+    request('/recurring/signals/dismiss', { method: 'POST', body: JSON.stringify({ key, kind, one_off: oneOff }) }),
   restoreRecurringSignal: (key) =>
     request('/recurring/signals/restore', { method: 'POST', body: JSON.stringify({ key }) }),
 

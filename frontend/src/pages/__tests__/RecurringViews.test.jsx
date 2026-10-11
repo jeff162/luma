@@ -28,6 +28,7 @@ vi.mock('../../lib/api.js', () => ({
     getDismissedRecurringSignals: vi.fn(),
     dismissRecurringSignal: vi.fn(),
     restoreRecurringSignal: vi.fn(),
+    deleteRecurring: vi.fn(() => Promise.resolve({ ok: true })),
     getTags: vi.fn(() => Promise.resolve([])),
   },
 }))
@@ -91,7 +92,7 @@ describe('Recurring page views', () => {
     // The card, not the finding — and the count is visible without switching, which is the whole
     // reason the badge sits on the control rather than inside the view it names.
     expect(await screen.findByText('Streamly')).toBeTruthy()
-    expect(screen.queryByText(/from its established amount/)).toBeNull()
+    expect(screen.queryByText(/from its usual amount/)).toBeNull()
     const attention = screen.getByText('Needs attention').closest('button')
     expect(attention.textContent).toContain('1')
   })
@@ -101,7 +102,7 @@ describe('Recurring page views', () => {
     await screen.findByText('Streamly')
 
     await userEvent.click(screen.getByText('Needs attention'))
-    await waitFor(() => expect(screen.getByText(/from its established amount/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/from its usual amount/)).toBeTruthy())
     // The series list is gone, and so are the controls that only apply to it.
     expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
     expect(screen.queryByText('Confirm')).toBeNull()
@@ -116,13 +117,47 @@ describe('Recurring page views', () => {
     // The drill-down loads, and the findings are still what is on screen — no trip to the series list,
     // whose filters might not even include this series.
     await waitFor(() => expect(api.getTransactions).toHaveBeenCalled())
-    expect(screen.getByText(/from its established amount/)).toBeTruthy()
+    expect(screen.getByText(/from its usual amount/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
+  })
+
+  it('shows a finding\'s series card under Details, without leaving the findings', async () => {
+    // A finding reports a problem; the card is the state it was judged against (cadence, amount
+    // setting, range, dates). It is the Series view's own card, so its controls are there too.
+    renderPage()
+    await screen.findByText('Streamly')
+    await userEvent.click(screen.getByText('Needs attention'))
+    const details = await screen.findByRole('button', { name: /Details/ })
+    expect(screen.queryByLabelText('Cadence')).toBeNull()
+
+    await userEvent.click(details)
+    expect(screen.getByLabelText('Cadence')).toBeTruthy()
+    expect(screen.getByText(/from its usual amount/)).toBeTruthy()
+
+    await userEvent.click(details)
+    expect(screen.queryByLabelText('Cadence')).toBeNull()
+  })
+
+  it('asks before deleting a series, and deletes only on the confirm', async () => {
+    // Delete is the one card action with no way back, so it says what is lost for this kind of series.
+    renderPage()
+    await screen.findByText('Streamly')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByText(/next scan finds it again as a suggestion/)).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep series' }))
+    expect(api.deleteRecurring).not.toHaveBeenCalled()
+    expect(screen.getByText('Streamly')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete series' }))
+    expect(api.deleteRecurring).toHaveBeenCalledWith('s1')
+    await waitFor(() => expect(screen.queryByText('Streamly')).toBeNull())
   })
 
   it('lands on the findings view when the Tasks page links to a kind', async () => {
     renderPage('/recurring?signal=price_change')
-    expect(await screen.findByText(/from its established amount/)).toBeTruthy()
+    expect(await screen.findByText(/from its usual amount/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Deselect all' })).toBeNull()
   })
 
@@ -198,11 +233,11 @@ describe('Recurring page controls', () => {
     renderWithMovement()
     await screen.findByText('Streamly')
     await userEvent.click(screen.getByText('Needs attention'))
-    await waitFor(() => expect(screen.getAllByText(/from its established amount/)).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText(/from its usual amount/)).toHaveLength(2))
 
     // The finding itself names only the paying account; the receiving one comes from its series.
     await userEvent.type(searchBox(), 'harborline')
-    await waitFor(() => expect(screen.getAllByText(/from its established amount/)).toHaveLength(1))
+    await waitFor(() => expect(screen.getAllByText(/from its usual amount/)).toHaveLength(1))
     expect(screen.getByText('Alpha Transfer')).toBeTruthy()
     // The kind pill still counts what is open, not what the search leaves.
     expect(screen.getByRole('button', { name: /All/ }).textContent).toContain('2')

@@ -1101,6 +1101,16 @@ Key invariants:
     leaves the series takes its acceptance with it. Deliberately **not** applied to a fixed series: there
     a dismissal means "yes, the price went up", the next charge at the new price is already silent under
     the settled rule, and widening the band would mask the *next* hike.
+
+    **A one-off dismissal is the opposite answer** (`recurring_signal_dismissal.one_off`, v73): "fine
+    this time, but the usual amount still stands" — a hike the merchant agreed to reverse. The charge
+    stays in the series, but it is left out of the history every later charge is judged against
+    (`_load_one_off_charges`): out of the baseline, the tightness test and the settled rule's *previous*.
+    So a return to the usual amount is silent and a repeat of the excepted amount is reported as the
+    step it is, where after an ordinary dismissal the repeat would read as the price having settled. It
+    never teaches a variable series' range either. Offered only on *Amount changed* — no other finding
+    has a usual amount to keep expecting — and refused by the API on any other kind. Derived by join like
+    the accepted amounts, so restoring the dismissal, or re-dismissing it the ordinary way, undoes it.
   - **Lateness is measured against data freshness, not the calendar.** The reference "now" for a missed
     charge is the newest live transaction on the series' account (the ledger's newest, for an
     account-agnostic series), never later than today. Comparing `next_due_date` to today would turn a

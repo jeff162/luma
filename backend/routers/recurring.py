@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.database import get_db
+from backend.routers.rules import _trash_rule
 from backend.services.recurring_detection import (
     AMOUNT_MODE_FIXED,
     AMOUNT_MODE_VARIABLE,
@@ -254,6 +255,8 @@ def list_dismissed_signals(horizon_days: int = UPCOMING_HORIZON_DAYS):
 class SignalDismissal(BaseModel):
     key: str
     kind: str = ""
+    # "Fine this time": only an Amount changed finding has a usual amount to keep expecting.
+    one_off: bool = False
 
 
 @router.post("/signals/dismiss")
@@ -262,8 +265,11 @@ def dismiss_signal_route(body: SignalDismissal):
     across scans while a genuinely new one (a later missed date, a different charge) still surfaces."""
     if not (body.key or "").strip():
         raise HTTPException(status_code=400, detail="key is required")
+    kind = (body.kind or "").strip()
+    if body.one_off and kind != "price_change":
+        raise HTTPException(status_code=400, detail="only an amount change can be dismissed as a one-off")
     with get_db() as conn:
-        dismiss(conn, body.key.strip(), (body.kind or "").strip())
+        dismiss(conn, body.key.strip(), kind, one_off=body.one_off)
         return {"ok": True}
 
 
@@ -324,18 +330,21 @@ def unconfirm_series(series_id: str):
 def _clear_backing_rule_flag(conn: sqlite3.Connection, series: sqlite3.Row) -> None:
     """A rule-backed series' 'recurring' checkbox lives on its rule. Suppress and delete both mean 'this
     isn't a series', so they clear that flag — otherwise the rule would keep re-declaring the series on the
-    next scan. (End deliberately does NOT clear it, so a resubscribe can resume the series.) If clearing the
-    flag leaves the rule with no action at all (a recurring-only rule), the rule is dead weight, so it is
-    removed — matching the 'a rule must do something' invariant the rule create/update guards enforce."""
+    next scan. (End deliberately does NOT clear it, so a resubscribe can resume the series.)
+
+    A recurring-only rule would be left with no action at all — dead weight, against the 'a rule must do
+    something' invariant the rule create/update guards enforce — so it goes to the **rules trash** instead,
+    like any deleted rule, rather than being destroyed: its matcher, amount range and tags are the user's
+    configuration. Its flag is left set, so restoring it from Settings → Trash re-creates the series."""
     if not (series["source"] == "rule" and series["rule_id"]):
         return
     rid = series["rule_id"]
-    conn.execute("UPDATE category_rule SET is_recurring = 0 WHERE id = ?", (rid,))
     r = conn.execute("SELECT category_id, clean_name FROM category_rule WHERE id = ?", (rid,)).fetchone()
     has_tag = conn.execute("SELECT 1 FROM rule_tag WHERE rule_id = ? LIMIT 1", (rid,)).fetchone()
     if r and r["category_id"] is None and not (r["clean_name"] or "").strip() and not has_tag:
-        conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rid,))
-        conn.execute("DELETE FROM category_rule WHERE id = ?", (rid,))
+        _trash_rule(conn, rid)
+    else:
+        conn.execute("UPDATE category_rule SET is_recurring = 0 WHERE id = ?", (rid,))
 
 
 @router.post("/{series_id}/suppress")

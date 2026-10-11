@@ -27,14 +27,25 @@ def dismissed_keys(conn: sqlite3.Connection) -> set[str]:
     return {r["signal_key"] for r in conn.execute("SELECT signal_key FROM recurring_signal_dismissal")}
 
 
-def dismiss(conn: sqlite3.Connection, key: str, kind: str) -> None:
+def one_off_keys(conn: sqlite3.Connection) -> set[str]:
+    """The dismissals that said "fine this time" rather than "fine" — see `recurring_signals`'
+    `_load_one_off_charges` for what that changes."""
+    return {r["signal_key"] for r in conn.execute(
+        "SELECT signal_key FROM recurring_signal_dismissal WHERE one_off = 1")}
+
+
+def dismiss(conn: sqlite3.Connection, key: str, kind: str, *, one_off: bool = False) -> None:
+    # `one_off` is stated here even though the column defaults to 0: a DDL default is fixed at the
+    # migration that added it, so the insert site is where the value is actually owned. Re-dismissing
+    # the same key replaces the answer, which is how a one-off becomes an ordinary dismissal and back.
     conn.execute(
         """
-        INSERT INTO recurring_signal_dismissal (signal_key, kind, dismissed_at)
-        VALUES (?, ?, datetime('now'))
-        ON CONFLICT(signal_key) DO UPDATE SET kind = excluded.kind, dismissed_at = excluded.dismissed_at
+        INSERT INTO recurring_signal_dismissal (signal_key, kind, one_off, dismissed_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(signal_key) DO UPDATE SET kind = excluded.kind, one_off = excluded.one_off,
+                                              dismissed_at = excluded.dismissed_at
         """,
-        (key, kind),
+        (key, kind, 1 if one_off else 0),
     )
 
 

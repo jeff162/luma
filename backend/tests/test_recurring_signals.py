@@ -283,6 +283,60 @@ class RecurringSignalsTests(unittest.TestCase):
         self._scan()
         self.assertEqual(len(self._signals("price_change")), 1, "the second hike must still be reported")
 
+    def _one_off_hike(self):
+        """A fixed bill that jumped once, with the warning dismissed as a one-off — the merchant agreed
+        to put the price back."""
+        self._monthly(payee="Northgate Insurance", category="Insurance", amounts=[116.10] * 6 + [153.48])
+        self._scan()
+        hike = self._signals("price_change")
+        self.assertEqual(len(hike), 1, "precondition: the hike is reported")
+        with self._use_db_path():
+            with get_db() as conn:
+                dismiss(conn, hike[0]["key"], hike[0]["kind"], one_off=True)
+        self.assertEqual(self._signals("price_change"), [])
+        return hike[0]["key"]
+
+    def test_a_one_off_dismissal_reports_the_same_amount_again_next_time(self):
+        # An ordinary dismissal followed by a repeat is silent (the price settled). A one-off said the
+        # usual amount still stands, so the repeat is judged against the charges before the exception.
+        self._one_off_hike()
+        self._txn(payee="Northgate Insurance", category="Insurance", amount=153.48,
+                  when=date.today() + timedelta(days=30))
+        self._scan()
+        signals = self._signals("price_change")
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0]["baseline_amount"], 116.10)
+
+    def test_a_one_off_dismissal_stays_quiet_when_the_usual_amount_returns(self):
+        self._one_off_hike()
+        self._txn(payee="Northgate Insurance", category="Insurance", amount=116.10,
+                  when=date.today() + timedelta(days=30))
+        self._scan()
+        self.assertEqual(self._signals("price_change"), [])
+
+    def test_an_ordinary_dismissal_still_lets_a_repeat_settle(self):
+        # The contrast the one-off exists for: dismissed the ordinary way, the same repeat is silent.
+        key = self._one_off_hike()
+        with self._use_db_path():
+            with get_db() as conn:
+                dismiss(conn, key, "price_change")
+        self._txn(payee="Northgate Insurance", category="Insurance", amount=153.48,
+                  when=date.today() + timedelta(days=30))
+        self._scan()
+        self.assertEqual(self._signals("price_change"), [])
+
+    def test_a_one_off_does_not_teach_a_variable_series_its_range(self):
+        # Dismissed as a one-off, the seasonal peak is not an accepted amount, so the next winter's peak
+        # is reported again — unlike `test_dismissing_a_seasonal_high_stops_it_returning_next_year`.
+        key = self._seasonal_peak_accepted()
+        with self._use_db_path():
+            with get_db() as conn:
+                dismiss(conn, key, "price_change", one_off=True)
+        self._txn(payee="Harborline Gas", category="Water", amount=880.00,
+                  when=date.today() + timedelta(days=240))
+        self._scan()
+        self.assertEqual(len(self._signals("price_change")), 1)
+
     # --- missed -----------------------------------------------------------------------------------
 
     def test_missed_charge_is_reported_when_the_data_is_current(self):

@@ -271,13 +271,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # gives each row, matched only within the data source that issued it. v71 moves Plaid's stored transaction
 # ids under the `plaid:` prefix, the namespace every other provider's ids already had. v72 removes from
 # every duplicate report the rows v69 stopped writing — a source restating its own prior import — so an
-# older report reads as one written today, and compacts the file once afterwards.
+# older report reads as one written today, and compacts the file once afterwards. v73 adds
+# `recurring_signal_dismissal.one_off`, an Amount changed finding dismissed as "fine this time".
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 72
+CURRENT_VERSION = 73
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2294,6 +2295,18 @@ def _drop_stored_source_restatements(conn):
     _remove_stored_source_restatements(conn)
 
 
+@migration(73)
+def _add_signal_dismissal_one_off(conn):
+    """`recurring_signal_dismissal.one_off` — an Amount changed finding dismissed as "fine this time"
+    (see services/recurring_signals._load_one_off_charges). Every existing dismissal was an ordinary
+    one, which the 0 default states. Guarded like v65-v72."""
+    if "recurring_signal_dismissal" not in _table_names(conn):
+        return
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(recurring_signal_dismissal)")}
+    if "one_off" not in columns:
+        conn.execute("ALTER TABLE recurring_signal_dismissal ADD COLUMN one_off INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -3416,10 +3429,13 @@ def init_db(db_path: str | None = None):
             -- fingerprint -- a transaction id, or a series' derived identity plus the date concerned --
             -- deliberately NOT a recurring_series id, which an auto series loses on every scan. It is
             -- therefore not a foreign key: a dismissal whose subject is later trashed or deleted simply
-            -- stops matching anything, which costs a row and no correctness.
+            -- stops matching anything, which costs a row and no correctness. `one_off` marks an
+            -- Amount changed finding dismissed as "fine this time": the charge is then left out of the
+            -- history later charges are judged against, so a repeat of it is reported again.
             CREATE TABLE IF NOT EXISTS recurring_signal_dismissal (
                 signal_key   TEXT PRIMARY KEY,
                 kind         TEXT NOT NULL,
+                one_off      INTEGER NOT NULL DEFAULT 0,
                 dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             -- The same shape for the rule-overlap check (services/rule_overlaps.py): "this pair of rules

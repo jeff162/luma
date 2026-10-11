@@ -21,7 +21,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import RuleActionModal from '../components/RuleActionModal.jsx'
 import {
-  PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, SegmentedToggle,
+  PageHeader, Spinner, Button, Select, Input, SearchInput, EmptyState, AppDialog, AppConfirmDialog, SegmentedToggle,
   getFloatingPanelSurfaceStyle, RefreshButton} from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
@@ -367,6 +367,7 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
           <AmountDisplay series={series} />
           <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>
             {CADENCE_LABELS[series.cadence] || series.cadence}
+            {series.last_txn_date ? <span style={{ opacity: 0.85 }}> · last {formatDate(series.last_txn_date)}</span> : null}
             {series.next_due_date ? <span style={{ opacity: 0.85 }}> · next ~{formatDate(series.next_due_date)}</span> : null}
           </div>
           {variable ? (
@@ -777,6 +778,7 @@ export default function Recurring() {
   const [payeeDetail, setPayeeDetail] = useState(null)  // txn opened in the shared TransactionDetail panel
   const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
   const [amountMatchSeries, setAmountMatchSeries] = useState(null)  // series whose amount matching is being edited
+  const [deleteTarget, setDeleteTarget] = useState(null)            // series awaiting delete confirmation
   const [amountMatchSuggestion, setAmountMatchSuggestion] = useState(null)  // a band proposed by a price-change finding
   const [searchParams, setSearchParams] = useSearchParams()
   // Signals are derived server-side; the page holds only the last fetch and what the user is looking at.
@@ -1104,10 +1106,8 @@ export default function Recurring() {
     // dialog would open on a band proposed for a different charge.
     else if (kind === 'amountMatch') { setAmountMatchSuggestion(null); setAmountMatchSeries(s); return }
     else if (kind === 'rename') updated = await api.updateRecurring(id, { display_name: value })
-    else if (kind === 'delete') {
-      await api.deleteRecurring(id)
-      setAllSeries(prev => (prev || []).filter(x => x.id !== id))
-    }
+    // Delete asks first (see `deleteSeries`): it is the one card action with no way back.
+    else if (kind === 'delete') { setDeleteTarget(s); return }
     if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
     // A characterization change means the user is done inspecting → collapse the drill-down. A cadence
     // tweak is not a characterization change, so it leaves the report open.
@@ -1121,9 +1121,37 @@ export default function Recurring() {
 
   const seriesById = (id) => (allSeries || []).find(x => x.id === id) || null
 
-  async function dismissSignal(signal) {
-    await api.dismissRecurringSignal(signal.key, signal.kind)
-    setSignalUndo({ key: signal.key, kind: signal.kind })
+  // Deleting a series is not undoable and has no trash: an auto series loses its curation (name,
+  // cadence, removals) and comes back from the next scan as a suggestion, a hand-added one is gone, and a
+  // rule-backed one turns off its rule's recurring flag. The confirmation says which, since the card
+  // offers Not recurring and Mark ended beside it as the non-destructive answers.
+  async function deleteSeries() {
+    const s = deleteTarget
+    setDeleteTarget(null)
+    if (!s) return
+    await api.deleteRecurring(s.id)
+    setAllSeries(prev => (prev || []).filter(x => x.id !== s.id))
+    setOpenSeries(prev => (prev && prev.id === s.id ? null : prev))
+    loadSignals()
+  }
+
+  // A finding's Details: the same card the Series view shows, acting through the same handlers.
+  const renderSeriesCard = (seriesId) => {
+    const s = seriesById(seriesId)
+    return s ? (
+      <SeriesCard
+        series={s}
+        onAction={handleAction}
+        onOpenReport={openReport}
+        onEditRule={(series) => setRuleModal({ mode: 'edit', ruleId: series.rule_id })}
+        active={openSeries?.id === s.id}
+      />
+    ) : null
+  }
+
+  async function dismissSignal(signal, { oneOff = false } = {}) {
+    await api.dismissRecurringSignal(signal.key, signal.kind, { oneOff })
+    setSignalUndo({ key: signal.key, kind: signal.kind, oneOff, baseline: signal.baseline_amount })
     loadSignals()
   }
 
@@ -1400,6 +1428,7 @@ export default function Recurring() {
                   onExcludeCharge={excludeSignalCharge}
                   onShowDismissed={showDismissedSignals}
                   matches={matchesSignal}
+                  renderSeries={renderSeriesCard}
                 />
               )
             ) : view === VIEW_UPCOMING ? (
@@ -1482,8 +1511,9 @@ export default function Recurring() {
         <RuleActionModal
           state={ruleModal}
           onClose={() => setRuleModal(null)}
-          // Editing the rule can change the series' membership/cadence/name, so reload the list.
-          onSaved={() => { setRuleModal(null); load() }}
+          // Editing the rule can change the series' membership/cadence/name, so reload the list, the
+          // findings judged against it, and any open report of its transactions.
+          onSaved={() => { setRuleModal(null); load(); loadSignals(); setReportNonce(n => n + 1) }}
         />
       )}
 
@@ -1498,6 +1528,7 @@ export default function Recurring() {
             const updated = await api.updateRecurring(amountMatchSeries.id, payload)
             setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
             loadSignals()  // a membership change can resolve or raise a finding about this series
+            if (openSeries?.id === updated.id) setReportNonce(n => n + 1)  // and changes the open report's rows
           }}
         />
       )}
@@ -1511,6 +1542,23 @@ export default function Recurring() {
           onDismiss={dismissAmbiguity}
           onRestore={restoreDecision}
           onClose={() => setReviewOpen(false)}
+        />
+      )}
+
+      {deleteTarget && (
+        <AppConfirmDialog
+          title={`Delete “${deleteTarget.display_name || deleteTarget.payee_key}”?`}
+          description={deleteTarget.source === 'rule'
+            ? 'This turns off Recurring series on the rule that defines it; turning that back on re-creates the series. If recurring was the rule’s only action, the rule moves to the rules trash, where restoring it brings the series back.'
+            : deleteTarget.source === 'manual'
+              ? 'A series added by hand is not found again by a scan. Getting it back means adding it again.'
+              : 'The next scan finds it again as a suggestion, without its name, cadence or removed transactions. To stop it being suggested, choose Not recurring instead.'}
+          confirmLabel="Delete series"
+          cancelLabel="Keep series"
+          confirmVariant="danger"
+          borderColor="var(--danger)"
+          onConfirm={deleteSeries}
+          onCancel={() => setDeleteTarget(null)}
         />
       )}
 
@@ -1534,8 +1582,10 @@ export default function Recurring() {
 
       {signalUndo && (
         <UndoToast
-          title="Signal dismissed"
-          description="It stays hidden; a new finding about the same series still appears."
+          title={signalUndo.oneOff ? 'Dismissed as a one-off' : 'Signal dismissed'}
+          description={signalUndo.oneOff
+            ? `${formatCurrency(signalUndo.baseline)} is still the expected amount. Later charges are checked against it, so this amount arriving again is reported.`
+            : 'It stays hidden; a new finding about the same series still appears.'}
           onUndo={() => restoreSignal(signalUndo.key)}
           onDismiss={dismissUndoToast}
         />

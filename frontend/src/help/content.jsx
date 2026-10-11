@@ -2075,6 +2075,7 @@ export const HELP_TOPICS = [
     summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule. Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions. Alerts are generated if a recurring transaction is missing or changes.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>
           A <strong>recurring series</strong> is a transaction that repeats on a schedule -- a subscription, a
           bill, a paycheck. These may have a fixed amount or the amount may vary in a range.
@@ -2088,8 +2089,9 @@ export const HELP_TOPICS = [
           its own after an import, and can be run on demand from the Recurring page.
         </p>
         <p>
-          Amount is a hint, not a gate. A utility bill that changes every month still qualifies, because
-          it arrives on a schedule. Transactions are grouped by payee <em>and</em> category, so one biller
+          Amount is a hint, not a gate, unless matching by amount is turned on (see <em>Which transactions
+          belong</em>). A utility bill that changes every month still qualifies, because it arrives on a
+          schedule. Transactions are grouped by payee <em>and</em> category, so one biller
           with several obligations -- a town charging property tax quarterly and water monthly -- becomes
           individual series rather than one muddled one.
         </p>
@@ -2135,6 +2137,14 @@ export const HELP_TOPICS = [
           the totals read from it. A charge that ought to belong and does not is a matching problem:
           correct its merchant name, or widen the rule that defines the series. Editing a transaction
           re-checks which series it belongs to, so a correction takes effect straight away.
+        </p>
+        <p>
+          <strong>Matching by amount.</strong> A series normally ignores amount when deciding what belongs.
+          When one payee bills two things in the same category that only the amount tells apart -- two
+          subscriptions at different prices -- the <strong>Amount</strong> button on the series card turns on
+          matching by amount: only charges within or near the range the series has charged join it, or a
+          range can be set by hand instead. A series defined by a rule has no Amount button; the rule's own amount condition does
+          the same job and is changed by editing the rule.
         </p>
         <p>
           A transaction carries a small ↻ marker while it belongs to a series, and its editor links through
@@ -2197,7 +2207,9 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           Opening the <em>series report</em> on a finding opens the related transactions in a panel below the
-          findings, without leaving the list being worked through.
+          findings, without leaving the list being worked through. <em>Details</em> under a finding shows the
+          series card itself -- cadence, amount setting, range, and the last and next dates -- with the same
+          controls as the series list.
         </p>
         <p>
           Dismissing a finding covers that one
@@ -2221,7 +2233,8 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           A change is reported once. When the next charge arrives at the same new amount, it is treated as
-          the new normal and nothing more is reported, whatever was done with the first finding.
+          the new normal and nothing more is reported -- unless the first finding was dismissed as a
+          one-off.
         </p>
         <p>
           Each finding offers a choice, depending on what the charge is:
@@ -2236,9 +2249,18 @@ export const HELP_TOPICS = [
             went up, and a further increase is reported as usual.
           </li>
           <li>
-            <strong>Accept new amount</strong> -- offered only on a series that matches charges by amount. It
-            widens the series' amount range to include the new price. Without it, later charges at the new
-            price are not matched to the series.
+            <strong>Dismiss as one-off</strong> -- the amount is correct this time, but the usual amount still
+            stands: a price increase the merchant agreed to reverse, or a single promotional month. The
+            finding is hidden and the charge stays in the series, but later charges are compared with the
+            amounts before it. A return to the usual amount passes quietly; the same higher amount arriving
+            again is reported again. On a bill whose amount varies, a one-off does not teach the series a
+            new normal.
+          </li>
+          <li>
+            <strong>Accept new amount</strong> -- offered only on a series with matching by amount turned on.
+            It widens the series' amount range to include the new price. Without it, later charges at the new
+            price are not matched to the series. A series defined by a rule never offers it: there the amount
+            range belongs to the rule, and a charge outside it is reported on the Rules page.
           </li>
           <li>
             <strong>Exclude from series</strong> -- the charge does not belong, such as a one-off purchase

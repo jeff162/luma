@@ -157,6 +157,14 @@ describe('RecurringSignals', () => {
     expect(screen.queryByRole('button', { name: 'Exclude from series' })).toBeNull()
   })
 
+  it('offers a one-off dismissal only on an amount finding, handing back the finding', async () => {
+    const { onDismiss } = renderSection({ signals: [PRICE, MISSED] })
+    const buttons = screen.getAllByRole('button', { name: 'Dismiss as one-off' })
+    expect(buttons).toHaveLength(1)
+    await userEvent.click(buttons[0])
+    expect(onDismiss).toHaveBeenCalledWith(PRICE, { oneOff: true })
+  })
+
   it('never shows an upcoming charge among the findings', () => {
     // Upcoming is a peer view, not a kind of problem; it must not leak into the attention list or its
     // per-kind filter row.

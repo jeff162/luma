@@ -217,6 +217,7 @@ def _load_accepted_amounts(conn: sqlite3.Connection) -> dict[str, list[float]]:
         FROM   recurring_signal_dismissal d
         JOIN   txn t ON d.signal_key = 'price_change:' || t.id
         WHERE  d.kind = 'price_change'
+          AND  d.one_off = 0
           AND  t.recurring_series_id IS NOT NULL
           AND  t.trashed_at IS NULL
           AND  t.is_pending = 0
@@ -224,6 +225,32 @@ def _load_accepted_amounts(conn: sqlite3.Connection) -> dict[str, list[float]]:
     ).fetchall():
         accepted.setdefault(row["series_id"], []).append(abs(float(row["amount"] or 0.0)))
     return accepted
+
+
+def _load_one_off_charges(conn: sqlite3.Connection) -> set[str]:
+    """The charges whose price-change warning was dismissed **as a one-off**: "fine this time, but the
+    usual amount is still the usual amount" — a hike the merchant agreed to reverse, a promotional month.
+
+    An ordinary dismissal on a fixed series accepts the new price, and the settled rule then keeps a
+    repeat of it quiet. A one-off says the opposite, so these charges are left out of the history every
+    later charge is judged against: the next charge is compared with what came *before* the exception,
+    and a repeat of the excepted amount is reported as the step it is. For the same reason a one-off
+    never teaches a variable series' range (`_load_accepted_amounts` skips it).
+
+    Like the accepted amounts, derived by joining the dismissal back to its transaction rather than
+    stored, so restoring the dismissal — or re-dismissing it the ordinary way — undoes it.
+    """
+    return {
+        row["id"]
+        for row in conn.execute(
+            """
+            SELECT t.id
+            FROM   recurring_signal_dismissal d
+            JOIN   txn t ON d.signal_key = 'price_change:' || t.id
+            WHERE  d.kind = 'price_change' AND d.one_off = 1
+            """
+        ).fetchall()
+    }
 
 
 def _series_payload(series) -> dict:
@@ -329,7 +356,8 @@ def _new_series(series, today: date) -> dict | None:
     }
 
 
-def _price_change(series, occurrences: list[dict], accepted: list[float] | None = None) -> dict | None:
+def _price_change(series, occurrences: list[dict], accepted: list[float] | None = None,
+                  one_offs: set[str] | None = None) -> dict | None:
     """The latest charge judged against the ones before it — the comparison the stored band cannot make.
 
     Which threshold applies depends on how tight the series' own history is, and **both the tightness
@@ -346,12 +374,16 @@ def _price_change(series, occurrences: list[dict], accepted: list[float] | None 
       what someone has actually accepted.
 
     Either way a step the *previous* charge already made is not reported again: the hike was news once.
+
+    Charges in `one_offs` (see `_load_one_off_charges`) are not part of the history a later charge is
+    judged against — neither the baseline, the tightness test, nor the "previous" of the settled rule.
     """
-    if not _is_user_owned(series) or series["status"] != "active" \
-            or len(occurrences) < _MIN_OCCURRENCES_FOR_PRICE:
+    if not _is_user_owned(series) or series["status"] != "active":
         return None
-    latest = occurrences[-1]
-    prior = occurrences[:-1]
+    latest = occurrences[-1] if occurrences else None
+    prior = [o for o in occurrences[:-1] if o["id"] not in (one_offs or ())]
+    if latest is None or len(prior) + 1 < _MIN_OCCURRENCES_FOR_PRICE:
+        return None
     history = [abs(o["amount"]) for o in prior]
     baseline_amounts = history[-_BASELINE_OCCURRENCES:]
     baseline = statistics.median(baseline_amounts)
@@ -444,6 +476,7 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
     members = _load_members(conn)
     per_account, ledger_newest = _load_freshness(conn)
     accepted = _load_accepted_amounts(conn)
+    one_offs = _load_one_off_charges(conn)
 
     signals: list[dict] = []
     for series in series_rows:
@@ -452,7 +485,7 @@ def compute_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_HO
             _upcoming(series, today, horizon_days),
             _missed(series, _reference_now(series, per_account, ledger_newest)),
             _new_series(series, today),
-            _price_change(series, occurrences, accepted.get(series["id"])),
+            _price_change(series, occurrences, accepted.get(series["id"]), one_offs),
         ):
             if signal is not None:
                 signals.append(signal)
@@ -495,4 +528,5 @@ def dismissed_signals(conn: sqlite3.Connection, *, horizon_days: int = UPCOMING_
     if not dismissed:
         return []
     everything = compute_signals(conn, horizon_days=horizon_days, include_dismissed=True)["signals"]
-    return [s for s in everything if s["key"] in dismissed]
+    one_off = signal_dismissals.one_off_keys(conn)
+    return [{**s, "one_off": s["key"] in one_off} for s in everything if s["key"] in dismissed]

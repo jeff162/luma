@@ -37,6 +37,7 @@
  * attention" was the mislabelling that separating the views fixes.
  */
 
+import { useState } from 'react'
 import { AppDialog, Button, EmptyState, Spinner } from './ui.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -88,7 +89,9 @@ function describe(signal) {
     }
     case 'price_change': {
       const dir = signal.direction === 'increase' ? 'up' : 'down'
-      const usual = signal.amount_kind === 'fixed' ? 'its established amount' : 'anything it has charged before'
+      // A fixed price is judged against its usual amount; a varying bill against the range of its last few
+      // charges — not its whole history, which may well have gone higher.
+      const usual = signal.amount_kind === 'fixed' ? 'its usual amount' : 'its recent charges'
       return `${formatCurrency(signal.baseline_amount)} → ${formatCurrency(Math.abs(signal.amount))} on ${formatDate(signal.txn_date)} — ${dir} ${signal.percent}% from ${usual}.`
     }
     case 'new_series':
@@ -107,8 +110,20 @@ function subject(signal) {
   return [signal.category_name, signal.account_name].filter(Boolean).join(' · ')
 }
 
-function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge }) {
+// What Dismiss means for each kind. On an amount finding it is more than hiding: the amount becomes the
+// series' normal, which is what sets it apart from the one-off beside it.
+const DISMISS_TITLES = {
+  price_change: 'Treat this amount as normal for the series',
+  missed: 'Hide this finding; a later missed charge is still reported',
+  new_series: 'Hide this finding; the series stays in Suggested',
+}
+
+function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, renderSeries }) {
   const tone = SIGNAL_KINDS[signal.kind]?.tone || 'var(--accent2)'
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  // The series' current state — its cadence, amount setting, range and dates — is what a finding is
+  // judged against, so it is one click away rather than a trip to the Series view.
+  const seriesCard = signal.series_id && renderSeries ? renderSeries(signal.series_id) : null
   const target = signalTarget(signal)
   const actions = []
   if (signal.kind === 'missed') {
@@ -146,52 +161,77 @@ function SignalRow({ signal, active, onDismiss, onSeriesAction, onOpenSeries, on
         </SignalAction>,
       )
     }
+    // The answer between Dismiss and Exclude: the charge belongs, but the usual amount still stands — a
+    // hike the merchant agreed to reverse. The charge stops counting toward what later ones are judged
+    // against, so a repeat of it is reported rather than read as the price having settled.
+    actions.push(
+      <SignalAction
+        key="one-off"
+        variant="quiet"
+        onClick={() => onDismiss(signal, { oneOff: true })}
+        title="Hide this finding but keep expecting the usual amount. If this amount comes again, it is reported again."
+      >
+        Dismiss as one-off
+      </SignalAction>,
+    )
   } else if (signal.kind === 'new_series') {
     actions.push(<SignalAction key="confirm" variant="primary" onClick={() => onSeriesAction('confirm', signal)}>Confirm</SignalAction>)
     actions.push(<SignalAction key="suppress" onClick={() => onSeriesAction('suppress', signal)}>Not recurring</SignalAction>)
   }
   actions.push(
-    <SignalAction key="dismiss" variant="quiet" onClick={() => onDismiss(signal)} title="Hide this one finding; a new one still appears">
+    <SignalAction key="dismiss" variant="quiet" onClick={() => onDismiss(signal)} title={DISMISS_TITLES[signal.kind] || 'Hide this finding; a new one still appears'}>
       Dismiss
     </SignalAction>,
   )
 
   return (
     <div data-signal-key={signal.key} style={{
-      display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px',
       borderTop: '1px solid color-mix(in srgb, var(--border) 55%, transparent)',
       // Marked while its series' transactions are open below, the same way a series card marks itself —
       // with several findings about different series, the panel's title alone does not say which row
       // opened it.
       background: active ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : undefined,
     }}>
-      <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: `color-mix(in srgb, ${tone} 65%, transparent)`, flexShrink: 0 }} />
-      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>
-          {headline(signal)}
-          {target ? (
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px' }}>
+        <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: `color-mix(in srgb, ${tone} 65%, transparent)`, flexShrink: 0 }} />
+        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 620, marginBottom: 2 }}>
+            {headline(signal)}
+            {target ? (
+              <button
+                onClick={() => onOpenSeries(signal)}
+                aria-label="Open this series"
+                title="Show this series’ transactions"
+                style={{
+                  background: 'none', border: 'none', padding: '0 0 0 5px', cursor: 'pointer',
+                  color: 'var(--accent2)', fontSize: 12.5, fontWeight: 700, lineHeight: 1,
+                  textDecoration: active ? 'underline' : 'none',
+                }}
+              >
+                ↗
+              </button>
+            ) : null}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{describe(signal)}</div>
+          {subject(signal) ? (
+            <div style={{ fontSize: 11.5, color: 'var(--muted)', opacity: 0.8, marginTop: 2 }}>{subject(signal)}</div>
+          ) : null}
+          {seriesCard ? (
             <button
-              onClick={() => onOpenSeries(signal)}
-              aria-label="Open this series"
-              title="Show this series’ transactions"
-              style={{
-                background: 'none', border: 'none', padding: '0 0 0 5px', cursor: 'pointer',
-                color: 'var(--accent2)', fontSize: 12.5, fontWeight: 700, lineHeight: 1,
-                textDecoration: active ? 'underline' : 'none',
-              }}
-            >
-              ↗
+              onClick={() => setDetailsOpen(v => !v)}
+              aria-expanded={detailsOpen}
+              style={{ background: 'none', border: 'none', padding: 0, marginTop: 4, cursor: 'pointer', color: 'var(--accent2)', fontSize: 11.5, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >Series Details<span style={{ fontSize: 9 }}>{detailsOpen ? '▾' : '▸'}</span>
             </button>
           ) : null}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{describe(signal)}</div>
-        {subject(signal) ? (
-          <div style={{ fontSize: 11.5, color: 'var(--muted)', opacity: 0.8, marginTop: 2 }}>{subject(signal)}</div>
-        ) : null}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {actions}
+        </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-        {actions}
-      </div>
+      {detailsOpen && seriesCard ? (
+        <div style={{ padding: '0 12px 12px 27px' }}>{seriesCard}</div>
+      ) : null}
     </div>
   )
 }
@@ -237,6 +277,10 @@ export function RecurringSignalsView({
   signals, counts, dismissedCount, kind, onKindChange, activeSeriesId,
   onDismiss, onSeriesAction, onOpenSeries, onAcceptPrice, onExcludeCharge, onShowDismissed,
   matches = () => true,
+  // seriesId → the series' own card (the page's SeriesCard), shown under a finding's Details toggle.
+  // Supplied by the page so the card is the one the Series view renders, not a lookalike; null where
+  // the series is not loaded.
+  renderSeries = null,
 }) {
   const anomalies = (signals || []).filter(s => s.kind !== 'upcoming')
   const activeKinds = ANOMALY_KIND_ORDER.filter(k => (counts?.[k] || 0) > 0)
@@ -279,6 +323,7 @@ export function RecurringSignalsView({
               onOpenSeries={onOpenSeries}
               onAcceptPrice={onAcceptPrice}
               onExcludeCharge={onExcludeCharge}
+              renderSeries={renderSeries}
             />
           ))}
         </div>
@@ -391,7 +436,7 @@ export function DismissedSignalsDialog({ signals, loading, onRestore, onClose })
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 620 }}>{headline(s)}</div>
               <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                {SIGNAL_KINDS[s.kind]?.label || s.kind} · {describe(s)}
+                {SIGNAL_KINDS[s.kind]?.label || s.kind}{s.one_off ? ' (one-off)' : ''} · {describe(s)}
               </div>
             </div>
             <SignalAction onClick={() => onRestore(s)}>Restore</SignalAction>
