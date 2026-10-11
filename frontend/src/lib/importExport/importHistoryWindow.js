@@ -14,7 +14,7 @@
 // actively-fed source crowd out a quiet neighbour's recent cards, which is what the old global fetch cap
 // did (`docs/scale-and-limits.md` → *Import history: retention*).
 
-import { format, parseISO } from 'date-fns'
+import { endOfMonth, format, parseISO } from 'date-fns'
 
 export const RECENT_CARD_COUNT = 4
 export const RECENT_WINDOW_DAYS = 30
@@ -26,19 +26,32 @@ export const MIN_ARCHIVED_CARDS = 3
 // separator needs no normalizing here (unlike a comparison that reaches into the time).
 const dayOf = value => String(value || '').slice(0, 10)
 
+// A sync card's month (`sync_period`, `YYYY-MM`), as its first and last day. It stands in for a span on a
+// card holding no rows — one whose every row was refused still exists to report that, and without this it
+// fell back to import time and sorted among months it had nothing to do with.
+const periodStart = batch => (batch?.sync_period ? `${batch.sync_period}-01` : '')
+const periodEnd = batch => {
+  const start = periodStart(batch)
+  return start ? format(endOfMonth(parseISO(start)), 'yyyy-MM-dd') : ''
+}
+
 // Newest date a card covers. `newest_txn_date` is the marketplace path's own older field, kept as a
 // fallback so a card predating the stored span still sorts by its data; import time is the last resort.
-export const coverageEnd = batch => dayOf(batch?.covers_end || batch?.newest_txn_date || batch?.imported_at)
-export const coverageStart = batch => dayOf(batch?.covers_start || coverageEnd(batch))
+export const coverageEnd = batch =>
+  dayOf(batch?.covers_end || batch?.newest_txn_date || periodEnd(batch) || batch?.imported_at)
+export const coverageStart = batch => dayOf(batch?.covers_start || periodStart(batch) || coverageEnd(batch))
 export const importedAt = batch => String(batch?.imported_at || '')
 
-// Cards run newest-covered first. Ties break on the start of the span and then on import time, so two
-// files covering the same period still order stably and the most recently imported of them leads.
+// Cards run by where their span starts, newest first. A span's start is the date it was fetched back to,
+// which is what places a multi-month card among the single-month ones: a connection's initial import sits
+// beneath the months that came after it, rather than above every month its span happens to reach into.
+// Ties break on the end of the span and then on import time, so two files covering the same period still
+// order stably and the most recently imported of them leads.
 export function byCoverage(a, b) {
-  const ends = coverageEnd(b).localeCompare(coverageEnd(a))
-  if (ends !== 0) return ends
   const starts = coverageStart(b).localeCompare(coverageStart(a))
   if (starts !== 0) return starts
+  const ends = coverageEnd(b).localeCompare(coverageEnd(a))
+  if (ends !== 0) return ends
   return importedAt(b).localeCompare(importedAt(a))
 }
 
@@ -53,6 +66,10 @@ export function byCoverage(a, b) {
  * list that presents itself as ordered by period. The hedge also bought little: when transactions are
  * recent, which is the ordinary case, coverage already puts a fresh import at the top on its own. It
  * only fired during a historical backfill, and paid for that one case by distorting the list for good.
+ *
+ * The window is tested on the same date the order sorts on — where a span starts — which is what makes
+ * it a prefix without having to enforce one. Testing the end instead let a long card running up to today
+ * stay in the list beneath an older, shorter card that had been archived.
  */
 export function partitionImportHistory(batches, {
   now = Date.now(),
@@ -65,14 +82,14 @@ export function partitionImportHistory(batches, {
   const recent = []
   const older = []
   list.forEach((batch, index) => {
-    const inWindow = index < recentCount || coverageEnd(batch) >= cutoff
+    const inWindow = index < recentCount || coverageStart(batch) >= cutoff
     ;(inWindow ? recent : older).push(batch)
   })
   if (older.length < minArchived) return { recent: list, archive: [] }
 
   const byYear = new Map()
   for (const batch of older) {
-    const year = coverageEnd(batch).slice(0, 4)
+    const year = coverageStart(batch).slice(0, 4)
     if (!byYear.has(year)) byYear.set(year, [])
     byYear.get(year).push(batch)
   }

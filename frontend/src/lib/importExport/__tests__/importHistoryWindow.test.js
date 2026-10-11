@@ -90,16 +90,16 @@ describe('the per-source recency window', () => {
   it('keeps cards covering one period together, however far apart they were imported', () => {
     const paypal = [
       card('nov-statement', '2026-10-07 00:43:00', { covers_start: '2025-11-01', covers_end: '2025-11-30' }),
-      card('activity-2025', '2026-07-26 20:09:00', { covers_start: '2025-01-03', covers_end: '2025-11-05' }),
       card('aug-statement', '2026-10-07 00:43:01', { covers_start: '2025-08-01', covers_end: '2025-08-31' }),
       card('jun-statement', '2026-10-07 00:43:02', { covers_start: '2025-06-01', covers_end: '2025-06-30' }),
+      card('activity-2025', '2026-07-26 20:09:00', { covers_start: '2025-01-03', covers_end: '2025-11-05' }),
       card('jan-statement', '2026-10-07 00:43:03', { covers_start: '2025-01-01', covers_end: '2025-01-31' }),
       card('activity-2024', '2026-07-26 20:09:01', { covers_start: '2024-01-06', covers_end: '2024-12-23' }),
       card('activity-2023', '2026-07-26 20:09:02', { covers_start: '2023-03-09', covers_end: '2023-12-03' }),
     ]
     const { archive } = partitionImportHistory(paypal, { now: NOW, recentCount: 1 })
     expect(archive.map(group => [group.label, group.batches.map(b => b.id)])).toEqual([
-      ['2025', ['activity-2025', 'aug-statement', 'jun-statement', 'jan-statement']],
+      ['2025', ['aug-statement', 'jun-statement', 'activity-2025', 'jan-statement']],
       ['2024', ['activity-2024']],
       ['2023', ['activity-2023']],
     ])
@@ -107,6 +107,17 @@ describe('the per-source recency window', () => {
 })
 
 describe('card order', () => {
+  // A connection's initial import spans every month its first pull reached; the monthly cards that
+  // follow it are newer than where it starts, though not newer than where it ends.
+  it('runs by where each span starts, so a long card sits beneath the months that came after it', () => {
+    const cards = [
+      card('initial', '2026-07-10 09:00:00', { covers_start: '2026-04-12', covers_end: '2026-07-10' }),
+      card('july', '2026-08-01 09:00:00', { covers_start: '2026-07-11', covers_end: '2026-07-31' }),
+      card('march', '2026-09-01 09:00:00', { covers_start: '2026-03-02', covers_end: '2026-03-30' }),
+    ]
+    expect([...cards].sort(byCoverage).map(b => b.id)).toEqual(['july', 'initial', 'march'])
+  })
+
   it('runs by the period covered, breaking ties on the most recent import', () => {
     const cards = [
       card('older-period', '2026-10-07 09:00:00', { covers_start: '2019-01-01', covers_end: '2019-12-31' }),
@@ -123,6 +134,16 @@ describe('card order', () => {
       card('marketplace', '2019-01-01 09:00:00', { newest_txn_date: '2024-06-01' }),
     ]
     expect([...cards].sort(byCoverage).map(b => b.id)).toEqual(['marketplace', 'no-span'])
+  })
+
+  // Every row the card received was refused, so it has no span — but it is still that month's card.
+  it('places a sync card with no span by its month, not by when it was created', () => {
+    const cards = [
+      card('september', '2026-09-01 03:28:14', { sync_period: '2026-09', covers_start: '2026-09-01', covers_end: '2026-09-28' }),
+      card('july-all-refused', '2026-09-01 03:28:14', { sync_period: '2026-07' }),
+      card('august', '2026-09-01 03:28:14', { sync_period: '2026-08', covers_start: '2026-08-25', covers_end: '2026-08-28' }),
+    ]
+    expect([...cards].sort(byCoverage).map(b => b.id)).toEqual(['september', 'august', 'july-all-refused'])
   })
 })
 

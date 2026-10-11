@@ -4783,6 +4783,9 @@ def list_batches():
             # Surfaced so the client can tell whether a profileless batch's file shape actually
             # matches a data source before auto-attaching it (Save as data source guard).
             d["header_fingerprint"] = snapshot.get("header_fingerprint") or None
+            # A sync card's month, which the history orders it by when the card holds no rows to have a
+            # span of its own (every row it received was refused).
+            d["sync_period"] = snapshot.get("sync_period") or None
             review_state = get_rule_suggestion_review_state(snapshot)
             summary = review_state.get("summary")
             if not isinstance(summary, dict):
