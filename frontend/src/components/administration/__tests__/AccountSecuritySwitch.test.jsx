@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 
-vi.mock('../../lib/api.js', () => ({
+vi.mock('../../../lib/api.js', () => ({
   api: {
     getIdentities: vi.fn(async () => ({ identities: [{ id: 'u1', display_name: 'Harbor', username: 'harbor' }] })),
     getCurrentUser: vi.fn(async () => ({ user: { id: 'u2', role: 'member', two_factor_enabled: false, passkeys: [] } })),
@@ -20,7 +20,7 @@ vi.mock('../../lib/api.js', () => ({
   },
 }))
 
-const { AccountSecuritySection } = await import('../Settings.jsx')
+const { AccountSecuritySection } = await import('../AccountSecuritySection.jsx')
 
 afterEach(cleanup)
 

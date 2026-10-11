@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useState } from 'react'
-import { api } from '../lib/api.js'
-import { Toggle } from './ui.jsx'
+import { api } from '../../lib/api.js'
+import { Toggle } from '../ui.jsx'
 
 export default function ReviewFlaggingSection() {
   const [enabled, setEnabled] = useState(null)

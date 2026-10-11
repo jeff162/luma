@@ -14,7 +14,7 @@
  * failed requests around an error — and it is what someone would be asked to send.
  */
 
-import { formatTimestamp } from '../lib/utils.js'
+import { formatTimestamp } from '../../lib/utils.js'
 
 export default function ErrorLogSection({ log, error }) {
   const entries = log?.entries || []

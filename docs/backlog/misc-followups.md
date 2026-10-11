@@ -45,6 +45,10 @@ CSV importer, which is right, but the page was already carrying four unrelated t
 fifth. The split that fixed the connections tab — configuration on one surface, operation on another —
 has an obvious second application here that was deliberately **not** taken in the same pass.
 
+**Superseded 2026-10-11 by [`settings-administration-split.md`](settings-administration-split.md)**,
+which settles where Backup / Restore goes, moves Export too, and does the rename. This entry is removed
+by that plan's last stage; only the import-history bullet below is independent of it.
+
 **Decided, not yet done.** The user's call on each, from that session:
 
 - **Backup / Restore should move off this page.** It is install administration: it acts on the whole

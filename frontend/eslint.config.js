@@ -148,8 +148,9 @@ export default [
   },
   {
     // The preferences context owns persistence; the app shell (App.jsx) bootstraps the startup route
-    // above the provider and Settings runs the destructive reset. These keep the txn + filter-date guards.
-    files: ['src/lib/UserPreferencesContext.jsx', 'src/App.jsx', 'src/pages/Settings.jsx'],
+    // above the provider and the developer options run the destructive reset. These keep the txn +
+    // filter-date guards.
+    files: ['src/lib/UserPreferencesContext.jsx', 'src/App.jsx', 'src/components/administration/DeveloperOptionsSection.jsx'],
     rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions, ...filterDateRestrictions] },
   },
   {

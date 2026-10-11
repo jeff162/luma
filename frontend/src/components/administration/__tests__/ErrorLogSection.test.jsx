@@ -8,11 +8,11 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ErrorLogSection from '../ErrorLogSection.jsx'
-import { useErrorLog } from '../../lib/useErrorLog.js'
-import { RefreshButton } from '../ui.jsx'
-import { api } from '../../lib/api.js'
+import { useErrorLog } from '../../../lib/useErrorLog.js'
+import { RefreshButton } from '../../ui.jsx'
+import { api } from '../../../lib/api.js'
 
-vi.mock('../../lib/api.js', () => ({ api: { getErrorLog: vi.fn() } }))
+vi.mock('../../../lib/api.js', () => ({ api: { getErrorLog: vi.fn() } }))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 

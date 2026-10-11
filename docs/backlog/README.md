@@ -67,6 +67,11 @@ scale — rather than by feature.
 
 ## Items
 
+- [settings-administration-split.md](settings-administration-split.md) — **in progress (2026-10-11).**
+  Sorting the occasional operations onto two pages by who may do them: Settings for every member,
+  Administration for what the admin gate already covers, with Backup / Restore moving off Import / Export
+  and Tags and Export becoming dialogs on Transactions. The file is the working plan — its *Build order*
+  lists only the stages still to do.
 - [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The
   import-enrichment + Amazon initiative landed in full — PayPal as an ordinary import, the general
   enrich-an-existing-transaction capability, `display_name_source`, evidence capture + role tagging, the

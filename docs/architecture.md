@@ -572,7 +572,8 @@ The mechanism, end to end:
   credential whose RP id does not match the page.
 - Frontend: `lib/appPasskey.js` (ceremony + serialization, separate from `lib/vaultPasskey.js`),
   `lib/base64url.js` (shared encoders — the vault stores standard base64, sign-in speaks base64url), the
-  sign-in button in `components/AuthScreen.jsx`, and `SignInPasskeysPanel` in `pages/Settings.jsx`.
+  sign-in button in `components/AuthScreen.jsx`, and `SignInPasskeysPanel` in
+  `components/administration/AccountSecuritySection.jsx`.
 
 Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter — a
 passwordless install can still hold vault-encrypted tokens because the vault secret is per-user and
