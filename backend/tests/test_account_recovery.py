@@ -78,14 +78,17 @@ def test_reset_clears_everything_that_kept_the_account_out(stack):
 
 def test_without_a_username_it_lists_accounts_and_asks_again_for_a_bad_password(stack):
     admin, _member = _workspace()
+    # The list is ordered by creation time, which is stored to the second and can step backwards when
+    # the clock is corrected (WSL2 does), so the admin's number is read off the list rather than assumed.
+    number = [u["id"] for u in cdb.list_users()].index(admin["id"]) + 1
 
     with _console(
-        answers=["1"],
+        answers=[str(number)],
         secrets=["short", "new-password-1", "mismatch-1234", "new-password-1", "new-password-1"],
     ) as (io, said):
         assert account_recovery.run(None, **io) == 0
 
-    assert "  1. Admin (admin)" in said
+    assert f"  {number}. Admin (admin)" in said
     assert "Not accepted: password must be at least 8 characters." in said
     assert "The two entries did not match." in said
     assert cdb.authenticate_user("Admin", "new-password-1")["id"] == admin["id"]
