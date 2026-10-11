@@ -1874,35 +1874,22 @@ export default function Dashboard() {
     : 'All time'
   // The chip row becomes parameters through the shared facet registry (lib/filterParams.js), which
   // splits each facet by mode so an exclude chip can never leak into an include list and invert its
-  // own meaning. The named consts below are the same values, destructured for the call sites that
-  // pass one facet on its own rather than the whole bag.
-  const facetParams = selectionsToParams(filters.selections)
+  // own meaning.
+  const facetParams = useMemo(() => selectionsToParams(filters.selections), [filters.selections])
   // A single account selection also fills the singular `account_id` some endpoints take; two or more
   // has no singular form, so those fall back to `account_ids` alone.
   const accountSelections = selectionsOfType(filters.selections, 'account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
-  const {
-    tag_ids: tagIds, owner_ids: ownerIds, account_ids: accountIds, group_ids: groupIds,
-    category_ids: categoryIds, payees, payee_contains: payeeContains,
-    exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
-    exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
-    exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
-    exclude_payee_contains: excludePayeeContains,
-  } = facetParams
+  // Tags and owners travel as arguments of their own on the totals/trend calls.
+  const { tag_ids: tagIds, owner_ids: ownerIds } = facetParams
   // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.
   // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
   // narrow the whole dashboard, not just bits of it. Keys match both the summary opts and the list params.
-  // The exclude_* keys ride along here too, so every endpoint the shared filter feeds honors "is not".
+  // Taken as "every other facet" rather than listed: the list this replaces had not been told about
+  // the attribute filter, so those chips narrowed the ledger and left the Dashboard's totals alone.
   const summaryFilters = useMemo(
-    () => ({
-      account_ids: accountIds, group_ids: groupIds, category_ids: categoryIds, payees,
-      payee_contains: payeeContains, exclude_payee_contains: excludePayeeContains,
-      exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
-      exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
-      exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
-    }),
-    [accountIds, groupIds, categoryIds, payees, payeeContains, excludeAccountIds, excludeGroupIds,
-      excludeCategoryIds, excludeOwnerIds, excludeTagIds, excludePayees, excludePayeeContains],
+    () => Object.fromEntries(Object.entries(facetParams).filter(([key]) => key !== 'tag_ids' && key !== 'owner_ids')),
+    [facetParams],
   )
 
   // Picker resolution is hoisted ahead of the tag-mode fetch effect so the effect's

@@ -16,18 +16,19 @@
  *    unrelated transactions — technically "hidden," but not a useful thing to say.
  */
 
+import { FILTER_FACETS } from './filterParams.js'
+
 export const DATE_KEYS = ['date_start', 'date_end']
 
-export const EXCLUDE_KEYS = [
-  'exclude_account_ids', 'exclude_group_ids', 'exclude_category_ids',
-  'exclude_tag_ids', 'exclude_payees', 'exclude_payee_contains', 'exclude_owner_ids',
-]
+// Both lists come from the facet registry rather than restating it, so a facet added there is probed
+// here. Restated, they had missed the attribute filter: an excluded attribute hiding every match was
+// never named as the cause.
+export const EXCLUDE_KEYS = FILTER_FACETS.map(facet => facet.exclude)
 
 // Include/intent facets — the narrowing signal a probe preserves. `quick_filter` and `needs_review`
-// are handled separately (a string and a boolean); these are the id-list includes.
-export const INCLUDE_KEYS = [
-  'account_ids', 'group_ids', 'category_id', 'category_ids', 'tag_ids', 'payees', 'payee_contains', 'owner_ids',
-]
+// are handled separately (a string and a boolean); these are the id-list includes, plus the list
+// feed's singular `category_id`.
+export const INCLUDE_KEYS = [...FILTER_FACETS.map(facet => facet.include), 'category_id']
 
 // The ledger's amount popover (magnitude bounds + debit/credit side via `direction`) and the recurring
 // filter are narrowing intents too — like an include facet, an amount/recurring filter that yields
