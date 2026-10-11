@@ -385,6 +385,10 @@ for what the *user* can act on.
 
 ## Verification And Tests
 
+The guidance below on how to write a test applies once a test has earned its place. Whether to write one
+at all is the test-by-value question further down, and for a small, local fix — a missed callback, a
+one-line wiring change — the default is no new test: run the existing suite and lint, and stop there.
+
 - **Every test failure is investigated when it happens, before anything else — including before
   re-running it.** The question that feels natural, *"was that caused by my change?"*, is the wrong one
   and it is what turns a failure into a lost signal: the answer is moot, because a failure has to be
