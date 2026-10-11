@@ -37,5 +37,7 @@ anyone could be upgrading from, so the entry below describes what exists rather 
 - **Multiple owners and multiple users**, with owner as a reporting axis rather than a separate ledger.
 - **Local or networked operation** — a desktop install on loopback, or a machine on the LAN reached by
   other devices behind a sign-in perimeter.
+- **An optional check for a new version**, off unless switched on, which adds a task when a newer
+  release exists. Nothing is downloaded or installed.
 
 [Unreleased]: https://github.com/jeff162/luma/compare/v0.3.0...HEAD

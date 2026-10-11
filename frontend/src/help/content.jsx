@@ -2090,7 +2090,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Amount is a hint, not a gate, unless matching by amount is turned on (see <em>Which transactions
-          belong</em>). A utility bill that changes every month still qualifies, because it arrives on a
+            belong</em>). A utility bill that changes every month still qualifies, because it arrives on a
           schedule. Transactions are grouped by payee <em>and</em> category, so one biller
           with several obligations -- a town charging property tax quarterly and water monthly -- becomes
           individual series rather than one muddled one.
@@ -2519,7 +2519,7 @@ export const HELP_TOPICS = [
         <p>
           Some exports give every transaction its own ID, in a column headed something
           like <em>Id</em> or <em>Transaction ID</em>. Mapping that column (<strong>Transaction
-          ID</strong> on the mapping screen) lets each later file from the same data source recognize
+            ID</strong> on the mapping screen) lets each later file from the same data source recognize
           the transactions already imported, even when a description has been reworded or an amount
           has changed &mdash; a tip added after a charge settled, for instance, corrects the amount in
           place instead of adding a second copy. A second identical charge with a different ID is
@@ -2537,7 +2537,7 @@ export const HELP_TOPICS = [
         <p>
           When one provider&apos;s files have ended up under two data sources, delete one of them: its
           files move to <strong>unknown data source</strong>, and <strong>Assign to data
-          source</strong> on each file card places them under the other.
+            source</strong> on each file card places them under the other.
         </p>
       </>
     ),
@@ -2555,7 +2555,7 @@ export const HELP_TOPICS = [
           A monthly export usually follows the same route every time: download the file, open the import
           page, pick the data source, import. A <strong>watched folder</strong> removes the middle of
           that. The <strong>Folder</strong> button on a data source's row under <strong>Manage data
-          sources</strong> takes a directory; a CSV that appears in it is imported the next time the app
+            sources</strong> takes a directory; a CSV that appears in it is imported the next time the app
           is opened, and arrives in the import history as an ordinary file card with the usual duplicate,
           rejected-row and rule-suggestion review on it.
         </p>
@@ -2594,7 +2594,7 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           The fix is made wherever it belongs &mdash; mapping the missing account under <strong>Manage
-          data sources</strong>, for instance. The next check picks the file up on its own and the task
+            data sources</strong>, for instance. The next check picks the file up on its own and the task
           clears itself; the file does not need touching.
         </p>
         <h4>What happens to the files</h4>
@@ -3453,7 +3453,10 @@ export const HELP_TOPICS = [
             <strong>About</strong> lists the current version, license,
             a pointer to the github repository, and the instance identifier. The instance identifier is
             stored in backups so that a restore can warn before a backup is restored to a system
-            other than the one which it came from.
+            other than the one which it came from. About is also where the check for a new version is
+            switched on or off. When it is on, {APP_NAME} periodically checks for a new release
+            and adds a task when one is available.
+            The task can be dismissed, and returns with the next release.
           </li>
         </ul>
       </>

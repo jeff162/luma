@@ -42,8 +42,8 @@ from backend.db.control_database import (
     get_data_provider_intended,
     get_https_warning_suppressed,
 )
-from backend import app_log_file, transport
-from backend.services import crypto_service
+from backend import app_log_file, runtime_config, transport
+from backend.services import crypto_service, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_signals import compute_signals
@@ -157,6 +157,28 @@ def _server_error_task(request: Request | None) -> dict | None:
     }
 
 
+def _update_available_task(request: Request | None) -> dict | None:
+    """A newer release than the running copy, when the install has opted in to checking for one
+    (`services/update_check.py`). Shown to whoever could install it. The dismissal key carries the
+    version, so putting the reminder away covers that release only and the next one raises it again."""
+    if request is None or not is_admin_or_local(request) or not update_check.is_enabled():
+        return None
+    version = update_check.available_version()
+    if not version:
+        return None
+    return {
+        "id":          "update_available",
+        "dismiss_key": f"update_available:{version}",
+        "title":       f"Version {version} is available",
+        "description": f"This copy is version {runtime_config.APP_VERSION}. The release notes and the "
+                       "download are on the releases page.",
+        "count":       1,
+        "link":        "/settings?section=about",
+        "link_label":  "Open About",
+        "severity":    SEVERITY_INFO,
+    }
+
+
 def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
@@ -248,6 +270,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     error_task = _server_error_task(request)
     if error_task:
         tasks.append(error_task)
+
+    update_task = _update_available_task(request)
+    if update_task:
+        tasks.append(update_task)
 
     with get_db() as conn:
         owner_count = conn.execute("""
@@ -421,7 +447,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
 def _with_dismiss_keys(tasks: list[dict]) -> list[dict]:
     """Make every task dismissible except one that declares itself `required`. The key is the task id, so
     a per-owner task (reimbursements) is dismissed per owner, and the ids the original four dismissible
-    tasks stored their marks under are unchanged."""
+    tasks stored their marks under are unchanged. A task that supplies its own key keeps it."""
     for task in tasks:
         if not task.get("required"):
             task.setdefault("dismiss_key", task["id"])

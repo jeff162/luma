@@ -307,6 +307,13 @@ export const api = {
   // Stops the server process itself, not the session. Only present when the desktop launcher owns the
   // process; elsewhere the backend answers 404 and the UI never offers it.
   shutdownApp: () => request('/app/shutdown', { method: 'POST' }),
+  // Checking for a new version (opt-in, install-wide). `autoCheckForUpdate` is the load-time call and is a
+  // no-op server-side unless the check is switched on and due; `checkForUpdateNow` always asks.
+  getUpdateCheck: () => request('/app/update-check'),
+  setUpdateCheckEnabled: (enabled) =>
+    request('/app/update-check/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
+  checkForUpdateNow: () => request('/app/update-check/run', { method: 'POST' }),
+  autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
   // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   getErrorLog: () => request('/diagnostics/log/errors'),
   // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.

@@ -11,6 +11,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FieldIssue, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
+import { UpdateCheckControls, UpdateCheckStatus, useUpdateCheck } from '../components/UpdateCheck.jsx'
 import { ImportDetailStorageDialog } from '../components/importExport/ImportDetailStorageDialog.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
 import {
@@ -2914,7 +2915,8 @@ function AboutRow({ label, value, help = '' }) {
 // which link to show; that cost an outbound request nobody asked for on every visit to this panel,
 // which contradicts the promise the README makes about network access. Both remaining links are plain
 // anchors: nothing is fetched from anywhere until the user clicks.
-function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, thirdPartyNoticesScope }) {
+function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, thirdPartyNoticesScope, canManageEnvironment }) {
+  const updateCheck = useUpdateCheck()
   return (
     <Card style={{ padding: 20 }}>
       <div style={{ display: 'grid', gap: 18 }}>
@@ -2931,6 +2933,7 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, third
           <AboutRow
             label="Version"
             value={`v${APP_VERSION}`}
+            help={updateCheck.status ? <UpdateCheckStatus status={updateCheck.status} /> : ''}
           />
           {/* The version is set by hand at release time, so every build made between two releases
               reports the same one. This row is what separates them, and what makes "has this been fixed
@@ -3015,6 +3018,8 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, third
             )}
           />
         </div>
+
+        {canManageEnvironment ? <UpdateCheckControls check={updateCheck} /> : null}
 
         <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           Provided without warranty of any kind, to the extent permitted by applicable law. See sections
@@ -3409,6 +3414,7 @@ export default function Settings() {
               bundledLicenseAvailable={bundledLicenseAvailable}
               buildStamp={buildStamp}
               thirdPartyNoticesScope={thirdPartyNoticesScope}
+              canManageEnvironment={canManageEnvironment}
             />
           </StickySection>
         </div>

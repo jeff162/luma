@@ -480,6 +480,9 @@ function LocalPreferenceProfileScreen({
 }) {
   const [name, setName] = useState('')
   const [skipHints, setSkipHints] = useState(false)
+  // Off until chosen: this is the one request the app makes that no click directly causes, so the
+  // welcome screen asks rather than assumes.
+  const [checkForUpdates, setCheckForUpdates] = useState(false)
   const [showWelcomeHelp, setShowWelcomeHelp] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
@@ -502,7 +505,7 @@ function LocalPreferenceProfileScreen({
   // catch-all completion contract is { name, destination, loadDemo } (see handleCompleteWelcomeSetup).
   function completeWelcome(choice) {
     if (!trimmedName || creating) return
-    onCompleteWelcome?.({ name: trimmedName, disableHints: skipHints, ...choice })
+    onCompleteWelcome?.({ name: trimmedName, disableHints: skipHints, checkForUpdates, ...choice })
   }
 
   const dataEntryChoices = [
@@ -574,7 +577,7 @@ function LocalPreferenceProfileScreen({
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, maxWidth: 470, paddingLeft: 10 }}>
               {hasProfiles
                 ? 'Tracks layout and view preferences.'
-                : `Add a user name and bring in your first transactions to get started.`}
+                : `Define the first user to get started.`}
             </div>
           </div>
         </div>
@@ -877,7 +880,14 @@ function LocalPreferenceProfileScreen({
             <Toggle
               checked={skipHints}
               onChange={setSkipHints}
-              label="Skip first-use hints (you can turn them back on from the Help page)"
+              label="Skip first-use hints (can be changed from the Help page)"
+              style={{ fontSize: 12, color: 'var(--muted)' }}
+            />
+
+            <Toggle
+              checked={checkForUpdates}
+              onChange={setCheckForUpdates}
+              label="Check for new versions (can be changed under Settings → About)"
               style={{ fontSize: 12, color: 'var(--muted)' }}
             />
 
@@ -1342,6 +1352,9 @@ export default function App() {
     // changed since this database was last scanned. Version-gated rather than time-gated, so it is a
     // no-op on every load but the first after a rule change.
     api.rescanDuplicates().catch(() => { })
+    // Whether a newer version has been released. The server makes a request only if the install has
+    // opted in and a day has passed since the last one; otherwise this is a no-op like the calls above.
+    api.autoCheckForUpdate().catch(() => { })
   }, [authEnabled, currentUser, activeLocalProfile, preferenceSubjectId])
 
   useEffect(() => {
@@ -1572,6 +1585,10 @@ export default function App() {
       // session is now set), before the app mounts the preferences provider and navigates.
       if (setup?.disableHints) {
         await api.saveUserPreference(HELP_HINTS_ENABLED_PREF_KEY, false).catch(() => { })
+      }
+      // Before the profile activates, so the load-time check that follows activation already sees it on.
+      if (setup?.checkForUpdates) {
+        await api.setUpdateCheckEnabled(true).catch(() => { })
       }
       if (loadDemo) {
         await api.loadDemoData()

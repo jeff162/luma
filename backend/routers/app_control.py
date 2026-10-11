@@ -19,10 +19,13 @@ service away from everyone else.
 
 from typing import Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
+from backend.authorization import require_admin_or_local
 from backend.runtime_config import bundled_license_path, third_party_notices
+from backend.services import update_check
 
 router = APIRouter()
 
@@ -105,3 +108,36 @@ def read_bundled_license():
     if path is None:
         raise HTTPException(status_code=404, detail="This build does not carry a bundled license file.")
     return PlainTextResponse(path.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
+
+
+class UpdateCheckSettings(BaseModel):
+    enabled: bool
+
+
+# Checking for a new version (`services/update_check.py`). Reading the answer is open to every user, and
+# so is the load-time call, which does nothing unless the check is switched on and due. Switching it on
+# and asking on demand are admin-or-local: both decide whether this server makes an outbound request,
+# which is a statement about the install rather than about the ledger.
+@router.get("/update-check")
+def read_update_check():
+    return update_check.status()
+
+
+@router.post("/update-check/settings", dependencies=[Depends(require_admin_or_local)])
+def save_update_check_settings(body: UpdateCheckSettings):
+    update_check.set_enabled(body.enabled)
+    return update_check.status()
+
+
+@router.post("/update-check/run", dependencies=[Depends(require_admin_or_local)])
+def run_update_check():
+    """Check now, whether or not the automatic check is on. `reached` says whether the release list
+    answered, which the status alone cannot: an unchanged status is also what "nothing newer" looks like."""
+    reached = update_check.run_check()
+    return {**update_check.status(), "reached": reached}
+
+
+@router.post("/update-check/auto")
+def auto_update_check():
+    update_check.maybe_check()
+    return update_check.status()

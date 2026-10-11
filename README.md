@@ -83,7 +83,7 @@ The same overview is available inside the application under **Help → How Luma 
 
 ## Design principles
 
-- **Local unless told otherwise.** Everything runs on the local machine against a local SQLite database. Luma makes no outbound request except for an action the user explicitly asked for — syncing a connected source, writing a backup to a chosen location, reading a CSV off a network drive. There is no telemetry, no analytics, and nothing that phones home.
+- **Local unless told otherwise.** Everything runs on the local machine against a local SQLite database. Luma makes no outbound request except for an action the user explicitly asked for — syncing a connected source, writing a backup to a chosen location, reading a CSV off a network drive. There is no telemetry, no analytics, and nothing that phones home. One edge case is that, when enabled, Luma will check for a new version which involves fetching the current release information periodically. Nothing about the installation is sent.
 
 - **Curation compounds.** Effort spent categorizing should keep paying off on data that has not arrived yet, which is what rules are for.
 
@@ -97,9 +97,11 @@ Luma is local-first by design, and the data stays local:
 
 - **The data stays on the local machine** — everything is kept in a local SQLite database.
 
-- **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how it is used.
+- **No tracking** — Luma has no analytics, telemetry, or "phone home."
 
 - **Connections happen only when the user asks** — the app reaches the network only for user-driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
+
+- **Optional check for new releases** — off by default. When enabled Luma asks GitHub for the project's latest version number, at most once a day. The request says nothing about the installation or its data but as with any network request, GitHub sees the address it comes from.
 
 - **Backups stay local** — exports are saved wherever the user wishes and can be encrypted if desired with a user supplied key.
 

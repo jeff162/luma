@@ -157,7 +157,19 @@ export default function Help() {
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
       <div data-browser-context-passthrough="true" style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
-        <PageHeader title="Help" />
+        <PageHeader title="Help">
+          <Link
+            to="/settings?section=about"
+            title="Version, license and the check for a new version"
+            style={{
+              background: 'var(--surface2)', border: '1px solid var(--border)',
+              borderRadius: 999, padding: '5px 12px', textDecoration: 'none',
+              color: 'var(--text)', fontSize: 12.5, whiteSpace: 'nowrap',
+            }}
+          >
+            About {APP_NAME}
+          </Link>
+        </PageHeader>
         {fromLabel ? (
           <div style={{ marginBottom: 16 }}>
             <button
@@ -173,7 +185,7 @@ export default function Help() {
           </div>
         ) : null}
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
-          Explanations for how features in {APP_NAME} are designed to be used. Topics also
+          Explanations for how features in {APP_NAME} are designed to be used. Each topic also
           appears as a <strong>?</strong> popover next to the feature it describes.
         </div>
 
