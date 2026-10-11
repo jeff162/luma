@@ -831,7 +831,7 @@ function SignInPasskeysPanel({ user, onUserChange }) {
     let cancelled = false
     api.signInPasskeyParams()
       .then(resp => { if (!cancelled) setParams(resp) })
-      .catch(() => {})
+      .catch(() => { })
     return () => { cancelled = true }
   }, [])
 
@@ -1872,11 +1872,7 @@ function DataLocationNavToggle({ dataLocation }) {
         onChange={setShowDataLocation}
         label="Show the data location in the navigation pane"
       />
-      <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
-        Names the financial database in use beneath the application name, for anyone who can open this
-        section. It is on by default where the databases are somewhere other than this build&rsquo;s own
-        default location.
-      </p>
+
     </div>
   )
 }
@@ -1958,9 +1954,9 @@ function ConfigurationSection({ authEnabled, currentUser }) {
             <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Configuration variables</SectionEyebrow>
             <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
               The defaults are suitable for many installations. Settings can be overridden with a
-              {' '}<code>.env</code> file at the path below, one <code>NAME=value</code> line per setting;
-              {' '}<code>env_example.txt</code>, included with every download, lists them all. This is useful
-              mainly for changing the port or running several copies on one machine. Changes require a
+              {' '}<code>.env</code>;
+              {' '}<code>env_example.txt</code> documents the settings. This is used
+              mainly for changing the port or running multiple copies on one machine. Changes require a
               restart.
             </p>
             <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
@@ -2959,9 +2955,8 @@ function AboutSection({ dbInstanceId, bundledLicenseAvailable, buildStamp, third
                 GNU AGPL v3.0 or later
               </a>
             )}
-            help={`© 2026 Jeffrey Orlin · SPDX identifier: AGPL-3.0-or-later. ${
-              bundledLicenseAvailable ? 'Local text from this build.' : 'Canonical text at gnu.org.'
-            }`}
+            help={`© 2026 Jeffrey Orlin · SPDX identifier: AGPL-3.0-or-later. ${bundledLicenseAvailable ? 'Local text from this build.' : 'Canonical text at gnu.org.'
+              }`}
           />
           <AboutRow
             label="Source"
