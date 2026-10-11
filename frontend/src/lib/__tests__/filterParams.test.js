@@ -8,7 +8,7 @@ import { FILTER_FACETS, selectionsOfType, selectionsToParams } from '../filterPa
  * facet keeps its two differences (keyed by label, joined with a pipe) wherever it is read.
  */
 
-const sel = (type, id, extra = {}) => ({ type, id, label: id, ...extra })
+const sel = (type, id, extra = {}) => ({ type, id, label: id, value: id, ...extra })
 
 describe('selectionsToParams', () => {
   it('sends nothing for an empty chip row', () => {

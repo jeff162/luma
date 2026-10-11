@@ -25,6 +25,7 @@ from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
     FACET_PARAM_NAMES,
+    PAYEE_LABEL_SQL,
     TransactionFacets,
     UNCATEGORIZED_CATEGORY_ID,
     UNCATEGORIZED_EXPENSE_CATEGORY_ID,
@@ -33,6 +34,7 @@ from backend.services.transaction_facets import (
     append_facets,
     coerce_facets,
     facets_from,
+    like_contains_pattern,
 )
 from backend.services.transaction_tags import (
     effective_selected_tag_signature_sql,
@@ -470,7 +472,7 @@ DOCUMENT_MATCH_SQL = (
 
 # The name the ledger shows for a row — the first non-empty of the rename, the cleaned name and the raw
 # name, as `visibleMerchant` in lib/importSourceFields.js resolves it.
-VISIBLE_NAME_SQL = "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))"
+VISIBLE_NAME_SQL = f"LOWER({PAYEE_LABEL_SQL})"
 
 # The free text an import captured beyond the names: the file's description cell and its extra text columns
 # (a memo, an "Original Statement"). The same set `match_source_text` rules read
@@ -962,6 +964,38 @@ def list_filter_attributes():
     a second list to keep in step, which is the duplication this whole seam exists to remove.
     """
     return attribute_vocabulary()
+
+
+@router.get("/payee-names")
+def list_payee_names(
+    q: str = Query(..., description="fragment of a payee name"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """The distinct payee names containing `q`, most used first — what the FilterBar's Payee tab offers.
+
+    A query of its own rather than names read off a page of the list feed: that page is a number of
+    *transactions*, so one frequent payee filled it and the others never appeared, and it was found by
+    the ledger search, which also matches categories, amounts and attachment text and so offered names
+    that do not contain what was typed. Spellings differing only in case are one entry, as they are to
+    the payee facet.
+    """
+    fragment = q.strip()
+    if not fragment:
+        return []
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT name FROM (
+                SELECT {PAYEE_LABEL_SQL} AS name FROM txn t WHERE t.trashed_at IS NULL
+            )
+            WHERE name LIKE ? ESCAPE '\\'
+            GROUP BY name COLLATE NOCASE
+            ORDER BY COUNT(*) DESC, name COLLATE NOCASE
+            LIMIT ?
+            """,
+            (like_contains_pattern(fragment), limit),
+        ).fetchall()
+    return [row["name"] for row in rows]
 
 
 def transaction_list_filters(

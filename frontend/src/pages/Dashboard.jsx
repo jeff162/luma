@@ -1883,10 +1883,11 @@ export default function Dashboard() {
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
   const {
     tag_ids: tagIds, owner_ids: ownerIds, account_ids: accountIds, group_ids: groupIds,
-    category_ids: categoryIds, payees,
+    category_ids: categoryIds, payees, payee_contains: payeeContains,
     exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
     exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
     exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
+    exclude_payee_contains: excludePayeeContains,
   } = facetParams
   // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.
   // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
@@ -1895,12 +1896,13 @@ export default function Dashboard() {
   const summaryFilters = useMemo(
     () => ({
       account_ids: accountIds, group_ids: groupIds, category_ids: categoryIds, payees,
+      payee_contains: payeeContains, exclude_payee_contains: excludePayeeContains,
       exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
       exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
       exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
     }),
-    [accountIds, groupIds, categoryIds, payees, excludeAccountIds, excludeGroupIds,
-      excludeCategoryIds, excludeOwnerIds, excludeTagIds, excludePayees],
+    [accountIds, groupIds, categoryIds, payees, payeeContains, excludeAccountIds, excludeGroupIds,
+      excludeCategoryIds, excludeOwnerIds, excludeTagIds, excludePayees, excludePayeeContains],
   )
 
   // Picker resolution is hoisted ahead of the tag-mode fetch effect so the effect's

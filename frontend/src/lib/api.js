@@ -879,6 +879,7 @@ export const api = {
   // The filter-attribute vocabulary (keys, labels, descriptions). Served rather than hardcoded so the
   // FilterBar's Attributes tab and the ledger's quick filter cannot drift from the predicates.
   getFilterAttributes: () => request('/transactions/filter-attributes'),
+  getPayeeNames: q => request(`/transactions/payee-names?${new URLSearchParams({ q })}`),
   createTag:   (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTag:   (id) => request(`/tags/${id}`, { method: 'DELETE' }),

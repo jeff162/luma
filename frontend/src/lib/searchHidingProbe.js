@@ -20,13 +20,13 @@ export const DATE_KEYS = ['date_start', 'date_end']
 
 export const EXCLUDE_KEYS = [
   'exclude_account_ids', 'exclude_group_ids', 'exclude_category_ids',
-  'exclude_tag_ids', 'exclude_payees', 'exclude_owner_ids',
+  'exclude_tag_ids', 'exclude_payees', 'exclude_payee_contains', 'exclude_owner_ids',
 ]
 
 // Include/intent facets — the narrowing signal a probe preserves. `quick_filter` and `needs_review`
 // are handled separately (a string and a boolean); these are the id-list includes.
 export const INCLUDE_KEYS = [
-  'account_ids', 'group_ids', 'category_id', 'category_ids', 'tag_ids', 'payees', 'owner_ids',
+  'account_ids', 'group_ids', 'category_id', 'category_ids', 'tag_ids', 'payees', 'payee_contains', 'owner_ids',
 ]
 
 // The ledger's amount popover (magnitude bounds + debit/credit side via `direction`) and the recurring

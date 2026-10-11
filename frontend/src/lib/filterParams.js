@@ -29,6 +29,9 @@ export const FILTER_FACETS = [
   { type: 'category', include: 'category_ids', exclude: 'exclude_category_ids' },
   { type: 'owner',    include: 'owner_ids',    exclude: 'exclude_owner_ids' },
   { type: 'payee',    include: 'payees',       exclude: 'exclude_payees', valueKey: 'label', sep: '|' },
+  // The same axis named by a fragment of the payee name rather than by a whole one. The backend ORs it
+  // with `payees`; the chip's label is a phrase, so the fragment travels in its own field.
+  { type: 'payee_contains', include: 'payee_contains', exclude: 'exclude_payee_contains', valueKey: 'value', sep: '|' },
   { type: 'tag',      include: 'tag_ids',      exclude: 'exclude_tag_ids' },
   // What a row *is* rather than what it is filed under. Its values are the keys served by
   // `GET /transactions/filter-attributes`, not ids of anything stored.

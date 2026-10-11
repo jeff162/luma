@@ -11,7 +11,6 @@ import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
          startOfYear, endOfYear } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
-import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import { CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph } from './TagUi.jsx'
@@ -93,6 +92,17 @@ const SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID = '__uncategorized_income_group__'
 // tag_filter_membership_sql recognizes this id as the untagged bucket. Mirrors the category filter's
 // synthetic Uncategorized ids and the owner filter's 'unassigned'.
 const UNTAGGED_TAG_ID = '__untagged__'
+
+// A fragment of a payee name as a selection. Keyed case-folded, as the match is, so the same fragment
+// typed twice is one chip.
+function payeeContainsSelection(fragment) {
+  return {
+    type: 'payee_contains',
+    id: `payee-contains:${fragment.toLowerCase()}`,
+    label: `Payee contains “${fragment}”`,
+    value: fragment,
+  }
+}
 
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
@@ -229,21 +239,18 @@ function FilterPopover({ onClose }) {
   }, [])
 
   useEffect(() => {
-    if (!payeeSearch.trim()) { setPayeeSuggestions([]); return }
-    // Payees are derived from real transactions because the app does not keep a separate payee directory in sync.
-    api.getTransactions({ search: payeeSearch, limit: 10 }).then(d => {
-      const seen = new Set()
-      const s = []
-      for (const t of d.transactions) {
-        const name = getTxnMerchantLabel(t)
-        if (name && !seen.has(name)) {
-          seen.add(name)
-          s.push({ type: 'payee', id: `payee:${name}`, label: name })
-        }
-      }
-      setPayeeSuggestions(s)
+    const fragment = payeeSearch.trim()
+    if (!fragment) { setPayeeSuggestions([]); return }
+    // An answer to an earlier keystroke can arrive after a later one's, and must not replace it.
+    let stale = false
+    api.getPayeeNames(fragment).then(names => {
+      if (!stale) setPayeeSuggestions(names.map(name => ({ type: 'payee', id: `payee:${name}`, label: name })))
     })
+    return () => { stale = true }
   }, [payeeSearch])
+
+  const payeeFragment = payeeSearch.trim()
+  const payeeRows = payeeFragment ? [payeeContainsSelection(payeeFragment), ...payeeSuggestions] : []
 
   const selectionOf = id => filters.selections.find(s => s.id === id)
   const isSelected = id => !!selectionOf(id)
@@ -511,7 +518,9 @@ function FilterPopover({ onClose }) {
               aria-label="Search payee name"
               style={{ ...inputStyle, width: '100%', marginBottom: 8 }}
             />
-            {payeeSuggestions.map(s => (
+            {/* What was typed is itself a filter, offered ahead of the names it matches: one merchant
+              appears under several names, and a fragment covers them all, including the next one. */}
+            {payeeRows.map(s => (
               <div key={s.id} onClick={() => { pickInclude(s); setPayeeSearch('') }} style={{
                 ...rowStyle, paddingLeft: 0,
                 background: rowBg(s.id),
@@ -521,8 +530,8 @@ function FilterPopover({ onClose }) {
                 <RowTrailing mode={selectionOf(s.id)?.mode} excludable onExclude={() => { pickExclude(s); setPayeeSearch('') }} />
               </div>
             ))}
-            {payeeSearch && payeeSuggestions.length === 0 && (
-              <div style={{ fontSize: 13, color: 'var(--muted)', padding: '6px 0' }}>No matches</div>
+            {payeeFragment && payeeSuggestions.length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--muted)', padding: '6px 0' }}>No payee names match</div>
             )}
           </div>
         )}

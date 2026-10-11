@@ -31,7 +31,9 @@ from fastapi import FastAPI
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import import_export, transactions as transactions_router
 from backend.routers.import_export.backup import export_transactions_csv
-from backend.routers.transactions import _BULK_FILTER_KEYS, _build_transaction_filter, list_transactions
+from backend.routers.transactions import (
+    _BULK_FILTER_KEYS, _build_transaction_filter, list_payee_names, list_transactions,
+)
 from backend.services.transaction_facets import (
     FACET_PARAM_NAMES,
     FACETS,
@@ -190,6 +192,33 @@ class FacetSemanticsTests(unittest.TestCase):
         # would drop the uncategorized row even though it plainly is not Groceries.
         self.assertEqual(self._ledger_ids(exclude_category_ids=self.leaf), {"txn-uncat"})
         self.assertEqual(self._export_merchants(exclude_category_ids=self.leaf), {"Mystery"})
+
+    def test_a_payee_fragment_ors_with_exact_payees_and_can_be_excluded(self):
+        self.assertEqual(self._ledger_ids(payee_contains="hole fo"), {"txn-cat"})
+        # One facet, so its two forms widen each other. As separate facets they would AND to nothing.
+        self.assertEqual(self._ledger_ids(payees="Mystery", payee_contains="hole fo"), {"txn-cat", "txn-uncat"})
+        self.assertEqual(self._ledger_ids(exclude_payee_contains="hole fo"), {"txn-uncat"})
+        # What was typed is text, not a pattern.
+        self.assertEqual(self._ledger_ids(payee_contains="%"), set())
+
+    def test_payee_names_are_distinct_names_containing_the_fragment(self):
+        # The list this replaces read names off ten *transactions* found by the ledger search, so one
+        # busy payee hid the rest and a row matching on its category offered an unrelated name.
+        with self._use_db_path(), get_db() as conn:
+            for index in range(12):
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, date, amount, display_name, category_id, owner_id, "
+                    "is_pending, needs_review) VALUES (?, ?, '2026-05-11', 5.0, 'Corner Grocer', ?, ?, 0, 0)",
+                    (f"txn-busy-{index}", self.account, self.leaf, SHARED_OWNER_ID),
+                )
+            conn.execute(
+                "INSERT INTO txn (id, account_id, date, amount, display_name, owner_id, is_pending, needs_review) "
+                "VALUES ('txn-once', ?, '2026-05-12', 5.0, 'GROCERY Outlet', ?, 0, 0)",
+                (self.account, SHARED_OWNER_ID),
+            )
+        with self._use_db_path():
+            # "Whole Foods" is filed under Groceries and does not contain the fragment.
+            self.assertEqual(list_payee_names(q="grocer", limit=20), ["Corner Grocer", "GROCERY Outlet"])
 
     def test_an_unknown_facet_kwarg_is_refused(self):
         # The builder takes facets as **kwargs so that adding one touches only the registry. That must

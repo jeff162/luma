@@ -214,6 +214,34 @@ def payee_membership(names: list[str]) -> Optional[tuple[str, list]]:
     return f"({or_clauses})", params
 
 
+# The name a row shows: the first non-empty of the rename, the cleaned name and the raw name, as
+# `getTxnName` in components/TransactionRow.jsx resolves it.
+PAYEE_LABEL_SQL = "COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '')"
+
+
+def like_contains_pattern(fragment: str) -> str:
+    """`fragment` as a LIKE pattern for "contains", to be used with `ESCAPE '\\'`.
+
+    Escaped because the fragment is text someone typed, and an unescaped `_` or `%` in it would match
+    more than it says.
+    """
+    escaped = fragment.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+# "Payee contains", beside the facet's "payee is". One merchant routinely appears under several names,
+# and choosing them one at a time both takes a pick per spelling and silently leaves out the spelling
+# that first appears next month. Compared against the name the row *shows*, unlike the exact form's three
+# columns: an exact value was picked from a list of names, whereas a fragment found only in a raw
+# descriptor the row does not display returns rows with nothing on them to explain why. LIKE folds ASCII
+# case, the same scope as the exact form's NOCASE.
+def payee_contains_membership(fragments: list[str]) -> Optional[tuple[str, list]]:
+    if not fragments:
+        return None
+    or_clauses = ' OR '.join([f"{PAYEE_LABEL_SQL} LIKE ? ESCAPE '\\'"] * len(fragments))
+    return f"({or_clauses})", [like_contains_pattern(fragment) for fragment in fragments]
+
+
 def tag_membership(ids: list[str]) -> Optional[tuple[str, list]]:
     # The *effective*-tag test — direct, inherited from the leaf category, its parent group, or the
     # effective account, and block-aware — plus the synthetic Untagged and Recurring selections. Defined
@@ -232,6 +260,10 @@ class Facet:
     negate: Callable[[str], str] = negate_membership
     # Payee values are names, which may legitimately contain a comma, so that facet is pipe-separated.
     separator: str = ','
+    # Further ways of naming this facet's members, each with its own parameter pair. Their values OR
+    # with the facet's own, which is what makes one a variant rather than a second facet: facets AND,
+    # so "payee is A" and "payee contains b" as two facets would select almost nothing.
+    variants: tuple['Facet', ...] = ()
 
 
 FACETS: tuple[Facet, ...] = (
@@ -239,7 +271,10 @@ FACETS: tuple[Facet, ...] = (
     Facet('group', 'group_ids', 'exclude_group_ids', group_membership),
     Facet('category', 'category_ids', 'exclude_category_ids', category_membership),
     Facet('owner', 'owner_ids', 'exclude_owner_ids', owner_membership),
-    Facet('payee', 'payees', 'exclude_payees', payee_membership, separator='|'),
+    Facet('payee', 'payees', 'exclude_payees', payee_membership, separator='|', variants=(
+        Facet('payee_contains', 'payee_contains', 'exclude_payee_contains', payee_contains_membership,
+              separator='|'),
+    )),
     Facet('tag', 'tag_ids', 'exclude_tag_ids', tag_membership, negate=negate_exists),
     # What a row *is*, rather than what it is filed under — see services/transaction_attributes.py.
     # Its own facet rather than a rider on tags (which is where "recurring" briefly lived) because
@@ -254,7 +289,8 @@ FACETS: tuple[Facet, ...] = (
 FACET_PARAM_NAMES: frozenset[str] = frozenset(
     name
     for facet in FACETS
-    for name in (facet.include_param, facet.exclude_param)
+    for kind in (facet, *facet.variants)
+    for name in (kind.include_param, kind.exclude_param)
     if name
 )
 
@@ -274,12 +310,14 @@ class TransactionFacets:
     category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs")
     owner_ids: Optional[str] = Query(None, description="comma-separated owner IDs")
     payees: Optional[str] = Query(None, description="pipe-separated payee names")
+    payee_contains: Optional[str] = Query(None, description="pipe-separated fragments of the shown payee name")
     tag_ids: Optional[str] = Query(None, description="comma-separated tag IDs")
     exclude_account_ids: Optional[str] = Query(None, description="account IDs to exclude ('is not')")
     exclude_group_ids: Optional[str] = Query(None, description="group IDs to exclude ('is not')")
     exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')")
     exclude_owner_ids: Optional[str] = Query(None, description="owner IDs to exclude ('is not')")
     exclude_payees: Optional[str] = Query(None, description="payee names to exclude ('is not')")
+    exclude_payee_contains: Optional[str] = Query(None, description="payee-name fragments to exclude ('is not')")
     exclude_tag_ids: Optional[str] = Query(None, description="tag IDs to exclude ('is not')")
     exclude_attribute_ids: Optional[str] = Query(None, description="attribute keys to exclude ('is not')")
 
@@ -343,13 +381,21 @@ def append_facets(clauses: list, params: list, facets: TransactionFacets | dict 
         return
     values = facets.as_params()
     for facet in FACETS:
-        included = facet.membership(split_ids(values.get(facet.include_param), facet.separator))
-        if included:
-            clauses.append(included[0])
-            params.extend(included[1])
-        if not facet.exclude_param:
-            continue
-        excluded = facet.membership(split_ids(values.get(facet.exclude_param), facet.separator))
-        if excluded:
-            clauses.append(facet.negate(excluded[0]))
-            params.extend(excluded[1])
+        for exclude in (False, True):
+            member = _facet_membership(facet, values, exclude=exclude)
+            if member:
+                clauses.append(facet.negate(member[0]) if exclude else member[0])
+                params.extend(member[1])
+
+
+def _facet_membership(facet: Facet, values: dict, *, exclude: bool) -> Optional[tuple[str, list]]:
+    """One facet's selection in one mode as a single membership, its variants ORed in."""
+    parts = []
+    for kind in (facet, *facet.variants):
+        param = kind.exclude_param if exclude else kind.include_param
+        member = kind.membership(split_ids(values.get(param), kind.separator)) if param else None
+        if member:
+            parts.append(member)
+    if len(parts) <= 1:
+        return parts[0] if parts else None
+    return f"({' OR '.join(sql for sql, _ in parts)})", [value for _, bound in parts for value in bound]

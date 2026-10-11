@@ -374,6 +374,17 @@ separator), a `TransactionFacets` dependency carrying the query parameters, and 
 walks the registry; `lib/filterParams.js` is its frontend counterpart, turning the chip row into those
 same parameters. Adding an axis is a row in each.
 
+**A facet may be named in more than one way, and the ways OR.** The payee facet takes whole names
+(`payees`) and fragments of a name (`payee_contains`), declared as a *variant* of the one facet rather
+than as a second facet, because facets AND: "payee is A" beside "payee contains b" as two axes would
+select almost nothing, where the chip row plainly means either. The fragment exists because one merchant
+appears under several names — picking them one at a time leaves out the spelling that first shows up next
+month. It is compared against the name the row shows, not the three name columns the exact form reads,
+so a row never comes back on the strength of a raw descriptor it does not display. The names the Payee tab
+offers come from `GET /transactions/payee-names` — distinct shown names containing the fragment, most
+used first — so the fragment row selects exactly the payees listed beneath it, plus any past the list's
+limit.
+
 **The registry exists because the failure of the hand-written version was silent.** Nine endpoints
 consume these facets — the list feed, seven summary/trend endpoints, and CSV export — and each formerly
 declared its own parameter block and called its own sequence of append helpers, with three separate
