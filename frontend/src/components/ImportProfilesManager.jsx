@@ -1104,15 +1104,14 @@ export default function ImportProfilesManager({
     setNameDraft('')
     if (!profile || !nextValue || nextValue === profile.name) return
     invalidateInFlightLoads()
-    setProfiles(prev => prev.map(item => (
-      item.id === profileId
-        ? { ...item, name: nextValue }
-        : item
-    )))
+    // Published to the page behind as well, like every other write here — it lists these sources too.
+    const renamed = profiles.map(item => (item.id === profileId ? { ...item, name: nextValue } : item))
+    setProfiles(renamed)
+    onDataChange?.({ profiles: renamed })
     try {
       await api.updateImportProfile(profileId, { name: nextValue })
     } catch (error) {
-      api.getImportProfiles().then(setProfiles)
+      refreshManagerData()
       setNoticeDialog({
         title: 'Could not rename the data source',
         description: error?.message || 'Please try again.',
