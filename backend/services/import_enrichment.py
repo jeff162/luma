@@ -38,6 +38,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+from backend.services.import_evidence import held_payload_evidence
 from backend.services.money_movement import (
     is_money_movement_type,
     is_refund_type,
@@ -214,7 +215,7 @@ def enrich_duplicate_row(conn: sqlite3.Connection, batch_id: str, row_number: in
     ).fetchone()
     if dup is None or dup["enriched_at"]:
         return None
-    incoming_evidence = _parse(dup["txn_payload_json"]).get("import_evidence") or {}
+    incoming_evidence = held_payload_evidence(_parse(dup["txn_payload_json"])) or {}
     delta = enrich_transaction(conn, txn_id, incoming_evidence)
     if delta is None:
         return None

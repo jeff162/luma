@@ -73,6 +73,7 @@ from backend.services.recurring_detection import payee_keys_for_ids, scan_import
 from backend.services.import_evidence import (
     EVIDENCE_ROLE_CATEGORICAL,
     EVIDENCE_ROLE_DESCRIPTIVE,
+    held_payload_evidence,
 )
 from backend.services.duplicate_detection import (
     build_dedupe_context,
@@ -852,11 +853,12 @@ def _attach_import_created_account_to_group(conn, account_id: str, target_accoun
 
 def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     txn_id = str(uuid.uuid4())
+    evidence = held_payload_evidence(payload)
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, posted_date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, source_transaction_id, needs_review)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           display_name, raw_name, date, posted_date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, source_transaction_id, external_transaction_id, needs_review)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -870,7 +872,7 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         payload.get("posted_date"),
         int(payload.get("is_pending") or 0),
         payload.get("content_hash"),
-        json.dumps(payload.get("import_evidence")) if isinstance(payload.get("import_evidence"), dict) else None,
+        json.dumps(evidence) if evidence else None,
         batch_id,
         payload.get("imported_category"),
         payload.get("notes"),
@@ -880,6 +882,9 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         payload.get("category_source"),
         payload.get("display_name_source") or "import",
         payload.get("source_transaction_id") or None,
+        # Present only on a synced row's held payload: "Import anyway" on one must keep the provider id, or
+        # the next sync re-sending that transaction finds nothing holding it and adds it a second time.
+        payload.get("external_transaction_id") or None,
     ))
     return txn_id
 
@@ -4562,6 +4567,10 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
 
         imported_now = 0
         imported_ids: list[str] = []   # scopes the post-commit duplicate sweep to what this call added
+        # Forced rows whose held payload made no categorization decision: a file row's payload carries the
+        # one its import made (mapping, rule, or file label), but a sync holds its row before the rules
+        # run. Those go through the rules now, as a hand-entered row does, rather than landing uncategorized.
+        uncategorized_ids: list[str] = []
         # (forced row, the existing row it was rejected against) — the pairs the user has just overruled,
         # which the sweep below must not put back in front of them as review work.
         settled_pairs: set[tuple[str, str]] = set()
@@ -4582,10 +4591,28 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
                 not_importable_count += 1
                 remaining_rows.append(entry)
                 continue
+            # A synced row whose provider id a row already holds is that transaction, in the ledger by
+            # another path since it was held (a later sync, a restore). Importing it again would be a
+            # second copy, and the id is unique besides.
+            provider_id = payload.get("external_transaction_id")
+            if provider_id and conn.execute(
+                "SELECT 1 FROM txn WHERE external_transaction_id = ?", (provider_id,)
+            ).fetchone():
+                not_importable_count += 1
+                remaining_rows.append(entry)
+                continue
+            # A synced row held before its payload named an owner takes its account's, as every import does.
+            if "owner_id" not in payload:
+                owner = conn.execute(
+                    "SELECT owner_id FROM account WHERE id = ?", (payload.get("account_id"),)
+                ).fetchone()
+                payload = {**payload, "owner_id": owner["owner_id"] if owner else None}
 
             importable_selected += 1
             txn_id = _insert_imported_transaction(conn, batch_id, payload)
             imported_ids.append(txn_id)
+            if "category_id" not in payload:
+                uncategorized_ids.append(txn_id)
             settled_pairs.update(
                 (txn_id, existing_id)
                 for existing_id in _duplicate_match_txn_ids(entry.get("matched_transaction") or {})
@@ -4596,6 +4623,8 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
 
         if importable_selected == 0:
             raise HTTPException(status_code=400, detail="Selected duplicates cannot be imported from this batch")
+        if uncategorized_ids:
+            recategorize_all(conn, txn_ids=uncategorized_ids)
 
         chosen_rows = [int(entry.get("row") or 0) for entry in duplicate_rows if body.import_all or int(entry.get("row") or 0) in selected_rows]
         if chosen_rows:

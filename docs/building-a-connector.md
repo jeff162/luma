@@ -280,9 +280,13 @@ pattern*, which is the implementation contract; this section is the design quest
 **unscoped** — no account, no connection. That is what makes a sync idempotent, and it is a real ledger
 invariant, not an implementation detail.
 
-**Check your provider's uniqueness guarantee before writing anything else.** Plaid's ids are globally
-unique. SimpleFIN's are unique only *within an account*, so its adapter namespaces them:
-`simplefin:<account>:<bank id>`, mirroring how `external_account_id` is namespaced.
+**Store every id under a prefix Luma assigns to the provider, then check how far the provider's own
+guarantee reaches.** A provider can only promise uniqueness among its own ids, never against another
+provider's, so the prefix is what makes the ledger-wide claim true: Plaid's ids are unique across Plaid
+and are stored as `plaid:<id>`. SimpleFIN's are unique only *within an account*, so its adapter adds the
+account as well: `simplefin:<account>:<bank id>`, mirroring how `external_account_id` is namespaced. A
+prefix is not something to add later — every id an adapter compares (`removed`, a pending row's
+predecessor) has to carry it too, and ids already stored need a migration.
 
 This was not hypothetical. The Bridge's demo server derives ids from the posting instant and runs every
 account on one schedule, so two accounts issued byte-identical ids — the second account's rows matched the
@@ -568,13 +572,20 @@ dialog, "Import anyway" and Restore all work on a sync card with no frontend cha
 * **Rejected rows** (today: $0 refusals) — `record_sync_zero_amount_rejection` → an `import_summary` in
   the card's `config_snapshot`, the same key and shape CSV import writes.
 
-Two details are easy to get wrong:
+Three details are easy to get wrong:
 
 * **Counts accumulate.** A CSV summarizes one file once; a monthly sync period card is added to by every
   top-up for the rest of the month. A summary that overwrites silently resets the count and reports only
   the most recent sync's refusals.
 * **A row number is an ordinal.** A sync has no file lines, but the reports are keyed by row, so arrivals
   are counted instead.
+* **A held duplicate is a row "Import anyway" will insert**, through the file importer's
+  `_insert_imported_transaction`, so its payload takes that function's shape — evidence as a dict under
+  `import_evidence`, the account's owner — plus the provider id. A forced row that lost its provider id is
+  added a second time the next time the provider re-sends it; one whose provider id another row already
+  holds is refused rather than inserted. A sync holds its row before the rules run, so the payload carries
+  no category decision, and a forced row with none is run through the rules on insert, as a hand-entered
+  row is. Reports held in the older sync shape are read through `held_payload_evidence`.
 
 **Tentative decision — resolving a refusal-only sync.** A sync whose only content is refused rows still
 resolves (and therefore creates) its card, so the refusals have somewhere to be reported. This matches

@@ -613,7 +613,9 @@ class BackupRestoreTests(BackupFixtureTestCase):
                 rows = {r["id"]: r for r in conn.execute(
                     "SELECT id, external_transaction_id FROM txn"
                 )}
-        self.assertEqual(rows["t1"]["external_transaction_id"], "prov-1")
+        # And lands in the namespace the adapter now looks it up under (v71, replayed on restore): a
+        # bare id would read as new to the next sync just as surely as a missing one.
+        self.assertEqual(rows["t1"]["external_transaction_id"], "plaid:prov-1")
         self.assertIsNone(rows["t2"]["external_transaction_id"])
 
     def test_restore_before_v59_dates_synced_rows_by_when_the_charge_was_made(self):

@@ -62,17 +62,18 @@ class ProviderTransactionIdRenameTests(MigrationCase):
     def test_the_ids_survive_the_rename_and_stay_unique(self):
         self._database_at(25, """
             CREATE TABLE txn (id TEXT PRIMARY KEY, plaid_transaction_id TEXT UNIQUE);
-            INSERT INTO txn (id, plaid_transaction_id) VALUES ('a', 'prov-1'), ('b', NULL);
+            INSERT INTO txn (id, plaid_transaction_id) VALUES ('a', 'simplefin:acct:prov-1'), ('b', NULL);
         """)
         self._upgrade()
 
         self.assertNotIn("plaid_transaction_id", self._columns("txn"))
         self.assertEqual(
-            self.conn.execute("SELECT external_transaction_id FROM txn WHERE id = 'a'").fetchone()[0], "prov-1"
+            self.conn.execute("SELECT external_transaction_id FROM txn WHERE id = 'a'").fetchone()[0],
+            "simplefin:acct:prov-1",
         )
         # The uniqueness is the point of the column: a sync that re-sends a row must not insert it twice.
         with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("INSERT INTO txn (id, external_transaction_id) VALUES ('c', 'prov-1')")
+            self.conn.execute("INSERT INTO txn (id, external_transaction_id) VALUES ('c', 'simplefin:acct:prov-1')")
 
 
 class ConnectionHealthBackfillTests(MigrationCase):

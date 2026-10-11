@@ -30,6 +30,20 @@ _TERMINAL_UPDATE_STATUSES = frozenset({
     None,
 })
 
+# Luma's namespace for Plaid's transaction ids. Plaid's ids are unique within Plaid only, while the ledger
+# keys every provider's ids in one ledger-wide UNIQUE column, so each adapter stores its ids under its own
+# prefix (docs/building-a-connector.md → Transaction ids must be globally unique). Migration v71 moved the
+# ids stored before this onto it.
+PLAID_TRANSACTION_ID_PREFIX = "plaid:"
+
+
+def plaid_transaction_id(txn_id):
+    """A Plaid transaction id as the ledger stores it. None stays None (a posted row with no pending
+    predecessor), and an id already carrying the prefix is left as it is."""
+    if not txn_id or str(txn_id).startswith(PLAID_TRANSACTION_ID_PREFIX):
+        return txn_id
+    return f"{PLAID_TRANSACTION_ID_PREFIX}{txn_id}"
+
 
 
 @contextmanager
@@ -116,7 +130,7 @@ class PlaidAdapter(ProviderAdapter):
     @staticmethod
     def _normalize_txn(t: dict) -> dict:
         return {
-            "external_transaction_id": t["plaid_transaction_id"],
+            "external_transaction_id": plaid_transaction_id(t["plaid_transaction_id"]),
             "external_account_id":     t["plaid_account_id"],
             "amount":                  t["amount"],
             "merchant_name":           t["merchant_name"],
@@ -164,7 +178,7 @@ class PlaidAdapter(ProviderAdapter):
             return {
                 **self._normalize_txn(t),
                 # The prior pending row's provider id when this posted txn supersedes it (see base.py).
-                "pending_external_transaction_id": t["pending_transaction_id"],
+                "pending_external_transaction_id": plaid_transaction_id(t["pending_transaction_id"]),
             }
 
         # Rows denominated in something other than the ledger's currency are dropped before they can be
@@ -193,7 +207,7 @@ class PlaidAdapter(ProviderAdapter):
             "modified":      modified,
             # Left unfiltered: these are bare ids, and removing a row that was never stored is already a
             # no-op. Filtering them would mean guessing at a currency the payload does not carry.
-            "removed":       result["removed"],  # already provider transaction ids
+            "removed":       [plaid_transaction_id(txn_id) for txn_id in result["removed"]],
             "next_cursor":   result["next_cursor"],
             "has_more":      result["has_more"],
             "update_status": status,

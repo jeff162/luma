@@ -311,7 +311,7 @@ class ProviderAdapterTests(unittest.TestCase):
              "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False}
         ]):
             self.assertEqual(adapter.fetch_transactions(cfg, "tok-1"), [
-                {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
+                {"external_transaction_id": "plaid:t-1", "external_account_id": "acct-1", "amount": 12.5,
                  "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False,
                  "posted_date": "2026-01-01", "counterparties": [],
                  "check_number": None, "location": None, "currency": None}
@@ -353,6 +353,21 @@ class PlaidCurrencyTests(unittest.TestCase):
             return get_adapter("plaid").fetch_transactions_sync(
                 self.CFG, "tok-1", ledger_currency=ledger_currency)
 
+    # ---- the ledger's namespace for Plaid's ids --------------------------
+
+    def test_every_id_the_adapter_hands_up_carries_the_plaid_prefix(self):
+        # Plaid's ids are unique only among Plaid's, and the ledger looks them up unscoped beside every
+        # other provider's. An id compared without the prefix — a removal, a pending predecessor — would
+        # silently match nothing.
+        posted = {**self._txn("t-posted", "acct-1", "USD"), "pending_transaction_id": "t-pending"}
+        page = {**self._page(posted), "modified": [self._txn("t-mod", "acct-1", "USD")], "removed": ["t-gone"]}
+        result = self._sync(page)
+        self.assertEqual(result["added"][0]["external_transaction_id"], "plaid:t-posted")
+        self.assertEqual(result["added"][0]["pending_external_transaction_id"], "plaid:t-pending")
+        self.assertEqual(result["modified"][0]["external_transaction_id"], "plaid:t-mod")
+        self.assertIsNone(result["modified"][0]["pending_external_transaction_id"])
+        self.assertEqual(result["removed"], ["plaid:t-gone"])
+
     # ---- resolving Plaid's two fields ------------------------------------
 
     def test_the_service_resolves_either_currency_field(self):
@@ -373,7 +388,7 @@ class PlaidCurrencyTests(unittest.TestCase):
             self._txn("t-usd", "acct-1", "USD"),
             self._txn("t-eur", "acct-2", "EUR"),
         ))
-        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-usd"})
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"plaid:t-usd"})
         self.assertEqual(result["unsupported_currency"], {"acct-2": "EUR"})
 
     def test_the_ledgers_currency_is_what_it_is_compared_against(self):
@@ -383,7 +398,7 @@ class PlaidCurrencyTests(unittest.TestCase):
             self._txn("t-aud", "acct-1", "AUD"),
             self._txn("t-usd", "acct-2", "USD"),
         ), ledger_currency="AUD")
-        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-aud"})
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"plaid:t-aud"})
         self.assertEqual(result["unsupported_currency"], {"acct-2": "USD"})
 
     def test_an_unofficial_currency_is_rejected_and_named(self):

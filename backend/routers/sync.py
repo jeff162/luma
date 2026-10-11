@@ -372,7 +372,7 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
 
 
 def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, content_hash: str,
-                          evidence_json, verdict, account_id: str, source_label: str) -> None:
+                          evidence_json, verdict, account_id: str, owner_id, source_label: str) -> None:
     """Persist a hard-rejected synced row into its card's duplicate report, through the *same* writer a
     CSV import uses — so the existing per-batch report, "Import anyway", and Restore all work on a sync
     card with no changes.
@@ -401,16 +401,20 @@ def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, cont
             **({"Posted date": txn["posted_date"]} if txn.get("posted_date") else {}),
         },
         "matched_transaction": verdict.matched or {},
-        # Enough to re-materialize the row if the user imports it anyway.
+        # Enough to re-materialize the row if the user imports it anyway, in the shape a file import's
+        # payload has — `_insert_imported_transaction` reads both, so the sync-only keys it would otherwise
+        # miss (the provider id) are named there.
         "txn_payload": {
             "account_id": account_id,
+            "owner_id": owner_id,
             "date": txn["date"],
             "posted_date": txn.get("posted_date"),
             "amount": txn["amount"],
             "merchant_name": merchant_name,
+            "display_name": merchant_name or txn["raw_name"],
             "raw_name": txn["raw_name"],
             "content_hash": content_hash,
-            "import_evidence_json": evidence_json,
+            "import_evidence": json.loads(evidence_json) if evidence_json else None,
             "external_transaction_id": txn["external_transaction_id"],
             "display_name_source": "import",
         },
@@ -1232,7 +1236,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 record_sync_duplicate(
                     conn, batch_id=card_id, txn=t, merchant_name=merchant_name,
                     content_hash=content_hash, evidence_json=evidence_json, verdict=verdict,
-                    account_id=acc["id"], source_label=source_label,
+                    account_id=acc["id"], owner_id=acc["owner_id"], source_label=source_label,
                 )
                 deduped += 1
                 cards_touched.add(card_id)

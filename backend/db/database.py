@@ -200,13 +200,14 @@ def compact_database(db_path: str | None = None) -> int:
 # previously counted as neither imported nor deduped, so the ledger changed and nothing said so. v69 adds
 # `import_batch.ignored_count` for the rows a source restated from its own prior import, which stop being
 # written to the duplicate report at all. v70 adds `txn.source_transaction_id`, the identifier a file source
-# gives each row, matched only within the data source that issued it.
+# gives each row, matched only within the data source that issued it. v71 moves Plaid's stored transaction
+# ids under the `plaid:` prefix, the namespace every other provider's ids already had.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 70
+CURRENT_VERSION = 71
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2116,6 +2117,75 @@ def _add_txn_source_transaction_id(conn):
         conn.execute("ALTER TABLE txn ADD COLUMN source_transaction_id TEXT")
 
 
+# Kept as a literal rather than imported from `services.providers.plaid`, which this module must not depend
+# on. It must stay equal to that module's PLAID_TRANSACTION_ID_PREFIX.
+_PLAID_TRANSACTION_ID_PREFIX = "plaid:"
+
+
+def _namespace_plaid_transaction_ids(conn):
+    """Move Plaid's stored transaction ids under the `plaid:` prefix its adapter now writes.
+
+    `txn.external_transaction_id` is unique ledger-wide and every sync looks it up unscoped, so each
+    provider's ids live under a prefix Luma assigns; Plaid's were the one set stored bare, unique only
+    because nothing else happened to look like them. Every bare id is taken to be Plaid's — the only other
+    provider has namespaced its ids from its first release but for one early build — except on a sync card
+    known to be that other provider's, which is what keeps that build's rows from being relabelled.
+
+    The duplicate report's stored payloads are rewritten the same way, so a held copy of a synced row
+    names its transaction in the namespace a later sync will look it up under.
+
+    Registered for post-restore replay: a backup taken before this version carries bare Plaid ids, and
+    restored as they are, every one would read as new to the next sync and be added a second time."""
+    # Guarded like v65-v70: the per-migration unit tests hand-build a minimal schema and run the chain.
+    tables = _table_names(conn)
+    if "txn" not in tables or "external_transaction_id" not in {
+        r["name"] for r in conn.execute("PRAGMA table_info(txn)")
+    }:
+        return
+    prefix = _PLAID_TRANSACTION_ID_PREFIX
+    batch_columns = (
+        {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")} if "import_batch" in tables else set()
+    )
+    other_provider = (
+        "EXISTS (SELECT 1 FROM import_batch b WHERE b.id = txn.import_batch_id AND b.provider = 'simplefin')"
+        if "provider" in batch_columns else "0"
+    )
+    conn.execute(
+        f"""UPDATE txn SET external_transaction_id = ? || external_transaction_id
+             WHERE external_transaction_id IS NOT NULL
+               AND external_transaction_id NOT LIKE 'plaid:%'
+               AND external_transaction_id NOT LIKE 'simplefin:%'
+               AND NOT {other_provider}""",
+        (prefix,),
+    )
+    if "import_batch_duplicate" not in tables or "txn_payload_json" not in {
+        r["name"] for r in conn.execute("PRAGMA table_info(import_batch_duplicate)")
+    }:
+        return
+    duplicate_other_provider = (
+        "EXISTS (SELECT 1 FROM import_batch b WHERE b.id = import_batch_duplicate.batch_id"
+        " AND b.provider = 'simplefin')"
+        if "provider" in batch_columns else "0"
+    )
+    conn.execute(
+        f"""UPDATE import_batch_duplicate
+               SET txn_payload_json = json_set(
+                     txn_payload_json, '$.external_transaction_id',
+                     ? || json_extract(txn_payload_json, '$.external_transaction_id'))
+             WHERE json_valid(txn_payload_json)
+               AND json_extract(txn_payload_json, '$.external_transaction_id') IS NOT NULL
+               AND json_extract(txn_payload_json, '$.external_transaction_id') NOT LIKE 'plaid:%'
+               AND json_extract(txn_payload_json, '$.external_transaction_id') NOT LIKE 'simplefin:%'
+               AND NOT {duplicate_other_provider}""",
+        (prefix,),
+    )
+
+
+@migration(71)
+def _add_plaid_transaction_id_namespace(conn):
+    _namespace_plaid_transaction_ids(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2155,6 +2225,7 @@ POST_RESTORE_DATA_INIT = {
     55: _backfill_import_batch_provider,
     64: _restore_trashed_accounts,
     65: _backfill_import_batch_coverage,
+    71: _namespace_plaid_transaction_ids,
 }
 
 

@@ -38,6 +38,8 @@ then. `import_enrichment` preserves whatever role a field carries when folding i
 
 from __future__ import annotations
 
+import json
+
 EVIDENCE_ROLE_DESCRIPTIVE = "descriptive"
 EVIDENCE_ROLE_CATEGORICAL = "categorical"
 
@@ -53,3 +55,25 @@ def evidence_field_feeds_text_match(field_entry) -> bool:
     if not isinstance(field_entry, dict):
         return False
     return str(field_entry.get("role") or "").strip().lower() != EVIDENCE_ROLE_CATEGORICAL
+
+
+def held_payload_evidence(payload) -> dict | None:
+    """The evidence a duplicate report's held payload carries, as a dict.
+
+    A file import stores it under `import_evidence`; a sync stored it as the JSON string
+    `import_evidence_json` until its writer was brought into the same shape, and reports written before
+    then are still held (and restored from backups). Every reader of a held payload goes through this, so
+    "Import anyway" and enrichment see a synced row's evidence just as they see a file row's."""
+    if not isinstance(payload, dict):
+        return None
+    evidence = payload.get("import_evidence")
+    if isinstance(evidence, dict):
+        return evidence
+    raw = payload.get("import_evidence_json")
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
