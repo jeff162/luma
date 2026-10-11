@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * Settings -> Error log: the errors the server recorded in its log file (`backend/app_log_file.py`), newest
+ * Administration -> Error log: the errors the server recorded in its log file (`backend/app_log_file.py`), newest
  * first.
  *
  * Read when the section opens and on refresh rather than polled, because it is consulted after something
  * went wrong rather than watched. The reading lives in `lib/useErrorLog.js` rather than here, because
- * Settings owns the section's title and a refresh sits beside the title of what it reloads. Each entry is
+ * the page owns the section's title and a refresh sits beside the title of what it reloads. Each entry is
  * one line, with its traceback folded behind a native disclosure: the message says what failed, and the
  * traceback is for whoever is asked to look into it.
  * The file's location is stated because the file holds more than this list does — warnings, and the

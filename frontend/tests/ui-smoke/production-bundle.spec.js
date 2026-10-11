@@ -26,6 +26,7 @@ const PAGES = [
   ['/import-export', 'Import / Export'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
+  ['/administration', 'Administration'],
   ['/help', 'Help'],
 ]
 

@@ -33,6 +33,7 @@ vi.mock('../pages/Categories.jsx', () => stub('categories'))
 vi.mock('../pages/Rules.jsx', () => stub('rules'))
 vi.mock('../pages/Accounts.jsx', () => stub('accounts'))
 vi.mock('../pages/Settings.jsx', () => stub('settings'))
+vi.mock('../pages/Administration.jsx', () => stub('administration'))
 vi.mock('../pages/ImportExport.jsx', () => stub('import-export'))
 vi.mock('../pages/ImportRuleSuggestions.jsx', () => stub('rule-suggestions'))
 vi.mock('../pages/Tasks.jsx', () => stub('tasks'))
@@ -67,6 +68,7 @@ describe('the route table', () => {
     ['/tasks', 'tasks'],
     ['/recurring', 'recurring'],
     ['/settings', 'settings'],
+    ['/administration', 'administration'],
     ['/help', 'help'],
   ]
 

@@ -27,6 +27,7 @@ const PATH_LABELS = [
   ['/import-export', 'Import / Export'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
+  ['/administration', 'Administration'],
 ]
 
 export function labelForPath(path) {

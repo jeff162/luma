@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// Settings -> Error log. The server orders and filters the entries, so what is pinned here is what the
+// Administration -> Error log. The server orders and filters the entries, so what is pinned here is what the
 // section says: each error's message up front with its traceback folded away, a plain statement when there
 // is nothing, where the file is, and a read failure that says so rather than showing an empty log.
 
@@ -21,7 +21,7 @@ const CRASH = {
   message: 'Exception in ASGI application',
   detail: 'Traceback (most recent call last):\nsqlite3.OperationalError: database is locked',
 }
-// Settings reads the log and puts the refresh on the section's title; this is that arrangement without the
+// The page reads the log and puts the refresh on the section's title; this is that arrangement without the
 // rest of the page.
 function OpenSection() {
   const errorLog = useErrorLog(true)

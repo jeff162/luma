@@ -10,6 +10,7 @@ const ROUTES = [
   '/tasks',
   '/recurring',
   '/settings',
+  '/administration',
   '/help',
 ]
 

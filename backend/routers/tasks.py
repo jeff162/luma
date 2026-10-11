@@ -90,7 +90,9 @@ def _https_setup_task(request: Request | None) -> dict | None:
             + " Put a TLS-terminating reverse proxy (Caddy) in front of the backend."
         ),
         "count":       1,
-        "link":        "/settings",
+        # Intended usage is where the transport guidance is, and it is an Administration section — so the
+        # link goes there only for someone the page admits.
+        "link":        "/administration?section=intendedUsage" if is_admin_or_local(request) else "/settings",
         "link_label":  "How to set up HTTPS",
         "severity":    SEVERITY_WARNING,
         "required":    required,
@@ -151,7 +153,7 @@ def _server_error_task(request: Request | None) -> dict | None:
                        "opened. Each is a failure the server did not handle, and its entry in the log "
                        "says where it happened.",
         "count":       unseen,
-        "link":        "/settings?section=errorLog",
+        "link":        "/administration?section=errorLog",
         "link_label":  "Open the error log",
         "severity":    SEVERITY_WARNING,
     }

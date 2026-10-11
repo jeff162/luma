@@ -20,6 +20,7 @@ import { Routes, Route } from 'react-router-dom'
 
 import {
   loadAccountsPage,
+  loadAdministrationPage,
   loadCategoriesPage,
   loadDashboardPage,
   loadHelpPage,
@@ -38,6 +39,7 @@ const Categories = lazy(loadCategoriesPage)
 const Rules = lazy(loadRulesPage)
 const Accounts = lazy(loadAccountsPage)
 const Settings = lazy(loadSettingsPage)
+const Administration = lazy(loadAdministrationPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
@@ -73,6 +75,7 @@ export default function AppRoutes() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/recurring" element={<Recurring />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/administration" element={<Administration />} />
         <Route path="/help" element={<Help />} />
         <Route path="/help/:topic" element={<Help />} />
       </Routes>

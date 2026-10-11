@@ -14,7 +14,7 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Tree views](#tree-views)
 
-- [Section toggles](#section-toggles)
+- [Section lists and collapsible cards](#section-lists-and-collapsible-cards)
 
 - [Row editing](#row-editing)
 
@@ -257,7 +257,7 @@ Most pages should follow this structure:
 
 Prefer page-local scrolling for long lists, with header and controls remaining visually stable above the scrolling region.
 
-When a page hosts several distinct management surfaces that don't need to be seen at once, prefer **in-page tabs** over a stack of collapsible cards — each surface gets the full width/height of the content area and the page reads as one thing at a time. The Import/Export page (`Import / Export / Backup`) and the Accounts page (`Accounts / Owners / Connections`) both use this: a simple tab-button row under the `PageHeader` over conditionally-rendered content. The active tab is **session-scoped** (mirrored to `sessionStorage`, not the durable preference store), so it persists while the app is open but resets to the primary tab on next launch — a within-session convenience, not a saved preference. A surface that *is* the only thing on its tab should render its content directly (or in a non-collapsible panel), not in a collapsible card — there's nothing to collapse it away from.
+When a page hosts several distinct management surfaces that don't need to be seen at once, prefer **in-page tabs** over a stack of collapsible cards (or, for more sections than a tab row holds, the section list Settings and Administration use — see *Section lists and collapsible cards*) — each surface gets the full width/height of the content area and the page reads as one thing at a time. The Import/Export page (`Import / Export / Backup`) and the Accounts page (`Accounts / Owners / Connections`) both use this: a simple tab-button row under the `PageHeader` over conditionally-rendered content. The active tab is **session-scoped** (mirrored to `sessionStorage`, not the durable preference store), so it persists while the app is open but resets to the primary tab on next launch — a within-session convenience, not a saved preference. A surface that *is* the only thing on its tab should render its content directly (or in a non-collapsible panel), not in a collapsible card — there's nothing to collapse it away from.
 
 **A page's content column is measured inside the padding, not on it.** `maxWidth` on the element that also carries the page padding yields a column `2 × padding` narrower than one measured on an inner element — so a centred header sits a padding's width in from a centred list of the same nominal width, which reads as a stray indent rather than as a bug. Put the padding on the outer element and the `maxWidth` on a child, everywhere on the page including a docked panel's header and body, and name the width once per page rather than repeating the number. The Recurring page had three different left margins stacked on each other for exactly this reason.
 
@@ -497,21 +497,29 @@ the user has to fix first, or the hint sends them to the wrong field. Note this 
 from the `title` an *enabled* button carries, which says what the action does — the two are not
 interchangeable and a control may want both.
 
-## Section toggles
+## Section lists and collapsible cards
 
-Settings uses collapsible top-level sections.
+Settings and Administration share one layout (`SectionListPage`): the section names in a list down the
+left, the selected section on the right, one at a time. It suits a page of many unrelated sections that
+are each visited occasionally — more of them than a tab row holds, and none needing to be seen beside
+another.
 
-- Collapsed controls should be compact rounded drops, not full-width bars.
+- The selected section is the URL's `?section=<key>`, so any section can be linked to and the remembered
+  startup route returns to the one last open. A key the page does not list falls back to the first.
 
-- The expanded content should be slightly indented beneath the toggle.
+- Only the selected section is mounted, so a section loads when it is opened.
 
-- The most common single-user sections should appear first.
+- The most common sections come first in the list.
 
-- Multi-user, auth, and tenant-oriented sections should appear lower on the page.
+- A section's help and refresh sit on its title, as a page's do; its description is one or two lines
+  under the title, and longer explanation belongs beside the controls it explains.
 
-- When collapsed, descriptions should be very short.
+- A section holding several lists (Trash, Duplicate detection exceptions) gives each a small heading
+  rather than its own entry in the list.
 
-- Longer explanatory text belongs inside the expanded pane, near the controls it explains.
+Which of the two pages a section belongs on is decided by who may use it, not by its subject:
+everything a member may do is on Settings, and everything behind `require_admin_or_local` is on
+Administration, whose navigation entry is absent for anyone else.
 
 ### What a collapsed card must still be able to say
 

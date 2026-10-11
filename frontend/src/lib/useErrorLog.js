@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Reads Settings -> Error log (`components/administration/ErrorLogSection.jsx`). Apart from the section because Settings owns
-// the section's title, and the refresh sits beside the title of what it reloads.
+// Reads Administration -> Error log (`components/administration/ErrorLogSection.jsx`). Apart from the section because the
+// page owns the section's title, and the refresh sits beside the title of what it reloads.
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
 
-// `enabled` is whether the section is open: it reads each time the section opens, as it did while the
-// section owned its own state and remounted on every open.
+// `enabled` is whether the section is open: it reads each time the section opens.
 export function useErrorLog(enabled) {
   const [log, setLog] = useState(null)
   const [error, setError] = useState('')

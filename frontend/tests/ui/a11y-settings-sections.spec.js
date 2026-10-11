@@ -1,30 +1,14 @@
 import { test, expect } from '@playwright/test'
 
-const SECTION_TITLES = [
-  'Appearance',
-  'Backup recipients',
-  'Environment variables (.env)',
-  'Account security',
-  'Plaid token protection',
-  'User management',
-  'Developer options',
-  'Transaction tags',
-  'Trash',
-  'About',
+// Both pages show one section at a time, picked from a list down the left, so every section has to be
+// opened in turn for its controls to be on screen.
+const SECTIONED_PAGES = [
+  ['/settings', 'Settings sections'],
+  ['/administration', 'Administration sections'],
 ]
 
-test('@a11y expanded settings sections expose labels and stable ids for visible form controls', async ({ page, baseURL }) => {
-  await page.goto(new URL('/settings', baseURL).toString())
-  await page.waitForLoadState('networkidle')
-
-  for (const title of SECTION_TITLES) {
-    const toggle = page.getByRole('button', { name: title, exact: true })
-    if (await toggle.count()) {
-      await toggle.first().click()
-    }
-  }
-
-  const findings = await page.evaluate(() => {
+function unlabeledControls(page) {
+  return page.evaluate(() => {
     function textFromNode(node) {
       return (node?.textContent || '').replace(/\s+/g, ' ').trim()
     }
@@ -88,6 +72,24 @@ test('@a11y expanded settings sections expose labels and stable ids for visible 
       })
       .filter(item => item.missingIdOrName || item.missingLabel)
   })
+}
+
+test('@a11y every settings and administration section exposes labels and stable ids for visible form controls', async ({ page, baseURL }) => {
+  const findings = []
+
+  for (const [path, listLabel] of SECTIONED_PAGES) {
+    await page.goto(new URL(path, baseURL).toString())
+    const sectionList = page.getByRole('navigation', { name: listLabel })
+    await expect(sectionList.getByRole('button').first()).toBeVisible()
+    const titles = await sectionList.getByRole('button').allTextContents()
+
+    for (const title of titles) {
+      await sectionList.getByRole('button', { name: title, exact: true }).click()
+      await expect(page.getByRole('heading', { level: 2, name: title, exact: true })).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      for (const finding of await unlabeledControls(page)) findings.push({ section: `${path} / ${title}`, ...finding })
+    }
+  }
 
   if (findings.length) {
     console.log(JSON.stringify(findings, null, 2))
