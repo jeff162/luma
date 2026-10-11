@@ -338,11 +338,23 @@ class TaskDismissalTests(TasksFixtureTestCase):
         enable_auth_mode()
         request = SimpleNamespace(
             url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
-            state=SimpleNamespace(user={"id": "test-user"}),
+            state=SimpleNamespace(user={"id": "test-user", "role": "admin"}),
         )
         with self._use_db_path():
+            self.assertIn("configure_https", {t["id"] for t in get_tasks(request)["tasks"]})
             result = dismiss_task("configure_https", request)
         self.assertNotIn("configure_https", {t["id"] for t in result["tasks"]})
+
+    def test_the_https_reminder_is_not_shown_to_a_member(self):
+        # Setting up HTTPS is the host's business, so someone who cannot do it is not told to.
+        from backend.db.control_database import enable_auth_mode
+        enable_auth_mode()
+        request = SimpleNamespace(
+            url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
+            state=SimpleNamespace(user={"id": "test-user", "role": "member"}),
+        )
+        with self._use_db_path():
+            self.assertNotIn("configure_https", {t["id"] for t in get_tasks(request)["tasks"]})
 
 
 class ReimbursementTaskTests(TasksFixtureTestCase):

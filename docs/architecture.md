@@ -715,7 +715,8 @@ and every alternative turned down — is in `security-model.md` → *Secret cust
   `SESSION_COOKIE_SECURE` (→ cookie `Secure`, set by the install, not derived from the profile), a
   `transport_warning` when connecting a provider on a cleartext link, and a **computed "Set up HTTPS"
   task** (`tasks.py`) — required/non-dismissible for a provider, recommended/suppressible for plain
-  client-server, self-clearing over HTTPS.
+  client-server, self-clearing over HTTPS, and shown only to an admin (or anyone, with sign-in
+  protection off), since a member cannot set it up.
 
 ### Provider connections (the aggregator seam)
 

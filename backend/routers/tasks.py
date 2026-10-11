@@ -66,8 +66,12 @@ def _https_setup_task(request: Request | None) -> dict | None:
     # protection on (a login cookie to sniff) or a data provider intended (a live bank secret). The
     # provider case is *required* (never dismissible); plain client-server is only *recommended*, so it is
     # dismissible from Tasks like any other reminder (and still honors the older persisted suppression).
-    # Self-clears the moment a request arrives over HTTPS.
+    # Self-clears the moment a request arrives over HTTPS. Shown only to someone who could set it up:
+    # putting a proxy in front of the server is the host's business, and the guidance it links to is an
+    # Administration section.
     if request is None or transport.request_is_loopback(request) or transport.request_is_https(request):
+        return None
+    if not is_admin_or_local(request):
         return None
     perimeter_on = auth_required()
     provider_intended = get_data_provider_intended()
@@ -90,9 +94,7 @@ def _https_setup_task(request: Request | None) -> dict | None:
             + " Put a TLS-terminating reverse proxy (Caddy) in front of the backend."
         ),
         "count":       1,
-        # Intended usage is where the transport guidance is, and it is an Administration section — so the
-        # link goes there only for someone the page admits.
-        "link":        "/administration?section=intendedUsage" if is_admin_or_local(request) else "/settings",
+        "link":        "/administration?section=intendedUsage",
         "link_label":  "How to set up HTTPS",
         "severity":    SEVERITY_WARNING,
         "required":    required,
