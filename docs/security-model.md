@@ -243,7 +243,9 @@ The limit covers:
 - **Sign-in passwords**, keyed by the name as typed, so a name with no account is limited exactly like a
   real one. A refusal with no password to check spends the same key stretching a real check would
   (`control_database.spend_password_check`), so the response time does not say which names are real
-  either.
+  either. A signed-in user changing their own password (`POST /auth/password`) proves the current one
+  first, since a session left open is not proof of who is at it, and a wrong one there counts against
+  the same limit as a wrong one at sign-in.
 - **Authenticator and 2FA recovery codes**, at sign-in and on the signed-in changes to two-factor itself
   (turning it off, replacing the recovery codes), so a stolen session cannot guess its way to switching
   the second factor off. A pause at sign-in also drops the pending challenge, so continuing needs the

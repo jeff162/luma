@@ -1589,6 +1589,13 @@ def _user_password_hash(user_id: str) -> str | None:
     return row["password_hash"] if row else None
 
 
+def user_password_matches(user_id: str, password: str) -> bool:
+    """Whether `password` is this account's, for a signed-in user proving it before a change. Unlike
+    `authenticate_user` it is not a sign-in, so it leaves the last-login time alone."""
+    stored = _user_password_hash(user_id)
+    return password_is_set(stored) and verify_password(password, stored)
+
+
 def update_user(
     user_id: str,
     *,

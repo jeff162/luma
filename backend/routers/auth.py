@@ -55,6 +55,7 @@ from backend.db.control_database import (
     set_password_policy,
     spend_password_check,
     update_user,
+    user_password_matches,
     verify_totp_code,
 )
 from backend.routers.app_control import (
@@ -194,6 +195,11 @@ class EnableAuthRequest(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
+    new_password: str
+
+
+class OwnPasswordChangeRequest(BaseModel):
+    current_password: str
     new_password: str
 
 
@@ -770,6 +776,39 @@ def change_password(body: PasswordChangeRequest, request: Request):
         request.session["pending_user_id"] = updated["id"]
         return {"requires_2fa": True, "recovery_code_count": recovery_code_count(updated["id"])}
     sign_in_sessions.start(request.session, updated["id"])
+    return {"user": _session_payload(updated)}
+
+
+@router.post("/password")
+def change_own_password(body: OwnPasswordChangeRequest, request: Request):
+    """A signed-in user replacing their own password.
+
+    The current password is the proof, because the session alone is not: whoever is at an unattended
+    browser would otherwise turn a few minutes at it into the account. It is limited as a sign-in
+    attempt on the same account, so guessing here and guessing at the sign-in screen spend one count.
+    The change signs the account out everywhere else (`control_database.update_user`) and keeps the
+    browser that made it."""
+    if not auth_required():
+        raise HTTPException(status_code=400, detail="Auth is not enabled for this instance")
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    subject = user["username"].strip().lower()
+    _begin_attempt(_SIGN_IN, subject)
+    if not user_password_matches(user["id"], body.current_password):
+        raise _wrong_secret(
+            _SIGN_IN, subject, HTTPException(status_code=401, detail="The current password is not correct"),
+        )
+    attempt_limiter.succeeded(_SIGN_IN, subject)
+    try:
+        updated = update_user(
+            user["id"],
+            password=body.new_password,
+            keep_sign_in_session=sign_in_sessions.digest_of(request.session),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    request.state.user = updated
     return {"user": _session_payload(updated)}
 
 

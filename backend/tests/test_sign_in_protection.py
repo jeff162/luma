@@ -318,6 +318,58 @@ class SessionEndingTests(_SignInOn):
             self._use(client, other_browser)
             self.assertEqual(client.get("/api/auth/me").status_code, 401)
 
+    def test_a_member_changing_their_own_password_must_prove_the_current_one(self):
+        with api_client() as (client, _), limiter_clock() as clock:
+            self._turn_sign_in_on(client)
+            self._sign_in(client, "Sam", MEMBER_PASSWORD)
+            other_browser = self._cookies(client)
+            client.cookies.clear()
+            clock.advance(SPACING)
+            self._sign_in(client, "Sam", MEMBER_PASSWORD)
+            new_password = "a-new-member-password"
+
+            clock.advance(SPACING)
+            refused = client.post("/api/auth/password", json={"current_password": "guess", "new_password": new_password})
+            self.assertEqual(refused.status_code, 401, refused.text)
+            # Nothing changed, and nobody was signed out.
+            this_browser = self._cookies(client)
+            self._use(client, other_browser)
+            self.assertEqual(client.get("/api/auth/me").status_code, 200)
+
+            self._use(client, this_browser)
+            clock.advance(SPACING)
+            changed = client.post(
+                "/api/auth/password", json={"current_password": MEMBER_PASSWORD, "new_password": new_password},
+            )
+            self.assertEqual(changed.status_code, 200, changed.text)
+            self.assertEqual(client.get("/api/auth/me").status_code, 200)
+            self._use(client, other_browser)
+            self.assertEqual(client.get("/api/auth/me").status_code, 401)
+
+            client.cookies.clear()
+            clock.advance(SPACING)
+            self.assertEqual(self._login(client, "Sam", MEMBER_PASSWORD).status_code, 401)
+            clock.advance(SPACING)
+            self._sign_in(client, "Sam", new_password)
+
+    def test_guessing_the_current_password_is_limited_with_sign_in(self):
+        """One count for the account's password, so a session left open is no better a place to guess
+        from than the sign-in screen."""
+        with api_client() as (client, _), limiter_clock() as clock:
+            self._turn_sign_in_on(client)
+            self._sign_in(client, "Sam", MEMBER_PASSWORD)
+            for _ in range(attempt_limiter.MAX_CONSECUTIVE_FAILURES - 1):
+                clock.advance(SPACING)
+                guess = client.post("/api/auth/password", json={"current_password": "guess", "new_password": "x" * 12})
+                self.assertEqual(guess.status_code, 401)
+            clock.advance(SPACING)
+            self._assert_too_many(
+                client.post("/api/auth/password", json={"current_password": "guess", "new_password": "x" * 12}),
+                attempt_limiter.LOCKOUT_SECONDS,
+            )
+            clock.advance(SPACING)
+            self._assert_too_many(self._login(client, "Sam", MEMBER_PASSWORD))
+
     def test_disabling_an_account_signs_it_out(self):
         with api_client() as (client, _):
             self._turn_sign_in_on(client)

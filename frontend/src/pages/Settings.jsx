@@ -35,6 +35,7 @@ export default function Settings() {
   const {
     authEnabled,
     canAdminister,
+    passwordPolicy,
     dbInstanceId,
     bundledLicenseAvailable,
     buildStamp,
@@ -66,9 +67,9 @@ export default function Settings() {
     authEnabled && {
       key: 'signInMethods',
       title: 'Sign-in methods',
-      description: 'Passkeys and two-factor sign-in for this account.',
+      description: 'The password, passkeys and two-factor sign-in for this account.',
       help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
-      content: <SignInFactorsSection />,
+      content: <SignInFactorsSection passwordPolicy={passwordPolicy} />,
     },
     {
       key: 'duplicateExceptions',

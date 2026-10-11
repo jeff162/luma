@@ -68,8 +68,6 @@ selected, and is addressable as `?section=<key>`. This replaces the collapsible 
 
 - Creating a backup becomes `require_admin_or_local`, so the page and the server agree. Restore and the
   backup keys already are.
-- A signed-in user changing their own password needs an endpoint: the existing `/auth/change-password`
-  only completes a change forced at sign-in. It takes the current password as proof.
 
 ## Build order
 
@@ -77,15 +75,14 @@ Each section is its own module: member sections under `components/settings/`, ad
 `components/administration/`. `pages/Settings.jsx` and `pages/Administration.jsx` list their sections
 on the shared layout, `components/SectionListPage.jsx`.
 
-1. **Add the password change to Sign-in methods.** The section has passkeys and 2FA; the form for a
-   member's own password, and the endpoint behind it, do not exist yet.
-2. **Move Backup / Restore to Administration** and gate backup creation on the server. Rename the Import
+1. **Move Backup / Restore to Administration** and gate backup creation on the server. Rename the Import
    page.
-3. **Build the Tags and Export dialogs on Transactions** and remove both from where they were
+2. **Build the Tags and Export dialogs on Transactions** and remove both from where they were
    (`settings/TransactionTagsSection.jsx` is the Tags dialog's body; `importExport/ExportTab.jsx` the
    Export dialog's).
-4. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
-   `authorization.py`; every "Settings → X" reference in the docs and the in-app help topics; the
+3. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
+   `authorization.py`; every "Settings → X" reference in the docs and the in-app help topics; the own-password change in
+   the `account-security` help topic; the
    `page-settings` / `page-import-export` help topics, a help topic for the Administration page, and
    `help/navigation.js`; the superseded entry in
    `misc-followups.md` (*Import / Export still needs a reachability pass*).

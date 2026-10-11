@@ -299,6 +299,8 @@ export const api = {
     request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   changePassword: (new_password) =>
     request('/auth/change-password', { method: 'POST', body: JSON.stringify({ new_password }) }),
+  changeOwnPassword: (current_password, new_password) =>
+    request('/auth/password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
   verifyTwoFactor: (code) =>
     request('/auth/2fa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
   bootstrap: (username, password, display_name) =>

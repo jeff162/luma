@@ -3,10 +3,96 @@
 
 import { useState, useEffect, useId } from 'react'
 import { api } from '../../lib/api.js'
-import { ONE_TIME_CODE_PROPS } from '../../lib/sensitiveFields.js'
-import { Card, Button, InsetPanel, getFormControlStyle } from '../ui.jsx'
+import { EXISTING_SECRET_PROPS, NEW_SECRET_PROPS, ONE_TIME_CODE_PROPS } from '../../lib/sensitiveFields.js'
+import { Card, Button, FieldIssue, InsetPanel, PasswordInput, PasswordManagerUsername, Tooltip, getFormControlStyle } from '../ui.jsx'
+import { PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall } from '../../lib/passwordPolicy.js'
 import { PASSKEY_SIGN_IN_UNAVAILABLE, ceremonyAvailability, registerSignInPasskey } from '../../lib/appPasskey.js'
 import { formatDate } from '../../lib/utils.js'
+
+// Password fields don't need the full card width.
+const PASSWORD_FIELD_WIDTH = { maxWidth: 360 }
+const PASSWORD_FIELD_STYLE = getFormControlStyle({ size: 'md', surface: 'base' })
+
+// The signed-in user's own password. The current one is asked for because the session alone is not
+// proof of who is at the keyboard; the server checks it, and signs the account out of every other
+// browser when the change is made. Closed until asked for, so the section does not open on three empty
+// password fields.
+function OwnPasswordPanel({ user, passwordPolicy }) {
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [changed, setChanged] = useState(false)
+
+  // `error` holds only what the server said and is cleared by any edit, so a message about the last
+  // attempt never reads as a verdict on what is typed now.
+  const edited = setter => value => { setError(''); setter(value) }
+  const blockingIssue = !current ? 'Enter the current password.'
+    : passwordIssue({ password: next, confirm, policy: passwordPolicy, withConfirm: true })
+
+  function close() {
+    setOpen(false)
+    setCurrent('')
+    setNext('')
+    setConfirm('')
+    setError('')
+  }
+
+  async function submit(e) {
+    e.preventDefault()
+    if (blockingIssue || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      await api.changeOwnPassword(current, next)
+      close()
+      setChanged(true)
+    } catch (err) {
+      setError(err.message || 'The password could not be changed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Password</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            {changed
+              ? 'Password changed. Other browser sessions signed in to this account have been signed out.'
+              : ''}
+          </div>
+        </div>
+        {!open && <Button small onClick={() => { setChanged(false); setOpen(true) }}>Change password</Button>}
+      </div>
+
+      {open && (
+        <InsetPanel as="form" onSubmit={submit} style={{ marginTop: 12 }}>
+          <PasswordManagerUsername value={user?.username || ''} />
+          <PasswordInput aria-label="Current password" placeholder="Current password" value={current} onChange={edited(setCurrent)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...EXISTING_SECRET_PROPS} />
+          <PasswordInput aria-label="New password" placeholder="New password" value={next} onChange={edited(setNext)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <FieldIssue>{passwordShortfall(next, passwordPolicy)}</FieldIssue>
+          <PasswordInput aria-label="Confirm new password" placeholder="Confirm new password" value={confirm} onChange={edited(setConfirm)} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} style={PASSWORD_FIELD_STYLE} {...NEW_SECRET_PROPS} />
+          <FieldIssue>{passwordMismatchShown(next, confirm) ? PASSWORD_MISMATCH : ''}</FieldIssue>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(passwordPolicy)}</div>
+          {error && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Tooltip content={blockingIssue && !saving ? blockingIssue : ''}>
+              <Button small type="submit" disabled={saving || !!blockingIssue}>
+                {saving ? 'Changing...' : 'Change password'}
+              </Button>
+            </Tooltip>
+            <Button small variant="ghost" type="button" onClick={close} disabled={saving}>Cancel</Button>
+          </div>
+        </InsetPanel>
+      )}
+    </div>
+  )
+}
 
 // Sign-in passkeys, which are **not** the vault's passkeys. Both exist, both use the same browser
 // prompt, and they are deliberately not merged: one crosses the login perimeter, the other opens
@@ -120,10 +206,10 @@ function SignInPasskeysPanel({ user, onUserChange }) {
   )
 }
 
-// The signed-in user's own sign-in factors — passkeys and the authenticator app. Per-user, so a Settings
+// The signed-in user's own sign-in methods — password, passkeys and the authenticator app. Per-user, so a Settings
 // section, unlike the installation-wide switch and password policy on Administration
 // (`administration/AccountSecuritySection.jsx`). Listed only while sign-in protection is on.
-export default function SignInFactorsSection() {
+export default function SignInFactorsSection({ passwordPolicy }) {
   const fieldIdBase = useId()
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -233,6 +319,7 @@ export default function SignInFactorsSection() {
 
   return (
     <Card style={{ padding: 20 }}>
+      <OwnPasswordPanel user={currentUser} passwordPolicy={passwordPolicy} />
       {/* Above the authenticator app because it changes what that section means: a passkey sign-in
           satisfies the second factor, so someone deciding between the two needs to read this first. */}
       <SignInPasskeysPanel user={currentUser} onUserChange={setCurrentUser} />
