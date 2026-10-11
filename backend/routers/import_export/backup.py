@@ -68,6 +68,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from backend.authorization import require_admin_or_local
 from backend.db.database import (
     CURRENT_VERSION,
+    compact_if_worthwhile,
     current_db_path,
     get_db,
     get_db_instance_id,
@@ -1910,6 +1911,7 @@ def restore_backup(body: RestoreRequest):
     finally:
         _abandon_restore_if_staging()
     documents = _restore_documents(None)
+    compact_if_worthwhile(reason="restored a backup")
     return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
 
 
@@ -1936,6 +1938,7 @@ def restore_from_archive(zf, force: bool = False, artifact_path: Optional[str] =
         # marker to `documents_pending` inside its own transaction, and that one has to survive.
         _abandon_restore_if_staging()
     documents = _restore_documents(zf)
+    compact_if_worthwhile(reason="restored a backup")
     return {"ok": True, "restored_at": utcnow_iso(), "restored_counts": counts, "documents": documents}
 
 

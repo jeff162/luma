@@ -27,7 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
+from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, compact_if_worthwhile, get_db
 from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
@@ -689,4 +689,6 @@ def delete_account(account_id: str, transactions: Optional[str] = None,
             return {"ok": True, "reassigned": transaction_count, "target_account_id": target_id}
 
         _delete_account_and_import_history(conn, account_id)
+    if transaction_count:
+        compact_if_worthwhile(reason="removed an account and its transactions")
     return {"ok": True, "deleted": transaction_count}

@@ -162,6 +162,20 @@ about it today. On the measured ledger the removal plus compaction took the file
 26.3 MB — more than the reports themselves, since the free list had also accumulated slack from every
 earlier delete, undo and restore.
 
+**The other bulk deletions compact too, but only when it is worth it** (`compact_if_worthwhile`): emptying
+the transaction trash, undoing an import, removing an account with its transactions, removing a
+connection's synced history, clearing the demo data, a restore, and every startup, which catches whatever
+a path without the call left behind. Each checks the free list first and rebuilds only when it holds at
+least 10 MB *and* a fifth of the file (`COMPACT_MIN_FREE_BYTES`, `COMPACT_MIN_FREE_FRACTION`), since a
+rebuild rewrites the whole file and smaller slack is reused by the next writes anyway. There is no button
+for it: none of this needs anyone to know what a free list is. Two things hold for every compaction. It
+is **checkpointed with the write-ahead log truncated**, because with another connection open — a running
+server's normal state — VACUUM leaves a copy of the rebuilt database in the `-wal` file, and the disk gets
+nothing back. And it writes a line to `luma.log` **before it starts** (what asked for it, and how much is
+on the free list) and another when it finishes (what was freed, and how long the lock was held), so a
+stall that coincides with one can be attributed. The free list is a floor on what comes back: it counts
+only wholly empty pages, and the rebuild also packs partly empty ones.
+
 **Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
 no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
 it has. The second is less obvious and is the larger half: **five consumers of `GET /import-export/batches`

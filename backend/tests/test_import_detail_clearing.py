@@ -371,7 +371,7 @@ class ImportDetailClearingTests(unittest.TestCase):
         before = self.db_path.stat().st_size
 
         with self._use_db_path():
-            freed = compact_database()
+            freed = compact_database(reason="test")
 
         self.assertGreater(freed, 0)
         self.assertEqual(self.db_path.stat().st_size, before - freed)
@@ -382,8 +382,8 @@ class ImportDetailClearingTests(unittest.TestCase):
         it today, never whether the work succeeded."""
         unreadable = Path(self.tempdir.name) / "not-a-database.db"
         unreadable.write_bytes(b"certainly not SQLite")
-        self.assertEqual(compact_database(str(unreadable)), 0)
-        self.assertEqual(compact_database(str(Path(self.tempdir.name) / "missing.db")), 0)
+        self.assertEqual(compact_database(str(unreadable), reason="test"), 0)
+        self.assertEqual(compact_database(str(Path(self.tempdir.name) / "missing.db"), reason="test"), 0)
 
 
 if __name__ == "__main__":

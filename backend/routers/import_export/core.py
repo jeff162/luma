@@ -49,7 +49,7 @@ from pydantic import BaseModel, Field
 
 from backend import app_config
 from backend.app_logging import log_error, log_warning
-from backend.db.database import (SHARED_OWNER_ID, compact_database, get_db,
+from backend.db.database import (SHARED_OWNER_ID, compact_database, compact_if_worthwhile, get_db,
                                  get_tenant_workflow_state, set_tenant_workflow_state)
 from backend.db.demo_data import is_demo_data_loaded
 from backend.services.restore_state import require_no_pending_restore
@@ -4926,7 +4926,7 @@ def clear_batch_detail_records(body: BatchDetailClearRequest):
         done = clear_batch_detail(conn, body.batch_ids, cleared_at=utcnow_iso())
     # Outside the write's own connection, which is the only way VACUUM can run. Without it the file
     # stays exactly the size it was and the screen's name is a claim the filesystem contradicts.
-    done["freed_bytes"] = compact_database()
+    done["freed_bytes"] = compact_database(reason="free up import space")
     return done
 
 
@@ -5597,5 +5597,6 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         )
         if batch["use_imported_categories"]:
             _remove_imported_batch_categories(conn, batch_id)
+    compact_if_worthwhile(reason="undid an import")
 
     return {"ok": True}

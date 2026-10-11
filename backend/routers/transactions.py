@@ -18,7 +18,7 @@ from datetime import datetime
 from decimal import Decimal
 import re
 import uuid
-from backend.db.database import get_db
+from backend.db.database import compact_if_worthwhile, get_db
 from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
 from backend.services.import_batch_totals import delete_transactions
 from backend.services.account_groups import effective_account_id_sql
@@ -2241,6 +2241,7 @@ def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
         # it now stands, sparing anything an in-flight ingest has written but not yet committed.
         with get_db() as conn:
             sweep_unreferenced_files(conn, min_age_seconds=INGEST_GRACE_SECONDS)
+        compact_if_worthwhile(reason="emptied the transaction trash")
     return {"removed": removed}
 
 

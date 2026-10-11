@@ -67,7 +67,8 @@ from backend.services.preferences import (
     get_preferences,
     set_preference,
 )
-from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner, _seed_default_categories
+from backend.db.database import (_seed_default_categories, compact_if_worthwhile, ensure_shared_owner, get_db,
+                                 get_db_instance_id)
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.documents import INGEST_GRACE_SECONDS, sweep_unreferenced_files
@@ -562,6 +563,7 @@ def clear_demo_data_endpoint():
     # its row.
     with get_db() as conn:
         sweep_unreferenced_files(conn, min_age_seconds=INGEST_GRACE_SECONDS)
+    compact_if_worthwhile(reason="cleared the demo data")
     return {"ok": True}
 
 

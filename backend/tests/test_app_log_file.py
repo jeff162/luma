@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from backend import app_log_file, runtime_config
+from backend.app_logging import log_info
 from backend.db import control_database, database
 from backend.tests._api_client import api_client
 
@@ -131,6 +132,17 @@ class AppLogFileTests(unittest.TestCase):
         self.assertNotIn("/api/tasks", written)
         for path in ("/api/rules/r1/widen", "/api/rules/r1", "/api/auth/users"):
             self.assertIn(f"{path} HTTP", written)
+
+    def test_an_info_line_is_kept_only_when_logged_to_be(self):
+        # A database compaction holds the database while it runs, so its lines are what a stall is lined up
+        # against; routine info would rotate failures away.
+        self._as_uvicorn_configures_it()
+        app_log_file.install()
+        log_info("routine detail")
+        log_info("compacting the database", keep_in_file=True)
+        written = "\n".join(self._lines())
+        self.assertNotIn("routine detail", written)
+        self.assertIn("compacting the database", written)
 
     def test_failures_anyone_can_cause_without_signing_in_stay_out(self):
         # On a networked install a flood of these would rotate genuine failures out of the file.

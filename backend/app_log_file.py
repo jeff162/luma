@@ -16,7 +16,8 @@ redirect:** a handler added next to the ones uvicorn configured, so the terminal
 nothing can see them (`desktop.py`), would take the output away from the supervisors that already keep it.
 
 **What is kept:** warnings and errors from anywhere, a crashed request's traceback included (uvicorn logs
-those to `uvicorn.error`); a line when the server starts, naming the version and — where something knew it,
+those to `uvicorn.error`); info lines logged with `keep_in_file` (`app_logging.log_info`), which is maintenance
+the server starts on its own, such as compacting the database; a line when the server starts, naming the version and — where something knew it,
 which is `set_reachable_url` below — the address this instance serves, so a reader can tell one run from the
 next; and access lines only for requests that failed. Successful requests stay out, or routine polling would soon
 rotate a failure out of the file. It rotates at `LOG_MAX_BYTES` and keeps one previous file, so a
@@ -58,6 +59,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from backend import runtime_config
+from backend.app_logging import KEEP_IN_FILE_ATTR
 from backend.db import control_database, database
 
 LOG_FILENAME = "luma.log"
@@ -116,7 +118,7 @@ class _UtcFormatter(logging.Formatter):
 
 class _WorthKeeping(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.name == _MARKER_LOGGER:
+        if record.name == _MARKER_LOGGER or getattr(record, KEEP_IN_FILE_ATTR, False):
             return True
         if record.name == _ACCESS_LOGGER:
             status = _access_status(record)

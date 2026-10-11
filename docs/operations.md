@@ -98,7 +98,8 @@ harness, which captures them precisely to explain a failed launch.
 **The server also keeps its own log, in every topology.** `luma.log` beside the data database is a *copy*
 of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather than a
 redirect, so the terminal, the systemd journal and `docker logs` keep everything they received before. It
-holds warnings and errors, a crashed request's traceback included, a line each time the server starts, and
+holds warnings and errors, a crashed request's traceback included, a line each time the server starts, a
+line before and after each database compaction, and
 access lines only for requests that failed; successful requests stay out, or routine polling would soon
 rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
 uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push

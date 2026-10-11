@@ -14,12 +14,13 @@ notes above `CURRENT_VERSION` say what the registered migrations do.
 
 import json
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
-from backend.app_logging import log_info
+from backend.app_logging import log_info, log_warning
 from backend.runtime_config import resolve_db_path
 
 DB_PATH = resolve_db_path()
@@ -113,7 +114,31 @@ def get_db(db_path: str | None = None):
         conn.close()
 
 
-def compact_database(db_path: str | None = None) -> int:
+# Compaction rewrites the whole file, so it is worth running unprompted only when what it gives back is large
+# both outright and against the file: 10 MB free in a 30 MB ledger, not 10 MB in a 2 GB one. Smaller slack is
+# left on the free list, where SQLite reuses it for the next writes anyway.
+COMPACT_MIN_FREE_BYTES = 10 * 1024 * 1024
+COMPACT_MIN_FREE_FRACTION = 0.2
+
+
+def _megabytes(byte_count: int) -> str:
+    return f"{byte_count / (1024 * 1024):.1f} MB"
+
+
+def _free_and_total_bytes(conn) -> tuple[int, int]:
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    return free_pages * page_size, page_count * page_size
+
+
+def _on_disk_bytes(db_path: str) -> int:
+    """The database file plus its write-ahead log, which is where a rebuild's pages sit until checkpointed."""
+    wal = Path(f"{db_path}-wal")
+    return Path(db_path).stat().st_size + (wal.stat().st_size if wal.exists() else 0)
+
+
+def compact_database(db_path: str | None = None, *, reason: str) -> int:
     """Rebuild the file so the pages a deletion freed go back to the filesystem. Returns the bytes
     given back, or 0 if nothing was reclaimed or the rebuild could not run.
 
@@ -126,6 +151,16 @@ def compact_database(db_path: str | None = None) -> int:
     be appended to the write it follows. It takes a brief exclusive lock (measured at 0.16s on an 88 MB
     database) and needs roughly twice the file's size in free disk while it rebuilds.
 
+    **It is logged to `luma.log` before it starts as well as after**, with `reason` naming what asked
+    for it: the lock is the one way it can be noticed, and a stall that coincides with an opening line
+    and no closing one is then attributable. The free list it reports up front is a floor on what the
+    rebuild gives back, which also packs partly empty pages.
+
+    **The rebuild is checkpointed and the log truncated in the same connection.** VACUUM writes the new
+    file through the write-ahead log, and with any other connection open — the normal state of a running
+    server — the log is left holding a copy about the size of the rebuilt database, so the file shrinks and
+    the disk does not. What it gives back is therefore measured over both files.
+
     **A failure here is never the caller's failure.** The deletion it follows has already committed;
     this only decides whether the filesystem hears about it today or the next time one runs. So a busy
     database or a full disk is logged and swallowed rather than turned into an error for work that
@@ -133,22 +168,55 @@ def compact_database(db_path: str | None = None) -> int:
     """
     resolved_path = _normalize_db_path(db_path)
     try:
-        before = Path(resolved_path).stat().st_size
-    except OSError:
+        before = _on_disk_bytes(resolved_path)
+        with get_db(resolved_path) as conn:
+            free_bytes, total_bytes = _free_and_total_bytes(conn)
+    except (OSError, sqlite3.Error):
         return 0
+    log_info(
+        f"[db] compacting {resolved_path} ({reason}): {_megabytes(free_bytes)} of "
+        f"{_megabytes(total_bytes)} is on the free list",
+        keep_in_file=True,
+    )
+    started = time.monotonic()
     try:
         with get_db(resolved_path) as conn:
             conn.execute("VACUUM")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except sqlite3.Error as exc:
-        log_info(f"[db] compaction skipped: {exc}")
+        log_warning(f"[db] compaction of {resolved_path} did not run: {exc}")
         return 0
     try:
-        freed = max(0, before - Path(resolved_path).stat().st_size)
+        after = _on_disk_bytes(resolved_path)
     except OSError:
         return 0
-    if freed:
-        log_info(f"[db] compacted {resolved_path}: freed {freed} bytes")
+    freed = max(0, before - after)
+    log_info(
+        f"[db] compacted {resolved_path}: freed {_megabytes(freed)} in {time.monotonic() - started:.1f}s, "
+        f"now {_megabytes(after)} on disk",
+        keep_in_file=True,
+    )
     return freed
+
+
+def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
+    """Compact after a deletion only when the free space clears both thresholds above; otherwise 0.
+
+    For the paths that delete in bulk as a side effect of something else — emptying the trash, undoing
+    an import, removing an account or a connection's history, a restore, startup — where the user has
+    not asked for space back, so a rebuild that would return a few kilobytes is a lock for nothing. The
+    check reads three pragmas and costs nothing. *Free up import space* calls `compact_database`
+    directly, because there the space is the point."""
+    resolved_path = _normalize_db_path(db_path)
+    try:
+        Path(resolved_path).stat()
+        with get_db(resolved_path) as conn:
+            free_bytes, total_bytes = _free_and_total_bytes(conn)
+    except (OSError, sqlite3.Error):
+        return 0
+    if free_bytes < COMPACT_MIN_FREE_BYTES or free_bytes < total_bytes * COMPACT_MIN_FREE_FRACTION:
+        return 0
+    return compact_database(resolved_path, reason=reason)
 
 
 # Fresh installs are created directly at `CURRENT_VERSION` from the full schema in `init_db` and
@@ -3487,7 +3555,11 @@ def init_db(db_path: str | None = None):
     # it, so the file shrinks when the data did; outside the block because VACUUM cannot run inside the
     # transaction the migrations ran in.
     if migrated_from is not None and migrated_from < 72:
-        compact_database(resolved_path)
+        compact_database(resolved_path, reason="upgrade across v72")
+    else:
+        # Whatever a deletion path that does not compact left behind, given back while nothing else
+        # holds the database.
+        compact_if_worthwhile(resolved_path, reason="startup")
 
 
 # The reconciliation reports' attention counts (Amazon's per import batch, the PayPal reconciliation over the

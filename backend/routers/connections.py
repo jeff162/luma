@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 
-from backend.db.database import get_db
+from backend.db.database import compact_if_worthwhile, get_db
 from backend.routers.accounts import resolve_default_owner_id
 from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_dedupe import rescan_connection_duplicates
@@ -273,6 +273,7 @@ def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
             """,
             (connection_id,),
         )
+    compact_if_worthwhile(reason="removed a connection's synced transactions")
 
     return {
         "ok": True,
