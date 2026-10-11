@@ -57,6 +57,7 @@ from backend.services.documents import (
 )
 from backend.services.purchase_links import purchase_for_txn, purchase_map_for
 from backend.services.refund_links import following_refund_ids, refund_map_for
+from backend.services.txn_links import partners_map
 from backend.services.reimbursements import (
     receivable_amounts,
     receivable_parts,
@@ -1191,6 +1192,12 @@ def list_transactions(
         # The refund pairing each row is on either side of, for the same link marker the purchase uses:
         # who the other side is, so the marker can name it and open it. See services/refund_links.py.
         refunds_by_txn = refund_map_for(conn, txn_ids) if rows else {}
+        # The Amazon order each row is the card charge of, or the charges an order row was paid by — the
+        # same marker again, so a charge the importer excluded reads as paired wherever it is seen rather
+        # than only in the Amazon card's reconciliation report. Lazy: the Amazon importer imports routers
+        # that import this one.
+        from backend.routers.import_export.amazon import LINK_KIND as AMAZON_ORDER_LINK_KIND
+        amazon_by_txn = partners_map(conn, AMAZON_ORDER_LINK_KIND, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
             # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
@@ -1204,6 +1211,7 @@ def list_transactions(
             txn["purchase"] = purchases_by_txn.get(txn["id"])
             txn["reimbursements"] = reimbursements_by_txn.get(txn["id"], [])
             txn["refund_link"] = refunds_by_txn.get(txn["id"])
+            txn["amazon_order"] = amazon_by_txn.get(txn["id"])
 
     return {
         "total": total,

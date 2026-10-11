@@ -325,7 +325,8 @@ exclude an unrelated charge from your totals and can't be spotted without auditi
 A pairing can be wrong — a coincidental same-amount charge, or an accepted suggestion that turned out
 not to be this order's. **Unlink** on the Matched row detaches the charge(s), restores each one's
 pre-exclusion category, and drops the order back to "No charge found", where **Link charges…** pairs
-it correctly. The order transaction itself is untouched; only the pairing is removed.
+it correctly. The order transaction itself is untouched; only the pairing is removed, and the unlinked
+charge is never matched to that order again automatically.
 
 To investigate what an order actually was, hover it for its origin detail (source file, captured
 fields) or click the **↗** to open the order's own page on Amazon — often the only place the detail
@@ -335,7 +336,10 @@ is captured at import, so it is present on orders imported after that capture wa
 ### An Amazon order shows "No charge found"
 
 Either the paying card isn't in your ledger (an untracked card, or the charge predates your imported
-history) — nothing to do, the order still counts — or the match was missed. **Link charges…** opens a
+history) — nothing to do, the order still counts — or the match was missed. A charge that simply hadn't
+arrived yet needs nothing either: when the card syncs or is imported after the Amazon file, the new rows
+are matched by the import's own rule (the order's only candidate, and no other order's), and anything
+less clear-cut shows up here as a suggestion. **Link charges…** opens a
 picker over the unaccounted charges with a running sum against the order total: check the charge(s)
 that paid for it (several, if it was split) and link them. A mismatched sum warns but doesn't block.
 

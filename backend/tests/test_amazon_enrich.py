@@ -30,6 +30,7 @@ from backend.routers.import_export.amazon import (
     dismiss_split_suggestion,
     find_or_create_funding_category,
     link_amazon_charges,
+    link_orders_to_new_charges,
     manual_link_charge,
     mark_charges_distinct,
     mark_orders_no_charge_reviewed,
@@ -1248,6 +1249,91 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(recon2["matched"], [])
         # The order needs a charge again — surfaced either as a review suggestion or No charge found.
         self.assertEqual(len(recon2["matched_review"]) + len(recon2["amazon_unmatched"]), 1)
+
+    # ---- a charge that arrives after its order --------------------------------------------------
+
+    def _import_order_without_charge(self, order=None):
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [order or _cash_order()], account_id="amazon", filename="orders.csv")
+            self.assertEqual(len(amazon_reconciliation(conn, summary["batch_id"])["amazon_unmatched"]), 1)
+        return summary["batch_id"]
+
+    def test_a_charge_synced_after_the_order_links_to_it(self):
+        # The Amazon file imported first: nothing to match then, so the order sat unmatched. The card
+        # charge arriving later is the order's only candidate, so it pairs as it would have at import.
+        batch_id = self._import_order_without_charge()
+        charge = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(link_orders_to_new_charges(conn, [charge]), 1)
+            recon = amazon_reconciliation(conn, batch_id)
+            funding_id = find_or_create_funding_category(conn)
+        self.assertEqual([c["id"] for c in recon["matched"][0]["charges"]], [charge])
+        self.assertEqual(self._txn(charge)["category_id"], funding_id)
+
+    def test_a_card_csv_imported_after_the_order_links_to_it(self):
+        # The same through the CSV import, which runs the pass on its own.
+        from backend.routers.import_export.core import run_import_core
+        batch_id = self._import_order_without_charge()
+        with self._use_db_path():
+            run_import_core(
+                "Date,Description,Amount\n2024-11-20,AMAZON MKTPL,-37.32\n",
+                {"account_id": "card", "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+                 "date_format": "%Y-%m-%d", "amount_convention": "single_signed"},
+                filename="card.csv",
+            )
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(len(amazon_reconciliation(conn, batch_id)["matched"]), 1)
+
+    def test_two_orders_wanting_one_new_charge_are_left_for_the_user(self):
+        # Which of two same-amount orders the charge paid is not deducible, so neither takes it.
+        self._import_order_without_charge(_cash_order("111-0000000-0000011"))
+        self._import_order_without_charge(_cash_order("111-0000000-0000012"))
+        charge = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(link_orders_to_new_charges(conn, [charge]), 0)
+        self.assertIsNone(self._txn(charge)["category_id"])
+
+    def test_a_pending_charge_waits_until_it_posts(self):
+        self._import_order_without_charge()
+        charge = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET is_pending = 1 WHERE id = ?", (charge,))
+            self.assertEqual(link_orders_to_new_charges(conn, [charge]), 0)
+            conn.execute("UPDATE txn SET is_pending = 0 WHERE id = ?", (charge,))
+            self.assertEqual(link_orders_to_new_charges(conn, [charge]), 1)
+
+    def test_a_charge_the_user_unlinked_is_not_paired_again(self):
+        batch_id = self._import_order_without_charge()
+        charge = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            link_orders_to_new_charges(conn, [charge])
+            link_id = amazon_reconciliation(conn, batch_id)["matched"][0]["link_id"]
+            unlink_order_charges(conn, link_id)
+            # The next sync brings another row of that amount; the declined charge stays declined.
+            other = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, raw_name, date, is_pending)
+                   VALUES (?, 'card', ?, 37.32, 'CORNER CAFE', 'CORNER CAFE', '2024-12-30', 0)""",
+                (other, SHARED_OWNER_ID),
+            )
+            self.assertEqual(link_orders_to_new_charges(conn, [other, charge]), 0)
+            # Linking it by hand is the user's choice, and clears the decline.
+            manual_link_charge(conn, link_id, charge)
+            meta = txn_links.get_link(conn, link_id)["metadata"]
+        self.assertNotIn("declined_charge_ids", meta)
+
+    def test_the_list_feed_names_each_side_of_an_order_pairing(self):
+        # The ledger row's link marker: the charge names its order, the order names each of its charges —
+        # and a split order's shipment charges name the order, not each other.
+        first, second = self._add_card_charge(20.00), self._add_card_charge(17.32, date="2024-11-21")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            link_id = amazon_reconciliation(conn, summary["batch_id"])["amazon_unmatched"][0]["link_id"]
+            link_amazon_charges(conn, link_id, [first, second])
+            order = txn_links.member_txn_ids(conn, link_id, role="order")[0]
+            mapped = txn_links.partners_map(conn, LINK_KIND, [order, first, second])
+        self.assertEqual({k: (v["role"], [o["id"] for o in v["others"]]) for k, v in mapped.items()},
+                         {order: ("order", [first, second]), first: ("charge", [order]), second: ("charge", [order])})
 
     def test_unlink_refuses_an_order_with_no_linked_charge(self):
         with self._use_db_path(), get_db() as conn:

@@ -24,6 +24,7 @@ import { getTxnSourceType, hasFileOriginDetail } from '../lib/importSourceFields
 import { formatSignedMoneyAmount, getTransactionAmountColor, transactionDirection } from '../lib/moneyDisplay.js'
 import { purchaseMarkerTooltip, purchaseRowSummary } from '../lib/purchaseLinks.js'
 import { refundLinkTooltip } from '../lib/refundLinks.js'
+import { amazonOrderLinkTooltip } from '../lib/amazonOrderLinks.js'
 import { reimbursementMarkerTooltip, reimbursementStatus } from '../lib/reimbursements.js'
 import { isSplitPartRow, splitPartLabel, splitPartSummary } from '../lib/splitRows.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -713,10 +714,17 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
   const [showDocuments, setShowDocuments] = useState(false)
   const [viewingDocument, setViewingDocument] = useState(null)
   const [editingPurchase, setEditingPurchase] = useState(false)
-  const linkedRefund = Boolean(txn.refund_link?.others?.length)
-  // A purchase always opens (its editor lives here); a refund pairing opens the other transaction only
-  // where the host can show one.
-  const linkMarkerOpens = Boolean(txn.purchase) || (linkedRefund && Boolean(onOpenDetail))
+  // The pairings this row is one side of — a refund and its payment, an Amazon order and the card charge
+  // that paid it — each with what the hover says and the transaction on the other side.
+  const pairings = [
+    [txn.refund_link, refundLinkTooltip],
+    [txn.amazon_order, amazonOrderLinkTooltip],
+  ]
+    .filter(([link]) => link?.others?.length)
+    .map(([link, describe]) => ({ label: describe(link), otherId: link.others[0].id }))
+  // A purchase always opens (its editor lives here); a pairing opens the other transaction only where the
+  // host can show one.
+  const linkMarkerOpens = Boolean(txn.purchase) || (pairings.length > 0 && Boolean(onOpenDetail))
   // The row carries only enough of the other side to name it, so the whole transaction is fetched to open
   // it — the detail panel needs a real row, as it does from every other way in.
   async function openLinkedTransaction(otherId) {
@@ -827,21 +835,22 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
             </span>
           </RowTooltip>
         ) : null}
-        {txn.purchase || linkedRefund ? (
+        {txn.purchase || pairings.length ? (
           /* The row belongs with other transactions: one payment of a multi-payment purchase — a
              deposit and a balance, an instalment plan — or one side of a refund and the payment it
-             returns. One glyph for both rather than a marker each, since the strip is already crowded
-             and both say the same thing: this row has partners. It opens what it stands for, like every
+             returns, or an Amazon order and the card charge that paid it. One glyph for all of them
+             rather than a marker each, since the strip is already crowded and they say the same thing:
+             this row has partners. It opens what it stands for, like every
              other interactive marker here (this repo has twice reversed a marker left inert on the
              reasoning that another route already existed): a purchase opens its editor — the same
              dialog the detail panel's purchase summary opens, so a mis-linked payment is repaired from
-             wherever it was noticed — and a refund pairing, which has nothing to edit, opens the
+             wherever it was noticed — and a pairing, which has nothing to edit, opens the
              transaction on the other side. A row that is both opens the purchase, the one that can be
              edited; its hover names both. */
           <RowTooltip
             content={(
               <span>
-                {[txn.purchase ? purchaseMarkerTooltip(txn.purchase) : null, linkedRefund ? refundLinkTooltip(txn.refund_link) : null]
+                {[txn.purchase ? purchaseMarkerTooltip(txn.purchase) : null, ...pairings.map(pairing => pairing.label)]
                   .filter(Boolean)
                   .map(line => <span key={line} style={{ display: 'block' }}>{line}</span>)}
                 {linkMarkerOpens ? <span style={{ display: 'block' }}>Click to open</span> : null}
@@ -855,17 +864,17 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
                 onClick={event => {
                   event.stopPropagation()
                   if (txn.purchase) setEditingPurchase(true)
-                  else openLinkedTransaction(txn.refund_link.others[0].id)
+                  else openLinkedTransaction(pairings[0].otherId)
                 }}
                 aria-label={txn.purchase
                   ? `${purchaseMarkerTooltip(txn.purchase)} — open this purchase`
-                  : `${refundLinkTooltip(txn.refund_link)} — open it`}
+                  : `${pairings[0].label} — open it`}
                 style={{ ...iconButtonStyle, fontSize: 11 }}
               >
                 🔗
               </button>
             ) : (
-              <span aria-label={refundLinkTooltip(txn.refund_link)} style={{ ...iconButtonStyle, fontSize: 11, cursor: 'default' }}>🔗</span>
+              <span aria-label={pairings.map(pairing => pairing.label).join('; ')} style={{ ...iconButtonStyle, fontSize: 11, cursor: 'default' }}>🔗</span>
             )}
           </RowTooltip>
         ) : null}

@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
+import { formatMoneyMagnitude, formatSignedMoneyAmount, transactionDirection } from '../lib/moneyDisplay.js'
 import { round2 } from '../lib/manualTransaction.js'
 import { useBusyIndicator, PAINT_GATE_DELAY_MS } from '../lib/useBusyIndicator.js'
 import CategoryPicker from './CategoryPicker.jsx'
@@ -101,8 +101,17 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
   const allocated = rows.reduce((sum, row) => sum + toAmount(row.amount), 0)
   const remaining = Math.round((total - allocated) * 100) / 100
   const balanced = Math.abs(remaining) < CENT
-  const complete = balanced && rows.length >= MIN_ROWS
-    && rows.every(r => r.category_id && Math.abs(toAmount(r.amount)) >= CENT)
+  // What stops Save, as the sentence its hover shows — one expression for both, so the button is never
+  // greyed for a reason the hover does not give. Several can be unmet at once; the order is the order of
+  // the work, so the total, which "Add remainder" usually settles last, is named last.
+  const unfilled = rows.findIndex(r => Math.abs(toAmount(r.amount)) < CENT)
+  const uncategorized = rows.findIndex(r => !r.category_id)
+  const saveBlocker = rows.length < MIN_ROWS ? `A split needs at least ${MIN_ROWS} parts`
+    : unfilled >= 0 ? `Enter an amount for part ${unfilled + 1}`
+      : uncategorized >= 0 ? `Choose a category for part ${uncategorized + 1}`
+        : !balanced ? `The parts must add up to the total — ${formatMoneyMagnitude(remaining)} ${remaining > 0 ? 'left to allocate' : 'over'}`
+          : null
+  const complete = !saveBlocker
 
   // An existing split opens on its own categories; a transaction being split for the first time opens
   // on two empty rows with its current category pre-filled into the first, since that is where the
@@ -271,7 +280,11 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
             <Button variant="ghost" small onClick={removeSplit} disabled={saving}>Remove split</Button>
           ) : null}
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
-          <Button small onClick={save} disabled={!complete || saving}>Save split</Button>
+          {/* A disabled button takes no pointer events, so the reason hangs off a wrapper (ui-patterns.md
+              → a control disabled by an unmet condition says which one). */}
+          <Tooltip content={saveBlocker} align="right">
+            <Button small onClick={save} disabled={!complete || saving}>Save split</Button>
+          </Tooltip>
         </>
       )}
     >

@@ -222,27 +222,7 @@ def following_refund_ids(conn: sqlite3.Connection, payment_ids: Iterable[str]) -
 
 def refund_map_for(conn: sqlite3.Connection, txn_ids: Iterable[str]) -> dict[str, dict]:
     """Per transaction, the other side of its refund pairings as the ledger row's link marker shows them:
-    ``{"role": "payment" | "refund", "others": [{id, name, date, amount}, …]}``. A payment may have been
-    refunded more than once (in parts), so `others` is a list; a refund names one payment. The rows on the
-    other side are carried whole enough to name and open, not to act on — the marker opens the other
-    transaction, which is where anything is done. A trashed row on the other side is left out."""
-    ids = [txn_id for txn_id in dict.fromkeys(txn_ids) if txn_id]
-    mapped: dict[str, dict] = {}
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
-        for row in conn.execute(
-            f"""SELECT me.txn_id AS txn_id, me.role AS role, o.id AS other_id, o.date, o.amount,
-                       COALESCE(o.display_name, o.merchant_name, o.raw_name) AS name
-                FROM   txn_link_member me
-                JOIN   txn_link l ON l.id = me.link_id AND l.kind = ?
-                JOIN   txn_link_member other ON other.link_id = me.link_id AND other.txn_id <> me.txn_id
-                JOIN   txn o ON o.id = other.txn_id AND o.trashed_at IS NULL
-                WHERE  me.txn_id IN ({",".join("?" * len(chunk))})
-                ORDER  BY o.date, o.id""",
-            (LINK_KIND, *chunk),
-        ):
-            entry = mapped.setdefault(row["txn_id"], {"role": row["role"], "others": []})
-            entry["others"].append(
-                {"id": row["other_id"], "name": row["name"], "date": row["date"], "amount": row["amount"]}
-            )
-    return mapped
+    ``{"role": "payment" | "refund", "others": [{id, name, date, amount}, …]}`` (``txn_links.partners_map``).
+    A payment may have been refunded more than once (in parts), so `others` is a list; a refund names one
+    payment."""
+    return txn_links.partners_map(conn, LINK_KIND, txn_ids)

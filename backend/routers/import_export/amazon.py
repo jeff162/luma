@@ -40,6 +40,7 @@ from typing import NamedTuple, Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from backend.app_logging import log_error
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.services import amazon_funding, txn_links
 from backend.services.account_groups import account_group_member_ids, effective_account_id
@@ -69,6 +70,8 @@ LINK_KIND = "amazon_order"
 BATCH_SOURCE_KIND = "marketplace:amazon"
 AMAZON_FUNDING_CATEGORY = "Amazon purchase"
 _CHARGE_DATE_WINDOW_DAYS = 3
+# Link metadata: the charges the user unlinked from this order, which no automatic pass offers it again.
+DECLINED_CHARGES_KEY = "declined_charge_ids"
 # Global (tenant-wide) setting: which category the matched card charge is moved into. Stored in
 # import_workflow_state; absent = use the seeded default below. A change takes effect on the *next*
 # import only — an already-imported charge keeps the category it was assigned.
@@ -523,8 +526,9 @@ def apply_amazon_order(
       * **Order already linked** → if this import carries item detail, fold it into the existing order
         transaction's evidence (``enriched``), or report ``already_enriched`` if that order already had item
         detail (a re-imported items file); a bare re-import with no new item detail is ``already_applied``.
-        The card charge is matched once, at first import — a mapping added later is not applied
-        retroactively (like the category setting, it affects future imports only).
+        The card charge is matched here at first import; one that arrives later is matched by
+        :func:`match_orders_after_ingest` when a sync or CSV import brings it. A mapping added later is not
+        applied to a charge already matched (like the category setting, it affects future matches only).
       * **Items-only, no existing order** → no order row to attach to, so the items are **parked** by order
         id (``items_discarded``) rather than dropped; importing the matching orders file later auto-attaches
         them (see ``amazon_pending_item`` / :func:`_park_items`).
@@ -1593,7 +1597,7 @@ async def amazon_import_detail_endpoint(batch_id: str):
         return amazon_import_detail(conn, batch_id)
 
 
-def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids) -> dict:
+def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids, *, manually: bool = True) -> dict:
     """Hand-reconcile an unmatched order to one *or more* card charges — one for a plain manual link, several
     when a split order was paid as multiple shipment charges (see the reconciliation's Matched·review
     suggestion). For each charge: do exactly what the auto-matcher does — exclude it (recategorize into the
@@ -1601,7 +1605,8 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids) 
     add it as a ``charge`` member. Reversal flows through the batch-undo path via those stashed priors.
 
     Guarded: the link must be an Amazon order that has no charge yet, and no charge may already belong to
-    another Amazon link (so one action can't double-exclude or steal a linked charge)."""
+    another Amazon link (so one action can't double-exclude or steal a linked charge). ``manually`` is False
+    for the automatic passes that reuse this (equal-amount pairing, the after-ingest match)."""
     link = txn_links.get_link(conn, link_id)
     if not link or link.get("kind") != LINK_KIND:
         raise ValueError("Unknown Amazon order link")
@@ -1630,7 +1635,14 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids) 
         # it carried there — if it ever returns to unaccounted (unlinked), it deserves a fresh look.
         conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (cid,))
     meta["charge_priors"] = priors
-    meta["charge_linked_manually"] = True
+    if manually:
+        meta["charge_linked_manually"] = True
+    # A charge the user unlinked from this order and has now linked again is no longer declined.
+    declined = [cid for cid in meta.get(DECLINED_CHARGES_KEY) or [] if cid not in ids]
+    if declined:
+        meta[DECLINED_CHARGES_KEY] = declined
+    else:
+        meta.pop(DECLINED_CHARGES_KEY, None)
     meta.pop("split_suggestion_dismissed", None)   # the order is reconciled now — clear any stale dismissal
     meta.pop("no_charge_reviewed", None)           # ...and any stale no-charge-found acknowledgment
     txn_links.set_metadata(conn, link_id, meta)
@@ -1836,7 +1848,7 @@ def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
         candidate_ids: list[str] = []
         seen: set = set()
         for o in group:
-            cands = _order_charge_candidates(conn, o["meta"], o["order"])
+            cands = _eligible_charges(conn, o["meta"], o["order"])
             if not cands:
                 continue   # untracked / last-4 mismatch: this order can't take any of these charges
             pairable_orders.append(o)
@@ -1854,9 +1866,103 @@ def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
         if matching is None:
             continue
         for order_index, charge_id in matching.items():
-            manual_link_charge(conn, pairable_orders[order_index]["link_id"], charge_id)
+            link_amazon_charges(conn, pairable_orders[order_index]["link_id"], [charge_id], manually=False)
             paired += 1
     return paired
+
+
+def _eligible_charges(conn: sqlite3.Connection, meta: dict, order: dict) -> list[str]:
+    """The matcher's candidates for an already-imported order, less any the user unlinked from it — what an
+    *automatic* pass may offer it."""
+    declined = set(meta.get(DECLINED_CHARGES_KEY) or [])
+    return [cid for cid in _order_charge_candidates(conn, meta, order) if cid not in declined]
+
+
+def _unmatched_orders_for_amounts(conn: sqlite3.Connection, amounts: set) -> list[dict]:
+    """Every cash order in the ledger that still has no charge and expects one of ``amounts`` — the orders a
+    newly arrived charge of that amount could belong to."""
+    if not amounts:
+        return []
+    rows = conn.execute(
+        f"""SELECT l.id AS link_id, l.metadata_json, o.id, o.date, o.account_id
+            FROM   txn_link l
+            JOIN   txn_link_member m ON m.link_id = l.id AND m.role = 'order'
+            JOIN   txn o ON o.id = m.txn_id AND o.trashed_at IS NULL
+            WHERE  l.kind = ?
+              AND  json_extract(l.metadata_json, '$.disposition') = 'cash'
+              AND  ROUND(json_extract(l.metadata_json, '$.charge_amount'), 2) IN ({",".join("?" * len(amounts))})
+              AND  NOT EXISTS (SELECT 1 FROM txn_link_member mc WHERE mc.link_id = l.id AND mc.role = 'charge')""",
+        (LINK_KIND, *sorted(amounts)),
+    ).fetchall()
+    return [
+        {"link_id": r["link_id"], "meta": json.loads(r["metadata_json"] or "{}"),
+         "order": {"id": r["id"], "date": r["date"], "account_id": r["account_id"]}}
+        for r in rows
+    ]
+
+
+def link_orders_to_new_charges(conn: sqlite3.Connection, txn_ids) -> int:
+    """Link already-imported orders to card charges that arrived after them — by a later sync or import —
+    under the same rule the import applies to a new order: the charge must be the order's **only** candidate
+    (the matcher's own candidate set: exact amount, ±3 days, the funding map or last-4). One rule more,
+    because the import saw one order at a time and this pass sees them all at once: no *other* unmatched
+    order may also want that charge, since which of two same-amount orders it paid is not deducible. Every
+    other case stays a suggestion in the reconciliation report, exactly as before.
+
+    Only orders expecting the amount of one of ``txn_ids`` are looked at, so a sync's cost follows what it
+    brought rather than the size of the order history. A pending charge still competes but is never linked
+    until it posts — the provider may drop it and send the posted row under another id, which would leave the
+    order linked to a trashed row — and a charge the user unlinked from an order is never offered to that
+    order again. Returns the number linked."""
+    ids = [txn_id for txn_id in dict.fromkeys(txn_ids or []) if txn_id]
+    amounts: set = set()
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        amounts |= {r["amount"] for r in conn.execute(
+            f"""SELECT DISTINCT ROUND(amount, 2) AS amount FROM txn
+                WHERE  id IN ({",".join("?" * len(chunk))})
+                  AND  trashed_at IS NULL AND is_pending = 0 AND amount > 0""",
+            chunk,
+        )}
+
+    # Every unmatched order of those amounts, not only those dated near an arrival: an order that wants an
+    # older charge of the same amount is competing for it all the same, and the uniqueness test has to see
+    # every order that wants a charge before giving it to one.
+    wanted = {entry["link_id"]: _eligible_charges(conn, entry["meta"], entry["order"])
+              for entry in _unmatched_orders_for_amounts(conn, amounts)}
+    demand = Counter(cid for candidates in wanted.values() for cid in candidates)
+    pending = set()
+    contested = list(demand)
+    for start in range(0, len(contested), 500):
+        chunk = contested[start:start + 500]
+        pending |= {r["id"] for r in conn.execute(
+            f"SELECT id FROM txn WHERE is_pending = 1 AND id IN ({','.join('?' * len(chunk))})", chunk)}
+
+    linked = 0
+    for link_id, candidates in wanted.items():
+        if len(candidates) == 1 and demand[candidates[0]] == 1 and candidates[0] not in pending:
+            link_amazon_charges(conn, link_id, candidates, manually=False)
+            linked += 1
+    return linked
+
+
+def match_orders_after_ingest(connection, *, txn_ids=None, batch_id: Optional[str] = None) -> None:
+    """Run :func:`link_orders_to_new_charges` once an import's or a sync's rows are committed, in the
+    connection context manager given, over the rows named — ``txn_ids``, or every row of ``batch_id``. Like
+    the other after-ingest passes it runs after the ingest transaction, never inside it, and a failure is
+    logged rather than allowed to fail what already landed. It runs **before** PayPal pairing, which would
+    otherwise claim a PayPal-looking Amazon charge first — the order the two see the rows in when the Amazon
+    file is the one imported second."""
+    if not txn_ids and not batch_id:
+        return
+    try:
+        with connection as conn:
+            ids = list(txn_ids or [])
+            if batch_id:
+                ids += [r["id"] for r in conn.execute("SELECT id FROM txn WHERE import_batch_id = ?", (batch_id,))]
+            link_orders_to_new_charges(conn, ids)
+    except Exception as e:
+        log_error(f"[amazon] after-ingest order match failed: {e}", exc_info=e)
 
 
 def _order_batch_id(conn: sqlite3.Connection, link_id: str) -> Optional[str]:
@@ -1932,6 +2038,11 @@ def unlink_order_charges(conn: sqlite3.Connection, order_link_id: str) -> dict:
         raise ValueError("This order has no linked charge")
     for charge_id in charge_ids:
         _detach_charge(conn, order_link_id, charge_id)
+    # Remembered so the after-ingest match never pairs the two again: it would, the next time a sync brings
+    # in a row of that amount, since the charge is very likely still the order's only candidate.
+    meta = txn_links.get_link(conn, order_link_id).get("metadata") or {}
+    meta[DECLINED_CHARGES_KEY] = list(dict.fromkeys([*(meta.get(DECLINED_CHARGES_KEY) or []), *charge_ids]))
+    txn_links.set_metadata(conn, order_link_id, meta)
     return {"status": "unlinked", "detached": charge_ids}
 
 

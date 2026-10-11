@@ -5,10 +5,8 @@
 // backend and surfaced as its message, deliberately not duplicated here, so what is worth pinning in
 // the UI is the remainder gate and that a rejection is shown rather than swallowed.
 //
-// Note the assertion style on the Save button. The shared `Button` simulates `disabled` (it dims and
-// drops the handler but never sets the DOM property), so `expect(button.disabled).toBe(true)` passes
-// against every implementation of everything — see docs/shared-components.md. The gate is therefore
-// asserted by clicking and checking the save never went out.
+// The Save gate is asserted by clicking and checking the save never went out, rather than by reading
+// `disabled`: the attribute is a claim about the element, and what matters is that nothing is saved.
 
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
@@ -611,5 +609,41 @@ describe('split editor load under StrictMode', () => {
     const fields = await screen.findAllByLabelText('Amount', {}, { timeout: 2000 })
     expect(fields.length).toBe(2)
     expect(screen.queryByText('Loading…')).toBeNull()
+  })
+})
+
+// A greyed Save says what it is waiting for. The reported case: the amounts added up and Save stayed
+// grey with nothing on screen saying a part still had no category.
+describe('why Save is unavailable', () => {
+  async function hoverSave(user) {
+    await user.hover(screen.getByText('Save split').closest('span'))
+  }
+
+  it('names the part still missing a category once the amounts add up', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    const fields = await amountFields()
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Groceries'))
+    await user.type(fields[0], '60')
+    await user.type(fields[1], '40')
+
+    await hoverSave(user)
+    expect(await screen.findByText('Choose a category for part 2')).toBeTruthy()
+  })
+
+  it('names what is left to allocate once every part is filled in', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    const fields = await amountFields()
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Groceries'))
+    await user.click(screen.getAllByText('Choose category')[0])
+    await user.click(await screen.findByText('Hardware'))
+    await user.type(fields[0], '60')
+    await user.type(fields[1], '30')
+
+    await hoverSave(user)
+    expect(await screen.findByText(/\$10\.00 left to allocate/)).toBeTruthy()
   })
 })

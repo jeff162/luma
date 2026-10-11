@@ -1831,6 +1831,12 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         except Exception as e:
             log_error(f"[sync] duplicate sweep failed: {e}", exc_info=e)
 
+    # Amazon orders imported before their card charge synced: link the ones the new rows settle
+    # (routers/import_export/amazon.py). Ahead of PayPal pairing, which would otherwise claim the charge.
+    if touched_ids:
+        from backend.routers.import_export.amazon import match_orders_after_ingest
+        match_orders_after_ingest(get_db(), txn_ids=touched_ids)
+
     # PayPal pairing: either side of a pair can arrive by sync, and a pending row that just posted becomes
     # pairable, so rows advanced count as well as rows added (services/paypal_funding.py).
     if cards_touched or touched_ids:

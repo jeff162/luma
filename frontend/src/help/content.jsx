@@ -2811,7 +2811,9 @@ export const HELP_TOPICS = [
             <strong>No charge found</strong> &mdash; counted, but no charge was matched to exclude (an untracked
             card, history that predates your imports, an order whose export named no card and whose charge
             doesn't read as Amazon, or a miss). Sometimes searching for the amount locates the corresponding
-            transaction. These orders count toward the import's needs-attention total so a stray one gets a look;
+            transaction. A charge that arrives later &mdash; the card synced or imported after the Amazon
+            file &mdash; is matched then, when it is the order's only candidate. These orders count toward the
+            import's needs-attention total so a stray one gets a look;
             when there's genuinely nothing to link mark it as reviewed.
             <p>
               Resolve with:
@@ -2883,7 +2885,7 @@ export const HELP_TOPICS = [
             (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
             order's), <strong>Unlink</strong> detaches the charge &mdash; its original category is
             restored and the order returns to <em>No charge found</em>, where <strong>Link charges…</strong>
-            can pair it correctly.</li>
+            can pair it correctly. An unlinked charge is never matched to that order again automatically.</li>
         </ul>
         <p>
           Hover any order or charge for its <strong>origin detail</strong> (source file, captured fields,

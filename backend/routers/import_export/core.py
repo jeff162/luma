@@ -4058,6 +4058,8 @@ def run_import_parsed(
     if batch_id:
         with (nullcontext(caller_conn) if caller_conn is not None else get_db()) as sweep_conn:
             sweep_import_suspects(sweep_conn, batch_id)
+        from .amazon import match_orders_after_ingest  # lazy: avoid the core↔amazon import cycle
+        match_orders_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db(), batch_id=batch_id)
         pair_refunds_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
         pair_after_ingest(nullcontext(caller_conn) if caller_conn is not None else get_db())
 
@@ -4688,6 +4690,8 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
     if imported_ids:
         with get_db() as conn:
             mark_import_suspects(conn, batch_id, txn_ids=imported_ids, exclude_pairs=settled_pairs)
+        from .amazon import match_orders_after_ingest  # lazy: avoid the core↔amazon import cycle
+        match_orders_after_ingest(get_db(), txn_ids=imported_ids)
         pair_refunds_after_ingest(get_db())
         pair_after_ingest(get_db())
 

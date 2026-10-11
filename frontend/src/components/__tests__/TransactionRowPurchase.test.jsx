@@ -144,3 +144,33 @@ describe('the link marker on a refund pairing', () => {
     expect(onOpenDetail).not.toHaveBeenCalled()
   })
 })
+
+// And for an Amazon order and the card charge it excluded (routers/import_export/amazon.py), which otherwise
+// reads as unpaired everywhere but the Amazon card's reconciliation report.
+describe('the link marker on an Amazon order pairing', () => {
+  it('names the order on its card charge and opens it', async () => {
+    api.getTransactions.mockResolvedValue({ transactions: [{ id: 'order', amount: 18.45 }] })
+    const onOpenDetail = vi.fn()
+    const user = userEvent.setup()
+    renderRow(
+      { amazon_order: { role: 'charge', others: [{ id: 'order', name: 'Trail Lantern; Lantern Hooks;', date: '2026-05-07', amount: 18.45 }] } },
+      { onOpenDetail },
+    )
+
+    await user.click(screen.getByLabelText('Amazon order: Trail Lantern; Lantern Hooks; · May 7, 2026 — open it'))
+    await waitFor(() => expect(onOpenDetail).toHaveBeenCalledWith({ id: 'order', amount: 18.45 }))
+  })
+
+  it('names each charge on the order', () => {
+    renderRow({
+      amazon_order: {
+        role: 'order',
+        others: [
+          { id: 'c1', name: 'AMAZON', date: '2026-05-07', amount: 10 },
+          { id: 'c2', name: 'AMAZON', date: '2026-05-09', amount: 8.45 },
+        ],
+      },
+    })
+    expect(screen.getByLabelText('Card charge $10.00 · May 7, 2026; Card charge $8.45 · May 9, 2026')).toBeTruthy()
+  })
+})

@@ -149,6 +149,33 @@ def member_txn_ids(conn: sqlite3.Connection, link_id: str, role: Optional[str] =
     return [r["txn_id"] for r in rows]
 
 
+def partners_map(conn: sqlite3.Connection, kind: str, txn_ids: Iterable[str]) -> dict[str, dict]:
+    """Per transaction, the other side of its links of one `kind`, as a ledger row's link marker shows them:
+    ``{"role": <this row's role>, "others": [{id, name, date, amount}, …]}``. The other side is the members
+    in a *different* role — a split-shipment order's charges are each other's siblings, not partners — and
+    is carried whole enough to name and open, not to act on. A trashed row on the other side is left out."""
+    ids = [txn_id for txn_id in dict.fromkeys(txn_ids) if txn_id]
+    mapped: dict[str, dict] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        for row in conn.execute(
+            f"""SELECT me.txn_id AS txn_id, me.role AS role, o.id AS other_id, o.date, o.amount,
+                       COALESCE(o.display_name, o.merchant_name, o.raw_name) AS name
+                FROM   txn_link_member me
+                JOIN   txn_link l ON l.id = me.link_id AND l.kind = ?
+                JOIN   txn_link_member other ON other.link_id = me.link_id AND other.role <> me.role
+                JOIN   txn o ON o.id = other.txn_id AND o.trashed_at IS NULL
+                WHERE  me.txn_id IN ({",".join("?" * len(chunk))})
+                ORDER  BY o.date, o.id""",
+            (kind, *chunk),
+        ):
+            entry = mapped.setdefault(row["txn_id"], {"role": row["role"], "others": []})
+            entry["others"].append(
+                {"id": row["other_id"], "name": row["name"], "date": row["date"], "amount": row["amount"]}
+            )
+    return mapped
+
+
 def delete_link(conn: sqlite3.Connection, link_id: str) -> list[dict]:
     """Delete a link and its memberships (members cascade). Returns the member list as it was, so a
     caller unwinding a feature can act on the freed transactions (e.g. un-exclude the charge). Does
