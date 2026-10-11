@@ -595,14 +595,49 @@ def _fts_match_query(value: str) -> Optional[str]:
     query nobody asked for. Quoting each token makes it a literal phrase, so a receipt can be searched
     for `AND` or `store (west)` and get what it says.
 
-    **Tokens match by prefix.** Every other quick-filter facet is a substring match, so an exact-word
+    **Terms match by prefix.** Every other quick-filter facet is a substring match, so an exact-word
     search here would behave differently from the box it shares — `doc:brak` finding nothing while
     `merchant:brak` finds Brake Co. Prefix is the closest FTS equivalent to typing-as-you-go.
+
+    **Text typed without a space is one phrase**, its pieces adjacent and in order; only spaces separate
+    the terms that are ANDed. FTS5 splits `13.80` or `8/25/2026` into several tokens, and ANDing those
+    loose found any receipt holding a word starting with each somewhere — `8oz`, a `6.25%` tax line and
+    the year were enough to "match" a date that appeared nowhere.
+
+    **A date is searched as the date, not as its spelling** — see `_fts_date_phrases`.
     """
-    tokens = [token for token in re.split(r"[^0-9A-Za-z\']+", value or "") if token]
-    if not tokens:
-        return None
-    return " ".join(f'"{token}"*' for token in tokens)
+    date_phrases = _fts_date_phrases(value)
+    if date_phrases:
+        return " OR ".join(f'"{phrase}"' for phrase in date_phrases)
+    terms = []
+    for chunk in (value or "").split():
+        tokens = [token for token in re.split(r"[^0-9A-Za-z\']+", chunk) if token]
+        if tokens:
+            terms.append(f'"{" ".join(tokens)}"*')
+    return " ".join(terms) or None
+
+
+def _fts_date_phrases(value: str) -> list[str]:
+    """The ways a receipt may print the date `value` names, as FTS5 phrases, or [] if it is not a full date.
+
+    A receipt's date is free text in whatever form its issuer chose, so the form typed is rarely the form
+    printed: `8/25/2026` has to find `08/25/2026`, `8/25/26`, `2026-08-25` and `Aug 25, 2026`. Punctuation
+    is not listed because the tokenizer drops it, which also covers `Aug. 25, 2026` and `08-25-2026`. The
+    numeric forms are month-first, as the date facet reads them.
+    """
+    iso_date = _parse_quick_filter_date(value)
+    if not iso_date:
+        return []
+    year, month, day = iso_date.split("-")
+    parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+    months = sorted({month, str(int(month))})
+    days = sorted({day, str(int(day))})
+    names = sorted({parsed.strftime("%b").lower(), parsed.strftime("%B").lower()})
+    phrases = [f"{year} {month} {day}"]
+    phrases += [f"{m} {d} {y}" for m in months for d in days for y in (year, year[2:])]
+    phrases += [f"{name} {d} {year}" for name in names for d in days]
+    phrases += [f"{d} {name} {year}" for name in names for d in days]
+    return phrases
 
 
 def _normalize_quick_filter_text(value: str) -> str:

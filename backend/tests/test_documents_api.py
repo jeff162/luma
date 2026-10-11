@@ -400,6 +400,17 @@ class DocumentSearchTests(DocumentsApiTestCase):
         self.assertEqual(self.quick_filter("doc:brake rotors"), ["txn-repair"])
         self.assertEqual(self.quick_filter("doc:brake espresso"), [])
 
+    def test_a_date_finds_the_receipts_that_print_it_and_no_others(self):
+        # The reported case: `8/25/2026` came back with two receipts from June, because its three numbers
+        # were searched separately and an `8oz`, a `6.25%` tax line and the year satisfied them.
+        self.attach("txn-repair", b"06/25/2026 4:20 pm\nSealant 8oz\nTax 6.25%", "June.txt", "text/plain")
+        self.assertEqual(self.quick_filter("doc:8/25/2026"), [])
+
+        # And the date is found however the receipt happens to spell it.
+        self.attach("txn-coffee", b"Order placed Aug 25, 2026", "Named.txt", "text/plain")
+        self.attach("txn-repair", b"Picked up 08/25/26", "Padded.txt", "text/plain")
+        self.assertEqual(sorted(self.quick_filter("doc:8/25/2026")), ["txn-coffee", "txn-repair"])
+
     def test_the_plain_search_box_reaches_inside_documents_and_says_so(self):
         # Searching a word that exists only inside an attached receipt has to work from the box people
         # actually type in — the first thing anyone does after attaching one. The objection to folding

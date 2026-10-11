@@ -40,6 +40,11 @@ alongside `quick_filter` or by the backend reading the same stored preference.
   `02/01/2023` reads as Feb 1 for a user who meant 1 Feb. A format-string swap is not enough — the
   *parse order* (MDY / DMY / YMD) has to follow the chosen format, with ISO `%Y-%m-%d` always accepted
   as the unambiguous fallback in every format. That rule needs stating in the UI, not just implementing.
+- **The document search writes its numeric forms month-first too.** A typed date is searched inside
+  attachments in the forms a receipt might print it (`_fts_date_phrases`), and the numeric ones are
+  generated in one order. The assumption to build on is that a receipt prints its date in the app's
+  chosen format, so the generated order follows the preference. A possible refinement is reading the
+  order off the receipt's own text: `6/7/26` is ambiguous, but `31/7/26` can only be day-first.
 - **Separator roles flip.** `_parse_quick_filter_amount` strips `,` as thousands and reads `.` as
   decimal; both invert in a `1.234,56` locale, so the same input yields a different number rather than
   an error.
