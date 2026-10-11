@@ -79,7 +79,7 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
             )
         return row["id"]
     conn.execute(
-        "INSERT INTO owner (id, name, color) VALUES (?, ?, ?)",
+        "INSERT INTO owner (id, name, color, flag_new_for_review) VALUES (?, ?, ?, 1)",
         (SHARED_OWNER_ID, SHARED_OWNER_NAME, SHARED_OWNER_COLOR),
     )
     return SHARED_OWNER_ID
@@ -272,13 +272,14 @@ def compact_if_worthwhile(db_path: str | None = None, *, reason: str) -> int:
 # ids under the `plaid:` prefix, the namespace every other provider's ids already had. v72 removes from
 # every duplicate report the rows v69 stopped writing — a source restating its own prior import — so an
 # older report reads as one written today, and compacts the file once afterwards. v73 adds
-# `recurring_signal_dismissal.one_off`, an Amount changed finding dismissed as "fine this time".
+# `recurring_signal_dismissal.one_off`, an Amount changed finding dismissed as "fine this time". v74 adds
+# `owner.flag_new_for_review`, which moves arrival flagging from one ledger-wide setting to each owner.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 73
+CURRENT_VERSION = 74
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2307,6 +2308,23 @@ def _add_signal_dismissal_one_off(conn):
         conn.execute("ALTER TABLE recurring_signal_dismissal ADD COLUMN one_off INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(74)
+def _add_owner_review_flagging(conn):
+    """`owner.flag_new_for_review` — whether an owner's transactions arrive flagged for review
+    (services/review_flagging.py). Every owner starts flagging, which the 1 default states. The
+    ledger-wide switch this replaces is dropped without being carried over: a ledger that had it off
+    sets its owners by hand. Guarded like v65-v73."""
+    tables = _table_names(conn)
+    if "owner" in tables:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(owner)")}
+        if "flag_new_for_review" not in columns:
+            conn.execute("ALTER TABLE owner ADD COLUMN flag_new_for_review INTEGER NOT NULL DEFAULT 1")
+    if "ui_preference" in tables:
+        conn.execute(
+            "DELETE FROM ui_preference WHERE scope_id = '__ledger__' AND pref_key = 'transactions.flag_new_for_review'"
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2793,10 +2811,13 @@ def init_db(db_path: str | None = None):
                 is_managed INTEGER NOT NULL DEFAULT 0
             );
 
+            -- `flag_new_for_review`: whether this owner's transactions arrive flagged `needs_review`
+            -- (services/review_flagging.py).
             CREATE TABLE IF NOT EXISTS owner (
                 id    TEXT PRIMARY KEY,
                 name  TEXT NOT NULL UNIQUE,
-                color TEXT NOT NULL DEFAULT '#6366f1'
+                color TEXT NOT NULL DEFAULT '#6366f1',
+                flag_new_for_review INTEGER NOT NULL DEFAULT 1
             );
 
             -- `external_account_id` is the provider's stable per-account handle (Plaid's account_id, a

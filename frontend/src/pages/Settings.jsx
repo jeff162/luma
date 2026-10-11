@@ -12,7 +12,6 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import SectionListPage, { Subsection } from '../components/SectionListPage.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
-import ReviewFlaggingSection from '../components/settings/ReviewFlaggingSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
 import ImportStorageSection from '../components/settings/ImportStorageSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
@@ -43,13 +42,6 @@ export default function Settings() {
       description: 'Define the currency used by the ledger.',
       help: <FeatureExplainer topic="single-currency" placement="bottom-left" />,
       content: <CurrencySection />,
-    },
-    {
-      key: 'newTransactions',
-      title: 'New transactions',
-      description: 'Choose whether new transactions arrive flagged for review.',
-      help: <FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />,
-      content: <ReviewFlaggingSection />,
     },
     // With sign-in protection off there is no sign-in for a passkey or a second factor to belong to.
     authEnabled && {

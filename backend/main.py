@@ -60,7 +60,7 @@ from backend.db.control_database import auth_required, get_user_by_id, init_cont
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service, sign_in_sessions
-from backend.routers import accounts, app_control, connections, auth, categories, currency, diagnostics, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, review_flagging, rules, sync, tags, tasks, transactions
+from backend.routers import accounts, app_control, connections, auth, categories, currency, diagnostics, documents, import_export, owners, plaid, providers, purchases, recurring, reimbursements, rules, sync, tags, tasks, transactions
 
 
 # Passed explicitly below so the session's lifetime is stated rather than inherited, and taken from the
@@ -338,7 +338,6 @@ app.include_router(import_export.router, prefix="/api/import-export", tags=["imp
 app.include_router(tasks.router,         prefix="/api/tasks",         tags=["tasks"])
 app.include_router(recurring.router,     prefix="/api/recurring",     tags=["recurring"])
 app.include_router(currency.router,      prefix="/api/currency",      tags=["currency"])
-app.include_router(review_flagging.router, prefix="/api/review-flagging", tags=["review-flagging"])
 app.include_router(app_control.router,   prefix="/api/app",           tags=["app"])
 app.include_router(diagnostics.router,   prefix="/api/diagnostics",   tags=["diagnostics"])
 

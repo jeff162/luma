@@ -1036,9 +1036,6 @@ export const api = {
   // the caller shows what the 409 says and retries verbatim with confirm: true.
   getLedgerCurrency:          ()     => request('/currency'),
   setLedgerCurrency:          (code, confirm = false) => request('/currency', { method: 'PUT', body: JSON.stringify({ code, confirm }) }),
-  // Whether an imported or synced transaction arrives flagged for review — ledger-wide, like the currency.
-  getReviewFlagging:          ()     => request('/review-flagging'),
-  setReviewFlagging:          (enabled) => request('/review-flagging', { method: 'PUT', body: JSON.stringify({ enabled }) }),
   getAmazonFundingCategory:   ()     => request('/import-export/amazon/funding-category'),
   setAmazonFundingCategory:   (categoryId) => request('/import-export/amazon/funding-category', { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) }),
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),

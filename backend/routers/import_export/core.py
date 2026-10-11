@@ -127,7 +127,7 @@ from backend.services.source_capabilities import (
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.paypal_funding import pair_after_ingest, reverse_batch_paypal_funding
 from backend.services.refund_links import pair_refunds_after_ingest, reverse_batch_refund_links
-from backend.services.review_flagging import flag_new_transactions
+from backend.services.review_flagging import owners_not_flagging
 from backend.services.paypal_funding import card_counts as paypal_card_counts
 from backend.services.money_movement import (
     suppress_batch_funding_legs,
@@ -3480,7 +3480,7 @@ def run_import_parsed(
         # Rules are stable across an import; load once so the per-row matcher below doesn't re-query them.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
-        flag_for_review = flag_new_transactions(conn)
+        unflagged_owner_ids = owners_not_flagging(conn)
         # Accumulate the newest transaction date each rule supplies an effect for, flushed after the row
         # loop so imports keep category_rule.last_effect_date current (drives the stale-rule cleanup).
         _rules_by_id = {r["id"]: r for r in rules}
@@ -3860,7 +3860,10 @@ def run_import_parsed(
                 reset_footer_detection()
                 continue
 
-            txn_id = _insert_imported_transaction(conn, batch_id, txn_payload, flag_for_review=flag_for_review)
+            txn_id = _insert_imported_transaction(
+                conn, batch_id, txn_payload,
+                flag_for_review=txn_payload.get("owner_id") not in unflagged_owner_ids,
+            )
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             if parsed_date:
                 for _rid in effect_rule_ids(rule_result, _rules_by_id, rule_tags_by_id):
@@ -4581,7 +4584,7 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
         importable_selected = 0
         not_importable_count = 0
         account_increments: dict[tuple[str | None, str], int] = {}
-        flag_for_review = flag_new_transactions(conn)
+        unflagged_owner_ids = owners_not_flagging(conn)
 
         for entry in duplicate_rows:
             row_number = int(entry.get("row") or 0)
@@ -4613,7 +4616,10 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
                 payload = {**payload, "owner_id": owner["owner_id"] if owner else None}
 
             importable_selected += 1
-            txn_id = _insert_imported_transaction(conn, batch_id, payload, flag_for_review=flag_for_review)
+            txn_id = _insert_imported_transaction(
+                conn, batch_id, payload,
+                flag_for_review=payload.get("owner_id") not in unflagged_owner_ids,
+            )
             imported_ids.append(txn_id)
             if "category_id" not in payload:
                 uncategorized_ids.append(txn_id)

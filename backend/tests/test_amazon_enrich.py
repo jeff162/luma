@@ -52,7 +52,6 @@ from backend.routers.import_export.amazon import (
 from backend.services.amazon_import import AmazonItem, AmazonOrder, PaymentLeg, merge
 from backend.services import amazon_funding, txn_links
 from backend.services.categorizer import recategorize_all
-from backend.services.review_flagging import set_flag_new_transactions
 
 
 def _cash_order(order_id="111-0000000-0000010", last4="4321", amount=37.32, refund=None):
@@ -925,9 +924,9 @@ class AmazonOrdersTests(unittest.TestCase):
             self.assertEqual(len(recon["amazon_unmatched"]), 1)
             self.assertFalse(recon["amazon_unmatched"][0]["reviewed"], "linking cleared the stale acknowledgment")
 
-    def test_order_rows_follow_the_review_flagging_setting(self):
+    def test_order_rows_follow_their_owners_review_flagging(self):
         with self._use_db_path(), get_db() as conn:
-            set_flag_new_transactions(conn, False)
+            conn.execute("UPDATE owner SET flag_new_for_review = 0 WHERE id = ?", (SHARED_OWNER_ID,))
             run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
             flags = [r[0] for r in conn.execute("SELECT needs_review FROM txn WHERE account_id = 'amazon'")]
         self.assertEqual(flags, [0])

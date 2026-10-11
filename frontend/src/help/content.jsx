@@ -609,9 +609,11 @@ export const HELP_TOPICS = [
           an exception that belongs in a different category.
         </p>
         <p>
-          Flagging is optional. Turning off <strong>Flag new transactions for review</strong>, under
-          <strong>New transactions</strong> on the <HelpLink to="/help/page-settings">Settings</HelpLink> page,
-          lets imported and synced transactions arrive unflagged. Transactions already flagged are not changed.
+          Flagging is optional and is chosen for each account owner. Turning off <strong>Flag new transactions
+          for review</strong> beside an owner, on the <strong>Owners</strong> tab of
+          the <HelpLink to="/help/page-accounts">Accounts</HelpLink> page, lets transactions imported or synced
+          into that owner's accounts arrive unflagged. Transactions in an account with no owner are always
+          flagged. Transactions already flagged are not changed.
         </p>
         <p>The flag clears three ways:</p>
         <ul>
@@ -1915,7 +1917,8 @@ export const HELP_TOPICS = [
         <p>
           <strong>Owners</strong> are assigned to accounts. When more
           than one owner exists, <em>shared</em> becomes available as a choice. Owner can be filtered
-          and reported on and used in the selection criteria for rules.
+          and reported on and used in the selection criteria for rules. Each owner also chooses whether its new
+          transactions arrive flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
         </p>
         <p>
           <strong>Connections</strong> is where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
@@ -3411,10 +3414,6 @@ export const HELP_TOPICS = [
           <li>
             <strong>Currency</strong> defines the meaning of the values in the
             ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
-          </li>
-          <li>
-            <strong>New transactions</strong> chooses whether imported and synced transactions arrive
-            flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
           </li>
           <li>
             <strong>Sign-in methods</strong> holds the password, passkeys and two-factor sign-in for

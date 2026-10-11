@@ -22,8 +22,12 @@ from backend.routers import tasks
 
 
 def _req(host: str, scheme: str = "http"):
-    # transport reads only request.url.hostname / request.url.scheme.
-    return SimpleNamespace(url=SimpleNamespace(hostname=host, scheme=scheme))
+    # transport reads only request.url.hostname / request.url.scheme. The task is also shown only to
+    # someone who could set HTTPS up, so the request is an admin's: what varies here is the transport.
+    return SimpleNamespace(
+        url=SimpleNamespace(hostname=host, scheme=scheme),
+        state=SimpleNamespace(user={"id": "test-user", "role": "admin"}),
+    )
 
 
 class DetectionTests(unittest.TestCase):

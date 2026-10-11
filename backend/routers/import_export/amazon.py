@@ -48,7 +48,7 @@ from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
-from backend.services.review_flagging import flag_new_transactions
+from backend.services.review_flagging import flags_new_transactions
 from backend.services.txn_summaries import txn_summaries
 from backend.services.amazon_import import (
     AmazonItem,
@@ -883,7 +883,8 @@ def run_amazon_import(
     if not groups:
         groups = {None: []}   # an empty drop still yields one (empty) batch, as before
 
-    flag_for_review = flag_new_transactions(conn)
+    # Every order lands in the one Amazon account, so the drop has a single owner to ask.
+    flag_for_review = flags_new_transactions(conn, _account_owner(conn, account_id))
     batch_results = [
         _import_group_to_batch(conn, group_orders, account_id=account_id,
                                filename=_group_label(group_orders, filename),

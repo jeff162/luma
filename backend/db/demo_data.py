@@ -161,7 +161,9 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
         "Jordan": (str(uuid.uuid4()), "Jordan Lee", "#db2777"),
     }
     for oid, name, color in owners.values():
-        conn.execute("INSERT INTO owner (id, name, color) VALUES (?, ?, ?)", (oid, name, color))
+        conn.execute(
+            "INSERT INTO owner (id, name, color, flag_new_for_review) VALUES (?, ?, ?, 1)", (oid, name, color)
+        )
 
     accounts = {
         "checking": (str(uuid.uuid4()), "Everyday Checking", "depository", owners["Alex"][0]),

@@ -70,7 +70,7 @@ from backend.services.duplicate_detection import (
     sweep_import_suspects,
 )
 from backend.services.recurring_detection import payee_keys_for_ids, run_auto_scan, scan_imported_payees
-from backend.services.review_flagging import flag_new_transactions
+from backend.services.review_flagging import owners_not_flagging
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -955,7 +955,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         # parse is gated on a source-text rule actually existing, matching `recategorize_all`, so a ledger
         # with none pays nothing.
         needs_source_text = any(rule["match_source_text"] for rule in rules)
-        flag_for_review = 1 if flag_new_transactions(conn) else 0
+        unflagged_owner_ids = owners_not_flagging(conn)
 
         def _account_for(external_account_id):
             return conn.execute(
@@ -1272,7 +1272,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                  1 if t["is_pending"] else 0, display_name_source, content_hash, evidence_json, card_id,
                  verdict.suspect_of if verdict.soft_flag else None,
                  verdict.reason_key if verdict.soft_flag else None,
-                 flag_for_review),
+                 0 if acc["owner_id"] in unflagged_owner_ids else 1),
             )
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             added += 1

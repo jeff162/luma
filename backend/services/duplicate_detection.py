@@ -4202,7 +4202,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
     is what keeps a legitimate repeat (the same amount twice in a week on one account) out of the report.
 
     Canonical choice (which row is KEPT vs. which becomes the trashed suspect): keep the more-curated row.
-    A row still awaiting review (needs_review = 1 — where a synced row starts unless the ledger has
+    A row still awaiting review (needs_review = 1 — where a synced row starts unless its owner has
     switched arrival flagging off, `services/review_flagging.py`) yields to a reviewed one;
     ties break to the earlier import, then the lower id. So a re-fetched Plaid copy is trashed in favor of
     the categorized CSV row it duplicates, not the reverse. Only rows not already carrying a suspect pointer

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, OverlayBackdrop } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, PasswordInput, Toggle, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { LastSyncSummary, LastSyncedLine, StatusPill } from '../components/connections/ConnectionStatus.jsx'
 import { ConnectionSyncLogDialog } from '../components/connections/ConnectionSyncLogDialog.jsx'
@@ -2362,8 +2362,17 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   )
 }
 
+// The Owners panel's one column heading. Each switch sits under the "t" of "transactions": its cell
+// leads with a hidden copy of the words before it, so the offset is measured by the text itself.
+const REVIEW_FLAG_HEADING_LEAD = 'Flag new '
+const REVIEW_FLAG_HEADING_REST = 'transactions for review'
+const REVIEW_FLAG_HEADING_STYLE = { fontSize: 12, color: 'var(--muted)', whiteSpace: 'pre' }
+
 function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => { }, disabled = false, width, expanded, onExpandedChange, collapsible = true }) {
   const visibleOwners = getPersonalOwners(owners)
+  // Shared gets a row once an account can be assigned to it, since its review flagging is then a choice
+  // like any other owner's.
+  const ownerRows = getAssignableOwners(owners)
   const ownersSummary = formatCountSummary(visibleOwners.length, 'owner')
   const [editingOwnerId, setEditingOwnerId] = useState(null)
   const [ownerDraft, setOwnerDraft] = useState('')
@@ -2417,6 +2426,14 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
     setOwnerDraft('')
   }
 
+  async function setReviewFlagging(owner, enabled) {
+    try {
+      await onSaveOwner(owner.id, { flag_new_for_review: enabled })
+    } catch (error) {
+      onError('Could not update owner', error)
+    }
+  }
+
   async function submitNewOwner() {
     const trimmed = newOwnerDraft.trim()
     if (!trimmed) return
@@ -2444,31 +2461,45 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
     >
       <div style={{ padding: '12px 16px 14px' }}>
         {visibleOwners.length > 0 ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            {visibleOwners.map(owner => (
-              <OwnerPill
-                key={owner.id}
-                owner={owner}
-                editing={editingOwnerId === owner.id}
-                draft={ownerDraft}
-                onDraftChange={setOwnerDraft}
-                onStartEdit={() => {
-                  setEditingOwnerId(owner.id)
-                  setOwnerDraft(owner.name)
-                  setCreatingOwner(false)
-                  setNewOwnerDraft('')
-                }}
-                onCommitEdit={commitEdit}
-                onCancelEdit={() => {
-                  setEditingOwnerId(null)
-                  setOwnerDraft('')
-                }}
-                onContextMenu={e => {
-                  e.preventDefault()
-                  setOwnerMenu({ x: e.clientX, y: e.clientY, owner })
-                }}
-              />
-            ))}
+          <div style={{ display: 'grid', gap: 12, justifyItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'max-content max-content', gap: '8px 20px', alignItems: 'center', justifyItems: 'start' }}>
+              <span />
+              <span style={REVIEW_FLAG_HEADING_STYLE}>{REVIEW_FLAG_HEADING_LEAD}{REVIEW_FLAG_HEADING_REST}</span>
+              {ownerRows.map(owner => (
+                <Fragment key={owner.id}>
+                  <OwnerPill
+                    owner={owner}
+                    editing={editingOwnerId === owner.id}
+                    draft={ownerDraft}
+                    onDraftChange={setOwnerDraft}
+                    onStartEdit={() => {
+                      setEditingOwnerId(owner.id)
+                      setOwnerDraft(owner.name)
+                      setCreatingOwner(false)
+                      setNewOwnerDraft('')
+                    }}
+                    onCommitEdit={commitEdit}
+                    onCancelEdit={() => {
+                      setEditingOwnerId(null)
+                      setOwnerDraft('')
+                    }}
+                    onContextMenu={e => {
+                      e.preventDefault()
+                      setOwnerMenu({ x: e.clientX, y: e.clientY, owner })
+                    }}
+                  />
+                  <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <span aria-hidden="true" style={{ ...REVIEW_FLAG_HEADING_STYLE, visibility: 'hidden' }}>{REVIEW_FLAG_HEADING_LEAD}</span>
+                    <Toggle
+                      checked={!!owner.flag_new_for_review}
+                      onChange={enabled => setReviewFlagging(owner, enabled)}
+                      ariaLabel={`${REVIEW_FLAG_HEADING_LEAD}${REVIEW_FLAG_HEADING_REST}: ${owner.name}`}
+                      disabled={disabled}
+                    />
+                  </div>
+                </Fragment>
+              ))}
+            </div>
             {creatingOwner ? (
               <div style={{
                 display: 'inline-flex',

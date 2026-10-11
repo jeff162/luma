@@ -20,7 +20,7 @@ from pathlib import Path
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import run_import
 from backend.routers.import_export.core import _insert_imported_transaction, mark_batch_reviewed
-from backend.routers.review_flagging import ReviewFlaggingRequest, get_review_flagging, set_review_flagging
+from backend.routers.owners import OwnerUpdate, list_owners, update_owner
 from backend.routers.transactions import (
     BulkAction,
     BulkSelection,
@@ -173,8 +173,8 @@ class _Upload:
         return self._content
 
 
-class ReviewFlaggingSettingTests(unittest.IsolatedAsyncioTestCase):
-    """The setting is read by the import *run*, so it is pinned by running one."""
+class OwnerReviewFlaggingTests(unittest.IsolatedAsyncioTestCase):
+    """An owner's choice is read by the import *run*, so it is pinned by running one."""
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -182,28 +182,33 @@ class ReviewFlaggingSettingTests(unittest.IsolatedAsyncioTestCase):
         init_db(str(self.db_path))
         self.token = set_current_db_path(str(self.db_path))
         self.account = str(uuid.uuid4())
+        self.unowned_account = str(uuid.uuid4())
         with get_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO account
-                  (id, external_account_id, provider, name, display_name, type, subtype,
-                   mask, owner_id, parent_account_id, trashed_at)
-                VALUES (?, ?, 'fixture', 'Checking', 'Checking', 'depository', 'checking',
-                        NULL, ?, NULL, NULL)
-                """,
-                (self.account, f"fixture_{self.account}", SHARED_OWNER_ID),
-            )
+            for account_id, name, owner_id in (
+                (self.account, "Checking", SHARED_OWNER_ID),
+                (self.unowned_account, "Savings", None),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO account
+                      (id, external_account_id, provider, name, display_name, type, subtype,
+                       mask, owner_id, parent_account_id, trashed_at)
+                    VALUES (?, ?, 'fixture', ?, ?, 'depository', 'checking',
+                            NULL, ?, NULL, NULL)
+                    """,
+                    (account_id, f"fixture_{account_id}", name, name, owner_id),
+                )
 
     def tearDown(self):
         reset_current_db_path(self.token)
         self.tempdir.cleanup()
 
-    async def _import(self, day: str, payee: str) -> None:
+    async def _import(self, day: str, payee: str, account: str = "Checking") -> None:
         config = {
             "filename": "fixture.csv",
             "profile_id": None,
             "account_id": None,
-            "account_map": {"Checking": self.account},
+            "account_map": {"Checking": self.account, "Savings": self.unowned_account},
             "skip_accounts": [],
             "new_accounts": None,
             "column_map": {"date": "Date", "description": "Description", "account": "Account", "amount": "Amount"},
@@ -213,22 +218,28 @@ class ReviewFlaggingSettingTests(unittest.IsolatedAsyncioTestCase):
             "apply_categorization": False,
             "use_imported_categories": False,
         }
-        csv_text = f"Date,Description,Account,Amount\n{day},{payee},Checking,9.99"
+        csv_text = f"Date,Description,Account,Amount\n{day},{payee},{account},9.99"
         await run_import(file=_Upload(csv_text), config=json.dumps(config))
 
-    async def test_setting_governs_arrival_only(self):
-        self.assertTrue(get_review_flagging()["enabled"])
+    def _flagging(self) -> bool:
+        return bool(next(o for o in list_owners() if o["id"] == SHARED_OWNER_ID)["flag_new_for_review"])
+
+    async def test_an_owners_choice_governs_arrival_only(self):
+        self.assertTrue(self._flagging())
         await self._import("2026-04-10", "Grocer")
-        set_review_flagging(ReviewFlaggingRequest(enabled=False))
-        self.assertFalse(get_review_flagging()["enabled"])
+        # Shared is built in, and its flagging is still its own to set.
+        update_owner(SHARED_OWNER_ID, OwnerUpdate(flag_new_for_review=False))
+        self.assertFalse(self._flagging())
         await self._import("2026-04-11", "Bakery")
-        set_review_flagging(ReviewFlaggingRequest(enabled=True))
+        # No owner has opted out for an unowned account, so its rows are flagged regardless.
+        await self._import("2026-04-11", "Interest", account="Savings")
+        update_owner(SHARED_OWNER_ID, OwnerUpdate(flag_new_for_review=True))
         await self._import("2026-04-12", "Florist")
         with get_db() as conn:
             flags = dict(conn.execute("SELECT merchant_name, needs_review FROM txn").fetchall())
         # Neither switch rewrote a stored row: the one flagged on arrival still is, and the one that
         # arrived unflagged was not swept in when flagging came back.
-        self.assertEqual(flags, {"Grocer": 1, "Bakery": 0, "Florist": 1})
+        self.assertEqual(flags, {"Grocer": 1, "Bakery": 0, "Interest": 1, "Florist": 1})
 
 
 if __name__ == "__main__":
