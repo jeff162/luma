@@ -94,6 +94,44 @@ test('an amount finding can exclude its charge from the series, and Undo puts it
   }
 })
 
+test('removing a row from a series updates its counts while the row stays in the report', async ({ page, request }) => {
+  // The row menu's removal patches its row in place and leaves it on screen (an edited row lingers until
+  // Refresh), but the counts are facts about the series: the report header, the card and the removed
+  // section have to move at once rather than wait for a reload.
+  const response = await request.get('/api/recurring')
+  expect(response, `recurring list failed (${response.status()})`).toBeOK()
+  const series = ((await response.json()).series || []).find(s => s.display_name === 'Netflix')
+  expect(series, 'the demo ledger should carry a Netflix series').toBeTruthy()
+  const count = series.occurrence_count
+
+  await page.goto('/recurring')
+  const card = page.locator(`[data-series-id="${series.id}"]`)
+  await card.getByRole('button', { name: `${count} transactions` }).click()
+  await expect(page.getByText(`${count} matching transactions`)).toBeVisible()
+
+  try {
+    await page.getByText(series.display_name, { exact: true }).last().click({ button: 'right' })
+    await page.getByText('↻ Remove from recurring series').click()
+
+    await expect(page.getByText(`${count - 1} matching transactions`)).toBeVisible()
+    await expect(card.getByRole('button', { name: `${count - 1} transactions` })).toBeVisible()
+    await page.getByRole('button', { name: '1 removed from this series' }).click()
+
+    await page.getByRole('button', { name: 'Add back' }).click()
+    await expect(page.getByText(`${count} matching transactions`)).toBeVisible()
+    await expect(card.getByRole('button', { name: `${count} transactions` })).toBeVisible()
+    await expect(page.getByRole('button', { name: /removed from this series/ })).toHaveCount(0)
+  } finally {
+    // Leave the series as the demo ledger had it: every removal cleared, and back to Suggested if curating
+    // it is what accepted it.
+    const removed = await request.get(`/api/transactions?recurring_excluded_series_id=${series.id}&limit=0`)
+    for (const txn of (await removed.json()).transactions || []) {
+      await request.post(`/api/recurring/${series.id}/membership`, { data: { transaction_id: txn.id, state: 'clear' } })
+    }
+    if (!series.confirmed) await request.post(`/api/recurring/${series.id}/unconfirm`)
+  }
+})
+
 test('a transfer between two accounts is one series, not two', async ({ page }) => {
   // The demo's standing transfer is recorded twice — once leaving checking, once arriving in savings —
   // which is what any movement between two tracked accounts looks like to a ledger organized by

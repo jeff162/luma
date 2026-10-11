@@ -494,7 +494,7 @@ function RemovedSection({ excluded, onAddBack }) {
 // docked panel), but its *content* sits in the same column as the list above — otherwise the panel's
 // title and table start at the page edge while the cards start at the column, and the page reads as
 // three different left margins stacked on each other.
-function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, scrollRef, sortState, onSort }) {
+function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, onMembershipChange, scrollRef, sortState, onSort }) {
   // The column goes on an element *inside* the padding, never on the padded element itself — putting a
   // maxWidth on a padded box measures the column inside the padding and shifts it by that amount.
   const column = { maxWidth: PAGE_COLUMN, margin: '0 auto', width: '100%' }
@@ -537,6 +537,7 @@ function ReportPanel({ series, rows, excluded, total, categories, loading, onClo
             onTransactionOpenDetail={onOpenTxnDetail}
             onRowsChange={onRowsChange}
             onTrashed={onTrashed}
+            onMembershipChange={onMembershipChange}
             showMerchantReport={false}
             emptyMessage="No linked transactions. Run a scan to (re)link matches."
             scrollRef={scrollRef}
@@ -983,14 +984,43 @@ export default function Recurring() {
       : { id: ALL_RECURRING_ID, display_name: 'All recurring transactions', _all: true }))
   }, [])
 
+  // A row left ('excluded') or rejoined ('clear') a series. The row itself lingers in the report, but the
+  // counts are facts about the series, not about which rows are on screen, so they follow at once: the
+  // card takes the server's recomputed series, the report total moves by the same amount the series'
+  // count did (exact for the all-series report too, and for a movement series whose count is in legs),
+  // and the row moves between the members and the removed-from-series section.
+  const applyMembershipChange = useCallback(({ txnId, row, seriesId, state, series }) => {
+    const before = (allSeriesRef.current || []).find(x => x.id === seriesId)
+    if (series) setAllSeries(prev => (prev || []).map(x => (x.id === series.id ? series : x)))
+    if (!openSeries || (!openSeries._all && openSeries.id !== seriesId)) return
+    const delta = series && before
+      ? series.occurrence_count - before.occurrence_count
+      : (state === 'excluded' ? -1 : 1)
+    if (delta) membersPaged.setTotal(prev => Math.max(0, prev + delta))
+    if (openSeries._all) return
+    if (state === 'excluded' && row) setExcluded(prev => [row, ...prev.filter(t => t.id !== txnId)])
+    else if (state === 'clear') setExcluded(prev => prev.filter(t => t.id !== txnId))
+  }, [membersPaged, openSeries])
+
   // Undo a removal from inside the drill-down (the durable path for a mistake noticed after the toast is
   // gone): clear the exclude override, then move the row from the removed list back into members in place.
+  // A row removed from this same report is still lingering there, so it is patched rather than added twice.
   const addBackToSeries = useCallback((txn) => {
-    membersPaged.setRows(prev => [txn, ...prev])
-    membersPaged.setTotal(prev => prev + 1)
-    setExcluded(prev => prev.filter(t => t.id !== txn.id))
-    api.setRecurringMembership(openSeries?.id, txn.id, 'clear').catch(() => {})
-  }, [membersPaged, openSeries])
+    const seriesId = openSeries?.id
+    const row = {
+      ...txn,
+      recurring_series_id: seriesId,
+      recurring_series_name: openSeries?.display_name || null,
+      recurring_excluded_series_id: null,
+      recurring_excluded_series_name: null,
+    }
+    membersPaged.setRows(prev => (prev.some(t => t.id === txn.id)
+      ? prev.map(t => (t.id === txn.id ? { ...t, ...row } : t))
+      : [row, ...prev]))
+    api.setRecurringMembership(seriesId, txn.id, 'clear')
+      .then(series => applyMembershipChange({ txnId: txn.id, row, seriesId, state: 'clear', series }))
+      .catch(() => {})
+  }, [membersPaged, openSeries, applyMembershipChange])
 
   // When the drill-down opens (or switches series) the list area shrinks, which can hide the card that
   // was clicked. Scroll it back into view with block:'nearest' so the list shifts up by the minimum
@@ -1419,6 +1449,7 @@ export default function Recurring() {
             onOpenTxnDetail={setPayeeDetail}
             onTrashed={txnId => { membersPaged.setTotal(prev => Math.max(0, prev - 1)); setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev)) }}
             onAddBack={addBackToSeries}
+            onMembershipChange={applyMembershipChange}
             scrollRef={membersPaged.listRef}
             sortState={membersPaged.sortState}
             onSort={membersPaged.onSort}

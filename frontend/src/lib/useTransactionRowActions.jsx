@@ -17,6 +17,10 @@
  *   - removeRow(id)            drop a row after it is trashed (and adjust any total/panels)
  *   - onRuleSaved(info)        optional: react to a rule create/apply from the menu
  *   - onSplitSaved(id, result) optional: a split was rewritten — refetch if the list shows allocations
+ *   - onMembershipChange(info) optional: a row left or rejoined a recurring series from the menu or its
+ *                              toast — { txnId, row, seriesId, state: 'excluded'|'clear', series }, where
+ *                              `row` is the patched row (absent on Undo) and `series` the server's
+ *                              recomputed series. For a host showing series counts beside the rows.
  *   - categories / onAddCategory  the category list the split editor's pickers render. Passing
  *                              a non-empty `categories` is what turns the split action on: without
  *                              one the menu
@@ -39,7 +43,7 @@ import { wholeTransactionRow } from './splitRows.js'
 import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 
-export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, categories, onAddCategory } = {}) {
+export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved, onSplitSaved, onMembershipChange, categories, onAddCategory } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const navigate = useNavigate()
   const [noteTarget, setNoteTarget] = useState(null)
@@ -196,14 +200,16 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
       ruleId: txn.recurring_rule_id || null,
     }
     try {
-      await api.setRecurringMembership(txn.recurring_series_id, txn.id, 'excluded')
+      const series = await api.setRecurringMembership(txn.recurring_series_id, txn.id, 'excluded')
       // The row lingers; clear the membership fields (drops its ↻ marker) and record which series it was
       // removed from, so its menu immediately offers "Restore to recurring series" (not just the toast).
-      reconcileRow?.(txn.id, {
+      const patch = {
         recurring_series_id: null, recurring_series_name: null, recurring_rule_id: null,
         recurring_excluded_series_id: txn.recurring_series_id,
         recurring_excluded_series_name: txn.recurring_series_name || null,
-      })
+      }
+      reconcileRow?.(txn.id, patch)
+      onMembershipChange?.({ txnId: txn.id, row: { ...txn, ...patch }, seriesId: snapshot.seriesId, state: 'excluded', series })
       setRecurringUndo(snapshot)
     } catch (err) {
       reportActionFailure('Could not remove from the recurring series', err)
@@ -217,15 +223,17 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     if (!seriesId) return
     closeMenu()
     try {
-      await api.setRecurringMembership(seriesId, txn.id, 'clear')
-      reconcileRow?.(txn.id, {
+      const series = await api.setRecurringMembership(seriesId, txn.id, 'clear')
+      const patch = {
         recurring_series_id: seriesId,
         recurring_series_name: txn.recurring_excluded_series_name || null,
         // rule_id is unknown here; the ↻ marker still shows, and a refetch/scan fills the exact link.
         recurring_rule_id: null,
         recurring_excluded_series_id: null,
         recurring_excluded_series_name: null,
-      })
+      }
+      reconcileRow?.(txn.id, patch)
+      onMembershipChange?.({ txnId: txn.id, row: { ...txn, ...patch }, seriesId, state: 'clear', series })
     } catch (err) {
       reportActionFailure('Could not restore to the recurring series', err)
     }
@@ -238,7 +246,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     if (!snap) return
     setRecurringUndo(null)
     try {
-      await api.setRecurringMembership(snap.seriesId, snap.txnId, 'clear')
+      const series = await api.setRecurringMembership(snap.seriesId, snap.txnId, 'clear')
       reconcileRow?.(snap.txnId, {
         recurring_series_id: snap.seriesId,
         recurring_series_name: snap.seriesName,
@@ -246,6 +254,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
         recurring_excluded_series_id: null,
         recurring_excluded_series_name: null,
       })
+      onMembershipChange?.({ txnId: snap.txnId, seriesId: snap.seriesId, state: 'clear', series })
     } catch (err) {
       reportActionFailure('Could not restore to the recurring series', err)
     }

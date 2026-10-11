@@ -142,6 +142,9 @@ export default function TransactionListTable({
   // cannot restate them — such a host passes its refetch. Where none is given the table falls back to
   // dropping the stale allocation rows rather than leaving them showing figures that are no longer true.
   onSplitSaved = null,
+  // A row left or rejoined a recurring series from the row menu (see useTransactionRowActions). The row
+  // itself is patched in place and lingers; a host that shows series counts beside it adjusts them here.
+  onMembershipChange = null,
   getRowStyle,
   maxHeight = 420,
   showAccount = true,
@@ -207,6 +210,7 @@ export default function TransactionListTable({
       const expanded = (rows || []).some(row => row.id === txnId && row.split_part_id)
       if (expanded) onRowsChange?.(prev => prev.filter(row => !(row.id === txnId && row.split_part_id)))
     },
+    onMembershipChange,
     categories,
     onAddCategory,
   })
