@@ -681,6 +681,7 @@ function FilterPill({ label, count, on, onClick }) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={on}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 7, padding: '4px 12px', borderRadius: 99,
         cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
@@ -1025,16 +1026,27 @@ export default function Recurring() {
   // When the drill-down opens (or switches series) the list area shrinks, which can hide the card that
   // was clicked. Scroll it back into view with block:'nearest' so the list shifts up by the minimum
   // needed — the clicked card stays visible just above the report, even for the last few rows.
+  //
+  // The scroll is owed until the card is actually rendered, then paid once. A series opened from a link
+  // or a finding may not have a card on screen yet — its section's pill is being switched on, or the
+  // Series view isn't the one showing — so the attempt repeats as the layout and view change rather than
+  // firing once into nothing. Paying it once is what keeps a later pill toggle from jumping back here.
   const listRef = useRef(null)
   const openId = openSeries?.id || null
+  const scrollOwedRef = useRef(null)
+  useEffect(() => { scrollOwedRef.current = openId }, [openId])
   useEffect(() => {
-    if (!openId) return
+    if (!openId || scrollOwedRef.current !== openId) return
     const node = listRef.current?.querySelector(`[data-series-id="${openId}"]`)
-    if (node) requestAnimationFrame(() => node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
-  }, [openId])
+    if (!node) return
+    scrollOwedRef.current = null
+    requestAnimationFrame(() => node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
+  }, [openId, layout, view])
 
   // Landing from a transaction's "Part of <series>" link (?series=<id>): open that series' drill-down
-  // once, then strip the param so closing it doesn't re-trigger.
+  // once, then strip the param so closing it doesn't re-trigger. The link wins over the saved pill
+  // selection: if the series' section is filtered out, its pill is switched on (and saved, like any pill
+  // click) so the card the link is about is on screen; the other pills are left as they were.
   const landedRef = useRef(null)
   useEffect(() => {
     const wanted = searchParams.get('series')
@@ -1043,10 +1055,12 @@ export default function Recurring() {
     if (!s) return
     landedRef.current = wanted
     setView(VIEW_SERIES)
+    const section = seriesCategory(s)
+    if (!selectedRef.current.has(section)) setFilterList([...selectedRef.current, section])
     openReport(s)
     const next = new URLSearchParams(searchParams); next.delete('series')
     setSearchParams(next, { replace: true })
-  }, [allSeries, searchParams, openReport, setSearchParams, setView])
+  }, [allSeries, searchParams, openReport, setSearchParams, setView, setFilterList])
 
   async function scan() {
     setScanning(true)

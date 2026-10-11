@@ -132,6 +132,41 @@ test('removing a row from a series updates its counts while the row stays in the
   }
 })
 
+test('a link to a series switches on its section and scrolls its card into view', async ({ page, request }) => {
+  // A transaction's "Part of <series>" link lands here with ?series=<id>. The saved pill selection may
+  // hide the section that series sits in; the link wins over it, so the pill comes on (and is saved) and
+  // the card is brought on screen rather than left for the user to find. The series is taken from the
+  // last section in page order, so it sits below the others and actually needs the scroll.
+  const SECTION_ORDER = ['suggested', 'confirmed', 'ended']
+  const sectionOf = s => (s.status === 'ended' ? 'ended'
+    : s.source === 'manual' || s.confirmed ? 'confirmed' : 'suggested')
+  const response = await request.get('/api/recurring')
+  expect(response, `recurring list failed (${response.status()})`).toBeOK()
+  const series = ((await response.json()).series || []).filter(s => s.status !== 'suppressed')
+  const target = series.reduce((best, s) => (
+    SECTION_ORDER.indexOf(sectionOf(s)) >= SECTION_ORDER.indexOf(sectionOf(best)) ? s : best))
+  const section = sectionOf(target)
+  const others = SECTION_ORDER.filter(x => x !== section)
+
+  const prefs = await (await request.get('/api/auth/preferences')).json()
+  const saved = prefs.preferences?.['ui.recurring.filters']
+  await request.post('/api/auth/preferences', { data: { key: 'ui.recurring.filters', value: others } })
+
+  try {
+    await page.goto(`/recurring?series=${target.id}`)
+    const label = section[0].toUpperCase() + section.slice(1)
+    await expect(page.getByRole('button', { name: new RegExp(`^${label}`), pressed: true })).toBeVisible()
+    await expect(page.locator(`[data-series-id="${target.id}"]`)).toBeInViewport()
+
+    const after = await (await request.get('/api/auth/preferences')).json()
+    expect(after.preferences['ui.recurring.filters']).toEqual(expect.arrayContaining([...others, section]))
+  } finally {
+    await request.post('/api/auth/preferences', {
+      data: { key: 'ui.recurring.filters', value: saved ?? ['suggested', 'confirmed', 'ended'] },
+    })
+  }
+})
+
 test('a transfer between two accounts is one series, not two', async ({ page }) => {
   // The demo's standing transfer is recorded twice — once leaving checking, once arriving in savings —
   // which is what any movement between two tracked accounts looks like to a ledger organized by
