@@ -19,7 +19,7 @@ built frontend inside it. Two forms come out of the same code, and `--form` choo
 
 The default is whichever form the build platform supports; **macOS is installed-only**, because a
 `.app` cannot hold its own writable data — a quarantined application may be run from a randomized
-read-only path that disappears afterwards. Either way, **Settings → Configuration** reports the
+read-only path that disappears afterwards. Either way, **Administration → Startup configuration** reports the
 directory actually in force.
 
 Each platform's artifact must be built on that platform: PyInstaller cannot cross-build.

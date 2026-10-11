@@ -217,7 +217,7 @@ export function SyncStatusProvider({ children }) {
   // just refreshed it, which is the one moment it is most obviously wrong.
   //
   // `runsFinished` counts those endings, for the consumers whose data a sync changes but who hold their own
-  // copy of it — Import/Export's history cards above all, whose row counts, account chips and review pills
+  // copy of it — the Import page's history cards above all, whose row counts, account chips and review pills
   // otherwise stayed at whatever the page last loaded, mid-sync or before it, until something unrelated
   // reloaded them. A counter rather than a callback so a page can simply watch it while mounted, however
   // the run was started (its own panel, the navigation pane, another tab). 0 means no run has ended.

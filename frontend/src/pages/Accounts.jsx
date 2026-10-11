@@ -83,7 +83,7 @@ const ACCOUNT_DETACH_DROP_ZONE_WIDTH = 84
 // The account list is the only thing on its own tab now, so it isn't constrained to share a width with
 // the sparse Owners/Connections panels — give it modestly more room for long account names.
 const ACCOUNTS_SECTION_BASE_WIDTH = 720
-// In-page tabs (mirroring the Import/Export page). The active tab is session-scoped: it sticks while the
+// In-page tabs (mirroring the Import page). The active tab is session-scoped: it sticks while the
 // app is open but resets to Accounts next launch (a within-session convenience, not a durable preference).
 const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners'], ['connections', 'Connections']]
 const ACCOUNTS_TAB_STORAGE_KEY = 'luma.accounts.tab'
@@ -843,7 +843,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [syncLogScope, setSyncLogScope] = useState(null)
   // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
-  // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
+  // cross-source duplicates surface here as a badge that jumps to the Import page's report to resolve them.
   const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
   // Every non-configuration action a connection has — sync, deepen history, rebuild accounts, remove
   // synced rows — with its own dialogs. Shared with the Import connections panel rather than

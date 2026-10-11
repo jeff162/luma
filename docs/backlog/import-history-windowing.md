@@ -20,7 +20,7 @@ it, and paging the endpoint under them turns a complete answer into a first-page
 enumerated in [`../scale-and-limits.md`](../scale-and-limits.md) → *Import history: retention*; the
 data-source manager's known-template-hash set is the one that becomes wrong rather than merely stale.
 Give each an endpoint that answers its own question, then change the list's response shape (array → a
-paged envelope) and budget for the remaining callers on the Import / Export page.
+paged envelope) and budget for the remaining callers on the Import page.
 
 ## Pointers
 

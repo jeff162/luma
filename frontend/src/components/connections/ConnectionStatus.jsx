@@ -81,7 +81,7 @@ const SYNC_OUTCOMES = {
   ok: { label: 'Success', tone: null, title: 'The last sync completed and imported everything it was offered.' },
 }
 
-// The outcome of the last sync, laid out like the Import/Export history card's own outcome row and built
+// The outcome of the last sync, laid out like the Import history card's own outcome row and built
 // from the same chips (`SourceAccountChip`) — a sync and a file import answer the same question, and a
 // user reads the two surfaces minutes apart, so they should not look like different features.
 export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog, onOpenReport }) {

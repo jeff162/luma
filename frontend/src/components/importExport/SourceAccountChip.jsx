@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The "what did each source account contribute?" chip, shared by every surface that reports the outcome of
-// one import or sync: the Import/Export history card and the Connections card.
+// one import or sync: the Import history card and the Connections card.
 //
 // It exists as one component because the two surfaces answer the same question and a user reads them
 // minutes apart — a second implementation would drift in exactly the details that matter (which glyph

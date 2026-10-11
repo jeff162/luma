@@ -156,7 +156,7 @@ function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerW
 }
 
 // `UnifiedDuplicatesDialog` lives at the App level so it can stay open while the user navigates
-// between Import/Export, Accounts, Transactions, etc. — see
+// between Import, Accounts, Transactions, etc. — see
 // `contexts/UnifiedDuplicatesViewerContext.jsx`. Open it via the `useUnifiedDuplicatesViewer`
 // hook's `open({batchId, title})`.
 

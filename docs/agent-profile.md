@@ -161,7 +161,7 @@ instruction and fix the drift rather than silently choosing the looser version.
 - **Check which database the app is actually pointed at before querying live state.** The defaults put
   both databases in the working directory, but `.env` is an *override* file that may or may not exist —
   and where it does, `DB_PATH` / `CONTROL_DB_PATH` routinely differ from those defaults. Read the file
-  (or Settings → Configuration) rather than assuming either shape. A live-state answer from the wrong
+  (or Administration → Startup configuration) rather than assuming either shape. A live-state answer from the wrong
   file is worse than no answer: it looks authoritative and sends the next few decisions in the wrong
   direction.
 
@@ -249,7 +249,7 @@ the strength of that guess.
 
 Where a cause is unrecoverable, leave the recurrence diagnosable: record an advisory on the path that
 fired, into `connection_sync_log.advisories` — a table with a reader behind it (the **Sync log**
-on Import / Export or Accounts → Connections), not a console line nobody opens. Pick the surface by who can act on it:
+on the Import page or Accounts → Connections), not a console line nobody opens. Pick the surface by who can act on it:
 `advisories` is the developer's, while `last_sync_warnings` shows on the connection card and is reserved
 for what the *user* can act on.
 

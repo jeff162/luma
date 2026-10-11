@@ -5,7 +5,7 @@
 //
 // Its own module rather than a named export from the dialog that first needed it: several surfaces spread
 // these onto their own inputs (the vault passphrase/confirm fields, the Connections tab's provider-secret
-// fields, the backup tab's restore passphrase), so a component module is the wrong home for it twice over
+// fields, Backup / Restore's restore passphrase), so a component module is the wrong home for it twice over
 // — it is not vault-specific, and a `.jsx` file exporting a non-component object breaks Vite's Fast
 // Refresh for everything else in that file.
 //

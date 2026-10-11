@@ -65,7 +65,7 @@ The backend favors explicit SQL and feature-oriented router modules over a heavy
   bootstrap, auth and preference state, which is what makes the table testable. `lib/routeChunks.js`
   owns the lazy loaders it and the shell's idle prefetch share
 
-- **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import / Export
+- **`frontend/src/pages/`:** top-level screens such as Dashboard, Transactions, Rules, and Import
 
 - **`frontend/src/components/`:** shared UI and interaction building blocks
 
@@ -340,7 +340,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 - **Saved-data-source behavior:** saved data sources remember whether imported files from that source should use categories present in the data by default, while each completed import batch keeps the actual per-file decision and scope used for that file
 
 - **Imported-category behavior:** imports that use categories present in the data can apply those file categories directly to imported transactions, add missing imported categories as real leaf categories under the protected system `Unassigned` group, and feed those categorized transactions into the shared rule-suggestion workflow; placeholder labels that only mean "not categorized yet" are normalized back to `NULL` instead of creating a real category. A label matching an **inactive** category (one the user deleted) is suppressed — the row imports uncategorized with its label retained, no leaf is created, and the inactive leaf is not resurrected — see the inactive-category lifecycle in `data-model.md`
-- **Organize / inactive surface:** there is one place to organize `Unassigned` leaves into reporting groups — the system-level "Group Imported Categories" workspace on Import / Export, seeded from the live `Unassigned` leaves. Group placement and "Set aside" are both draft edits committed together on **Apply** (set-aside is treated like a bucket, undoable in-session). Applying a set-aside *parks* a category (`set_aside = 1`) and leaves it active — its transactions keep it and later imports of its label still land in it. Only Delete, from the workspace or the Categories page, *deactivates* a category (`is_active = 0`) rather than hard-deleting it; deactivated categories leave the active tree and the organize pool, appear in the Categories page "Inactive" list, and are recoverable via `POST /categories/{id}/reactivate`
+- **Organize / inactive surface:** there is one place to organize `Unassigned` leaves into reporting groups — the system-level "Group Imported Categories" workspace on the Import page, seeded from the live `Unassigned` leaves. Group placement and "Set aside" are both draft edits committed together on **Apply** (set-aside is treated like a bucket, undoable in-session). Applying a set-aside *parks* a category (`set_aside = 1`) and leaves it active — its transactions keep it and later imports of its label still land in it. Only Delete, from the workspace or the Categories page, *deactivates* a category (`is_active = 0`) rather than hard-deleting it; deactivated categories leave the active tree and the organize pool, appear in the Categories page "Inactive" list, and are recoverable via `POST /categories/{id}/reactivate`
   - **The workspace's in-progress draft is shared tenant state, not a per-user preference.** It stages how the one *shared* category tree is being organized, so all users/profiles see a single draft. It is stored in `import_workflow_state` (key `system_category_workspace_draft`, shared, in the data DB, carried by backups) and read/written through `GET`/`PUT /import-export/category-workspace-draft` — deliberately *not* the scoped `ui_preference` store, which would silo the draft per profile and orphan it on a restore into a different profile. The durable truth for parked/grouped state is the `category` table itself (group membership + `set_aside`); the draft only layers *un-applied* edits on top, and the workspace re-seeds parked/grouped state from those live flags whenever the draft is absent (see `categoryImportState.js::buildInitialSnapshot`), so losing a draft never loses committed organization.
   - **Saving the draft is revisioned, and applying it is one transaction.** The stored draft carries a `revision`; every `PUT` names the revision it was edited from (`base_revision`) and a stale one is refused with `409 draft_conflict` and the stored draft, the check and the write sharing one immediate transaction. A stale save whose draft equals the stored one is accepted without a new revision, since nothing would be lost either way; and opening or restoring the workspace re-reads the shared draft first (unless the window holds an unsaved change or an unresolved refusal), because the workspace saves as soon as it mounts and a window left idle while someone else arranged would otherwise be refused on that first save. The browser runs saves one at a time and coalesces edits made meanwhile, and on a refusal stops saving and asks whether to keep its own arrangement (saved again over the reported revision) or load the stored one (the open workspace re-seeds from it); any other save failure is shown and retried with the next edit. **Apply** is `POST /categories/imported-workspace/apply`: the groups the draft names, the categories placed in them by id, and the set-aside list are committed through the same create and edit rules as the individual category endpoints, inside one transaction, and it returns the resulting flat category list. A plan naming a category that is no longer waiting is refused with `409 workspace_stale` rather than applied around, and any refusal reloads the tree. Before this, Apply was a run of separate create, move, set-aside and restore calls from the browser, so a failure partway left a partial tree, and saves were fire-and-forget, so two windows silently overwrote each other.
 
@@ -359,7 +359,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Watched import folders — the unattended way in** (`watch.py`): a data source may name a directory on the **server**, and a file that appears there is imported through `run_import_parsed` without anyone opening the page. It adds no reporting of its own, because it does not need any: a file it takes produces an ordinary import batch, so duplicates, refused rows, imported categories and rule suggestions all land on the file card that already reviews them.
 
-  **There is no scheduler, and this must not introduce one.** The app is multi-tenant with per-identity database paths, so a timer thread would have no tenant to run as and no way to choose one. Scanning is request-driven on the `POST /recurring/auto-scan` pattern: `POST /import-export/watch/auto-scan` runs a scan only if one is due (a `db_meta` watermark, `AUTO_SCAN_MIN_INTERVAL_MINUTES`), and is called from `App.jsx` when the data scope activates and again when the Import / Export page's `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the unconditional *Check now*. The nav badge and the Tasks list read a **persisted** count (`attention_counts`) and never touch the filesystem — a badge that stat-ed a network share would put every page load behind it.
+  **There is no scheduler, and this must not introduce one.** The app is multi-tenant with per-identity database paths, so a timer thread would have no tenant to run as and no way to choose one. Scanning is request-driven on the `POST /recurring/auto-scan` pattern: `POST /import-export/watch/auto-scan` runs a scan only if one is due (a `db_meta` watermark, `AUTO_SCAN_MIN_INTERVAL_MINUTES`), and is called from `App.jsx` when the data scope activates and again when the Import page's `WatchedFoldersPanel` mounts; `POST /import-export/watch/scan` is the unconditional *Check now*. The nav badge and the Tasks list read a **persisted** count (`attention_counts`) and never touch the filesystem — a badge that stat-ed a network share would put every page load behind it.
 
   **A scan is cheap because of the per-file watermark.** `import_watch_file` holds `(size, mtime)` per entry, which `os.scandir` returns for about the cost of the syscall, so only an entry that is new or has moved is read, hashed and parsed. A file that has moved is re-hashed and matched against `import_batch.file_content_hash`, which stays the durable answer to "have we taken this exact file"; the table is a cache of the cheap half plus the reason a file is waiting on someone, which is why it is deliberately outside backups (`data-model.md` → *Watched import folders*).
 
@@ -407,14 +407,17 @@ The shape follows from one goal: **an ordinary install needs no configuration fi
 common case, so `.env` is an override mechanism rather than a prerequisite — nothing creates it, and its
 absence is the normal state. The registry in `backend/app_config.py` is the single declaration of each
 setting (environment variable, default, whether it is stored, whether it is redacted); the resolver, the
-`GET /api/auth/config` report the Settings page renders, and any setting added later all read from it.
+`GET /api/auth/config` report Administration → Startup configuration renders, and any setting added
+later all read from it. That panel is a report of values resolved at startup. A setting changed inside
+the app does not join its rows or this registry, since anything in the registry gains an environment
+variable that outranks it.
 
 **Why the environment layer still wins.** An operator has to be able to force a value from outside the
 app — a broken stored setting would otherwise be unreachable, and the two-installations-on-one-host case
 is configured entirely from outside. `.env` is loaded with `override=True`, so within that layer the file
 beats a stale shell environment; that is also what lets the Playwright harness point `LUMA_ENV_FILE` at
 an isolated file and get its throwaway databases. Because an override is invisible from inside the app,
-the Settings → Configuration report names the layer each effective value came from rather than showing a
+the Administration → Startup configuration report names the layer each effective value came from rather than showing a
 form that silently would not take effect.
 
 **`.env` is loaded by an import that every entry point makes first** (`backend/load_env_file.py`). The
@@ -497,8 +500,9 @@ and the bootstrap it triggers makes more calls that may 401 while it works.
 - **Login is an authentication *perimeter*, not an authorization system.** Its only job is to keep
   *non-users* out. Once inside, every user sees and edits the **same** data with no row- or scope-level
   restriction. No data route checks role.
-- **Admin gates *settings*, not *data*.** The `_require_admin` split (`backend/routers/auth.py`) governs
-  user management and environment/provider settings only; nothing at the data layer is admin-gated.
+- **Admin gates the install and the perimeter, not the ledger.** The guards in
+  `backend/authorization.py` govern user management, environment/provider settings, backup and restore,
+  and the backup keys; nothing at the data layer is admin-gated.
 - **One identity concept — a `user_account` — in a single table.** There is no separate local-profile
   table: a perimeter-off identity and an authenticated user are the *same* row, and the "Enable sign-in
   protection" flag decides **only whether the login password is verified**. *Perimeter off* is local mode:
@@ -573,7 +577,7 @@ The mechanism, end to end:
 - Frontend: `lib/appPasskey.js` (ceremony + serialization, separate from `lib/vaultPasskey.js`),
   `lib/base64url.js` (shared encoders — the vault stores standard base64, sign-in speaks base64url), the
   sign-in button in `components/AuthScreen.jsx`, and `SignInPasskeysPanel` in
-  `components/administration/AccountSecuritySection.jsx`.
+  `components/settings/SignInFactorsSection.jsx`.
 
 Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter — a
 passwordless install can still hold vault-encrypted tokens because the vault secret is per-user and
@@ -902,7 +906,7 @@ came of leaving it unstated, in `docs/data-model.md`.
   the rows it added or revised. The `↗` beside "Last sync" opens the shared import-card ledger
   (`useBatchDetailPanels`) over the Connections tab — scoped to just those rows when the count is non-zero,
   otherwise the whole card — so newly arrived transactions can be categorized where they arrived instead of
-  the user navigating to Import / Export history to hunt for the card. Only the count travels; the row ids
+  the user navigating to the Import history to hunt for the card. Only the count travels; the row ids
   stay server-side and the query expands them (`sync_connection_id`), because this payload is polled
   throughout every sync. See `docs/data-model.md` for the cap and the three rules governing the row list.
 - **"Reconnect this" is a separate signal from "syncing failed", because only one of them is actionable.**
@@ -944,7 +948,7 @@ came of leaving it unstated, in `docs/data-model.md`.
   here), **Connect bank**, a small per-connection **Sync** for checking what was just configured, and the
   linked accounts. The tab is **configuration only**; the operational half (routine sync, fetch more
   history, refresh accounts, remove synced transactions, and the sync log — which this tab also opens in
-  place) lives on Import / Export in
+  place) lives on the Import page in
   `components/connections/DataConnectionsPanel.jsx`, with the actions shared through
   `lib/useConnectionOperations.js` and the status rendering through `components/connections/ConnectionStatus.jsx`
   so the two surfaces cannot describe one connection differently. See `ui-patterns.md` for why the split
@@ -1240,7 +1244,7 @@ A checkout is recognized rather than declared, and keeps the working-directory d
 
 That flag is a **default for the user preference in front of the line, not a rule**. It arms itself where "which database is this?" is a live question: the databases are somewhere other than this build's own default, or this copy is a `checkout` (a working copy is a development context by definition — tying it to `developer_options` instead would miss it, since that flag gates destructive reset tooling and plenty of people working on the app never turn it on), or developer options are on. Because the backend's answer is the preference's *default* rather than a seeded value, an untouched preference tracks the installation — setting `DATA_DIR` later makes the line appear on its own — while an explicit choice wins in both directions from then on.
 
-**The paths are admin-or-local information, and the gate lives on the server.** `/auth/config` already restricts them, so the status payload carries `data_location` only for a session that could read it there (`_session_can_manage_config`, the non-raising twin of the guard that endpoint uses); every other session gets no field, and the client renders nothing rather than holding a second copy of the rule. The toggle that controls the line sits in the Settings *Configuration* panel for the same reason — that section is already behind the same gate, so one condition covers the control and the thing it controls.
+**The paths are admin-or-local information, and the gate lives on the server.** `/auth/config` already restricts them, so the status payload carries `data_location` only for a session that could read it there (`_session_can_manage_config`, the non-raising twin of the guard that endpoint uses); every other session gets no field, and the client renders nothing rather than holding a second copy of the rule. The toggle that controls the line sits in Administration's *Startup configuration* panel for the same reason — that section is already behind the same gate, so one condition covers the control and the thing it controls.
 
 **Every way of stopping converges on one line.** `server.should_exit` is uvicorn's graceful path, and the in-app control, the macOS wrapper's death, and the stop signals all set it — so in-flight requests finish, the lockfile is released, and the exit is the same however it was asked for. Signals need `backend/desktop.py` to install handlers of its own, for two different reasons. **SIGTERM** is already handled by uvicorn, and that is the problem: `Server.capture_signals` restores the *previous* handler on the way out and re-raises what it caught, so a SIGTERM that has just shut the server down cleanly is delivered a second time to `SIG_DFL`, which terminates the process before the lockfile is released or anything is printed — and SIGTERM is exactly what the Dock's Quit, Command-Q, and `systemctl stop` send. Registering a handler makes uvicorn save *that* as the previous one, so the re-raise lands somewhere harmless. **SIGHUP** is not in uvicorn's handled set at all, so this is the only handler it gets; without one, closing the terminal a portable build was started from kills it outright. **SIGINT** gets one too, because a Ctrl+C can arrive twice: a terminal signals its whole foreground process group, and the packaged Linux build's onefile bootloader, receiving it as well, forwards it to the server. uvicorn then re-raises both, and with Python's default handler in place `asyncio.run` has installed its own, which raises `KeyboardInterrupt` on the second — a traceback after a clean stop, first seen on a Raspberry Pi, where the two deliveries land far enough apart not to merge. For the same reason a second SIGINT is never uvicorn's force quit (`_GracefulServer`): every stop is graceful, and `GRACEFUL_SHUTDOWN_SECONDS` (5) bounds the wait for in-flight requests instead of a second keypress. The handlers *request* a stop rather than ignoring the signal, which is what covers the window before uvicorn's own exist — a quit during a slow startup is honoured instead of leaving the macOS wrapper to wait out its kill timer.
 

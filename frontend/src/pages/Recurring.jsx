@@ -86,7 +86,7 @@ function seriesCategory(series) {
 
 // The page's three peer views. Findings and the series they refer to were originally stacked on one
 // screen, where they crowded each other out; they are now chosen between. `sessionStorage` remembers the
-// choice for the session (matching the Accounts/Import-Export tab convention) while a URL param — the
+// choice for the session (matching the Accounts/Import tab convention) while a URL param — the
 // Tasks page's `?signal=<kind>` link — wins over it, so a deep link lands where it means to.
 const VIEW_SERIES = 'series'
 const VIEW_SIGNALS = 'signals'

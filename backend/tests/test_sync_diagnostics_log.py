@@ -287,7 +287,7 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
 
     def test_the_cards_the_rows_landed_on_are_named_alongside_the_total(self):
         # `added` is one number, but a sync files each row under its own transaction month, so a pull
-        # spanning a month boundary writes to two cards — and the Import/Export page shows one at a time.
+        # spanning a month boundary writes to two cards — and the Import page shows one at a time.
         # Without this a correct total reconciles against no visible card and reads as rows going missing.
         # Past the initial backfill, which is the one pull that deliberately keeps everything on one card.
         with self._use_db_path(), get_db() as conn:

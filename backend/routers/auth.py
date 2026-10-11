@@ -535,7 +535,7 @@ def load_demo_data_endpoint(request: Request):
 @router.get("/demo-data")
 def demo_data_status():
     """Demo-data state for this tenant. `loaded` drives the banner + the import/connect block; `loadable`
-    (empty tenant) drives the "Load demo data" offer on the Import/Export page so the demo is reachable
+    (empty tenant) drives the "Load demo data" offer on the Import page so the demo is reachable
     after a skip or a clear, not only from first-run onboarding. Local-mode only."""
     _require_local_mode()
     with get_db() as conn:

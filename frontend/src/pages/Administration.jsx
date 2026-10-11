@@ -112,5 +112,11 @@ export default function Administration() {
     },
   ]
 
-  return <SectionListPage title="Administration" sections={sections} />
+  return (
+    <SectionListPage
+      title="Administration"
+      help={<FeatureExplainer topic="page-administration" placement="bottom-left" />}
+      sections={sections}
+    />
+  )
 }

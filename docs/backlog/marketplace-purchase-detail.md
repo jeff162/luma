@@ -217,7 +217,7 @@ pair is never offered again, the way Amazon's *Not duplicates* assertion works.
 accounts. The review says so rather than making the user guess which one to pick, but it does not
 resolve the duplicate itself: which copy is wrong is a ledger question.
 
-## Where it lives in Import / Export
+## Where it lives on the Import page
 
 This settles the open question in `ui-patterns.md` → *Marketplace accounts get their own import surface*:
 the **Amazon** tab becomes **Marketplaces**, with **one section per supported vendor**. Each section

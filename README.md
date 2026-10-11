@@ -196,7 +196,7 @@ against the existing instance rather than starting a second copy.
 Nothing needs configuring first. Every setting has a working default, and the values that must persist are generated on first run and kept in the
 control database. Everything relevant to everyday use is configured in the app under **Settings**.
 
-From there the first run is as described in *How it works* above. **Settings → Configuration** reports
+From there the first run is as described in *How it works* above. **Administration → Startup configuration** reports
 every effective setting and which layer supplied it.
 
 ## Running from source

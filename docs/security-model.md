@@ -167,14 +167,21 @@ deliberate revocation reads as broken rather than as closed.
 
 **Login is an authentication perimeter, not an authorization system.** Its only job is to keep *non-users*
 out. Once inside, every user sees and edits the same data with no row- or scope-level restriction, and no
-data route checks role. **Admin gates settings, not data** — user management, provider/environment
-settings, and the operations that replace the workspace wholesale: every restore path, and the backup keys
-that decide who can read a backup. A restore is not a data edit. It swaps out every row, the connections
-and the provider configuration at once, so it is a settings-scale act somebody has to be able to
-authorize, and before it was gated any signed-in member could replace the global provider configuration
-through the legacy credentials restore. The guards live in `backend/authorization.py`; with sign-in
-protection off there is no role to hold, and they pass. Do not add an authorization check at the data
-layer expecting it to mean something; there is no scoping model behind it for it to enforce.
+data route checks role. **Admin gates the install and the perimeter, not the ledger** — user management,
+provider/environment settings, and the operations that replace the workspace wholesale: every restore
+path, and the backup keys that decide who can read a backup. A restore is not a data edit. It swaps out
+every row, the connections and the provider configuration at once, so it is a settings-scale act somebody
+has to be able to authorize, and before it was gated any signed-in member could replace the global
+provider configuration through the legacy credentials restore. Creating a backup (`GET /backup`,
+`GET /backup/credentials`) is held to the same gate so the server agrees with the page that offers it.
+The guards live in `backend/authorization.py`; with sign-in protection off there is no role to hold, and
+they pass. Do not add an authorization check at the data layer expecting it to mean something; there is
+no scoping model behind it for it to enforce.
+
+**The gate is also what sorts the interface.** Everything a member may do is on Settings and everything
+behind `require_admin_or_local` is on Administration, whose navigation entry is absent for anyone else
+(`ui-patterns.md` → *Section lists and collapsible cards*). The update check under Settings → About is
+the one item that straddles the line, and its admin half is hidden in place.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity
 has a password and another does not, anyone on the LAN picks the passwordless one and reads the same
@@ -700,6 +707,10 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
   seals the live DEK into a slot of the caller's choosing with nothing "replaced". *"Only the first
   passphrase is safe"* misses a passkey-only member adding a first passphrase, which takes the same path
   to the same durable credential.
+- **Admin-gating a setting because it is ledger-wide.** The currency and the review flag apply to every
+  member's view, which reads like a reason to restrict them. Both are instantly reversible, neither
+  touches the perimeter, the host or a secret, and a member who could not change them can still delete
+  the ledger's rows, so the gate would protect nothing.
 - **Refusing the lost-passphrase reset while another member holds a slot.** A slot row cannot prove its
   holder is reachable, the admin gate already settles who may do this, and the compromise path permits
   the identical destruction — so a refusal only stops the users who describe their situation accurately.

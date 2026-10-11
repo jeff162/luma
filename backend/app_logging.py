@@ -9,7 +9,7 @@ land in the same stream, but still falls back to plain stdout in contexts like
 scripts or tests where the app logger stack has not been configured yet.
 
 The level is a statement about who needs to know. `log_error` is a failure someone should look at — a step
-that failed after the work around it succeeded is the usual case — and it reaches Settings -> Error log and
+that failed after the work around it succeeded is the usual case — and it reaches Administration -> Error log and
 the Tasks reminder for administrators (`app_log_file.py`). `log_warning` is something the server coped
 with, or that is already reported where a user will see it; it stays in the file. An info line stays out of
 the file unless it is logged with `keep_in_file` — for work the server undertakes on its own that a reader

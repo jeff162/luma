@@ -114,6 +114,11 @@ export const HELP_SECTIONS = [
     blurb: 'The one page of preferences, and what each section of it covers.',
   },
   {
+    key: 'administration',
+    label: 'Administration',
+    blurb: 'Running the installation: how it starts, who can sign in, and backups.',
+  },
+  {
     key: 'general-concepts',
     label: 'General concepts',
     blurb: `What holds for the whole ledger rather than one page: the single currency, where the data lives and how it is backed up, and who can reach it.`,
@@ -169,7 +174,7 @@ export const HELP_TOPICS = [
         </p>
         <ol>
           <li>
-            Load transactions - Use the Import/Export page or connect
+            Load transactions - Use the Import page or connect
             a <HelpLink to="/help/data-providers">data provider</HelpLink>. If there are
             several files to be imported, import them all at once before moving on. If files come from
             different sources, accounts can be mapped so they match. If this
@@ -197,7 +202,7 @@ export const HELP_TOPICS = [
                 If the imported data was curated and contains useful
                 transaction categorization, this can be noted during the import or on the import record, and
                 the <strong>Group imported categories</strong> and <strong>Generate rules</strong> buttons
-                on the Import/Export page can bring them in to the system and propose matching rules based on
+                on the Import page can bring them in to the system and propose matching rules based on
                 the transactions' existing categorization.
               </li>
               <li>
@@ -234,7 +239,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
-    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks and settings -- each saying what it is for and handing off to its own topic.',
+    summary: 'The major parts of the app in one table -- importing, accounts and owners, the ledger, categories and groups, tags, rules, recurring charges, the dashboard, tasks, settings and administration -- each saying what it is for and handing off to its own topic.',
     body: () => (
       <><p>The major sections roughly in the order data moves through them:</p>
         {/* A table rather than the prose tour this used to be: ten sections described at paragraph length
@@ -247,8 +252,8 @@ export const HELP_TOPICS = [
             </thead>
             <tbody>
               <tr>
-                <td><HelpLink to="/help/page-import-export">Import / Export</HelpLink></td>
-                <td>Load transactions, Generate Backups, Export data. Strong duplicate detection
+                <td><HelpLink to="/help/page-import-export">Import</HelpLink></td>
+                <td>Load transactions. Strong duplicate detection
                   so overlapping files and sources are safe to import.</td>
               </tr>
               <tr>
@@ -292,7 +297,12 @@ export const HELP_TOPICS = [
               </tr>
               <tr>
                 <td><HelpLink to="/help/page-settings">Settings</HelpLink></td>
-                <td>Various system configuration options and the Trash.</td>
+                <td>Preferences, sign-in methods and the Trash.</td>
+              </tr>
+              <tr>
+                <td><HelpLink to="/help/page-administration">Administration</HelpLink></td>
+                <td>Startup configuration, sign-in protection, users, and Backup / Restore. For
+                  administrators only.</td>
               </tr>
             </tbody>
           </table>
@@ -561,6 +571,12 @@ export const HELP_TOPICS = [
           The <strong>Reimbursements</strong> button at the top of the page brings up a list of the
           un-resolved reimbursable transactions so expenses and payments can be paired.
         </p>
+        <p>
+          <strong>Tags</strong> opens the list of tags, where a tag is added, renamed, recolored or
+          deleted (see <HelpLink to="/help/tags">how tags work</HelpLink>). <strong>Export&hellip;</strong>{' '}
+          writes transactions to a CSV file (see{' '}
+          <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>).
+        </p>
         <h4>Markers on a row</h4>
         <p>
           Various small markers are used to convey additional information. Clicking on a marker displays
@@ -581,7 +597,7 @@ export const HELP_TOPICS = [
     id: 'reviewing-transactions',
     section: 'transactions',
     title: 'Needs Review',
-    surfaces: ['Transactions (quick filter)', 'Import / Export (file card)'],
+    surfaces: ['Transactions (quick filter)', 'Import (file card)'],
     summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Needs review quick filter, and bulk Mark reviewed are tools to help with this process.',
     body: () => (
       <>
@@ -614,7 +630,7 @@ export const HELP_TOPICS = [
             should be processed.
           </li>
           <li>
-            The import cards on the Import/Export page have a pill with the number of transactions in
+            The import cards on the Import page have a pill with the number of transactions in
             the import which need review. Clicking the pill opens the import&apos;s transactions with the
             <em>Needs review</em> quick filter already on; the same filter turns off to show the rest of the import.
             Next to the pill is a button to <strong>mark all reviewed</strong>.
@@ -1352,7 +1368,7 @@ export const HELP_TOPICS = [
     id: 'tags',
     section: 'categories',
     title: 'How tags work',
-    surfaces: ['Tag manager (Settings)'],
+    surfaces: ['Transactions (Tags)'],
     summary: "Tags are cross-cutting labels applied at the transaction, category, group, or account level. A transaction's effective tags are the union of all four sources.",
     body: () => (
       <>
@@ -1754,7 +1770,7 @@ export const HELP_TOPICS = [
     id: 'generate-rules',
     section: 'rules',
     title: 'Generating rules from transactions in an imported file',
-    surfaces: ['Import / Export (rule suggestions)'],
+    surfaces: ['Import (rule suggestions)'],
     summary: 'Generate rules studies a file whose transactions are already categorized and proposes rules that reproduce that categorization on future data; the output is rules, not a re-categorization of the file. When one merchant is filed under several categories the suggestions form a conflict set, which can be resolved in different ways for different results.',
     body: () => (
       <>
@@ -1913,7 +1929,7 @@ export const HELP_TOPICS = [
     id: 'data-providers',
     section: 'accounts',
     title: 'Data providers and connections',
-    surfaces: ['Accounts (Connections)', 'Import / Export (Data connections)'],
+    surfaces: ['Accounts (Connections)', 'Import (Data connections)'],
     summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
     body: () => (
       <>
@@ -1935,7 +1951,7 @@ export const HELP_TOPICS = [
         <p>
           Transactions from <em>data providers</em> go through the the same duplicate
           detection process as file imports and the transaction record lives on the
-          Import/Export page organized by Month rather than file.
+          Import page organized by Month rather than file.
         </p>
         <p>
           Syncing is a manual process; there is no facility for a scheduled or automatic sync
@@ -1995,8 +2011,8 @@ export const HELP_TOPICS = [
         <h4>Syncing</h4>
         <p>
           New transactions are pulled on request using the sync control in the navigation pane or
-          from <strong>Sync now</strong> on the <strong>Data connections</strong> card of the Import /
-          Export page. Per-connection Import cards on the Import/Export page records
+          from <strong>Sync now</strong> on the <strong>Data connections</strong> card of the Import
+          page. Per-connection Import cards on the Import page records
           what arrived, similar to an imported file. Importing a file generates a single card, the
           data connections create a card for the <strong>Initial import</strong> and then one
           per month.
@@ -2312,9 +2328,9 @@ export const HELP_TOPICS = [
   {
     id: 'page-import-export',
     section: 'importing',
-    title: 'The Import / Export page',
-    surfaces: ['Import / Export'],
-    summary: 'Where transactions come in and where data goes out. Four tabs cover Import, Export, Backup / Restore and Amazon, and the import history below keeps a card per file recording what it did.',
+    title: 'The Import page',
+    surfaces: ['Import'],
+    summary: 'Where transactions come in. Two tabs cover Import and Amazon, and the import history below keeps a card per file recording what it did.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2322,7 +2338,7 @@ export const HELP_TOPICS = [
             what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
             are how the page itself is divided. */}
         <p>
-          Where transactions come in and where data goes out. The page has four tabs, and the sections
+          Where transactions come in. The page has two tabs, and the sections
           below follow them: each row names something on the page, says what it is for, and links the
           topic that explains it.
         </p>
@@ -2447,30 +2463,23 @@ export const HELP_TOPICS = [
             </tbody>
           </table>
         </div>
-
-        <HelpHeading anchor="export-and-backup">Export and Backup / Restore</HelpHeading>
-        <p>
-          <strong>Export</strong> writes transactions out as a CSV file &mdash; see{' '}
-          <HelpLink to="/help/csv-export">exporting transactions to CSV</HelpLink>. <strong>Backup /
-            Restore</strong> makes and restores whole-database archives, optionally encrypted to a backup
-          key &mdash; see <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
-        </p>
       </>
     ),
   },
   {
     id: 'csv-export',
-    section: 'importing',
+    section: 'transactions',
     title: 'Exporting transactions to CSV',
-    surfaces: ['Import / Export (Export)', 'Copy transactions (Download CSV)'],
+    surfaces: ['Transactions (Export…)', 'Copy transactions (Download CSV)'],
     summary: 'A CSV export writes the transactions matching a filter, with the chosen columns, in roughly the shape they were imported. It is not a backup: splits, tags, rules and attachments stay behind.',
     body: () => (
       <>
         <p>*needs review*</p>
         <p>
-          The <strong>Export</strong> tab writes the transactions matching its filter to a CSV file, one
-          row per transaction, with the columns ticked below the filter. With no filter set, every
-          transaction is written. For a list too large to copy, the Transactions page&apos;s{' '}
+          <strong>Export&hellip;</strong> on the Transactions page writes the transactions matching a
+          filter to a CSV file, one row per transaction, with the columns ticked below the filter. The
+          filter starts as a copy of the page&apos;s own, and changing it leaves the page as it was. With
+          no filter set, every transaction is written. For a list too large to copy, the{' '}
           <strong>Copy transactions</strong> dialog offers the same file as <strong>Download CSV</strong>.
         </p>
         <p>
@@ -2498,7 +2507,7 @@ export const HELP_TOPICS = [
     id: 'unknown-data-source',
     section: 'importing',
     title: 'Saved data sources (import file profiles)',
-    surfaces: ['Import / Export (Recent imports)'],
+    surfaces: ['Import (Recent imports)'],
     summary: 'Imported files not linked to a saved mapping are listed under "unknown data source" or "temporary draft". A data source is a saved mapping which is useful if other files with the same format (e.g. from the same source) will be imported later.',
     body: () => (
       <>
@@ -2512,7 +2521,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           The saved mapping can be created during the import or afterwards from
-          the import summary on the import/export page.
+          the import summary on the Import page.
         </p>
         <p>
           The <strong>Manage sources</strong> button allows for editing, deleting and can also
@@ -2551,7 +2560,7 @@ export const HELP_TOPICS = [
     id: 'watched-folders',
     section: 'importing',
     title: 'Importing from a watched folder',
-    surfaces: ['Import / Export (Watched folders)', 'Manage data sources (Folder)'],
+    surfaces: ['Import (Watched folders)', 'Manage data sources (Folder)'],
     summary: 'A data source can watch a folder instead of waiting for a file to be dropped on the import page. Files placed there are imported on the next visit; anything the saved mapping cannot answer on its own is left for review rather than guessed at.',
     body: () => (
       <>
@@ -2579,7 +2588,7 @@ export const HELP_TOPICS = [
         <h4>Files left for review</h4>
         <p>
           Anything the saved mapping cannot answer is listed under <strong>Watched folders</strong> on
-          Import / Export, with the reason beside it, and a task points at the same list.{' '}
+          the Import page, with the reason beside it, and a task points at the same list.{' '}
           <strong>Import&hellip;</strong> opens that file in the ordinary import flow with the data source
           already applied, so the question gets answered once and the file imports.{' '}
           <strong>Dismiss</strong> stops reporting a file without touching it, until the file itself
@@ -2612,7 +2621,7 @@ export const HELP_TOPICS = [
         </p>
         <h4>When the check happens</h4>
         <p>
-          Folders are checked when the app is opened and when the Import / Export page is opened, at most
+          Folders are checked when the app is opened and when the Import page is opened, at most
           about once an hour, and <strong>Check now</strong> checks immediately. A file is left for the
           following check the first time it is seen, so a download still being written is never read
           half-finished.
@@ -2659,7 +2668,7 @@ export const HELP_TOPICS = [
     id: 'amazon-import',
     section: 'importing',
     title: 'Importing Amazon order detail (AZAD Chrome extension)',
-    surfaces: ['Import / Export — Amazon'],
+    surfaces: ['Import — Amazon'],
     summary: 'Capture Amazon order detail using a Chrome browser extension to export order history. Per-item detail can be captured as well, which is what allows an order to be split across categories. The corresponding Amazon charges are re-categorized as money movement to avoid double counting the charges.',
     body: () => (
       <>
@@ -2744,7 +2753,7 @@ export const HELP_TOPICS = [
     id: 'amazon-funding-sources',
     section: 'importing',
     title: 'Amazon import page',
-    surfaces: ['Import / Export — Amazon'],
+    surfaces: ['Import — Amazon'],
     summary: `Configures which account holds the Amazon transactions, which category the excluded Amazon payment maps to, and mapping the payment sources in the CSV file to accounts in ${APP_NAME}.`,
     body: () => (
       <>
@@ -2790,7 +2799,7 @@ export const HELP_TOPICS = [
     id: 'amazon-reconciliation',
     section: 'importing',
     title: 'Amazon reconciliation report',
-    surfaces: ['Import / Export — Amazon', 'Import history (transactions ↗ pill)'],
+    surfaces: ['Import — Amazon', 'Import history (transactions ↗ pill)'],
     summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in the ledger, and includes tools to resolve ambiguous situations.',
     body: () => (
       <>
@@ -2936,7 +2945,7 @@ export const HELP_TOPICS = [
     id: 'paypal-statements',
     section: 'importing',
     title: 'PayPal statements',
-    surfaces: ['Import / Export — dropping a PayPal statement PDF or zip'],
+    surfaces: ['Import — dropping a PayPal statement PDF or zip'],
     summary: 'PayPal’s monthly statement PDFs import like its activity CSV, each into the PayPal account it belongs to.',
     body: () => (
       <>
@@ -3063,7 +3072,7 @@ export const HELP_TOPICS = [
     id: 'duplicate-report',
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
-    surfaces: ['Import / Export (file ↗ report)', 'Duplicate-detection report'],
+    surfaces: ['Import (file ↗ report)', 'Duplicate-detection report'],
     summary: `When the same activity arrives multiple times, this report identifies the clear cases and groups the rest into categories. Review is an undecided match that needs a decision, and the only category counted as pending work (the file's "to review" count and the Tasks warning). Matched · review and Rejected · review are already rejected and advisory: examine one, Import anyway if it shouldn't have been rejected, or Mark reviewed. Everything else is settled. Hover over a pill for a short explanation.`,
     body: () => (
       <>
@@ -3248,7 +3257,7 @@ export const HELP_TOPICS = [
     id: 'intra-file-duplicates',
     section: 'duplicates',
     title: 'A source that contains duplicate transactions',
-    surfaces: ['Import / Export (duplicate report)'],
+    surfaces: ['Import (duplicate report)'],
     summary: 'Duplicate detection compares an incoming file against what is already in the ledger, so two copies inside one file both import and neither is flagged. The fix is to clean the export before importing it, or to trash the extra copy after.',
     body: () => (
       <>
@@ -3386,11 +3395,14 @@ export const HELP_TOPICS = [
     section: 'settings',
     title: 'Settings',
     surfaces: ['Settings'],
-    summary: 'Appearance and currency, the tag manager, sign-in protection, the trash, and the configuration screen. Almost none of it has to be touched to use the app.',
+    summary: 'Preferences and housekeeping open to every user: appearance and currency, sign-in methods, the trash, and a few lists the app keeps. Almost none of it has to be touched to use the app.',
     body: () => (
       <>
+        <p>*needs review*</p>
         <p>Settings is a collection of both controls that affect the {APP_NAME}'s behavior
-          and various utility type functions.</p>
+          and various utility type functions. Everything here is open to every user; what only an
+          administrator may change is on the{' '}
+          <HelpLink to="/help/page-administration">Administration</HelpLink> page.</p>
         <p>The configuration related settings are:</p>
         <ul>
           <li>
@@ -3405,52 +3417,20 @@ export const HELP_TOPICS = [
             flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
           </li>
           <li>
-            <strong>Transaction tags</strong> is the tag manager, where tags are renamed and removed.
-            See <HelpLink to="/help/tags">how tags work</HelpLink>.
-          </li>
-          <li>
-            <strong>Account security</strong> turns sign-in protection on and off and sets the
-            password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
-          </li>
-          <li>
-            <strong>Configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
-            it shows how various settings are derived and when a default value has been
-            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
-            <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
-            This is only visible to users who are administrators.
+            <strong>Sign-in methods</strong> holds the password, passkeys and two-factor sign-in for
+            the account that is signed in. It is listed only while sign-in protection is on.
+            See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
         </ul>
         <p>The following fall under utility type settings:</p>
         <ul>
           <li>
-            <strong>Intended usage</strong> covers where the data lives and what protects it.
-            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
-          </li>
-          <li>
-            <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
-            sections that empty separately.
-          </li>
-          <li>
-            <strong>Import storage</strong> clears the record each import keeps of the rows it
-            refused: duplicates still flagged for review, matches against another source, the
-            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
-            longer appear in the duplicates view and cannot be imported anyway. Imported
-            transactions are not affected.
-          </li>
-
-          <li>
-            <strong>Error log</strong> lists the errors recorded in the "console log" file.
-            This is only visible to users who are administrators. A new error adds a task to the
-            Tasks page for them, which clears once the error log has been opened.
-          </li>
-          <li>
-            <strong>Dismissed duplicate pairs</strong> Lists the pairs of transactions that have
+            <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
+            <em>Dismissed duplicate pairs</em> lists the pairs of transactions that have
             been marked as not duplicates. These are stored so a subsequent pass does not
             suggest them as duplicates again. Mistakes can be corrected by reopening a dismissed
-            pair and then returning to the duplicate detection report to resolve it.
-          </li>
-          <li>
-            <strong>Distinct Account Pairs</strong> lists the pairs of accounts that have been
+            pair and then returning to the duplicate detection report to resolve it.{' '}
+            <em>Distinct account pairs</em> lists the pairs of accounts that have been
             identified as distinct because a cross-account duplicate was surfaced and the action
             was to accept both transactions. Cross-account duplicates exist because different sources
             may identify the same account differently so what appears to be a cross-account duplicate
@@ -3459,12 +3439,23 @@ export const HELP_TOPICS = [
             the <em>Forget</em> button.
           </li>
           <li>
+            <strong>Import storage</strong> clears the record each import keeps of the rows it
+            refused: duplicates still flagged for review, matches against another source, the
+            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
+            longer appear in the duplicates view and cannot be imported anyway. Imported
+            transactions are not affected.
+          </li>
+          <li>
+            <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
+            sections that empty separately.
+          </li>
+          <li>
             <strong>About</strong> lists the current version, license,
             a pointer to the github repository, and the instance identifier. The instance identifier is
             stored in backups so that a restore can warn before a backup is restored to a system
-            other than the one which it came from. About is also where the check for a new version is
-            switched on or off. When it is on, {APP_NAME} periodically checks for a new release
-            and adds a task when one is available.
+            other than the one which it came from. For an administrator, About is also where the check
+            for a new version is switched on or off. When it is on, {APP_NAME} periodically checks for a
+            new release and adds a task when one is available.
             The task can be dismissed, and returns with the next release.
           </li>
         </ul>
@@ -3472,10 +3463,58 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'page-administration',
+    section: 'administration',
+    title: 'Administration',
+    surfaces: ['Administration'],
+    summary: 'The settings that belong to the installation rather than to one user: how it starts, who can sign in, and backups. Only an administrator sees the page.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          Administration holds what affects the whole installation. With sign-in protection on, the
+          page is listed only for users who are administrators. With it off, there are no roles and
+          the page is open to anyone using the app.
+        </p>
+        <ul>
+          <li>
+            <strong>Startup configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
+            it shows how various settings are derived and when a default value has been
+            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
+            <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
+          </li>
+          <li>
+            <strong>Error log</strong> lists the errors recorded in the "console log" file.
+            A new error adds a task to the Tasks page, which clears once the error log has been
+            opened.
+          </li>
+          <li>
+            <strong>Intended usage</strong> covers where the data lives and what protects it.
+            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+          </li>
+          <li>
+            <strong>Sign-in protection</strong> turns sign-in protection on and off and sets the
+            password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
+          </li>
+          <li>
+            <strong>User management</strong> adds and removes the users who can sign in, sets
+            whether each is an administrator, and resets a password. It is listed only while sign-in
+            protection is on.
+          </li>
+          <li>
+            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
+            encrypted to a backup key, and is where the backup encryption keys are kept.
+            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  {
     id: 'configuration',
-    section: 'settings',
+    section: 'administration',
     title: 'Configuration settings',
-    surfaces: ['Configuration (Settings)'],
+    surfaces: ['Startup configuration (Administration)'],
     summary: `Every setting has a working default, so nothing needs configuring to get started. A .env file overrides the handful of values that have to be known before the app starts, such as the port and where the database files live.`,
     body: () => (
       <>
@@ -3530,7 +3569,7 @@ export const HELP_TOPICS = [
         <p>
           An override is a line in a plain text file named <code>.env</code>, one setting per line in the
           form <code>NAME=value</code> &mdash; for example <code>FRONTEND_PORT=8020</code>. Each setting on the
-          Configuration screen shows the name to use. Changes take effect the next time {APP_NAME} starts.
+          Startup configuration screen shows the name to use. Changes take effect the next time {APP_NAME} starts.
         </p>
         <p>
           The screen shows the exact path the file is read from, whether or not the file exists yet. Where
@@ -3581,7 +3620,7 @@ export const HELP_TOPICS = [
     id: 'data-and-backups',
     section: 'general-concepts',
     title: 'Data on disk, and backups',
-    surfaces: ['Intended usage (Settings)'],
+    surfaces: ['Intended usage (Administration)', 'Backup / Restore (Administration)'],
     summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
     body: () => (
       <>
@@ -3602,6 +3641,8 @@ export const HELP_TOPICS = [
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
         <p>
+          Backups are made and restored by an administrator, under <strong>Backup / Restore</strong> on
+          the <HelpLink to="/help/page-administration">Administration</HelpLink> page.
           If the transaction data is considered sensitive, {APP_NAME} can generate key pairs to build
           strongly encrypted backup files. The credentials backup does not require encrypting
           as the data inside is already encrypted. Restoring a credential backup does require
@@ -3629,7 +3670,7 @@ export const HELP_TOPICS = [
     id: 'account-security',
     section: 'general-concepts',
     title: 'Account security: password, passkeys and two-factor',
-    surfaces: ['Account security (Settings)'],
+    surfaces: ['Sign-in protection (Administration)', 'Sign-in methods (Settings)'],
     summary: `Sign-in protection is a network perimeter: it keeps people who aren't users out. It is not disk encryption, and everyone signed in shares the same data. A passkey signs in without a typed password and without a two-factor code; two-factor adds a code at sign-in and is optional.`,
     body: () => (
       <>
@@ -3644,7 +3685,9 @@ export const HELP_TOPICS = [
         </p>
         <p>*needs review*</p>
         <p>
-          The switch at the top of <em>Account security</em> turns sign-in protection on and off.
+          The switch under <em>Sign-in protection</em> on the{' '}
+          <HelpLink to="/help/page-administration">Administration</HelpLink> page turns sign-in
+          protection on and off.
           Turning it on sets a password for the administrator's own account; any other users choose
           theirs at their next sign-in. Turning it off takes an administrator and removes the
           password check for everyone, but keeps every account and password, so turning it back on
@@ -3654,10 +3697,15 @@ export const HELP_TOPICS = [
           <strong>Password policy</strong> sets how strong account passwords must be. It applies to
           all users, and it can be tightened or relaxed at any time.
         </p>
+        <p>
+          Each user's own password is changed under <em>Sign-in methods</em> on the{' '}
+          <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is
+          required, and the change signs the account out of every other browser.
+        </p>
         <p>*needs review*</p>
         <p>
           <strong>Passkeys</strong> sign in with a fingerprint, face or device PIN instead of a typed
-          password. Each device gets its own passkey, added under <em>Account security</em> while
+          password. Each device gets its own passkey, added under <em>Sign-in methods</em> while
           signed in. The account password keeps working and is still what signs in on a connection
           that cannot run a passkey &mdash; passkeys need an HTTPS connection to a named host, so an
           instance reached by IP address cannot use them at all.
@@ -3679,9 +3727,9 @@ export const HELP_TOPICS = [
           are the way back in, so save these in a password manager or somewhere equally safe.
         </p>
         <p>
-          Two-factor is optional. It matters most when Luma runs as a server that other devices
+          Two-factor is optional. It matters most when {APP_NAME} runs as a server that other devices
           sign in to: there, signing in is all that stands between someone who can reach the server
-          and the data on it. When Luma runs on the computer it is used from, anyone who can use that
+          and the data on it. When {APP_NAME} runs on the computer it is used from, anyone who can use that
           computer can read the database files directly, so sign-in protects use of the application
           rather than the data, and leaving two-factor off is reasonable.
         </p>

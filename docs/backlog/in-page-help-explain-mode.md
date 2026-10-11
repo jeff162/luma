@@ -22,7 +22,7 @@ first form of the idea. Two ways to draw it, both turned down in favor of pointi
 - **A schematic drawn from labelled boxes** is cheap, follows the theme, and its links are checked by the
   existing help-registry test, but it is still a second copy of the layout that has to be kept in step.
 
-What shipped instead is the cheap half: the Import/Export hub became a set of *on the page → what it is
+What shipped instead is the cheap half: the Import hub became a set of *on the page → what it is
 for* tables, grouped by tab, each row linking its topic. That table is the control-to-topic mapping this
 mode would declare in code, so it is the natural page for a first prototype.
 
@@ -43,7 +43,7 @@ mode would declare in code, so it is the natural page for a first prototype.
 
 - **What is not on screen.** Controls on another tab, inside a closed dialog or a collapsed card, or not
   rendered at all on an empty page. A fresh install has no import history, so the file-card controls on
-  Import/Export — several topics — have nothing to outline, and a new user is exactly who needs this. A
+  Import — several topics — have nothing to outline, and a new user is exactly who needs this. A
   fallback is needed, such as an "also on this page" list of the topics whose controls are not showing.
 - **Crowding.** Some pages carry many topic-bearing controls at once; outlines may need to stay quiet
   until hovered or focused.

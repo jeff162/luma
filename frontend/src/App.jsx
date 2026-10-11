@@ -369,7 +369,7 @@ function getLocalProfileStorageKey(dbInstanceId) {
 // FilterBar is rendered above the active route; date and saved-filter chips only make sense on pages
 // whose content respects them — Dashboard reports and the Transactions ledger. Other pages (Categories,
 // Rules, Accounts, Settings, Tasks, Help) operate on their own scope and would otherwise show a bar
-// that does nothing. The Import/Export page deliberately uses its own local filter panel so the
+// that does nothing. The Import page deliberately uses its own local filter panel so the
 // shared chip can stay scoped to the user's "what am I looking at" view without dragging the export
 // scope along with it.
 function shouldShowFilterBar(pathname) {
@@ -1844,7 +1844,7 @@ export default function App() {
                                 title="Clear demo data?"
                                 description={demoClearError
                                   ? demoClearError
-                                  : 'This removes the demo dataset and returns the app to a clean slate so you can bring in your own data. As long as no new data is loaded, the demo data can be reloaded from the Import/Export page.'}
+                                  : 'This removes the demo dataset and returns the app to a clean slate so you can bring in your own data. As long as no new data is loaded, the demo data can be reloaded from the Import page.'}
                                 confirmLabel={clearingDemo ? 'Clearing…' : 'Clear demo data'}
                                 confirmVariant="danger"
                                 confirmDisabled={clearingDemo}

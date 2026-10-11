@@ -4,7 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- provider + useUnifiedDuplicatesViewer hook + nav-bar pill live together by design */
 
 // App-level state for the unified duplicate-detection report dialog. The dialog used to live
-// inside the Import/Export page tree and would unmount whenever the user navigated away —
+// inside the Import page tree and would unmount whenever the user navigated away —
 // frustrating for the cross-account-merge workflow where the user wants to investigate flagged
 // rows by hopping to the Accounts or Transactions page and then come back. Hoisting the state
 // here lets the dialog persist across route changes.

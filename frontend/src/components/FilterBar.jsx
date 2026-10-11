@@ -470,7 +470,7 @@ function FilterPopover({ onClose }) {
         {tab === 'owners' && (
           owners.length === 0 ? (
             <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
-              No owners defined — add them in Settings.
+              No owners defined — add them on the Accounts page.
             </div>
           ) : owners.map(o => {
             const sel = { type: 'owner', id: o.id, label: o.name }
@@ -505,7 +505,7 @@ function FilterPopover({ onClose }) {
               </div>
               {tags.length === 0 ? (
                 <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
-                  No tags yet — create them in Settings.
+                  No tags yet — create them under Tags on the Transactions page.
                 </div>
               ) : tags.map(tag => {
                 const sel = { type: 'tag', id: tag.id, label: tag.name, color: tag.color }

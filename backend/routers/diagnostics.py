@@ -4,7 +4,7 @@
 """
 What the running server can tell an administrator about itself, beyond its configuration.
 
-Today that is the errors in its log file (`backend/app_log_file.py`), read by Settings -> Error log.
+Today that is the errors in its log file (`backend/app_log_file.py`), read by Administration -> Error log.
 Admin-only, like the configuration it sits beside: a traceback can carry transaction details and the
 file paths of this installation.
 

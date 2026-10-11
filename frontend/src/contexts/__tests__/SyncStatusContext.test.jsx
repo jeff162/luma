@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// A page that keeps its own copy of what a sync writes — Import/Export's history cards — has to hear when a
+// A page that keeps its own copy of what a sync writes — the Import page's history cards — has to hear when a
 // run ends, or it goes on showing the counts it last loaded: rows that had already landed beside chips and
 // totals that had not been written yet. `runsFinished` is that signal. These pin that it moves once per
 // ended run and never while one is still going, since a reload fired mid-run would read exactly the

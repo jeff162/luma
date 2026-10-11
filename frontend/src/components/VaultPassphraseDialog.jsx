@@ -3,7 +3,7 @@
 
 // The credential-vault passphrase dialog — the surface `useVaultGate` asks the host to render for its
 // `mode` ('set' to mint the workspace vault, 'unlock' to open it for this session). Extracted from the
-// Connections tab when the Backup tab became its second host: restoring a credentials backup re-keys
+// Connections tab when Backup / Restore became its second host: restoring a credentials backup re-keys
 // secrets under the workspace DEK, so it needs the same gate and the same prompt.
 //
 // A third mode, 'change', rewraps the DEK under a new passphrase. It is not a gate mode — nothing awaits
@@ -11,7 +11,7 @@
 // component with one extra input and its own opportunity to disagree about the rules.
 //
 // The strength meter travels with it (no other caller). The field sets do not: the Connections tab's
-// provider-secret fields and the backup tab annotate their secrets the same way, and one copy of that is
+// provider-secret fields and Backup / Restore annotate their secrets the same way, and one copy of that is
 // the point, so it lives in `lib/sensitiveFields.js` — a shared constant, and not a vault-specific one, so
 // a component module was the wrong home for it in both directions.
 

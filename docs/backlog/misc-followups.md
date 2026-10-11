@@ -38,39 +38,6 @@ category-owner → tag migration — so this entry is still unwritten.
 tags and pointing at the Help-page topic for users who want the model
 explained.
 
-## Import / Export still needs a reachability pass
-
-**Context (2026-09-05).** The connections work put a Data connections card on the Import tab beside the
-CSV importer, which is right, but the page was already carrying four unrelated things and now carries a
-fifth. The split that fixed the connections tab — configuration on one surface, operation on another —
-has an obvious second application here that was deliberately **not** taken in the same pass.
-
-**Superseded 2026-10-11 by [`settings-administration-split.md`](settings-administration-split.md)**,
-which settles where Backup / Restore goes, moves Export too, and does the rename. This entry is removed
-by that plan's last stage; only the import-history bullet below is independent of it.
-
-**Decided, not yet done.** The user's call on each, from that session:
-
-- **Backup / Restore should move off this page.** It is install administration: it acts on the whole
-  database, restore is destructive and gated, and it has nothing to do with transactions arriving.
-  **Where it goes is undecided, and Settings is not the answer by default** — Settings has been a
-  parking spot for things built before their home existed rather than a destination, and most of what
-  sits there is expected to move too. A *System administration* area with Settings as one member is
-  the shape under consideration. This move therefore waits on that decision rather than leading it.
-- **Export stays put for now.** It is a data operation on the ledger rather than admin, and its pairing
-  with Import is at least defensible. Revisit only if the page is still crowded afterwards.
-- **The page rename comes last, and that ordering is the point.** "Import / Export" is already wrong (it
-  carries Backup/Restore and Amazon) and gets wronger with connections on it — but the right name is
-  downstream of what is left on the page, so naming it before Backup/Restore leaves would be guessing.
-- **The import history's own organization** is a separate job, now largely built — the per-source
-  recency window, its by-year archive, coverage-based ordering and the stored-detail maintenance screen
-  are all in; what is left there is the fetch re-bound
-  ([`import-history-windowing.md`](import-history-windowing.md)). It is the half of
-  the page that gets worse as the top gets denser, so it pairs naturally with this.
-
-**Why deferred.** The connections split was already touching the two largest files in the repo. Bundling
-a second page reorganization into it would have made one change nobody could review.
-
 ## SimpleFIN's window limit rose to 90 days — and became a silent cap
 
 **Context (2026-08-08).** `WINDOW_DAYS` is set from what the live Bridge *says* rather than from its

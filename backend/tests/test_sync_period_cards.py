@@ -202,7 +202,7 @@ class SyncPeriodCardTests(unittest.TestCase):
         # The card resolvers key on (connection, backfill/period) without regard to row count, so a card
         # left at zero rows is not inert — the next backfill reuses it. And once the connection is
         # disconnected (`connection_id` is ON DELETE SET NULL) nothing that keys on the connection can
-        # reach it, leaving an unremovable empty card on Import/Export. A CSV card is the deliberate
+        # reach it, leaving an unremovable empty card on the Import page. A CSV card is the deliberate
         # exception: it records a file, which stays true after its rows are gone.
         with self._use_db_path(), get_db() as conn:
             conn.execute(

@@ -316,7 +316,7 @@ export const api = {
     request('/app/update-check/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   checkForUpdateNow: () => request('/app/update-check/run', { method: 'POST' }),
   autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
-  // Settings -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
+  // Administration -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
   getErrorLog: () => request('/diagnostics/log/errors'),
   // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.
   acknowledgeErrorLog: (through) =>

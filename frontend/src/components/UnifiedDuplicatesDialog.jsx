@@ -8,10 +8,10 @@
 //
 // This component used to live inside ImportExport.jsx. It was extracted so that
 // `UnifiedDuplicatesViewerContext` can mount it at the top of the App tree and keep it open
-// while the user navigates between Import/Export, Accounts, Transactions, etc. The dialog is
+// while the user navigates between Import, Accounts, Transactions, etc. The dialog is
 // presentational + makes its own API calls for keep/reject/restore/import-anyway actions; the
 // context owns the open/close/reload state and routes drill-through requests back to the
-// Import/Export page (which is the only place that can render a batch-detail panel).
+// Import page (which is the only place that can render a batch-detail panel).
 //
 // Per-row actions:
 //   * soft_flag row → "Keep" (broad assertion: records the two accounts as distinct; clears the
@@ -456,7 +456,7 @@ export default function UnifiedDuplicatesDialog({
     } finally {
       // Unconditional, including after a failure: a partly-applied bulk is exactly the case where the
       // numbers on screen are least trustworthy, and this is what advances the viewer `version` that the
-      // Import/Export page watches to refresh its own counts.
+      // Import page watches to refresh its own counts.
       try {
         if (typeof onReload === 'function') await onReload()
       } catch { /* the reload's own error surfaces through the viewer */ }

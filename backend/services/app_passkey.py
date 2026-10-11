@@ -234,7 +234,7 @@ def verify_assertion(*, credential: dict, challenge: str, rp_id: str, origin: st
     user_handle = (credential.get("response") or {}).get("userHandle")
     if user_handle and webauthn.base64url_to_bytes(user_handle) != sign_in_user_handle(stored["user_id"]):
         raise PasskeyRejected(
-            "That passkey does not match its account here. Remove it in Account security and add it again."
+            "That passkey does not match its account here. Remove it under Sign-in methods in Settings and add it again."
         )
 
     # A counter that stayed at 0 is not a regression: an authenticator is free to keep no counter at

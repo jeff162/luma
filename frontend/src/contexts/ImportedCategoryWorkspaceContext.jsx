@@ -4,7 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- provider + hook + renderer + nav-bar pill live together by design */
 
 // App-level state for the "Group Imported Categories" workspace. It used to live inside the
-// Import/Export page tree, so it could only be opened from there and unmounted the moment the user
+// Import page tree, so it could only be opened from there and unmounted the moment the user
 // navigated away. Hoisting it here lets the Categories page (and the Import page) open the same
 // workspace, lets it survive route changes, and lets the user minimize it to a nav-bar pill while they
 // work elsewhere — mirroring UnifiedDuplicatesViewerContext.

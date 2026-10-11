@@ -112,7 +112,7 @@ previous file (`luma.log.1`).
 What it cannot hold is anything before the application starts, such as a missing dependency or a crash
 during import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
 in the application's own startup (a migration raising), is held — the log is set up before the data
-database is readied. Settings → **Error log** reads the errors back out of it, for administrators only,
+database is readied. Administration → **Error log** reads the errors back out of it, for administrators only,
 since a traceback can carry transaction details and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest.
 `LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals'
 output beside the scripts.
@@ -167,7 +167,7 @@ The databases are not all that lives there:
 | `luma-data.db` | the ledger | — |
 | `luma-control.db` | users, sessions, and the credential vault | — |
 | `documents/` | attached documents, one file per attachment (`services/documents.py`) | yes |
-| `luma.log`, `luma.log.1` | the server's own log, read by Settings → **Error log** | yes |
+| `luma.log`, `luma.log.1` | the server's own log, read by Administration → **Error log** | yes |
 | `luma-desktop.log` | startup output where there is no terminal — today, the macOS app started from Finder | no |
 | `luma-desktop.lock` | the port of an instance the launcher (`backend/desktop.py`) started, so a second launch opens a tab on it | no |
 
@@ -179,7 +179,7 @@ with it; the launcher's two files are placed in `DATA_DIR` itself and stay there
 uses the override, the data directory and the database's directory are two different places, and only
 the second holds the documents.
 
-**Settings → Configuration is the authority on what is actually in force.** It reports every effective
+**Administration → Startup configuration is the authority on what is actually in force.** It reports every effective
 value *and the layer it came from*, because an environment override is invisible from inside the app.
 Read it before believing anything about a running instance — including which database it is open on.
 
@@ -272,7 +272,8 @@ so a Linux run still catches it.
 current admin is preserved and the backup's accounts merged in, rather than the perimeter being
 silently overwritten. Restoring requires admin in the first place — it is a destructive act somebody
 has to be able to authorize. That covers every restore route, resuming an interrupted one, and changing
-the backup keys; with sign-in protection off there is no role to check, and any session may.
+the backup keys. Creating a backup is held to the same gate so the server agrees with the Administration
+page that offers it. With sign-in protection off there is no role to check, and any session may.
 
 **A restore covers one of the two databases, so its outcome depends on state it never touched.** The
 regular backup is the *data* database; identities, the sign-in perimeter and the vault slots live in the
@@ -320,12 +321,12 @@ What exists today, and what each actually tells you:
 | Surface | Answers |
 | --- | --- |
 | `GET /api/health` | is a server listening and answering on this port |
-| Settings → Configuration | every effective setting and the layer it came from |
+| Administration → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
 | Settings → About | the version, and for a packaged build the commit it was built from |
-| The connection sync log (**Sync log** on Import / Export → Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync, connect or disconnect failed |
+| The connection sync log (**Sync log** on Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
-| `luma.log`, read by Settings → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
+| `luma.log`, read by Administration → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing
 else on screen distinguishes a checkout pointed at a restored backup from one pointed at real data. The

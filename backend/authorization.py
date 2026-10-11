@@ -7,8 +7,9 @@ Authority checks for the operations that are not ordinary data work.
 The login perimeter keeps non-users out and nothing more: once inside, every user reads and edits the same
 data, and no data route checks role. Admin gates the few things that are not data edits — user management,
 provider and environment settings, and the operations that replace the workspace wholesale: every restore
-path, and the backup keys that decide who can read a backup. See `docs/security-model.md` → *Identity and
-the network perimeter*.
+path, and the backup keys that decide who can read a backup. Creating a backup is held to the same gate so
+the server agrees with the Administration page that offers it. See `docs/security-model.md` → *Identity
+and the network perimeter*.
 
 Kept out of `routers/auth.py` because routers that the auth router itself imports need these too, and a
 guard reached through a lazy import is one that is easy to leave off the next route.

@@ -67,11 +67,6 @@ scale — rather than by feature.
 
 ## Items
 
-- [settings-administration-split.md](settings-administration-split.md) — **in progress (2026-10-11).**
-  Sorting the occasional operations onto two pages by who may do them: Settings for every member,
-  Administration for what the admin gate already covers, with Backup / Restore moving off Import / Export
-  and Tags and Export becoming dialogs on Transactions. The file is the working plan — its *Build order*
-  lists only the stages still to do.
 - [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The
   import-enrichment + Amazon initiative landed in full — PayPal as an ordinary import, the general
   enrich-an-existing-transaction capability, `display_name_source`, evidence capture + role tagging, the
@@ -313,6 +308,7 @@ at the first public release, so it cannot point at anything completed before tha
 | `docs/backlog/watched-import-folders.md` | 2026-09-20 | architecture — the mechanism as built (the module, the three triggers, the `(size, mtime)` watermark) and the three rejected shapes (OS file events, a scheduler thread, a `processed/` subdirectory); data-model — the field semantics and every refusal the scan must make, plus the corrected account-map note; **A** (`security-model.md`) — *Reading and deleting outside the data directory*, the one place the app touches a path it does not own; **B** (`operations.md`) — which machine the folder is on, per topology; **C** (`scale-and-limits.md`) — why a listing is cheap and a badge never scans; playbook + a help topic for the user-facing half | **No** — deleted. Both open questions were decided when the work was picked up (purge ships; a source proves itself with one hand import first), and the file's stated precondition was wrong: the account map *is* persisted, just invisibly, which became its own entry in data-model → *Open* |
 | `docs/backlog/dashboard-reporting.md` | 2026-10-07 (partial) | ui-patterns → *The single-period trend* — the trend-bucketing question, settled as calendar grains with the selection highlighted plus an exact same-span mode, and the rejected month-rounded period-sized buckets | **Yes**, 113 → 96 — `cash_date`, Compare and the Trends-tab audit are unstarted |
 | `docs/backlog/passkey-app-login.md` | 2026-09-17 | **A** (`security-model.md`) — *Passkeys and the second factor*: why required user verification stands in for the TOTP step, why the convenience case is itself a security argument, why the password stays the floor, why the two passkey features must not merge, and the scoping of the vault's assertion-verification rejection; architecture — the mechanism as built (table, service, endpoints, session-held challenge, frontend modules) | **No** — deleted. Every open question in it was decided as the work landed: discoverable credentials required, the management surface beside the vault's passkeys but separately labelled, and a password mandatory per account |
+| `docs/backlog/settings-administration-split.md` | 2026-10-11 | **A** (`security-model.md`) — admin gates the install and the perimeter, not the ledger, that the same gate sorts Settings from Administration, creating a backup joining the gate, and the rejected gating of ledger-wide settings; ui-patterns — the section-list layout was already there as the work landed, and this added the export dialog working on a copy of the page's filter; architecture — startup configuration as a report that in-app settings never join; the Settings, Administration, Import and Transactions help topics | **No** — deleted. Every stage shipped, and it also retired the *Import / Export still needs a reachability pass* entry in `misc-followups.md`, which it superseded. No code cited it |
 
 ### Checked, and found to owe nothing
 

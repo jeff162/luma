@@ -190,7 +190,7 @@ up, import one export the usual way, then point it at the folder.
 
 ### A watched folder left a file for review instead of importing it
 
-Files it could not take are listed under **Watched folders** on Import / Export, each with the reason,
+Files it could not take are listed under **Watched folders** on the Import page, each with the reason,
 and a Task points at the same place. **Import…** opens the file in the ordinary import flow with
 everything already filled in, so the answer is to finish it there once; **Dismiss** stops reporting a
 file without touching it, until the file itself changes.
@@ -210,7 +210,7 @@ picks the file up on its own, and the Task clears itself.
 
 ### An import keeps creating a category I don't want
 
-**Delete** it — from the **Delete…** action in **Group Imported Categories** (Import / Export) or the
+**Delete** it — from the **Delete…** action in **Group Imported Categories** (Import) or the
 Categories page. Delete doesn't erase the row: its existing transactions clear (or, via the Categories
 page dialog, reassign to another category) while keeping their raw imported label, and **future
 imports of that label come in uncategorized** instead of recreating it. The category moves to the

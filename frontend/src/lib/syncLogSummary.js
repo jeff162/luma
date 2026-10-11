@@ -311,7 +311,7 @@ export function finalStatusSummary(status) {
 }
 
 // Which import cards this sync's rows landed on. The institution prefix is dropped because it is already
-// the log row's own title, leaving the part that identifies the card on the Import/Export page.
+// the log row's own title, leaving the part that identifies the card on the Import page.
 export function cardSummary(cards, institution) {
   if (!cards?.length) return null
   const prefix = institution ? `${institution} · ` : null

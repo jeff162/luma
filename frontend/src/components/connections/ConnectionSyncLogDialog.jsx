@@ -218,7 +218,7 @@ function SyncRow({ entry, when }) {
         </div>
       ) : null}
       {/* Where the rows went. A sync files each row under its own transaction month, so one pull lands on
-          as many cards as it spans — and the Import/Export page shows one card at a time, which makes an
+          as many cards as it spans — and the Import page shows one card at a time, which makes an
           `added` total that matches no visible card read as rows having gone missing. */}
       {cards ? (
         <div style={{ color: 'var(--muted)' }}>

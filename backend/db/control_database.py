@@ -412,7 +412,7 @@ def delete_app_setting(key: str):
 
 
 # How many errors the server has logged, and how many of those an administrator has seen by opening
-# Settings -> Error log (`backend/app_log_file.py`). Install-wide rather than per user, like the log itself:
+# Administration -> Error log (`backend/app_log_file.py`). Install-wide rather than per user, like the log itself:
 # an error needs looking at once, by whoever looks. Counted as they are logged rather than re-derived from
 # the file, which rotates — an error nobody had seen would drop out of the count along with its line.
 _SERVER_ERRORS_RECORDED = "server_errors_recorded"
