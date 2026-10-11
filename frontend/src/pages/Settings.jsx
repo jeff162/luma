@@ -14,7 +14,6 @@ import ThemeSection from '../components/settings/ThemeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import ReviewFlaggingSection from '../components/settings/ReviewFlaggingSection.jsx'
 import SignInFactorsSection from '../components/settings/SignInFactorsSection.jsx'
-import TransactionTagsSection from '../components/settings/TransactionTagsSection.jsx'
 import ImportStorageSection from '../components/settings/ImportStorageSection.jsx'
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
 import { RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection } from '../components/settings/TrashSections.jsx'
@@ -70,13 +69,6 @@ export default function Settings() {
           <Subsection title="Distinct account pairs"><DistinctAccountPairsSection /></Subsection>
         </div>
       ),
-    },
-    {
-      key: 'transactionTags',
-      title: 'Transaction tags',
-      description: 'Labels applied to transactions to create selection criteria.',
-      help: <FeatureExplainer topic="tags" placement="bottom-left" />,
-      content: <TransactionTagsSection />,
     },
     {
       key: 'importStorage',

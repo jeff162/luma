@@ -6,7 +6,7 @@
  * interpret the same active chips through its own API calls while the user's current slice survives navigation.
  */
 
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
          startOfYear, endOfYear } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
@@ -104,16 +104,36 @@ function payeeContainsSelection(fragment) {
   }
 }
 
+// Placed against the viewport rather than against its trigger: a FilterBar may sit inside a dialog, whose
+// panel and scrolling body clip anything positioned within them. It stays where it is mounted, so its
+// stacking is unchanged, and follows its trigger through a scroll or a resize.
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
+  const [position, setPosition] = useState(null)
   useDismissibleLayer({
     open: true,
     onClose,
     refs: [ref],
   })
+  useLayoutEffect(() => {
+    function place() {
+      const anchor = ref.current?.parentElement?.getBoundingClientRect()
+      if (!anchor) return
+      const next = { top: anchor.bottom + 6, left: anchor.left }
+      setPosition(prev => (prev && prev.top === next.top && prev.left === next.left ? prev : next))
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [])
   return (
     <div ref={ref} style={{
-      position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 300,
+      position: 'fixed', top: position?.top ?? 0, left: position?.left ?? 0, zIndex: 300,
+      visibility: position ? 'visible' : 'hidden',
       background: 'var(--surface)',
       border: '1px solid color-mix(in srgb, var(--border) 50%, var(--muted) 50%)',
       borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',

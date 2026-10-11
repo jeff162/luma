@@ -71,22 +71,23 @@ async function collectVisibleControlFindings(page) {
   })
 }
 
-test('@a11y import page export filter controls stay labeled', async ({ page, baseURL }) => {
+test('@a11y export dialog filter controls stay labeled', async ({ page, baseURL }) => {
   const findings = []
 
-  await page.goto(new URL('/import-export', baseURL).toString())
+  await page.goto(new URL('/transactions', baseURL).toString())
   await page.waitForLoadState('networkidle')
 
-  await page.getByRole('button', { name: 'Export' }).click()
-  await page.getByRole('button', { name: 'Date' }).click()
+  await page.getByRole('button', { name: 'Export…' }).click()
+  const dialog = page.locator('[data-modal-overlay]')
+  await dialog.getByRole('button', { name: 'Date' }).click()
   findings.push(...(await collectVisibleControlFindings(page)).map(item => `export/date: ${item.summary}`))
 
-  await page.getByRole('button', { name: 'Filter' }).click()
-  await page.getByRole('button', { name: 'Payee' }).click()
+  await dialog.getByRole('button', { name: 'Filter' }).click()
+  await dialog.getByRole('button', { name: 'Payee' }).click()
   findings.push(...(await collectVisibleControlFindings(page)).map(item => `export/filter: ${item.summary}`))
 
   if (findings.length) {
-    console.log(`Import/export accessibility findings (${findings.length}):\n${findings.join('\n')}`)
+    console.log(`Export dialog accessibility findings (${findings.length}):\n${findings.join('\n')}`)
   }
 
   expect(findings, findings.join('\n')).toEqual([])

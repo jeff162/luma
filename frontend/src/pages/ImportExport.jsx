@@ -48,7 +48,6 @@ import { ImportedCategorySettingsDialog } from '../components/importExport/Impor
 import { RejectedRowsDialog } from '../components/importExport/RejectedRowsDialog.jsx'
 import { DuplicateRowsDialog } from '../components/importExport/DuplicateRowsDialog.jsx'
 import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
-import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import WatchedFoldersPanel from '../components/importExport/WatchedFoldersPanel.jsx'
 import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
@@ -5291,13 +5290,12 @@ export default function ImportExport() {
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-          {[['import', 'Import'], ['export', 'Export'], ['amazon', 'Amazon']].map(([id, label]) => (
+          {[['import', 'Import'], ['amazon', 'Amazon']].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
           ))}
         </div>
         {tab === 'import' && <ImportErrorBoundary><ImportTab onAmazonDetected={routeToAmazon} syncLogConnectionId={syncLogConnectionId} /></ImportErrorBoundary>}
         {tab === 'amazon' && <ImportErrorBoundary><AmazonImportTab initialFiles={amazonHandoffFiles} /></ImportErrorBoundary>}
-        {tab === 'export' && <ExportTab />}
       </div>
     </div>
   )

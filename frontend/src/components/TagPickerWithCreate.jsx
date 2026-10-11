@@ -11,7 +11,7 @@ import { addTagToCache } from '../lib/useTags.js'
  * Shared tag picker used wherever the user can attach tags — transaction rows,
  * the Categories page (group/leaf tags), and rule editing. The picker shows
  * existing tags as checkboxes and offers an inline "+ New tag" affordance so
- * users do not have to hop to Settings just to invent a new tag name.
+ * users do not have to hop to the tag manager just to invent a new tag name.
  *
  * Newly created tags optimistically appear in the list with a tiny placeholder
  * id while the create request is in flight. Once the API returns, the parent

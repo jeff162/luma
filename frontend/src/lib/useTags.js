@@ -10,7 +10,7 @@
  * effect and hit `GET /tags` again. `useTags()` centralizes both: one module-level cache, one fetch
  * shared across all consumers, and a subscription so every open picker updates together.
  *
- * Invalidation is explicit, not signal-driven: tags only change from the Settings management UI
+ * Invalidation is explicit, not signal-driven: tags only change from the tag manager (`TagsDialog`)
  * (create/edit/delete → call `invalidateTags()`) and the inline "+ New tag" in `TagPickerWithCreate`
  * (→ `addTagToCache()`). Listening to the global `luma:data-mutated` signal would refetch tags on
  * every unrelated transaction edit, so the two real mutation sites notify this cache directly instead.

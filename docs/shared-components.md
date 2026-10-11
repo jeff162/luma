@@ -122,7 +122,7 @@ registry (`services/transaction_facets.py`) — never a new parameter threaded t
 | Reach for | Instead of building | Where |
 | --- | --- | --- |
 | **`TagPickerWithCreate`** — the one tag browse-and-create picker (creating is available wherever assigning is; supports the per-transaction inherited-tag opt-out via `blockedTagIds`) | a page-local tag selector | `components/TagPickerWithCreate.jsx` |
-| **`useTags`** — the shared, cached tag list for pickers (one `GET /tags` app-wide; `addTagToCache` folds in an inline-created tag, `invalidateTags` refreshes after a Settings edit). **Not** for per-row use — see the hook's header | each surface fetching tags into its own `useState` + effect | `lib/useTags.js` |
+| **`useTags`** — the shared, cached tag list for pickers (one `GET /tags` app-wide; `addTagToCache` folds in an inline-created tag, `invalidateTags` refreshes after a tag-manager edit). **Not** for per-row use — see the hook's header | each surface fetching tags into its own `useState` + effect | `lib/useTags.js` |
 | **`TagUi`** — shared tag rendering: `TagGlyph`, `TagBadge`, and the canonical `TAG_COLOR_PALETTE` | hand-rendering a tag chip/dot or redefining the palette | `components/TagUi.jsx` |
 | **`saveBlob(blob, filename)`** — hand a blob to the browser as a download. `downloadUrl` is the fetch-then-save wrapper for a server URL; this is the same save step for content the app produced itself (a generated key file). The revoke timing inside is a trap worth not re-deriving: revoking synchronously can beat the click and save a zero-byte file | an inline `createObjectURL` + anchor dance | `lib/api.js` |
 | **`CategoryPicker`** — leaf-category selection | a custom category dropdown | `components/CategoryPicker.jsx` |

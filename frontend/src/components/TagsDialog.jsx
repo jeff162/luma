@@ -1,16 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useId } from 'react'
-import { api } from '../../lib/api.js'
-import { Card, Button, Spinner, getFormControlStyle, AppConfirmDialog } from '../ui.jsx'
-import { useTransientTextEdit } from '../../lib/uiInteractions.js'
-import TransientTextInput from '../TransientTextInput.jsx'
-import { TagGlyph, TAG_COLOR_PALETTE } from '../TagUi.jsx'
-import { invalidateTags } from '../../lib/useTags.js'
+import { useState, useEffect, useId, useRef } from 'react'
+import { api } from '../lib/api.js'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import { AppDialog, Button, Spinner, getFormControlStyle, AppConfirmDialog } from './ui.jsx'
+import { useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransientTextInput from './TransientTextInput.jsx'
+import { TagGlyph, TAG_COLOR_PALETTE } from './TagUi.jsx'
+import { invalidateTags } from '../lib/useTags.js'
 
 // `compact` shrinks the swatches and tightens the gap so the full 18-color palette fits on a single
-// row in the narrow per-tag palette column (the tag list); the add-tag form spans the card width and
+// row in the narrow per-tag palette column (the tag list); the add-tag form spans the dialog width and
 // keeps the roomier default targets.
 function TagColorPalette({ value, onChange, compact = false, align = 'flex-start' }) {
   const swatch = compact ? 22 : 28
@@ -111,8 +112,16 @@ function EditableTagName({ tag, onCommit }) {
   )
 }
 
-export default function TransactionTagsSection() {
+/*
+ * The tag manager: add, rename, recolour and delete tags. Opened from the Transactions page, whose rows
+ * are where tags show.
+ *
+ * `onClose` is passed `{ changed }` — true when a tag those rows may be showing was renamed, recoloured or
+ * deleted, so the host can refetch them.
+ */
+export default function TagsDialog({ onClose }) {
   const fieldIdBase = useId()
+  const changedRef = useRef(false)
   const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -158,6 +167,7 @@ export default function TransactionTagsSection() {
       const updated = await api.updateTag(tagId, payload)
       setTags(prev => prev.map(tag => tag.id === tagId ? updated : tag))
       setError('')
+      changedRef.current = true
       invalidateTags()
     } catch (err) {
       setError(err.message || 'Failed to update tag')
@@ -171,6 +181,7 @@ export default function TransactionTagsSection() {
       await api.deleteTag(tag.id)
       setTags(prev => prev.filter(item => item.id !== tag.id))
       setError('')
+      changedRef.current = true
       invalidateTags()
     } catch (err) {
       setError(err.message || 'Failed to delete tag')
@@ -179,27 +190,24 @@ export default function TransactionTagsSection() {
 
   return (
     <>
-      {pendingDeleteTag ? (
-        <AppConfirmDialog
-          title="Delete tag?"
-          description={`Delete tag "${pendingDeleteTag.name}"? Existing transaction assignments will be removed too.`}
-          confirmLabel="Delete"
-          confirmVariant="danger"
-          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={() => handleDeleteTag(pendingDeleteTag)}
-          onCancel={() => setPendingDeleteTag(null)}
-          width="min(500px, 100%)"
-        />
-      ) : null}
-
-      <Card style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px 0', color: 'var(--muted)', fontSize: 13, lineHeight: 1.5 }}>
-          Tags are lightweight labels you can add manually or through rules. They show up on transaction rows and can filter dashboard views and exports.
-        </div>
-        <form onSubmit={handleCreate} style={{ display: 'grid', gap: 12, padding: 16, borderBottom: '1px solid var(--border)' }}>
+      <AppDialog
+        title={(
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            Tags
+            <FeatureExplainer topic="tags" placement="bottom-left" />
+          </span>
+        )}
+        description="Tags are lightweight labels you can add manually or through rules. They show up on transaction rows and can filter dashboard views and exports."
+        onClose={() => onClose({ changed: changedRef.current })}
+        width="min(760px, 100%)"
+        bodyPadding={0}
+        bodyStyle={{ gap: 0 }}
+        actions={<Button onClick={() => onClose({ changed: changedRef.current })}>Close</Button>}
+      >
+        <form onSubmit={handleCreate} style={{ display: 'grid', gap: 12, padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <input
             id={`${fieldIdBase}-tag-name`}
-            name="settings-new-tag-name"
+            name="new-tag-name"
             value={form.name}
             onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))}
             placeholder="Tag name"
@@ -221,17 +229,17 @@ export default function TransactionTagsSection() {
         </form>
 
         {error ? (
-          <div style={{ padding: '10px 16px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+          <div style={{ padding: '10px 20px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
             {error}
           </div>
         ) : null}
 
         {loading && tags.length === 0 ? <Spinner /> : tags.length === 0 ? (
-          <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
+          <div style={{ padding: '18px 20px', color: 'var(--muted)', fontSize: 13 }}>
             No tags created yet.
           </div>
         ) : (
-          tags.map(tag => (
+          tags.map((tag, index) => (
             <div
               key={tag.id}
               style={{
@@ -242,8 +250,9 @@ export default function TransactionTagsSection() {
                 gridTemplateColumns: 'minmax(130px, max-content) minmax(0, 1fr) auto',
                 gap: 12,
                 alignItems: 'center',
-                padding: '8px 16px',
-                borderBottom: '1px solid var(--border)',
+                padding: '8px 20px',
+                // The dialog's footer rules off the last row itself.
+                borderBottom: index === tags.length - 1 ? 'none' : '1px solid var(--border)',
               }}
             >
               <EditableTagName
@@ -259,6 +268,7 @@ export default function TransactionTagsSection() {
               <button
                 type="button"
                 onClick={() => setPendingDeleteTag(tag)}
+                aria-label={`Delete tag ${tag.name}`}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -276,7 +286,21 @@ export default function TransactionTagsSection() {
             </div>
           ))
         )}
-      </Card>
+      </AppDialog>
+
+      {/* After the dialog, so it stacks above it. */}
+      {pendingDeleteTag ? (
+        <AppConfirmDialog
+          title="Delete tag?"
+          description={`Delete tag "${pendingDeleteTag.name}"? Existing transaction assignments will be removed too.`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => handleDeleteTag(pendingDeleteTag)}
+          onCancel={() => setPendingDeleteTag(null)}
+          width="min(500px, 100%)"
+        />
+      ) : null}
     </>
   )
 }

@@ -49,8 +49,8 @@ const preferencePersistenceRestrictions = [
 // — what almost everything wants) or getRawDate() (explicit-only — the rare bypass, e.g. the
 // Transactions ledger). Reading `filters.date` directly silently skips the page-default logic. The
 // files that legitimately read the explicit value — the FilterContext that defines it, the FilterBar
-// date-picker UI, the Dashboard trend (deliberately keyed on the explicit pick, not the default), and
-// ExportTab (its own nested provider with no default) — are allowlisted in the overrides below.
+// date-picker UI, and the Dashboard trend (deliberately keyed on the explicit pick, not the default) —
+// are allowlisted in the overrides below.
 const filterDateRestrictions = [
   { object: 'filters', property: 'date', message: 'Read the period via getDate() (default-aware) or getRawDate() (explicit-only) from useFilters — reading filters.date directly bypasses the page-default logic.' },
 ]
@@ -155,13 +155,12 @@ export default [
   },
   {
     // Files that legitimately read the *explicit* date field: the context that defines it, the date-picker
-    // UI, the Dashboard trend (keyed on the explicit pick, not the default), and ExportTab's nested
-    // provider. They keep the txn + preference guards; only the filters.date guard is lifted here.
+    // UI, and the Dashboard trend (keyed on the explicit pick, not the default). They keep the txn +
+    // preference guards; only the filters.date guard is lifted here.
     files: [
       'src/lib/FilterContext.jsx',
       'src/components/FilterBar.jsx',
       'src/pages/Dashboard.jsx',
-      'src/components/importExport/ExportTab.jsx',
     ],
     rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions] },
   },

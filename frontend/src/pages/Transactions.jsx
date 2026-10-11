@@ -33,6 +33,8 @@ import LinkPurchaseDialog from '../components/LinkPurchaseDialog.jsx'
 import AddTransactionDialog from '../components/AddTransactionDialog.jsx'
 import ReimbursementsReportDialog from '../components/ReimbursementsReportDialog.jsx'
 import StoredDocumentsDialog from '../components/StoredDocumentsDialog.jsx'
+import TagsDialog from '../components/TagsDialog.jsx'
+import ExportTransactionsDialog from '../components/ExportTransactionsDialog.jsx'
 import { useStoredDocuments } from '../lib/useStoredDocuments.js'
 import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
@@ -228,6 +230,8 @@ export default function Transactions() {
   const [rulePrompt, setRulePrompt] = useState(null)
   const [addingTransaction, setAddingTransaction] = useState(false)
   const [storedDocumentsOpen, setStoredDocumentsOpen] = useState(false)
+  const [tagsOpen, setTagsOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const storedDocuments = useStoredDocuments()
   // Deep-linkable so a Tasks reminder can open the report already narrowed to what it counted — the
   // same pattern the uncategorized and needs-review nudges use. The narrowing rides along as props
@@ -950,6 +954,8 @@ export default function Transactions() {
           <Button small variant="ghost" onClick={() => setStoredDocumentsOpen(true)}>
             {storedDocuments.documents?.length ? `Stored documents (${storedDocuments.documents.length})` : 'Stored documents'}
           </Button>
+          <Button small variant="ghost" onClick={() => setTagsOpen(true)}>Tags</Button>
+          <Button small variant="ghost" onClick={() => setExportOpen(true)}>Export…</Button>
           {/* The ledger is where someone notices a transaction is missing, so this is where adding one
               belongs — beside the list it will appear in, not parked in Settings. */}
           <Button small variant="ghost" onClick={() => setAddingTransaction(true)}>+New</Button>
@@ -1287,6 +1293,18 @@ export default function Transactions() {
             onClose={() => setStoredDocumentsOpen(false)}
           />
         )}
+
+        {tagsOpen && (
+          <TagsDialog
+            onClose={({ changed }) => {
+              setTagsOpen(false)
+              // The rows carry each tag's name and colour, so an edit to one is refetched.
+              if (changed) load({ append: false }).catch(() => {})
+            }}
+          />
+        )}
+
+        {exportOpen && <ExportTransactionsDialog onClose={() => setExportOpen(false)} />}
 
         {reimbursementsOpen && (
           <ReimbursementsReportDialog

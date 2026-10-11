@@ -70,10 +70,7 @@ Each section is its own module: member sections under `components/settings/`, ad
 `components/administration/`. `pages/Settings.jsx` and `pages/Administration.jsx` list their sections
 on the shared layout, `components/SectionListPage.jsx`.
 
-1. **Build the Tags and Export dialogs on Transactions** and remove both from where they were
-   (`settings/TransactionTagsSection.jsx` is the Tags dialog's body; `importExport/ExportTab.jsx` the
-   Export dialog's).
-2. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
+1. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
    `authorization.py`, which now has to cover creating a backup (`GET /backup` and `/backup/credentials`
    are `require_admin_or_local`); every "Settings → X", "Import / Export" and Backup / Restore-tab
    reference in the docs and the in-app help topics; the own-password change in
