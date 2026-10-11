@@ -3,7 +3,7 @@
 
 // The import history's rows: one per data source, each holding the cards it produced. Saved data sources,
 // marketplace vendors and connections each get their own row; a file imported without a source is the
-// temporary draft (the newest) or the unknown-data-source bucket (the rest). Shared by the Import / Export
+// temporary draft (the newest) or the unknown-data-source bucket (the rest). Shared by the Import
 // history and the import-storage screen in Settings, which groups the same cards under the same names.
 
 import { byCoverage } from './importHistoryWindow.js'

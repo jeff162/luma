@@ -5,7 +5,7 @@
 //
 // Extracted when the connections tab was split in two: **configuration** stayed on the Accounts page
 // (connect, disconnect, account mapping, provider credentials) while the **operational** half — syncing,
-// and the record of what a sync did — moved to Import / Export, beside the cards a sync writes to. Both
+// and the record of what a sync did — moved to Import, beside the cards a sync writes to. Both
 // halves still have to describe the same connection, and they must not describe it differently: the
 // outcome pill and the per-account chips are the same components on both, so a user reading one page
 // minutes after the other cannot be told two stories about one pull.
@@ -147,7 +147,7 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
           {rowTotal ? `${n(rowTotal)} row${rowTotal === 1 ? '' : 's'}` : 'no new transactions'}
         </span>
         {/* The same `↗` launcher used elsewhere on this card, and it opens the ledger over this page
-            rather than navigating: finding the right card on the Import / Export history page was the
+            rather than navigating: finding the right card on the Import history page was the
             entire friction this removes.
             The two modes are named rather than left to look identical, because they answer different
             questions — one shows what this pull delivered, the other the card it landed on, which by

@@ -62,7 +62,7 @@ function buildGroups(dataSourceRows, storage) {
   return dataSourceRows
     .map(row => {
       // Largest first, like the sources themselves: the question this screen answers is where the
-      // space is, not what was imported when — the history on Import / Export is ordered by period.
+      // space is, not what was imported when — the history on Import is ordered by period.
       const cards = (row.batches || [])
         .map(batch => ({ batch, stored: storage[batch.id] }))
         .filter(entry => entry.stored && (entry.stored.report_rows > 0 || entry.stored.rejected_rows > 0))

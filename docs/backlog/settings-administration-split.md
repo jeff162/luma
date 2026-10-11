@@ -64,24 +64,19 @@ Both pages share one layout: the section names in a list down the left, the sele
 right, one at a time. A section gets the full content width (several are tables), loads only when
 selected, and is addressable as `?section=<key>`. This replaces the collapsible drops.
 
-## Server changes
-
-- Creating a backup becomes `require_admin_or_local`, so the page and the server agree. Restore and the
-  backup keys already are.
-
 ## Build order
 
 Each section is its own module: member sections under `components/settings/`, admin sections under
 `components/administration/`. `pages/Settings.jsx` and `pages/Administration.jsx` list their sections
 on the shared layout, `components/SectionListPage.jsx`.
 
-1. **Move Backup / Restore to Administration** and gate backup creation on the server. Rename the Import
-   page.
-2. **Build the Tags and Export dialogs on Transactions** and remove both from where they were
+1. **Build the Tags and Export dialogs on Transactions** and remove both from where they were
    (`settings/TransactionTagsSection.jsx` is the Tags dialog's body; `importExport/ExportTab.jsx` the
    Export dialog's).
-3. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
-   `authorization.py`; every "Settings → X" reference in the docs and the in-app help topics; the own-password change in
+2. **Docs and help.** The admin wording in `security-model.md`, `architecture.md` and
+   `authorization.py`, which now has to cover creating a backup (`GET /backup` and `/backup/credentials`
+   are `require_admin_or_local`); every "Settings → X", "Import / Export" and Backup / Restore-tab
+   reference in the docs and the in-app help topics; the own-password change in
    the `account-security` help topic; the
    `page-settings` / `page-import-export` help topics, a help topic for the Administration page, and
    `help/navigation.js`; the superseded entry in

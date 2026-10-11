@@ -4,7 +4,7 @@
 /*
  * File-scoped ledger drawer: shows every transaction that was imported from a single
  * import_batch, across all accounts the file populated. Reached from the file-card on the
- * Import / Export page (full file view) and from the duplicate-detection dialog's drill-
+ * Import page (full file view) and from the duplicate-detection dialog's drill-
  * through arrow (file view, optionally scoped to a date range from a coverage-window match).
  *
  * Five filters all flow through the same `activeKey` into `usePagedTransactions`, which

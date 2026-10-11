@@ -491,7 +491,7 @@ export default function Rules() {
   const [owners,     setOwners]     = useState([])
   const [accounts,   setAccounts]   = useState([])
   // Recent import batches, fetched only to drive the "Generate rules from imported data" entry button's
-  // pending-suggestion count and dim state — the review itself lives on the Import / Export route.
+  // pending-suggestion count and dim state — the review itself lives on the Import route.
   const [batches,    setBatches]    = useState([])
   const [loading,    setLoading]    = useState(true)
   const sessionInit = useRef(loadRulesSession()).current

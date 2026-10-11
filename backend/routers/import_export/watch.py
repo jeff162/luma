@@ -23,7 +23,7 @@ recoverable without touching the source's settings — an import by hand updates
 **Scans are request-driven.** There is deliberately no scheduler — the app is multi-tenant with
 per-identity database paths, so a timer thread would have no tenant to run as and no way to choose
 one. `maybe_auto_scan` is the watermark-gated catch-up a client calls on app load and on entering
-Import / Export, the same shape as `recurring_detection.maybe_auto_scan`; `scan_watched_sources` is
+Import, the same shape as `recurring_detection.maybe_auto_scan`; `scan_watched_sources` is
 the explicit *Check now*. The nav badge reads the persisted parked count and never scans.
 
 **What keeps a scan cheap** is the per-file `(size, mtime)` watermark in `import_watch_file`:

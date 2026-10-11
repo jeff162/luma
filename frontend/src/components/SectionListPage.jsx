@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-/* eslint-disable react-refresh/only-export-components -- the layout and the hook that reads its URL parameter live together by design */
+/* eslint-disable react-refresh/only-export-components -- the layout, its subsection heading and the hook that reads its URL parameter live together by design */
 
 /*
  * The layout Settings and Administration share: the section names in a list down the left, the selected
@@ -16,7 +16,7 @@
  */
 
 import { useSearchParams } from 'react-router-dom'
-import { PageHeader } from './ui.jsx'
+import { PageHeader, SectionEyebrow } from './ui.jsx'
 
 const SECTION_PARAM = 'section'
 const SECTION_LIST_WIDTH = 200
@@ -44,6 +44,16 @@ const selectedListItemStyle = { ...listItemStyle, background: 'var(--surface2)',
 export function useSectionParam() {
   const [searchParams] = useSearchParams()
   return searchParams.get(SECTION_PARAM) || ''
+}
+
+// One part of a section that holds several things under a single heading.
+export function Subsection({ title, children }) {
+  return (
+    <div>
+      <SectionEyebrow style={{ fontSize: 13, marginBottom: 8 }}>{title}</SectionEyebrow>
+      {children}
+    </div>
+  )
 }
 
 /*

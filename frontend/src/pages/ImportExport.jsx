@@ -49,7 +49,6 @@ import { RejectedRowsDialog } from '../components/importExport/RejectedRowsDialo
 import { DuplicateRowsDialog } from '../components/importExport/DuplicateRowsDialog.jsx'
 import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
 import { ExportTab } from '../components/importExport/ExportTab.jsx'
-import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import WatchedFoldersPanel from '../components/importExport/WatchedFoldersPanel.jsx'
 import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
@@ -4633,7 +4632,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
                   <div>
                     <div style={{ fontSize: 17, fontWeight: 600 }}>Manage data sources</div>
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-                      Edit saved CSV data sources without leaving Import / Export.
+                      Edit saved CSV data sources without leaving Import.
                       {!dataSourceManagerEditing ? ' Drag to move.' : ''}
                     </div>
                   </div>
@@ -5288,18 +5287,17 @@ export default function ImportExport() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Import / Export" help={<FeatureExplainer topic="page-import-export" placement="bottom-left" />} />
+        <PageHeader title="Import" help={<FeatureExplainer topic="page-import-export" placement="bottom-left" />} />
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-          {[['import', 'Import'], ['export', 'Export'], ['backup', 'Backup / Restore'], ['amazon', 'Amazon']].map(([id, label]) => (
+          {[['import', 'Import'], ['export', 'Export'], ['amazon', 'Amazon']].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
           ))}
         </div>
         {tab === 'import' && <ImportErrorBoundary><ImportTab onAmazonDetected={routeToAmazon} syncLogConnectionId={syncLogConnectionId} /></ImportErrorBoundary>}
         {tab === 'amazon' && <ImportErrorBoundary><AmazonImportTab initialFiles={amazonHandoffFiles} /></ImportErrorBoundary>}
         {tab === 'export' && <ExportTab />}
-        {tab === 'backup' && <BackupRestoreTab />}
       </div>
     </div>
   )

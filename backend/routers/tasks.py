@@ -374,7 +374,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
                                "Open the import that flagged them to review each one.",
                 "count":       suspect_dupes,
                 "link":        "/import-export",
-                "link_label":  "Open Import / Export",
+                "link_label":  "Open Import",
                 "severity":    SEVERITY_WARNING,
             })
 
@@ -396,7 +396,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
                                "Open the import and review its Amazon reconciliation report.",
                 "count":       amazon_attention,
                 "link":        "/import-export",
-                "link_label":  "Open Import / Export",
+                "link_label":  "Open Import",
                 "severity":    SEVERITY_WARNING,
             })
 
@@ -418,7 +418,7 @@ def _build_tasks(request: Request | None) -> list[dict]:
                                + "Open each one in the import flow to finish it.",
                 "count":       waiting,
                 "link":        "/import-export",
-                "link_label":  "Open Import / Export",
+                "link_label":  "Open Import",
                 "severity":    SEVERITY_WARNING,
             })
 

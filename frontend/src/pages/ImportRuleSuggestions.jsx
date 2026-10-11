@@ -31,10 +31,10 @@ export default function ImportRuleSuggestions() {
   const { batchId, profileId } = useParams()
   const navigate = useNavigate()
   // The back affordance follows where the user came from: the Rules page stamps {backTo, backLabel}
-  // when it opens this surface, otherwise it falls back to Import / Export (its canonical home).
+  // when it opens this surface, otherwise it falls back to Import (its canonical home).
   const location = useLocation()
   const backTo = location.state?.backTo || '/import-export'
-  const backLabel = location.state?.backLabel || 'Import / Export'
+  const backLabel = location.state?.backLabel || 'Import'
   const isProfileContext = !!profileId
   const isSystemContext = !batchId && !profileId
   const contextKey = isSystemContext
@@ -587,7 +587,7 @@ export default function ImportRuleSuggestions() {
       : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''} `
   const emptyStateTitle = isSystemContext ? 'No categorized imports yet' : (isProfileContext ? 'Data source not found' : 'Import not found')
   const emptyStateDescription = isSystemContext
-    ? 'Use the categories present in the data from Import / Export to include an imported file in rule suggestions.'
+    ? 'Use the categories present in the data from Import to include an imported file in rule suggestions.'
     : isProfileContext
       ? 'This data source may have been deleted or no longer has imported files attached.'
       : 'This import may have been undone or is no longer available in Recent imports.'

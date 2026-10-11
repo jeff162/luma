@@ -1,10 +1,11 @@
 """
-The Import / Export operations that need an admin once sign-in protection is on.
+The backup, restore and watched-folder operations that need an admin once sign-in protection is on.
 
 A restore is not a data edit: it replaces every row, the connections and the provider configuration at once.
 Before this, any signed-in member could run one — including the legacy credentials restore, which replaces
 global provider configuration that is otherwise an admin's alone to change. The backup keys are held to the
-same bar because they decide who can read a backup at all. Pointing a data source at a **watched folder**
+same bar because they decide who can read a backup at all, and creating a backup is held to it so the
+server agrees with the Administration page that offers it. Pointing a data source at a **watched folder**
 is here for a different reason of the same shape: it names a directory on the server's filesystem, which is
 global app configuration rather than ledger data, and the folder can be set to delete the files it imports.
 
@@ -20,6 +21,8 @@ import unittest
 from backend.tests._api_client import api_client
 
 GUARDED = [
+    ("get", "/api/import-export/backup", {}),
+    ("get", "/api/import-export/backup/credentials", {}),
     ("post", "/api/import-export/restore", {"json": {"data": {}}}),
     ("post", "/api/import-export/restore-file", {"files": {"file": ("backup.zip", b"not a backup", "application/zip")}}),
     ("post", "/api/import-export/restore/resume-documents", {}),
@@ -56,7 +59,7 @@ class RestoreAuthorityTests(unittest.TestCase):
         signed_in = client.post("/api/auth/login", json={"username": username, "password": password})
         self.assertEqual(signed_in.status_code, 200, signed_in.text)
 
-    def test_a_member_is_refused_every_restore_path_and_every_backup_key_change(self):
+    def test_a_member_is_refused_every_backup_every_restore_path_and_every_backup_key_change(self):
         with api_client() as (client, _):
             self._turn_sign_in_on(client)
             for method, path, kwargs in GUARDED:

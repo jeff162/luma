@@ -8,9 +8,8 @@
  */
 
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { SectionEyebrow } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import SectionListPage from '../components/SectionListPage.jsx'
+import SectionListPage, { Subsection } from '../components/SectionListPage.jsx'
 import ThemeSection from '../components/settings/ThemeSection.jsx'
 import CurrencySection from '../components/settings/CurrencySection.jsx'
 import ReviewFlaggingSection from '../components/settings/ReviewFlaggingSection.jsx'
@@ -20,16 +19,6 @@ import ImportStorageSection from '../components/settings/ImportStorageSection.js
 import { DismissedDuplicatePairsSection, DistinctAccountPairsSection } from '../components/settings/DuplicateExceptionSections.jsx'
 import { RulesTrashSection, TransactionsTrashSection, DuplicateTransactionsTrashSection } from '../components/settings/TrashSections.jsx'
 import AboutSection from '../components/settings/AboutSection.jsx'
-
-// One part of a section that holds several lists under a single heading.
-function Subsection({ title, children }) {
-  return (
-    <div>
-      <SectionEyebrow style={{ fontSize: 13, marginBottom: 8 }}>{title}</SectionEyebrow>
-      {children}
-    </div>
-  )
-}
 
 export default function Settings() {
   const {

@@ -989,7 +989,7 @@ def _recipients_for_export(conn, requested_ids: Optional[str]) -> list[dict]:
     return [by_id[rid] for rid in wanted]
 
 
-@router.get("/backup")
+@router.get("/backup", dependencies=[Depends(require_admin_or_local)])
 def export_backup(
     encrypted: bool = Query(False),
     recipients: Optional[str] = Query(
@@ -1035,7 +1035,7 @@ def export_backup(
     )
 
 
-@router.get("/backup/credentials")
+@router.get("/backup/credentials", dependencies=[Depends(require_admin_or_local)])
 def export_credentials(request: Request):
     """Export data-source credentials **as ciphertext**, with the vault material needed to reopen them.
 

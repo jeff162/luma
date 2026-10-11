@@ -889,7 +889,7 @@ export default function ImportProfilesManager({
   initialMode = 'list',
   onProfileCreated,
 } = {}) {
-  // This manager keeps saved data-source administration inside Import / Export:
+  // This manager keeps saved data-source administration inside Import:
   // the list stays embedded in the page, while add/edit happens in a floating
   // form so users can manage recurring CSV sources without leaving the workflow.
   const rootRef = useRef(null)

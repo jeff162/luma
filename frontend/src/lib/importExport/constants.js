@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Shared constants for the Import / Export page and its extracted helpers and
+// Shared constants for the Import page and its extracted helpers and
 // sub-components. These are the cross-cutting display options, preference keys,
 // and imported-category vocabulary that must read identically across the page
 // body, the pure helpers in this folder, and the presentational components.

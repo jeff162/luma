@@ -71,7 +71,7 @@ async function collectVisibleControlFindings(page) {
   })
 }
 
-test('@a11y import/export export filters and backup tab controls stay labeled', async ({ page, baseURL }) => {
+test('@a11y import page export filter controls stay labeled', async ({ page, baseURL }) => {
   const findings = []
 
   await page.goto(new URL('/import-export', baseURL).toString())
@@ -84,10 +84,6 @@ test('@a11y import/export export filters and backup tab controls stay labeled', 
   await page.getByRole('button', { name: 'Filter' }).click()
   await page.getByRole('button', { name: 'Payee' }).click()
   findings.push(...(await collectVisibleControlFindings(page)).map(item => `export/filter: ${item.summary}`))
-
-  await page.getByRole('button', { name: 'Backup / Restore' }).click()
-  await page.waitForLoadState('networkidle')
-  findings.push(...(await collectVisibleControlFindings(page)).map(item => `backup: ${item.summary}`))
 
   if (findings.length) {
     console.log(`Import/export accessibility findings (${findings.length}):\n${findings.join('\n')}`)

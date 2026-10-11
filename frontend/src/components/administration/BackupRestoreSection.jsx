@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The Backup / Restore tab of the Import / Export page: generate plain or
-// RSA-encrypted data and data-source credential backups, and restore from a
-// backup file.
+// Administration -> Backup / Restore: generate plain or RSA-encrypted data and
+// data-source credential backups, restore from a backup file, and manage the
+// keys an encrypted backup is sealed to. All of it is admin-or-local on the
+// server, which is why it is here rather than beside the importer.
 //
 // Restore is ONE picker for both kinds of backup. The file says which it is
 // (the server reads that without decrypting, so an encrypted archive is
@@ -19,7 +20,7 @@ import { useEffect, useState } from 'react'
 import { api, downloadUrl } from '../../lib/api.js'
 import { useAppSession } from '../../lib/AppSessionContext.jsx'
 import { AppDialog, Button, Card, PasswordInput, PasswordManagerUsername } from '../ui.jsx'
-import { SectionTitle } from './importPresentational.jsx'
+import { Subsection } from '../SectionListPage.jsx'
 import { BackupRecipients } from './BackupRecipients.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
@@ -44,7 +45,7 @@ function describeRestoreIncompatibility(detail) {
   return parts.join(' ') || 'This backup may not be compatible with the current system.'
 }
 
-export function BackupRestoreTab() {
+export default function BackupRestoreSection() {
   const demoRestoreMessage = 'Restoring a backup is disabled while demo data is loaded — clear it from the banner above first.'
   // Restore is blocked server-side while demo data is loaded; disable the file picker to match.
   const { demoLoaded } = useAppSession()
@@ -76,10 +77,6 @@ export function BackupRestoreTab() {
   // Restoring credentials re-keys them under this workspace's DEK, so it needs the vault open. The gate
   // prompts and the action resumes itself — see lib/useVaultGate.js.
   const { mode: vaultDialog, ensureVault, closeVault } = useVaultGate(vault)
-  // Every restore path, and the backup keys below, need an admin once sign-in protection is on: a restore
-  // replaces the whole workspace. Assumed allowed until the status says otherwise, so an admin never sees
-  // the refusal flash past on load; the server enforces it either way.
-  const [canRestore, setCanRestore] = useState(true)
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
   const hasStoredCredentials = !!credentialBackupStatus?.has_credentials
   // What the chosen file turned out to be. Everything below the picker — which inputs appear, what the
@@ -93,14 +90,12 @@ export function BackupRestoreTab() {
   // non-demo can have been added.
   const restoreBlocked = !restoreFile || restoring || inspectingRestore || !!inspectError || !restoreKind
     || demoLoaded
-    || !canRestore
     || (restoreKind === 'data' && restoreInspection?.encrypted && !privateKeyFile)
 
   async function refreshVault() {
     const status = await api.getAuthStatus().catch(() => null)
     const u = status?.user || {}
     setVault({ configured: !!u.vault_configured, unlocked: !!u.vault_unlocked })
-    setCanRestore(!status?.auth_enabled || u.role === 'admin')
   }
 
   useEffect(() => {
@@ -283,8 +278,8 @@ export function BackupRestoreTab() {
   }
 
   return (
-    <div>
-      <SectionTitle>Backup</SectionTitle>
+    <div style={{ display: 'grid', gap: 18 }}>
+      <Subsection title="Backup">
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
@@ -333,6 +328,7 @@ export function BackupRestoreTab() {
           }}>{backupMsg}</div>
         ) : null}
       </Card>
+      </Subsection>
 
       {recipientChoice ? (
         <AppDialog
@@ -373,7 +369,7 @@ export function BackupRestoreTab() {
         </AppDialog>
       ) : null}
 
-      <SectionTitle>Restore</SectionTitle>
+      <Subsection title="Restore">
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {restoreMsg && (
           <div
@@ -407,15 +403,11 @@ export function BackupRestoreTab() {
               aria-label="Choose backup file to restore"
               accept=".json,.zip,application/json,application/zip"
               onChange={e => handleRestoreFileChange(e.target.files[0])}
-              disabled={!canRestore}
               style={{ fontSize: 13 }}
             />
           </div>
           {demoLoaded && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{demoRestoreMessage}</div>
-          )}
-          {!canRestore && (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>Restoring a backup needs an admin.</div>
           )}
           {inspectingRestore && (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
@@ -525,13 +517,15 @@ export function BackupRestoreTab() {
           </div>
         </div>
       </Card>
+      </Subsection>
 
-      {/* Last of the three, deliberately. Backup leads because it is what the page is for; Restore is a
+      {/* Last of the three, deliberately. Backup leads because it is what the section is for; Restore is a
           fixed height and keeps its heading on screen; the key list is the only section that can grow, so
           it goes where growth pushes nothing off the page. It is also the least-visited of the three —
           configuration for the encrypted backup above rather than an action in its own right. */}
-      <SectionTitle>Backup Encryption Keys</SectionTitle>
-      <BackupRecipients onRecipientsChange={setBackupRecipients} canManage={canRestore} />
+      <Subsection title="Backup encryption keys">
+        <BackupRecipients onRecipientsChange={setBackupRecipients} />
+      </Subsection>
 
       {pendingConfirm && (
         <div

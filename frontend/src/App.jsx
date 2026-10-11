@@ -254,7 +254,7 @@ const NAV_LINKS = [
   ['/rules', 'Rules'],
   ['/accounts', 'Accounts'],
   ['/recurring', 'Recurring'],
-  ['/import-export', 'Import / Export'],
+  ['/import-export', 'Import'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
   [ADMINISTRATION_PATH, 'Administration'],
@@ -515,9 +515,15 @@ function LocalPreferenceProfileScreen({
   const dataEntryChoices = [
     {
       key: 'import',
-      title: 'Import a CSV file or restore a Backup',
-      summary: 'Load transactions from a transaction export or a prior backup.',
+      title: 'Import a CSV file',
+      summary: 'Load transactions from a transaction export.',
       destination: '/import-export',
+    },
+    {
+      key: 'restore',
+      title: 'Restore a backup',
+      summary: 'Load everything from a prior backup.',
+      destination: `${ADMINISTRATION_PATH}?section=backup`,
     },
     {
       key: 'connect',

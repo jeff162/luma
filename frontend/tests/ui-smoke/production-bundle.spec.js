@@ -23,7 +23,7 @@ const PAGES = [
   ['/rules', 'Rules'],
   ['/accounts', 'Accounts'],
   ['/recurring', 'Recurring'],
-  ['/import-export', 'Import / Export'],
+  ['/import-export', 'Import'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
   ['/administration', 'Administration'],
@@ -69,8 +69,9 @@ test.describe('the built bundle', () => {
       }
 
       // React Router marks the active NavLink, so this says the route resolved and the chunk behind it
-      // loaded — without depending on any wording inside the page.
-      await expect(page.getByRole('link', { name: navLabel })).toHaveAttribute('aria-current', 'page')
+      // loaded — without depending on any wording inside the page. Found by its address rather than its
+      // name: a nav label is a short word that links inside a page also contain, and one carries a badge.
+      await expect(page.locator(`a[href="${path}"][aria-current="page"]`)).toHaveCount(1)
       await expect(page.locator('h1').first()).toBeVisible()
       await expect(page.getByText('Something went wrong')).toHaveCount(0)
 

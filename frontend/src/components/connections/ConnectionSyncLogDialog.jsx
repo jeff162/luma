@@ -598,9 +598,9 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
 }
 
 
-// Opened from a button rather than standing on a page: the Data connections card on Import / Export, and
+// Opened from a button rather than standing on a page: the Data connections card on Import, and
 // on Accounts → Connections each provider's card and each connection's last-sync pill, opened in place
-// there rather than by sending the user to Import / Export — someone who went looking for the log on the
+// there rather than by sending the user to Import — someone who went looking for the log on the
 // connections page should find it without a detour.
 //
 // It was a permanent section under the import history at first, which was wrong in the same way its old

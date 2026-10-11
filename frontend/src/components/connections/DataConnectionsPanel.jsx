@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Data connections as a way of *getting data in*, on the Import / Export page beside the file importer.
+// Data connections as a way of *getting data in*, on the Import page beside the file importer.
 //
 // **Why it is here and not only on Accounts.** Syncing used to live on the Accounts page's Connections
 // tab, next to connecting a bank and mapping its accounts — so the routine operation was reached through

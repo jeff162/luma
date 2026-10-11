@@ -13,7 +13,7 @@
 
 // Matched first, so deep sub-routes get their own name instead of the top-level
 // section label below (e.g. /import-export/rule-suggestions is its own page, not
-// "Import / Export"). Checked against the full clean path.
+// "Import"). Checked against the full clean path.
 const SUBPATH_LABELS = [
   [/\/rule-suggestions$/, 'Imported Rule Suggestions'],
 ]
@@ -24,7 +24,7 @@ const PATH_LABELS = [
   ['/categories', 'Categories'],
   ['/rules', 'Rules'],
   ['/accounts', 'Accounts'],
-  ['/import-export', 'Import / Export'],
+  ['/import-export', 'Import'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
   ['/administration', 'Administration'],

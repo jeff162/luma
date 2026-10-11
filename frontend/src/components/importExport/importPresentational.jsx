@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Small presentational building blocks local to the Import / Export page: the
+// Small presentational building blocks local to the Import page: the
 // section heading, the rounded data-source/account selector pill (with its
 // recommended/secondary emphasis treatments and "possible match" badge), the
 // superscript filter pill, the imported-category usage sentence that hosts it,

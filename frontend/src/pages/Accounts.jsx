@@ -544,7 +544,7 @@ const HISTORY_DEPTH_OPTIONS = [
   { value: '30', label: 'Last 30 days' },
 ]
 
-const HISTORY_DEPTH_TITLE = "How far back this connection pulls on its first sync. Saved as your default for future connections. To pull older history for an existing connection, use Fetch more history on the Import / Export page."
+const HISTORY_DEPTH_TITLE = "How far back this connection pulls on its first sync. Saved as your default for future connections. To pull older history for an existing connection, use Fetch more history on the Import page."
 
 // Connect a provider whose authorization is a value the user pastes rather than a widget that opens.
 // Everything shown is driven by the provider's `connect_spec` — label, help link, placeholder — so adding
@@ -838,7 +838,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [openAccountLists, setOpenAccountLists] = useState({})
   // What the open sync log starts filtered to — `{ subjects }` (connection ids) or `{ providers }` — and null
   // while it is closed. Opened in place, the
-  // same dialog Import / Export opens, because this is a page people come to when a connection looks wrong
+  // same dialog Import opens, because this is a page people come to when a connection looks wrong
   // and the log is what explains it — sending them to another page to read it was a detour.
   const [syncLogScope, setSyncLogScope] = useState(null)
   // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
@@ -846,11 +846,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
   const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
   // Every non-configuration action a connection has — sync, deepen history, rebuild accounts, remove
-  // synced rows — with its own dialogs. Shared with the Import / Export connections panel rather than
+  // synced rows — with its own dialogs. Shared with the Import connections panel rather than
   // written twice: see `lib/useConnectionOperations.js` for why the split runs where it does.
   // Only the two this page still performs: the per-connection check beside each connection, and the
   // historical pull a connect or a mapping decision runs. Fetching more history, rebuilding accounts and
-  // removing synced rows moved to the Import / Export panel with the rest of the operational half — this
+  // removing synced rows moved to the Import panel with the rest of the operational half — this
   // card links to them rather than repeating them.
   const {
     sync, pullConnectionHistory, retriedAfterUnlock,
@@ -858,7 +858,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     dialogsNode: connectionDialogsNode,
   } = useConnectionOperations({ onChanged: async () => { await onAccountsChanged?.(); await refresh() } })
 
-  // The same floating import-card ledger the Import / Export page opens, hosted here so a connection's
+  // The same floating import-card ledger the Import page opens, hosted here so a connection's
   // last sync can be reviewed without leaving the tab. Reused rather than rebuilt: that panel is already
   // read-write for categories and already knows how to page, sort, search and bulk-edit a card's rows.
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({ categories, onAddCategory })
@@ -1335,7 +1335,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         setNotice({
           title: 'Mapping applied — already-synced transactions re-checked',
           description: `${parts.join(', ')}. Removed transactions keep their category and can be restored `
-            + 'from this connection’s cards in Import / Export history.',
+            + 'from this connection’s cards in Import history.',
         })
       }
       await refresh()
@@ -1396,7 +1396,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // Everything the collapsed header has to be able to say, so that collapsing a card never hides
   // something that is asking to be acted on. A card is only worth collapsing if what it conceals is
   // routine detail; a failing connection or an unmapped account is neither.
-  // Shared with the Import / Export connections panel — see `providerConnectionStates`. A plain function
+  // Shared with the Import connections panel — see `providerConnectionStates`. A plain function
   // rather than a memo: it sits after this component's early `loading` return, where a hook cannot go.
   const providerSummary = p => providerConnectionStates(p, {
     unmappedByConnection,
@@ -1529,7 +1529,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 ) : null}
                 {s.review ? (
                   <StatusPill tone="warning" onClick={() => navigate('/import-export')}
-                    title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import / Export history to review`}>
+                    title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review`}>
                     ⚠ {s.review} to review
                   </StatusPill>
                 ) : null}
@@ -1537,7 +1537,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
               </span>
             }
             // No provider-level "Sync now" here any more. The routine pull lives where new data arrives
-            // — Import / Export, and the navigation pane's control — because reaching it through a
+            // — Import, and the navigation pane's control — because reaching it through a
             // configuration surface was the odd flow this split exists to fix. What stays is the
             // per-connection check below, which answers a different question: "did the thing I just
             // configured work?"
@@ -1628,7 +1628,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             <button
                               type="button"
                               onClick={() => navigate('/import-export')}
-                              title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import / Export history to review this connection's sync cards`}
+                              title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review this connection's sync cards`}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4,
                                 padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
@@ -1664,7 +1664,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                               while the work runs. */}
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
                             {/* Small and quiet on purpose, and *not* a second home for the routine pull —
-                                that lives on Import / Export now. This one exists because the changes made
+                                that lives on Import now. This one exists because the changes made
                                 on this card (a mapping, a reconnect, a fresh connection) are only really
                                 confirmed by data arriving, and the effect of an action belongs where the
                                 action was taken. Scoped to this connection alone, and its outcome lands
@@ -1730,7 +1730,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                         ) : null}
                         {/* Outcome and totals only — the per-account chips are deliberately not here.
                             They are the sync's own work product, so they belong with the sync: on the
-                            import card it wrote, in the Import / Export history, rendered by the very
+                            import card it wrote, in the Import history, rendered by the very
                             same `SourceAccountChip`. Carrying them here as well meant this card showed
                             two lists of the same accounts, one from the provider and one local, which
                             needed a heading to tell them apart and made a seven-account connection
@@ -1964,7 +1964,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             },
             {
               // The operational actions — fetch more history, refresh accounts, remove synced rows — and
-              // the sync log live with the sync itself on Import / Export. This is the one pointer to
+              // the sync log live with the sync itself on Import. This is the one pointer to
               // them, so a user who came here to fix a connection can get to what it has been doing.
               label: 'Sync activity and history…',
               separatorBefore: true,
@@ -4777,7 +4777,7 @@ export default function Accounts() {
               onAccountsChanged={loadData}
               // For the import-card ledger a connection card can now open in place: its rows are
               // categorizable, which is the whole reason to open it here rather than send the user
-              // to the Import / Export page to find the card.
+              // to the Import page to find the card.
               categories={categories}
               onAddCategory={category => setCategories(prev => (
                 prev.some(existing => existing.id === category.id) ? prev : [...prev, category]

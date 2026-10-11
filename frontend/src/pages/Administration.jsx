@@ -21,6 +21,7 @@ import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
 import IntendedUsageSection from '../components/administration/IntendedUsageSection.jsx'
 import { AccountSecuritySection } from '../components/administration/AccountSecuritySection.jsx'
 import UserAdminSection from '../components/administration/UserAdminSection.jsx'
+import BackupRestoreSection from '../components/administration/BackupRestoreSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
 
 const ERROR_LOG_SECTION = 'errorLog'
@@ -96,6 +97,12 @@ export default function Administration() {
       title: 'User management',
       description: 'Manage who can sign in.',
       content: <UserAdminSection passwordPolicy={passwordPolicy} />,
+    },
+    {
+      key: 'backup',
+      title: 'Backup / Restore',
+      help: <FeatureExplainer topic="data-and-backups" placement="bottom-left" />,
+      content: <BackupRestoreSection />,
     },
     developerOptionsEnabled && {
       key: 'developerOptions',

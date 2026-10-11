@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The Export tab of the Import / Export page: pick columns and a filter scope,
+// The Export tab of the Import page: pick columns and a filter scope,
 // then download a CSV. Export deliberately runs its own FilterProvider rather
 // than the app-wide FilterContext — see the note on ExportTab — so adjusting the
 // export slice does not disturb the chip the rest of the app reads.

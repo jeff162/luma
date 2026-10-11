@@ -7,7 +7,7 @@
 // Extracted when the connections UI split in two. Configuration (connect, disconnect, account mapping,
 // the provider credential) stayed on the Accounts page because that is where those decisions are made and
 // where Plaid Link has to stay — its handler closure lives in that component, so navigating away
-// mid-connect loses the connection. The operations here moved to Import / Export, beside the import cards
+// mid-connect loses the connection. The operations here moved to Import, beside the import cards
 // a sync writes to, because a sync is how new data arrives and belongs with the other way new data
 // arrives. Both surfaces still need *some* of these — the Accounts card keeps a per-connection sync so a
 // mapping change can be verified where it was made — so they live in one hook rather than being written
@@ -45,7 +45,7 @@ export function useConnectionOperations({ onChanged } = {}) {
 
   // Tells the host something changed that no sync run reports. The actions that end in a run (a sync, more
   // history, rebuilt accounts) deliberately do not call it: every run's end already reaches the hosts —
-  // Accounts through `runsFinished`, the Import / Export panel through the providers listing re-read at the
+  // Accounts through `runsFinished`, the Import panel through the providers listing re-read at the
   // same moment — and settling here as well reloaded the Accounts page twice per sync, once for each.
   const settle = useCallback(async () => { await onChanged?.() }, [onChanged])
 

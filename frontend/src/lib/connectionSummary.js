@@ -111,7 +111,7 @@ export function lastSyncReportCards(connection) {
 //
 // The states a surface has to report about one provider's connections, derived in one place because two
 // surfaces now render them: the Accounts page's configuration card (where the remedy for each of these
-// lives) and the Import / Export connections panel (where the user finds out). Computed twice, they would
+// lives) and the Import connections panel (where the user finds out). Computed twice, they would
 // drift — and a badge that disagrees with itself across two pages is worse than one that is only on one.
 //
 // `unmappedByConnection` and `reviewByConnection` are passed in rather than read here: they come from
