@@ -410,6 +410,9 @@ class DocumentSearchTests(DocumentsApiTestCase):
         self.attach("txn-coffee", b"Order placed Aug 25, 2026", "Named.txt", "text/plain")
         self.attach("txn-repair", b"Picked up 08/25/26", "Padded.txt", "text/plain")
         self.assertEqual(sorted(self.quick_filter("doc:8/25/2026")), ["txn-coffee", "txn-repair"])
+        # Without a year it is the same date in any year, in the same spellings.
+        self.assertEqual(sorted(self.quick_filter("doc:8/25")), ["txn-coffee", "txn-repair"])
+        self.assertEqual(sorted(self.quick_filter("doc:Aug 25")), ["txn-coffee", "txn-repair"])
 
     def test_the_plain_search_box_reaches_inside_documents_and_says_so(self):
         # Searching a word that exists only inside an attached receipt has to work from the box people

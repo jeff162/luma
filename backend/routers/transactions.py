@@ -606,7 +606,8 @@ def _fts_match_query(value: str) -> Optional[str]:
     loose found any receipt holding a word starting with each somewhere — `8oz`, a `6.25%` tax line and
     the year were enough to "match" a date that appeared nowhere.
 
-    **A date is searched as the date, not as its spelling** — see `_fts_date_phrases`.
+    **A date is searched as the date, not as its spelling**, with or without its year — see
+    `_fts_date_phrases`.
     """
     date_phrases = _fts_date_phrases(value)
     if date_phrases:
@@ -620,26 +621,51 @@ def _fts_match_query(value: str) -> Optional[str]:
 
 
 def _fts_date_phrases(value: str) -> list[str]:
-    """The ways a receipt may print the date `value` names, as FTS5 phrases, or [] if it is not a full date.
+    """The ways a receipt may print the date `value` names, as FTS5 phrases, or [] if it names no date.
 
     A receipt's date is free text in whatever form its issuer chose, so the form typed is rarely the form
     printed: `8/25/2026` has to find `08/25/2026`, `8/25/26`, `2026-08-25` and `Aug 25, 2026`. Punctuation
     is not listed because the tokenizer drops it, which also covers `Aug. 25, 2026` and `08-25-2026`. The
     numeric forms are month-first, as the date facet reads them.
+
+    A month and day with no year (`8/25`, `Aug 25`) gets the same forms without one, and a phrase matches
+    wherever it sits, so those find the date in any year.
     """
     iso_date = _parse_quick_filter_date(value)
-    if not iso_date:
+    month_day = None if iso_date else _parse_fts_month_day(value)
+    if not iso_date and not month_day:
         return []
-    year, month, day = iso_date.split("-")
-    parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+    year, month, day = iso_date.split("-") if iso_date else (None, *month_day.split("-"))
     months = sorted({month, str(int(month))})
     days = sorted({day, str(int(day))})
-    names = sorted({parsed.strftime("%b").lower(), parsed.strftime("%B").lower()})
+    # Named from a fixed leap year: only the month is read, and Feb 29 has to be constructible.
+    named = datetime(2000, int(month), 1)
+    names = sorted({named.strftime("%b").lower(), named.strftime("%B").lower()})
+    if not year:
+        phrases = [f"{m} {d}" for m in months for d in days]
+        phrases += [f"{name} {d}" for name in names for d in days]
+        phrases += [f"{d} {name}" for name in names for d in days]
+        return phrases
     phrases = [f"{year} {month} {day}"]
     phrases += [f"{m} {d} {y}" for m in months for d in days for y in (year, year[2:])]
     phrases += [f"{name} {d} {year}" for name in names for d in days]
     phrases += [f"{d} {name} {year}" for name in names for d in days]
     return phrases
+
+
+def _parse_fts_month_day(value: str) -> Optional[str]:
+    """A month and day with no year as "MM-DD" — `_parse_quick_filter_month_day`, plus a named month."""
+    numeric = _parse_quick_filter_month_day(value)
+    if numeric:
+        return numeric
+    text = (value or "").strip()
+    for fmt in ("%b %d %Y", "%B %d %Y"):
+        try:
+            # Parsed against a leap year so Feb 29 is not refused.
+            return datetime.strptime(f"{text} 2000", fmt).strftime("%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 def _normalize_quick_filter_text(value: str) -> str:
