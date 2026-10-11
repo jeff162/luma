@@ -25,7 +25,7 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 | Adding a file importer | — | ✅ | partly (the downstream rules; not the CSV parse seam) |
 | Adding a marketplace importer | — | — | ✅ |
 | Transaction ids must be globally unique | ✅ | partly (a file's own row id is scoped to its data source, not the ledger — see the section's end) | — (an order id joins a vendor's own files; it is not a ledger identity) |
-| Zero-amount rows | ✅ | ✅ | ✅ (and the one current source that answers `keep` for reason 2) |
+| Zero-amount rows | ✅ | ✅ | ✅ (and the one current source that keeps $0 rows as genuine zeros) |
 | Dates a source does not have | ✅ | ✅ (a column can be blank or hold a sentinel exactly as a protocol field can) | ✅ |
 | Currency | ✅ | ✅ (the one-currency rule; the `ledger_currency` argument is connection-only) | ✅ (the one-currency rule) |
 | The published guide is not the contract · Request budgets · Pages and commits | ✅ | — | — |
@@ -308,28 +308,24 @@ evidence; a recognized format can read it without a mapping, as the PayPal impor
 
 ## Zero-amount rows
 
-A source may publish a transaction with **no amount**. Whether to keep it is not a universal fact — it
-depends on what a $0 row *means* from that source, and the five current sources answer for three different
-reasons. The declaration and the rule live in `backend/services/source_capabilities.py`.
+A source may publish a transaction with **no amount**. The declaration and the rule live in
+`backend/services/source_capabilities.py`.
 
-**Keep $0 rows if either is true:**
+**A $0 row is worth recording only when the zero is genuine** — a finished record such as a fully
+gift-carded or promotional order, or a refund that nets out. A pending placeholder is not worth recording
+for itself; the transaction it stands for is recorded when it settles.
 
-1. **The row is reachable later.** A pending charge is often published before it carries an amount and
-   revised when it settles. Where the revision lands on the row already held — keyed on the provider's
-   transaction id, via a change feed (`modified`) or a pending→posted pointer — the $0 row is exactly what
-   the settled amount updates. Dropping it does not delay the charge, it **discards** it: a revision
-   naming a row that was never inserted is ignored, not treated as an insert.
-2. **The zero is genuine.** Some sources publish $0 rows that are finished records rather than
-   placeholders — a fully gift-carded or promotional order, a refund that nets out.
-
-**Reject only if neither holds.** Then the row is unreachable dead weight: the real charge arrives as its
-own separate row, and duplicate detection cannot pair the two because their amounts differ.
+**Keep placeholders only where refusing them would lose the settlement.** That is a provider that revises
+the row in place — a change feed's `modified`, keyed on the provider's transaction id — and ignores a
+revision naming a row that was never inserted. Anywhere the settled charge arrives as a row of its own,
+refusing the placeholder loses nothing, and inserting it would leave dead weight that duplicate detection
+cannot pair with the settled row, since their amounts differ.
 
 | Source | Policy | Why |
 | --- | --- | --- |
-| Plaid | `keep` | Revises in place, via `modified` and `pending_transaction_id`. |
-| SimpleFIN | `reject` | No change feed and no pending pointer, so nothing *guarantees* reachability: a settling charge is sometimes re-sent under its original id (observed live) and sometimes arrives as a new one, stranding the placeholder. A revision that may or may not find the row cannot carry a policy whose whole premise is that it will. |
-| CSV / PayPal | `reject` | No identity carries between files, so nothing can ever revise the placeholder. |
+| Plaid | `keep` | A settling charge can arrive as a `modified` revision of the row it names, which is lost if that row was refused. |
+| SimpleFIN | `reject` | No change feed: a settling charge arrives as an ordinary row, sometimes under the placeholder's id (observed live) and sometimes under a new one — inserted either way when the placeholder is not held. |
+| CSV / PayPal | `reject` | The settled charge arrives in a later file as a row of its own — with a transaction id as well, since an id the ledger does not hold is a new row. |
 | PayPal statement | `reject` | A closed month's finished record that nothing revises; a $0 line in it moved no money — an authorization or a hold. |
 | Amazon | `keep` | A $0 order is a finished record; reconciliation would otherwise read it as an order whose charge was not found. |
 

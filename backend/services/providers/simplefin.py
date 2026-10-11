@@ -641,9 +641,9 @@ class SimpleFinAdapter(ProviderAdapter):
     stable_external_id = False
     max_history_days = None           # the Bridge publishes no history cap; the walk finds the end itself
     routine_lookback_days = 30
-    # Rejected: the Bridge publishes no change feed and no pending pointer, so nothing can ever revise a
-    # row already held — a settling charge arrives under a *new* id as its own row, leaving the $0 one
-    # stranded (duplicate detection cannot pair them; the amounts differ). Same dead weight as a CSV's.
+    # Rejected: the Bridge publishes no change feed, so a settling charge always arrives as a row of its own
+    # — under the placeholder's id or a new one — and is inserted when the placeholder is not held. Refusing
+    # the placeholder loses nothing; keeping it would strand it whenever the id changes.
     zero_amount_rows = REJECT_ZERO_AMOUNT
     # The protocol states a currency on the account, never on a transaction, so a mismatch drops the account.
     currency_scope = CURRENCY_PER_ACCOUNT

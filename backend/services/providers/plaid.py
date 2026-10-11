@@ -73,8 +73,8 @@ class PlaidAdapter(ProviderAdapter):
     connect_noun = "Institution"
     max_history_days = 730
     has_cursor = True
-    # Kept: Plaid revises a transaction in place, so a $0 pending row is what the settled amount lands
-    # on — through `modified`, or through `pending_transaction_id` when the posted row gets a new id.
+    # Kept: a charge can settle as a `modified` revision of the pending row it names, and a revision naming a
+    # row never inserted is ignored — so refusing the $0 placeholder could lose the settlement.
     zero_amount_rows = KEEP_ZERO_AMOUNT
     # Every transaction carries `iso_currency_code`, and the adapter judges rows one by one.
     currency_scope = CURRENCY_PER_TRANSACTION

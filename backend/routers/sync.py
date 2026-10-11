@@ -11,14 +11,14 @@ idempotence by provider transaction id, pending-to-posted advancement without re
 reuse of the shared categorization engine, and — for a connection's first (historical) pull — one
 "initial import" card, with routine top-up syncs accreting onto monthly period cards.
 
-Zero-amount rows are the provider's call, not this loop's. A source often publishes a pending charge
-before it carries an amount and revises it on settlement; that revision reaches us keyed on the provider
-transaction id, as a `modified` or through `pending_external_transaction_id`. Both paths update a row
-already held and ignore a revision naming one that is not (`_apply_modified` counts it `skipped_not_held`)
-— so where a provider revises in place, the $0 row is precisely what the settled amount lands on and
-filtering it would discard the charge rather than delay it. Where a provider *cannot* revise in place
-(SimpleFIN: no change feed, no pending pointer, and a settling charge arrives under a new id) the
-placeholder is unreachable and is refused instead, exactly as a CSV's is. Each adapter therefore declares
+Zero-amount rows are the provider's call, not this loop's. A $0 placeholder is worth nothing for itself —
+the transaction is recorded when it settles — and is kept only where refusing it would lose the
+settlement. A `modified` revision updates a row already held and ignores one naming a row that is not
+(`_apply_modified` counts it `skipped_not_held`), so a provider that can settle a charge that way has its
+placeholders kept. A posted row naming its pending predecessor (`pending_external_transaction_id`) is not
+such a case: with the predecessor absent it is inserted as a new row. A provider whose settled charges
+always arrive as rows of their own (SimpleFIN: no change feed) has its placeholders refused, exactly as a
+CSV's are. Each adapter therefore declares
 `zero_amount_rows` and `_insert_added` honors it; the rule for choosing, and the failure each way, is in
 `services/source_capabilities.py` and `docs/building-a-connector.md`. A refusal is reported on the card
 as a rejected row, never dropped silently.

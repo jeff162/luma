@@ -3578,10 +3578,10 @@ def run_import_parsed(
                 continue
             # Declared rather than decided here: a $0 row means different things from different sources,
             # and the rule (plus what goes wrong either way) lives in `services/source_capabilities.py`.
-            # For a CSV it is a pending charge published before it settled, and without a transaction id
-            # nothing can revise it — no identity carries between files — so the settled charge arrives in
-            # a later file as an ordinary new row while the placeholder lingers as a permanent near-miss
-            # for duplicate detection. Refused, and reported on the card rather than silently discarded.
+            # For a CSV it is a pending charge published before it settled, worth nothing for itself: the
+            # settled charge arrives in a later file as a row of its own, while a kept placeholder would
+            # linger as a permanent near-miss for duplicate detection. Refused, and reported on the card
+            # rather than silently discarded.
             if reject_zero_amount_rows and amount == 0:
                 skipped += 1
                 zero_amount_rows.append(_rejected_row_entry(

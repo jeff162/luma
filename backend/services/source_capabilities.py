@@ -14,22 +14,16 @@ non-adapter sources are registered here by name and every consumer reads through
 Zero-amount rows
 ----------------
 
-A source may publish a transaction with **no amount**. Whether that row is worth keeping is not a
-universal fact — it depends on what a $0 row *means* coming from that particular source, and the five
-sources answer for three different reasons. A source keeps its $0 rows if **either** is true:
+A source may publish a transaction with **no amount**. Such a row is worth recording only when the zero
+is genuine — a finished record such as a fully gift-carded or promotional order, or a refund that nets
+out. A pending placeholder is not worth recording for itself; the transaction it stands for is recorded
+when it settles.
 
-  1. **The row is reachable later.** A pending charge is often published before it carries an amount
-     and revised once it settles. Where a revision lands on the row we already hold — keyed on the
-     provider's transaction id, via a change feed or a pending→posted pointer — the $0 row is exactly
-     what the settled amount updates. Dropping it does not delay the charge, it discards it: a
-     revision naming a row we never inserted is ignored, not treated as an insert.
-
-  2. **The zero is genuine.** Some sources report $0 rows that are real, finished records rather than
-     placeholders — a fully gift-carded or promotional order, a refund that nets out.
-
-If neither holds, a $0 row is unreachable dead weight: the real charge will arrive as its own separate
-row, and duplicate detection cannot pair the two because their amounts differ. It is rejected, and
-reported as a rejected row on the import/sync card rather than silently dropped.
+A placeholder is kept only where refusing it would *lose* that settlement: a provider that revises the
+row in place, keyed on its transaction id, and ignores a revision naming a row never inserted. Wherever the
+settled charge arrives as a row of its own, refusing the placeholder loses nothing, and inserting it would
+leave dead weight that duplicate detection cannot pair with the settled row, the amounts differing. A
+refused row is reported as a rejected row on the import/sync card rather than silently dropped.
 
 Every source states its own policy explicitly — there is deliberately no default. The reasoning above
 does not generalize from one source to the next, so a source that has not been thought about must fail
@@ -57,19 +51,17 @@ SOURCE_AMAZON = "amazon"
 SOURCE_PAYPAL_STATEMENT = "paypal_statement"
 
 _NON_ADAPTER_SOURCE_POLICY: dict[str, ZeroAmountPolicy] = {
-    # Reason 1 does not apply: most CSVs carry no identity between files, so a later file's settled row is
-    # an ordinary new row and nothing can ever revise the placeholder. (A source that maps a transaction-ID
-    # column is the exception — its later file corrects the held row by id — but the policy is declared
-    # per importer, not per mapping, so such a source is still refused here.) Reason 2 does not either — a $0
+    # The settled charge arrives in a later file as a row of its own — with a transaction-ID column as well,
+    # since an id the ledger does not hold is a new row — so refusing the placeholder loses nothing. And a $0
     # line in a statement export is a pending charge or a non-transaction (a footer, a balance-forward),
-    # never a meaningful zero. This covers PayPal, which is this same importer under a source kind.
+    # never a genuine zero. This covers PayPal, which is this same importer under a source kind.
     SOURCE_CSV: REJECT_ZERO_AMOUNT,
-    # Reason 2: Amazon imports *orders*, and a $0 order is a finished record — fully gift-carded,
+    # A genuine zero: Amazon imports *orders*, and a $0 order is a finished record — fully gift-carded,
     # promotional, or a return that nets to zero — not a placeholder awaiting an amount. Reconciliation
     # depends on seeing them; a $0 order that vanished would read as an order with no charge found.
     SOURCE_AMAZON: KEEP_ZERO_AMOUNT,
-    # Neither reason applies to a PayPal monthly statement: it is a closed month's finished record that
-    # nothing revises, and a $0 line in it moved no money — an authorization or a hold, not a purchase.
+    # A PayPal monthly statement is a closed month's finished record with no placeholders in it, and a $0
+    # line in it moved no money — an authorization or a hold, not a purchase.
     SOURCE_PAYPAL_STATEMENT: REJECT_ZERO_AMOUNT,
 }
 
