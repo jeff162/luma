@@ -222,7 +222,12 @@ class ConnectionScenarioTests(unittest.TestCase):
             ).fetchone()["config_snapshot"])["import_summary"]
         self.assertEqual(summary["zero_amount_count"], 1)
         self.assertEqual(summary["rejected_count"], 1)
-        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["zero_amount"],
+        with self._db() as conn:
+            kinds = [r["kind"] for r in conn.execute(
+                "SELECT r.kind FROM import_batch_rejected_row r JOIN import_batch b ON b.id = r.batch_id "
+                "WHERE b.connection_id = ?", (CONNECTION_ID,),
+            ).fetchall()]
+        self.assertEqual(kinds, ["zero_amount"],
                          "the refused row must be on the card's rejected report, where a rejected CSV "
                          "row would be — a refusal the user cannot see is indistinguishable from a bug")
 

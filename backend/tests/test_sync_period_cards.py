@@ -392,9 +392,16 @@ class SyncPeriodCardTests(unittest.TestCase):
         summary = json.loads(cards[0]["config_snapshot"] or "{}")["import_summary"]
         self.assertEqual(summary["zero_amount_count"], 2, "the second sync's refusal overwrote the first")
         self.assertEqual(summary["rejected_count"], 2)
-        self.assertEqual(len(summary["rejected_rows"]), 2)
-        self.assertEqual(summary["rejected_headers"], ["Date", "Description", "Account", "Amount"])
-        self.assertEqual(summary["rejected_rows"][0]["reason"], "Zero amount")
+        with self._use_db_path(), get_db() as conn:
+            rows = conn.execute(
+                "SELECT row_number, reason, row_date, description, amount FROM import_batch_rejected_row "
+                "WHERE batch_id = ? ORDER BY row_number", (cards[0]["id"],),
+            ).fetchall()
+        self.assertEqual([r["row_number"] for r in rows], [1, 2], "the second sync's row replaced the first")
+        self.assertEqual(rows[0]["reason"], "Zero amount")
+        self.assertEqual((rows[0]["description"], rows[0]["amount"]), ("Fuel Stop", 0.0),
+                         "the report's own columns read these, and a sync row left them empty")
+        self.assertTrue(rows[0]["row_date"])
 
     def test_a_settlement_for_a_row_we_never_kept_is_lost_rather_than_imported(self):
         # The counterfactual that gives the test above its force, stated rather than implied: this is

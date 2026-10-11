@@ -44,6 +44,8 @@ side is a saved data source.
 
 - Do not add defensive complexity unless it has a clear payoff. Recovery behavior for unusual or corrupt states can be noted for future consideration without being implemented immediately.
 
+- Prefer not to carry runtime code that fixes up old data which does not really matter — a read-path fallback that dresses up records written before a fix, say. Nothing ever says it is no longer needed, so it stays long after the last affected database has moved on. Where the old data does matter, a one-time migration is the better tool, since it runs once and is done. Where carrying code is still the right call, give it an expiry — a version number, a date, or both — and remove it then: anyone who wanted the fix has it by that point, and anyone who does not loses nothing.
+
 - Schema changes land in **two** places, and omitting either one breaks a real install: the baseline `CREATE` in `init_db` (what a fresh database is built from) *and* a registered `@migration(version)` (what advances an existing one). The migration runner is active — see "Schema evolution" in `docs/data-model.md`. What was dropped at the Luma rebrand break point was the *pre-rebrand* chain, not migrations as such. Register the migration and bump `CURRENT_VERSION` **last**, after the code that uses the column is in place, so a reloading dev server cannot half-apply it.
 
 ## UI And Interaction Preferences

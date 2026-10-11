@@ -565,8 +565,11 @@ Both reports write through the same writers as CSV import, so the existing card 
 dialog, "Import anyway" and Restore all work on a sync card with no frontend changes:
 
 * **Duplicates** — `record_sync_duplicate` → `import_batch_duplicate`.
-* **Rejected rows** (today: $0 refusals) — `record_sync_zero_amount_rejection` → an `import_summary` in
-  the card's `config_snapshot`, the same key and shape CSV import writes.
+* **Rejected rows** (today: $0 refusals) — `record_sync_zero_amount_rejection` →
+  `import_batch_rejected_row` through `save_batch_rejected_rows`, with the counts in the card's
+  `config_snapshot` `import_summary`, as CSV import splits them. The row's own `date`/`description`/`amount`
+  fields are what the report's main columns read; an earlier version kept the rows in the snapshot with only
+  their raw values, so the report showed dashes there and pushed the detail into extra columns.
 
 Three details are easy to get wrong:
 

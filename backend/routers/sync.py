@@ -421,53 +421,51 @@ def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, cont
     }])
 
 
-# The columns a synced rejected row is shown under. A CSV names the file's own headers here; a sync has
-# none, so it publishes the same four fields `record_sync_duplicate` reports a rejected duplicate with —
-# one vocabulary for both reports, and the dialog renders them without knowing which produced it.
-_SYNC_REJECTED_HEADERS = ["Date", "Description", "Account", "Amount"]
-
-# Matches the CSV importer's own cap: the report is a sample that shows the user *what kind* of row was
-# refused, not a second copy of the feed.
-_MAX_REJECTED_ROWS = 20
+# The columns a synced rejected row is shown under beyond the report's own date, description and amount —
+# which a CSV fills from the file's mapped headers and a sync fills directly, having no file. The account is
+# the one thing a sync row carries that those three do not, and naming the other three here as well would
+# show each of them twice.
+_SYNC_REJECTED_HEADERS = ["Account"]
 
 
 def record_sync_zero_amount_rejection(conn, *, batch_id: str, txn: dict, source_label: str) -> None:
-    """File a refused $0 row onto its card's rejected-row report, in the shape CSV import already writes.
+    """File a refused $0 row onto its card's not-imported report, through the writer CSV import uses.
 
     The counts **accumulate** rather than being written once. A CSV summarizes one file at the end of one
     import; a monthly sync period card is added to by every top-up for the rest of the month, so a summary
     that overwrote would silently reset the count on each sync and report only the latest one's rejects.
+    The rows accumulate the same way, numbered by a running ordinal — a sync has no lines, but the report
+    is keyed by row — and stop being stored at the cap a file's are, while the count carries on.
     """
     # Lazy for the same reason `record_sync_duplicate` is: core.py pulls in many services, and the key is
     # taken from it rather than restated here so the two reports cannot drift onto different snapshot keys.
-    from backend.routers.import_export.core import IMPORT_SUMMARY_KEY
+    from backend.routers.import_export.core import (
+        IMPORT_SUMMARY_KEY, MAX_STORED_REJECTED_ROWS, save_batch_rejected_rows,
+    )
 
     snapshot = _card_config_snapshot(conn, batch_id)
     summary = snapshot.get(IMPORT_SUMMARY_KEY) or {}
+    zero_amount_count = int(summary.get("zero_amount_count") or 0) + 1
 
-    rejected_rows = list(summary.get("rejected_rows") or [])
-    if len(rejected_rows) < _MAX_REJECTED_ROWS:
-        rejected_rows.append({
-            # A running ordinal, not a file line — the same substitution `record_sync_duplicate` makes,
-            # and for the same reason: a sync has no lines but the report is keyed by row.
-            "row": int(summary.get("zero_amount_count") or 0) + 1,
+    stored = conn.execute(
+        "SELECT COUNT(*) AS n FROM import_batch_rejected_row WHERE batch_id = ?", (batch_id,),
+    ).fetchone()["n"]
+    if stored < MAX_STORED_REJECTED_ROWS:
+        save_batch_rejected_rows(conn, batch_id, [{
+            "row": zero_amount_count,
             "kind": ZERO_AMOUNT_REJECTION_KIND,
             "reason": ZERO_AMOUNT_REJECTION_REASON,
-            "values": {
-                "Date": txn["date"],
-                "Description": txn["raw_name"] or txn.get("merchant_name") or "",
-                "Account": source_label,
-                "Amount": txn["amount"],
-            },
-        })
+            "values": {"Account": source_label},
+            "date": txn["date"],
+            "description": txn["raw_name"] or txn.get("merchant_name") or "",
+            "amount": txn["amount"],
+        }])
 
-    zero_amount_count = int(summary.get("zero_amount_count") or 0) + 1
     validation_error_count = int(summary.get("validation_error_count") or 0)
     summary.update({
         "zero_amount_count": zero_amount_count,
         "validation_error_count": validation_error_count,
         "rejected_count": zero_amount_count + validation_error_count,
-        "rejected_rows": rejected_rows,
         "rejected_headers": _SYNC_REJECTED_HEADERS,
     })
     snapshot[IMPORT_SUMMARY_KEY] = summary
