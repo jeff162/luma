@@ -27,6 +27,7 @@ from backend.routers.import_export import core as core_module
 from backend.routers import providers as providers_module
 
 from backend.tests._fake_adapter import DONE as _DONE, FakeCursorAdapter as _FakeAdapter
+from backend.services.review_flagging import set_flag_new_transactions
 from backend.services.source_capabilities import KEEP_ZERO_AMOUNT, REJECT_ZERO_AMOUNT
 
 
@@ -149,6 +150,18 @@ class SyncPeriodCardTests(unittest.TestCase):
                 "SELECT COUNT(*) n FROM txn WHERE import_batch_id = ?", (cards[0]["id"],)
             ).fetchone()["n"]
             self.assertEqual(stamped, 2)
+
+    def test_synced_rows_follow_the_review_flagging_setting(self):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            set_flag_new_transactions(conn, False)
+        with self._driven_sync([self._txn("t2", -20.0, "Lunch")]):
+            pass
+        with self._use_db_path(), get_db() as conn:
+            flags = dict(conn.execute("SELECT external_transaction_id, needs_review FROM txn").fetchall())
+        # The row that arrived while flagging was on keeps its flag: the setting governs arrival only.
+        self.assertEqual(flags, {"t1": 1, "t2": 0})
 
     def test_initial_backfill_polls_to_completion_on_one_card(self):
         # First poll: only the initial (30-day) pull is ready → rows land, but the connection stays "initial".

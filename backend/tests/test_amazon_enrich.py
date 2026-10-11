@@ -52,6 +52,7 @@ from backend.routers.import_export.amazon import (
 from backend.services.amazon_import import AmazonItem, AmazonOrder, PaymentLeg, merge
 from backend.services import amazon_funding, txn_links
 from backend.services.categorizer import recategorize_all
+from backend.services.review_flagging import set_flag_new_transactions
 
 
 def _cash_order(order_id="111-0000000-0000010", last4="4321", amount=37.32, refund=None):
@@ -127,7 +128,7 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_cash_order_creates_one_txn_and_excludes_charge(self):
         charge_id = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
 
         self.assertEqual(result["status"], "applied")
         self.assertEqual(result["disposition"], "cash")
@@ -170,14 +171,14 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_refund_reduces_counted_amount(self):
         self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(refund=10.0), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(refund=10.0), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         # net cash = 37.32 − 10.00 refund
         self.assertAlmostEqual(self._amazon_orders()[0]["amount"], 27.32, places=2)
 
     def test_reverse_restores_charge_and_deletes_order(self):
         charge_id = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             link_id = result["link_id"]
             reversed_result = reverse_amazon_order(conn, link_id)
 
@@ -196,7 +197,7 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute("INSERT INTO category (id, name, category_type) VALUES ('shop', 'Shopping', 'expense')")
             conn.execute("UPDATE txn SET category_id = 'shop', category_source = 'manual', category_overridden = 1 WHERE id = ?", (charge_id,))
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             self.assertNotEqual(self._txn(charge_id)["category_id"], "shop")  # overridden while applied
             reverse_amazon_order(conn, result["link_id"])
         restored = self._txn(charge_id)
@@ -213,7 +214,7 @@ class AmazonOrdersTests(unittest.TestCase):
             PaymentLeg(method="Rewards Points", last4=None, date=None, amount=None, is_non_cash=True),
         ]
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
         self.assertEqual(result["disposition"], "non_cash")
         self.assertFalse(result["charge_linked"])
@@ -234,7 +235,7 @@ class AmazonOrdersTests(unittest.TestCase):
             PaymentLeg(method="Rewards Points", last4=None, date=None, amount=None, is_non_cash=True),
         ]
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
         self.assertEqual(result["disposition"], "cash")
         self.assertTrue(result["charge_linked"])
@@ -253,7 +254,7 @@ class AmazonOrdersTests(unittest.TestCase):
             PaymentLeg(method="Rewards Points", last4=None, date=None, amount=None, is_non_cash=True),
         ]
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertEqual(result["disposition"], "non_cash")
         self.assertFalse(result["charge_linked"])
         self.assertEqual(self._amazon_orders()[0]["amount"], 0.0)
@@ -261,7 +262,7 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_cash_order_with_no_matching_charge_counts_directly(self):
         # Untracked card: no ledger charge to match, so the order is the sole record and still counts.
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, _cash_order(last4="9999"), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(last4="9999"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertEqual(result["disposition"], "cash")
         self.assertFalse(result["charge_linked"])
         orders = self._amazon_orders()
@@ -274,7 +275,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self._add_card_charge(37.32)
         self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertFalse(result["charge_linked"])
 
     # ---- reconciliation: duplicate-charge detection + trash-to-resolve ----------------------------
@@ -285,7 +286,7 @@ class AmazonOrdersTests(unittest.TestCase):
         c1 = self._add_card_charge(37.32)
         c2 = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             report = amazon_reconciliation(conn, self.batch_id)
         self.assertEqual(len(report["duplicate"]), 1)
         self.assertEqual(report["amazon_unmatched"], [])
@@ -303,7 +304,7 @@ class AmazonOrdersTests(unittest.TestCase):
         c1 = self._add_card_charge(37.32)
         c2 = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             outcome = trash_duplicate_charge(conn, c1, applied["link_id"])
             report = amazon_reconciliation(conn, self.batch_id)
             funding_id = find_or_create_funding_category(conn)
@@ -319,7 +320,7 @@ class AmazonOrdersTests(unittest.TestCase):
         # copy (the matched one included) so the user can trash the redundant one; the match survives.
         c1 = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             self.assertTrue(applied["charge_linked"])
         c2 = self._add_card_charge(37.32)   # a duplicate arrives after the match
         with self._use_db_path(), get_db() as conn:
@@ -371,7 +372,7 @@ class AmazonOrdersTests(unittest.TestCase):
                    VALUES (?, 'card', ?, 37.32, 'AMAZON.COM', 'AMAZON.COM', 'AMAZON MKTPLACE PMTS AMZN.COM/BILL WA — LONGER DETAIL', '2024-11-19', 0)""",
                 (detailed, SHARED_OWNER_ID),
             )
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             result = merge_duplicate_charges(conn, applied["link_id"])
             report = amazon_reconciliation(conn, self.batch_id)
         self.assertEqual(result["survivor_id"], detailed)          # richer copy kept
@@ -402,7 +403,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
         self._insert_charge(loser, "AMAZON MARKETPLACE")
         with self._use_db_path(), get_db() as conn:
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             result = merge_duplicate_charges(conn, applied["link_id"])
         self.assertEqual(result["survivor_id"], survivor)
         self.assertIsNotNone(self._txn(loser)["trashed_at"])
@@ -415,7 +416,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
         self._insert_charge(loser, "AMAZON MKTPLACE ORDER 112-9988776")
         with self._use_db_path(), get_db() as conn:
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             result = merge_duplicate_charges(conn, applied["link_id"])
         self.assertEqual(result["survivor_id"], survivor)
         self.assertEqual(self._folded_detail(survivor), ["AMAZON MKTPLACE ORDER 112-9988776"])
@@ -427,7 +428,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
         self._insert_charge(loser, "AMAZON MARKETPLACE NA - PAYMENTS")
         with self._use_db_path(), get_db() as conn:
-            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             result = merge_duplicate_charges(conn, applied["link_id"])
         self.assertEqual(result["survivor_id"], survivor)
         self.assertIsNotNone(self._txn(loser)["trashed_at"])
@@ -439,8 +440,8 @@ class AmazonOrdersTests(unittest.TestCase):
         for _ in range(3):
             self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            a1 = apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id)
-            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id)
+            a1 = apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             with self.assertRaises(ValueError):
                 merge_duplicate_charges(conn, a1["link_id"])
 
@@ -449,7 +450,7 @@ class AmazonOrdersTests(unittest.TestCase):
         self._add_card_charge(37.32)
         self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             recon = amazon_reconciliation(conn, self.batch_id)
         self.assertEqual(len(recon["duplicate"]), 1)
         self.assertTrue(recon["duplicate"][0]["mergeable"])
@@ -460,8 +461,8 @@ class AmazonOrdersTests(unittest.TestCase):
         for _ in range(3):
             self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id)
-            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             recon = amazon_reconciliation(conn, self.batch_id)
         self.assertTrue(len(recon["duplicate"]) >= 1)
         self.assertTrue(all(not d["mergeable"] for d in recon["duplicate"]))
@@ -480,7 +481,7 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             amazon_funding.upsert_funding_source(conn, last4="4321", network="Test Card",
                                                  funding_account_id="card")
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
         self.assertTrue(result["charge_linked"])
         self.assertEqual(result["funding_state"], "mapped")
@@ -492,7 +493,7 @@ class AmazonOrdersTests(unittest.TestCase):
         charge_id = self._add_card_charge(37.32, account_id="card")
         with self._use_db_path(), get_db() as conn:
             amazon_funding.upsert_funding_source(conn, last4="4321", network="Test Card", untracked=True)
-            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertFalse(result["charge_linked"])
         self.assertEqual(result["funding_state"], "untracked")
         self.assertIsNone(self._txn(charge_id)["category_id"])   # the charge is left alone
@@ -509,7 +510,7 @@ class AmazonOrdersTests(unittest.TestCase):
             )
         charge_id = self._add_card_charge(37.32, account_id="nomask")
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, _cash_order(last4="4321"), account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, _cash_order(last4="4321"), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
         self.assertTrue(result["charge_linked"])
         self.assertEqual(self._txn(charge_id)["category_id"], funding_id)
@@ -524,7 +525,7 @@ class AmazonOrdersTests(unittest.TestCase):
         order.payment_legs = [PaymentLeg(method="Test Card", last4="4321", date="2024-11-19", amount=0.0)]
         order.items = [AmazonItem(description="Freebie", price=0.0, asin="B0ZZZ")]
         with self._use_db_path(), get_db() as conn:
-            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
         self.assertEqual(result["disposition"], "non_cash")
         self.assertFalse(result["charge_linked"])
@@ -536,8 +537,8 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_reimport_is_idempotent(self):
         self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
-            second = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
+            second = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertEqual(second["status"], "already_applied")
         self.assertEqual(len(self._amazon_orders()), 1)  # not duplicated
 
@@ -923,6 +924,13 @@ class AmazonOrdersTests(unittest.TestCase):
             recon = amazon_reconciliation(conn, batch_id)
             self.assertEqual(len(recon["amazon_unmatched"]), 1)
             self.assertFalse(recon["amazon_unmatched"][0]["reviewed"], "linking cleared the stale acknowledgment")
+
+    def test_order_rows_follow_the_review_flagging_setting(self):
+        with self._use_db_path(), get_db() as conn:
+            set_flag_new_transactions(conn, False)
+            run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            flags = [r[0] for r in conn.execute("SELECT needs_review FROM txn WHERE account_id = 'amazon'")]
+        self.assertEqual(flags, [0])
 
     def test_reconciliation_reverse_scan_finds_unaccounted_amazon_charge(self):
         # One order matches its charge; a *second* Amazon charge on the same card in range is accounted
@@ -1348,7 +1356,7 @@ class AmazonOrdersTests(unittest.TestCase):
         order = _cash_order()
         order.order_url = "https://www.amazon.com/your-orders/order-details?orderID=111-0000000-0000010"
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         evidence = json.loads(self._amazon_orders()[0]["import_evidence_json"])
         self.assertEqual(evidence["source_url"], order.order_url)
         self.assertNotIn(order.order_url, json.dumps(evidence["extra_text_fields"]))
@@ -1362,7 +1370,7 @@ class AmazonOrdersTests(unittest.TestCase):
             order = _cash_order(order_id=f"url-{i}")
             order.order_url = hostile
             with self._use_db_path(), get_db() as conn:
-                apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+                apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         # Every one of those orders exists, and not one of them captured a URL.
         stored = self._amazon_orders()
         self.assertEqual(len(stored), len(hostile_urls))
@@ -1782,7 +1790,7 @@ class AmazonOrdersTests(unittest.TestCase):
                 (transfers["id"],),
             )
             set_tenant_workflow_state(conn, FUNDING_CATEGORY_STATE_KEY, {"category_id": "amz"})
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
         self.assertEqual(self._txn(charge_id)["category_id"], "amz")
 
     def test_funding_category_falls_back_when_choice_deleted(self):
@@ -1792,7 +1800,7 @@ class AmazonOrdersTests(unittest.TestCase):
         charge_id = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
             set_tenant_workflow_state(conn, FUNDING_CATEGORY_STATE_KEY, {"category_id": "ghost"})
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             default_id = find_or_create_funding_category(conn)
         self.assertEqual(self._txn(charge_id)["category_id"], default_id)
 
@@ -1826,7 +1834,7 @@ class AmazonOrdersTests(unittest.TestCase):
         # funding charge is `enrichment`, feature-owned, and must stay excluded (else it re-enters totals).
         charge_id = self._add_card_charge(37.32)
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
             recategorize_all(conn)
         charge = self._txn(charge_id)
@@ -1839,7 +1847,7 @@ class AmazonOrdersTests(unittest.TestCase):
         charge_id = self._add_card_charge(37.32, name="AMAZON.COM")
         shopping_leaf = self._add_rule("amazon", "Online Shopping")
         with self._use_db_path(), get_db() as conn:
-            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id, flag_for_review=True)
             funding_id = find_or_create_funding_category(conn)
             recategorize_all(conn)
         charge = self._txn(charge_id)

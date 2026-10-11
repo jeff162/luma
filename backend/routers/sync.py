@@ -70,6 +70,7 @@ from backend.services.duplicate_detection import (
     sweep_import_suspects,
 )
 from backend.services.recurring_detection import payee_keys_for_ids, run_auto_scan, scan_imported_payees
+from backend.services.review_flagging import flag_new_transactions
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -954,6 +955,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
         # parse is gated on a source-text rule actually existing, matching `recategorize_all`, so a ledger
         # with none pays nothing.
         needs_source_text = any(rule["match_source_text"] for rule in rules)
+        flag_for_review = 1 if flag_new_transactions(conn) else 0
 
         def _account_for(external_account_id):
             return conn.execute(
@@ -1259,7 +1261,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                      amount, merchant_name, display_name, raw_name, date, posted_date, is_pending,
                      display_name_source, content_hash, import_evidence_json, import_batch_id,
                      suspect_duplicate_of, suspect_duplicate_reason, needs_review)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 # A rule is the only thing that can categorize a synced row, so its provenance is `rule`
                 # whenever a category was set — the same stamp the CSV import writes, which is what the
@@ -1269,7 +1271,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                  merchant_name, display_name, t["raw_name"], t["date"], t.get("posted_date"),
                  1 if t["is_pending"] else 0, display_name_source, content_hash, evidence_json, card_id,
                  verdict.suspect_of if verdict.soft_flag else None,
-                 verdict.reason_key if verdict.soft_flag else None),
+                 verdict.reason_key if verdict.soft_flag else None,
+                 flag_for_review),
             )
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             added += 1

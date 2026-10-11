@@ -592,6 +592,11 @@ export const HELP_TOPICS = [
           It may be worth reviewing these to catch any mistakes. Sometimes a transaction that matched a rule is
           an exception that belongs in a different category.
         </p>
+        <p>
+          Flagging is optional. Turning off <strong>Flag new transactions for review</strong>, under
+          <strong>New transactions</strong> on the <HelpLink to="/help/page-settings">Settings</HelpLink> page,
+          lets imported and synced transactions arrive unflagged. Transactions already flagged are not changed.
+        </p>
         <p>The flag clears three ways:</p>
         <ul>
           <li>Editing the transaction's category clears it. Correcting or setting the category counts as reviewing it.
@@ -3394,6 +3399,10 @@ export const HELP_TOPICS = [
           <li>
             <strong>Currency</strong> defines the meaning of the values in the
             ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
+          </li>
+          <li>
+            <strong>New transactions</strong> chooses whether imported and synced transactions arrive
+            flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
           </li>
           <li>
             <strong>Transaction tags</strong> is the tag manager, where tags are renamed and removed.

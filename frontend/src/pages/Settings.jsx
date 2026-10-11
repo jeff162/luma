@@ -11,6 +11,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FieldIssue, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
+import ReviewFlaggingSection from '../components/ReviewFlaggingSection.jsx'
 import { UpdateCheckControls, UpdateCheckStatus, useUpdateCheck } from '../components/UpdateCheck.jsx'
 import { ImportDetailStorageDialog } from '../components/importExport/ImportDetailStorageDialog.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
@@ -3255,6 +3256,16 @@ export default function Settings() {
             {...bindSection('currency')}
           >
             <CurrencySection />
+          </StickySection>
+
+          <StickySection
+            title="New transactions"
+            description="Choose whether new transactions arrive flagged for review."
+            scrollContainerRef={settingsScrollRef}
+            actions={<FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />}
+            {...bindSection('newTransactions')}
+          >
+            <ReviewFlaggingSection />
           </StickySection>
 
           {/* Section key stays 'environment' through the rename so an existing expanded/collapsed

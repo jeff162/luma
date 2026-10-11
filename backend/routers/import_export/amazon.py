@@ -48,6 +48,7 @@ from backend.services.categorizer import category_lock_for
 from backend.services.excluded_categories import ensure_excluded_transfers_leaf
 from backend.services.import_batch_totals import refresh_batch_coverage
 from backend.services.reconciliation_attention import batch_attention
+from backend.services.review_flagging import flag_new_transactions
 from backend.services.txn_summaries import txn_summaries
 from backend.services.amazon_import import (
     AmazonItem,
@@ -369,7 +370,8 @@ def _order_evidence(order: AmazonOrder) -> dict:
     return evidence
 
 
-def _create_order_txn(conn, order, amount, *, account_id, owner_id, batch_id, category_id) -> str:
+def _create_order_txn(conn, order, amount, *, account_id, owner_id, batch_id, category_id,
+                      flag_for_review: bool) -> str:
     """Create the single spending transaction for one order in the Amazon account (amount = net cash;
     the item list is the memo; per-item reference detail rides in evidence). One row per order — never
     per item.
@@ -396,7 +398,7 @@ def _create_order_txn(conn, order, amount, *, account_id, owner_id, batch_id, ca
         "import_evidence": _order_evidence(order),
         "category_source": "import",
         "display_name_source": "import",
-    })
+    }, flag_for_review=flag_for_review)
 
 
 def _match_charge(conn, order, account_id, disposition):
@@ -518,6 +520,7 @@ def apply_amazon_order(
     *,
     account_id: str,
     batch_id: str,
+    flag_for_review: bool,
 ) -> dict:
     """Materialize one parsed order as a single spending transaction in the Amazon account and link its
     funding card charge. Orders-only model: one row per order (amount = net cash, memo = the item list),
@@ -577,6 +580,7 @@ def apply_amazon_order(
     order_txn_id = _create_order_txn(
         conn, order, disposition.net_cash,
         account_id=account_id, owner_id=owner_id, batch_id=batch_id, category_id=category_id,
+        flag_for_review=flag_for_review,
     )
 
     members = [(order_txn_id, "order")]
@@ -721,6 +725,7 @@ def _import_group_to_batch(
     account_id: str,
     filename: str,
     apply_categorization: bool,
+    flag_for_review: bool,
 ) -> dict:
     """Create one import batch (one card) and apply every order of a *single source-file group* into it — the
     per-file unit the orchestrator splits a drop into. Returns the batch's counts, investigable detail, the
@@ -764,7 +769,8 @@ def _import_group_to_batch(
             entry["kinds"].add(kind)
 
     for order in orders:
-        result = apply_amazon_order(conn, order, account_id=account_id, batch_id=batch_id)
+        result = apply_amazon_order(conn, order, account_id=account_id, batch_id=batch_id,
+                                    flag_for_review=flag_for_review)
         status = result["status"]
         if status == "already_applied":
             counts["already_applied"] += 1
@@ -877,10 +883,12 @@ def run_amazon_import(
     if not groups:
         groups = {None: []}   # an empty drop still yields one (empty) batch, as before
 
+    flag_for_review = flag_new_transactions(conn)
     batch_results = [
         _import_group_to_batch(conn, group_orders, account_id=account_id,
                                filename=_group_label(group_orders, filename),
-                               apply_categorization=apply_categorization)
+                               apply_categorization=apply_categorization,
+                               flag_for_review=flag_for_review)
         for group_orders in groups.values()
     ]
 

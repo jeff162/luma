@@ -10,6 +10,7 @@ as either an un-clearable review pool or rows that never enter it.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -17,7 +18,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.import_export import run_import
 from backend.routers.import_export.core import _insert_imported_transaction, mark_batch_reviewed
+from backend.routers.review_flagging import ReviewFlaggingRequest, get_review_flagging, set_review_flagging
 from backend.routers.transactions import (
     BulkAction,
     BulkSelection,
@@ -102,6 +105,7 @@ class NeedsReviewTests(unittest.TestCase):
                     "raw_name": "Grocer",
                     "date": date,
                 },
+                flag_for_review=True,
             )
 
     def _needs_review(self, txn_id: str) -> int:
@@ -158,6 +162,73 @@ class NeedsReviewTests(unittest.TestCase):
         self.assertEqual(self._needs_review(a), 0)
         self.assertEqual(self._needs_review(b), 0)
         self.assertEqual(self._flagged_ids(), [])
+
+
+class _Upload:
+    def __init__(self, content: str):
+        self.filename = "fixture.csv"
+        self._content = content.encode("utf-8")
+
+    async def read(self):
+        return self._content
+
+
+class ReviewFlaggingSettingTests(unittest.IsolatedAsyncioTestCase):
+    """The setting is read by the import *run*, so it is pinned by running one."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "review-flagging.db"
+        init_db(str(self.db_path))
+        self.token = set_current_db_path(str(self.db_path))
+        self.account = str(uuid.uuid4())
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO account
+                  (id, external_account_id, provider, name, display_name, type, subtype,
+                   mask, owner_id, parent_account_id, trashed_at)
+                VALUES (?, ?, 'fixture', 'Checking', 'Checking', 'depository', 'checking',
+                        NULL, ?, NULL, NULL)
+                """,
+                (self.account, f"fixture_{self.account}", SHARED_OWNER_ID),
+            )
+
+    def tearDown(self):
+        reset_current_db_path(self.token)
+        self.tempdir.cleanup()
+
+    async def _import(self, day: str, payee: str) -> None:
+        config = {
+            "filename": "fixture.csv",
+            "profile_id": None,
+            "account_id": None,
+            "account_map": {"Checking": self.account},
+            "skip_accounts": [],
+            "new_accounts": None,
+            "column_map": {"date": "Date", "description": "Description", "account": "Account", "amount": "Amount"},
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        csv_text = f"Date,Description,Account,Amount\n{day},{payee},Checking,9.99"
+        await run_import(file=_Upload(csv_text), config=json.dumps(config))
+
+    async def test_setting_governs_arrival_only(self):
+        self.assertTrue(get_review_flagging()["enabled"])
+        await self._import("2026-04-10", "Grocer")
+        set_review_flagging(ReviewFlaggingRequest(enabled=False))
+        self.assertFalse(get_review_flagging()["enabled"])
+        await self._import("2026-04-11", "Bakery")
+        set_review_flagging(ReviewFlaggingRequest(enabled=True))
+        await self._import("2026-04-12", "Florist")
+        with get_db() as conn:
+            flags = dict(conn.execute("SELECT merchant_name, needs_review FROM txn").fetchall())
+        # Neither switch rewrote a stored row: the one flagged on arrival still is, and the one that
+        # arrived unflagged was not swept in when flagging came back.
+        self.assertEqual(flags, {"Grocer": 1, "Bakery": 0, "Florist": 1})
 
 
 if __name__ == "__main__":
