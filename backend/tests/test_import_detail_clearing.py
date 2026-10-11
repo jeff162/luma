@@ -22,7 +22,6 @@ from backend.routers.import_export.core import list_batches
 from backend.services.import_detail_storage import (
     remove_batch_restatements,
     restatement_rows,
-    summarize_restatement_removal,
     clear_batch_detail,
     detail_storage,
     summarize_detail_clearing,
@@ -199,6 +198,19 @@ class ImportDetailClearingTests(unittest.TestCase):
         self.assertEqual(stored[self.batch_id]["unreviewed_rows"], 0)
         self.assertGreater(stored[self.batch_id]["bytes"], 0)
 
+    def test_the_storage_listing_counts_each_report_row_once(self):
+        """The screen states what a clear would take per import, so a row both flagged and enriched must
+        not be counted under both — the three kinds have to add up to the rows held."""
+        self._insert_duplicate(1, substate="no_match")
+        self._insert_duplicate(2, substate="matched_near_date", enriched=True)
+        self._insert_duplicate(3, enriched=True)
+        self._insert_duplicate(4)
+        with self._use_db_path(), get_db() as conn:
+            stored = detail_storage(conn)[self.batch_id]
+
+        self.assertEqual((stored["unreviewed_rows"], stored["enriched_rows"]), (2, 1))
+        self.assertEqual(stored["report_rows"], 4)
+
     # ---- nothing is left stranded ----------------------------------------
 
     def test_a_row_whose_only_undo_was_the_report_is_handed_to_the_trash(self):
@@ -309,16 +321,6 @@ class ImportDetailClearingTests(unittest.TestCase):
         self._insert_duplicate(1)
         with self._use_db_path(), get_db() as conn:
             self.assertEqual(restatement_rows(conn, self.batch_id), [])
-
-    def test_the_preview_says_what_goes_and_what_stays(self):
-        batch_id = self._seed_mixed_report()
-        with self._use_db_path(), get_db() as conn:
-            preview = summarize_restatement_removal(conn, [batch_id])
-        self.assertEqual(preview["cards"], 1)
-        self.assertEqual(preview["rows"], 2)
-        self.assertEqual(preview["rows_kept"], 3)
-        self.assertEqual(preview["flagged_kept"], 1)
-        self.assertGreater(preview["bytes"], 0)
 
     def test_the_counts_move_so_the_card_reads_as_it_would_have(self):
         # The whole point: afterwards the card says what the same file would have said had it been

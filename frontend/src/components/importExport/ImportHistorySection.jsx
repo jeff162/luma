@@ -63,7 +63,6 @@ export function ImportHistorySection({
   onReviewMoneyMovement,
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
-  openDetailStorage,
 }) {
   return (
         <>
@@ -121,15 +120,6 @@ export function ImportHistorySection({
                       <span>Generate rules</span>
                       <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
                     </span>
-                  </Button>
-                </Tooltip>
-                {/* Grouped with the other two because it acts on the import cards below, not on the
-                    data-source concept that "Manage sources" is a subscript to. It carries no count:
-                    the figure it would show costs a scan of the duplicate-report table, which is not
-                    worth paying on every page load to answer a question nobody has asked yet. */}
-                <Tooltip content="See what each import stored beyond its transactions, and clear it">
-                  <Button small variant="ghost" onClick={openDetailStorage}>
-                    Free up import space
                   </Button>
                 </Tooltip>
               </div>

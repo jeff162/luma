@@ -201,13 +201,15 @@ def compact_database(db_path: str | None = None) -> int:
 # `import_batch.ignored_count` for the rows a source restated from its own prior import, which stop being
 # written to the duplicate report at all. v70 adds `txn.source_transaction_id`, the identifier a file source
 # gives each row, matched only within the data source that issued it. v71 moves Plaid's stored transaction
-# ids under the `plaid:` prefix, the namespace every other provider's ids already had.
+# ids under the `plaid:` prefix, the namespace every other provider's ids already had. v72 removes from
+# every duplicate report the rows v69 stopped writing — a source restating its own prior import — so an
+# older report reads as one written today, and compacts the file once afterwards.
 
 # Bumping this line is the activation step, so it is the *last* edit a migration gets. A dev server
 # running under `--reload` applies the new version the moment this file is saved, against whichever
 # database it is pointed at — including the developer's own. Land everything the migration reads or
 # writes first, then come back here.
-CURRENT_VERSION = 71
+CURRENT_VERSION = 72
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -2186,6 +2188,44 @@ def _add_plaid_transaction_id_namespace(conn):
     _namespace_plaid_transaction_ids(conn)
 
 
+def _remove_stored_source_restatements(conn):
+    """Take out of every duplicate report the rows an import no longer writes: a source's settled
+    restatement of its own prior import (`services/import_detail_storage.remove_batch_restatements`).
+
+    Done here rather than offered on the maintenance screen because there is nothing in such a row to
+    keep — the transaction it duplicates is in the ledger and is the record — so asking would only be a
+    chance to keep a second copy of it. On a real ledger it was 27,299 of 30,745 report rows. What the
+    screen is left offering is the part that does hold something: rows still flagged for review, the
+    record an enrichment is undone from, and other sources' claims on the same account.
+
+    Registered for post-restore replay, since a backup taken before this version carries the rows back.
+    Runs after v65's coverage backfill in that replay, which reads the report for a card's span."""
+    # Guarded like v65-v71: the per-migration unit tests hand-build a minimal schema and run the chain.
+    tables = _table_names(conn)
+    if not {"import_batch", "import_batch_duplicate"} <= tables:
+        return
+    batch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch)")}
+    duplicate_columns = {r["name"] for r in conn.execute("PRAGMA table_info(import_batch_duplicate)")}
+    if not ({"config_snapshot", "deduped_count", "ignored_count"} <= batch_columns
+            and {"review_substate", "enriched_at", "values_json", "matched_transaction_json"} <= duplicate_columns):
+        return
+    # Imported here rather than at module scope: the service reaches this module through
+    # `services.duplicate_detection`.
+    from backend.services.import_detail_storage import remove_batch_restatements
+
+    batch_ids = [row["id"] for row in conn.execute(
+        "SELECT DISTINCT batch_id AS id FROM import_batch_duplicate"
+    )]
+    done = remove_batch_restatements(conn, batch_ids)
+    if done["rows"]:
+        log_info(f"[db] removed {done['rows']} restated rows from {done['cards']} duplicate reports")
+
+
+@migration(72)
+def _drop_stored_source_restatements(conn):
+    _remove_stored_source_restatements(conn)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -2226,6 +2266,7 @@ POST_RESTORE_DATA_INIT = {
     64: _restore_trashed_accounts,
     65: _backfill_import_batch_coverage,
     71: _namespace_plaid_transaction_ids,
+    72: _remove_stored_source_restatements,
 }
 
 
@@ -2330,6 +2371,7 @@ def _alphabetize_top_level_category_groups(conn: sqlite3.Connection):
 
 def init_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
+    migrated_from = None
     with get_db(resolved_path) as conn:
         existing_tables = {
             row["name"]
@@ -3386,6 +3428,7 @@ def init_db(db_path: str | None = None):
         else:
             # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT
             # EXISTS`, so structural changes belong in registered migrations, which run here.
+            migrated_from = get_db_version(conn)
             run_migrations(conn)
         # Partial index over just the small set of still-un-reviewed rows (the filter/count always
         # selects needs_review = 1). It lives here rather than in the schema script above because on a
@@ -3439,6 +3482,12 @@ def init_db(db_path: str | None = None):
         _create_refund_follow_trigger(conn)
         _create_document_search_index(conn)
         ensure_shared_owner(conn)
+    # v72 deletes most of what the duplicate reports held (39 MB of an 88 MB file, measured), and SQLite
+    # keeps freed pages for reuse rather than returning them. Compacted once, on the upgrade that crossed
+    # it, so the file shrinks when the data did; outside the block because VACUUM cannot run inside the
+    # transaction the migrations ran in.
+    if migrated_from is not None and migrated_from < 72:
+        compact_database(resolved_path)
 
 
 # The reconciliation reports' attention counts (Amazon's per import batch, the PayPal reconciliation over the

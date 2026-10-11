@@ -11,6 +11,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FieldIssue, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, PasswordManagerUsername, AppConfirmDialog, Toggle, Tooltip, RefreshButton } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import ErrorLogSection from '../components/ErrorLogSection.jsx'
+import { ImportDetailStorageDialog } from '../components/importExport/ImportDetailStorageDialog.jsx'
 import { useErrorLog } from '../lib/useErrorLog.js'
 import {
   PASSWORD_MISMATCH, PASSWORD_POLICIES, passwordIssue, passwordMismatchShown, passwordPolicyHelpText,
@@ -2381,6 +2382,19 @@ function RulesTrashSection() {
  * Reopening is not destructive: it lifts the judgement *and* restores the finding, so the pair returns to
  * the duplicate report exactly as it was rather than waiting for some later scan to notice it again.
  */
+// Here rather than on Import / Export because it is housekeeping over what imports left behind, not a
+// step of importing: what remains in those records after migration v72 is small and wanted, and clearing
+// it is an occasional choice rather than part of the work the import history exists for.
+function ImportStorageSection() {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button small variant="ghost" onClick={() => setOpen(true)}>Free up import space</Button>
+      {open ? <ImportDetailStorageDialog onClose={() => setOpen(false)} /> : null}
+    </>
+  )
+}
+
 function DismissedDuplicatePairsSection() {
   const [pairs, setPairs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -3351,6 +3365,15 @@ export default function Settings() {
             {...bindSection('transactionTags')}
           >
             <TransactionTagsSection />
+          </StickySection>
+
+          <StickySection
+            title="Import storage"
+            description="The record each import keeps of the rows it refused, and the space it uses."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('importStorage')}
+          >
+            <ImportStorageSection />
           </StickySection>
 
           <StickySection

@@ -1152,7 +1152,14 @@ CSV import creates supporting records for workflow and recovery:
   otherwise trip the empty-batch delete and take its `file_content_hash` — half the re-import guard —
   with it. What is given up is "Import anyway" for these rows, which is the deliberate re-adding of a
   row already held, and the raw material a later auto-restore (`backlog/import-dedupe-followups.md`)
-  would have replayed after an undo; the recovery there is re-importing the file.
+  would have replayed after an undo; the recovery there is re-importing the file. **Reports written before
+  this are brought into line by migration v72** (`import_detail_storage.remove_batch_restatements`, which
+  applies the same test after the fact and moves the same counts), registered for post-restore replay so
+  an older backup comes back in the same shape. It is a migration rather than an offered action because
+  there is nothing in such a row to keep. It reads the row's source label back out of its stored cells
+  through the card's `config_snapshot.column_map`, so a card with no account column (a single-account
+  file, a sync card) is left alone rather than guessed about — measured on a real ledger, none of those
+  held a restatement the test could not see.
 
 - **What an import *changed* rather than added** (`import_batch.updated_count`): rows that corrected a
   transaction already held, counted apart from imported and deduped because they are neither — the
@@ -1165,7 +1172,9 @@ CSV import creates supporting records for workflow and recovery:
   one row per row it refused, holding the raw values, the transaction it matched and the payload it
   would have inserted — and that report is by a wide margin the largest thing the import history
   stores. Measured on a real ledger it was 34 MB against a 73 MB database, more than every transaction
-  put together, and it rides every backup. Clearing it is maintenance over stored diagnostics, so the
+  put together, and it rides every backup — before imports stopped writing a source's restatements of its
+  own earlier import, which were 89% of it (see `ignored_count` above). Clearing what remains is
+  maintenance over stored diagnostics (Settings → *Import storage*), so the
   card **stays in the history** and says its detail was cleared; nothing disappears, which is what
   keeps the action from needing a destructive vocabulary that would misdescribe it.
 

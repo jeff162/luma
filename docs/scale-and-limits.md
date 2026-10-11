@@ -118,11 +118,12 @@ pattern). That is what bounds the *rendered* history; the fetch is still unbound
 **The largest thing the history stores is the duplicate reports**, not the cards: one row per refused
 row, each holding the raw values, the matched transaction and the payload that would have been inserted.
 Measured on a real ledger that was **34 MB of JSON against a 73 MB database** — more than every
-transaction put together — and it rides every backup. A maintenance screen (*Free up import space*, served by
-`services/import_detail_storage.py`) attributes that space per source and clears it on request, leaving
-the cards, their counts, their coverage claims and their file hashes in place. There is deliberately no
-retention *policy*: an automatic sweep would be the silent cap again, and the clearing cannot be undone.
-See `data-model.md` → *Import batches and profiles*.
+transaction put together — and it rides every backup. A maintenance screen (Settings → *Import storage*,
+served by `services/import_detail_storage.py`) attributes that space per source and clears it on request,
+leaving the cards, their counts, their coverage claims and their file hashes in place. There is
+deliberately no retention *policy* over what it offers: an automatic sweep would be the silent cap again,
+and the clearing cannot be undone. Choosing by age is a selection on the screen (*Select imports over a
+year old*), never a schedule. See `data-model.md` → *Import batches and profiles*.
 
 **What stopped that growing back is a decision about what to write, not a sweep over what is held.** The
 population above was overwhelmingly one thing: a source restating its own prior import, which is what a
@@ -131,22 +132,26 @@ and of those rows only 172 — fewer than one in 150 — were ever flagged as wa
 (`import_batch.ignored_count`) and not recorded (`is_settled_source_restatement`,
 `prune_source_restatements`), because there is nothing in such a record to read — the transaction each
 one duplicates is in the ledger and *is* the record. The distinction from a retention policy is the
-whole of why this is allowed: no sweep runs on its own, no record is removed without being asked for,
-and a refusal that asks anything of anyone — a covered date that paired with nothing, a twin two days
-out, any claim from a *different* source — still writes its row and keeps its place in the report.
+whole of why this is allowed: no sweep runs on its own over anything someone might want, and a refusal
+that asks anything of anyone — a covered date that paired with nothing, a twin two days out, any claim
+from a *different* source — still writes its row and keeps its place in the report.
 
-**Reports written before the change are brought into line on request, not swept.** The maintenance
-screen's second action (*Remove rows already in the ledger*,
-`import_detail_storage.remove_batch_restatements`) applies the same test after the fact, so a database
-loaded before the change can be put in the shape it would have had if loaded after. It needs one thing
-the report has no column for — the source label each stored row was mapped under — and reads it back
-out of the row's own stored cells via the batch's `config_snapshot.column_map`, which is exact rather
-than approximate: an aggregator export maps many accounts in one file, and a looser test would mistake
-a second source's claim for the card's own. A card whose snapshot carries no column map (a
-single-account file, or a sync card) is left alone rather than guessed about. Measured on a real
-ledger it removed 27,299 of 30,745 rows and 39.25 MB, leaving all 172 rows flagged for review.
+**Reports written before that change were brought into line by a migration, which is the one removal
+not asked for.** Migration v72 (`import_detail_storage.remove_batch_restatements`) applies the same test
+after the fact to every card, and is replayed after restoring an older backup, so a database loaded
+before the change ends in the shape it would have had if loaded after. It is allowed for the same reason
+the import-time decision is: what it takes holds nothing — it is not a retention judgement about records
+someone might still want. It needs one thing the report has no column for — the source label each stored
+row was mapped under — and reads it back out of the row's own stored cells via the batch's
+`config_snapshot.column_map`, which is exact rather than approximate: an aggregator export maps many
+accounts in one file, and a looser test would mistake a second source's claim for the card's own. A card
+whose snapshot carries no column map (a single-account file, or a sync card) is left alone rather than
+guessed about. Measured on a real ledger it removed 27,299 of 30,745 rows in under a second, and the
+upgrade's one-time compaction took the file from 88.4 MB to 27.6 MB. What was left — 3,446 rows — is
+mostly other sources' claims on the same account (different exporters label one account differently),
+plus the rows flagged for review and the records enrichments are undone from: the part worth a choice.
 
-**Both removals compact the file afterwards** (`db.database.compact_database`). SQLite keeps freed pages
+**The clear compacts the file afterwards, and so does the upgrade across v72** (`db.database.compact_database`). SQLite keeps freed pages
 on a free list and reuses them, so without this a large deletion changes nothing anyone can check: the
 file stays the size it was, and a screen named *Free up import space* has freed none that is visible.
 VACUUM cannot run inside a transaction, so it runs on a connection of its own after the write commits;

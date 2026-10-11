@@ -3397,6 +3397,13 @@ export const HELP_TOPICS = [
             <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
             sections that empty separately.
           </li>
+          <li>
+            <strong>Import storage</strong> clears the record each import keeps of the rows it
+            refused: duplicates still flagged for review, matches against another source, the
+            details needed to undo an enrichment, and rejected rows. Once cleared, those rows no
+            longer appear in the duplicates view and cannot be imported anyway. Imported
+            transactions are not affected.
+          </li>
 
           <li>
             <strong>Error log</strong> lists the errors recorded in the "console log" file.

@@ -74,20 +74,27 @@ def detail_storage(conn) -> dict:
 
     Two grouped passes rather than a query per card: this is read when the maintenance screen opens
     rather than on every history load, so one scan of each table beats N round trips.
+
+    The report rows are split three ways, each row counted once, so the screen can say what a clear
+    would take before anything is ticked: still flagged for review, the record an enrichment is undone
+    from, and the rest — settled duplicates, most of them another source's claim on the same account.
     """
     by_batch: dict[str, dict] = {}
     for row in conn.execute(f"""
         SELECT batch_id,
                COUNT(*) AS report_rows,
                COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes,
-               COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS unreviewed_rows
+               COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS unreviewed_rows,
+               COALESCE(SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 - ({_UNREVIEWED_SQL}) ELSE 0 END), 0)
+                 AS enriched_rows
         FROM   import_batch_duplicate
         GROUP  BY batch_id
-    """, ADVISORY_REVIEW_SUBSTATES):
+    """, (*ADVISORY_REVIEW_SUBSTATES, *ADVISORY_REVIEW_SUBSTATES)):
         by_batch[row["batch_id"]] = {
             "report_rows": int(row["report_rows"] or 0),
             "bytes": int(row["bytes"] or 0),
             "unreviewed_rows": int(row["unreviewed_rows"] or 0),
+            "enriched_rows": int(row["enriched_rows"] or 0),
             "rejected_rows": 0,
         }
     for row in conn.execute(f"""
@@ -98,7 +105,8 @@ def detail_storage(conn) -> dict:
         GROUP  BY batch_id
     """):
         entry = by_batch.setdefault(
-            row["batch_id"], {"report_rows": 0, "bytes": 0, "unreviewed_rows": 0, "rejected_rows": 0},
+            row["batch_id"],
+            {"report_rows": 0, "bytes": 0, "unreviewed_rows": 0, "enriched_rows": 0, "rejected_rows": 0},
         )
         entry["rejected_rows"] = int(row["rejected_rows"] or 0)
         entry["bytes"] += int(row["bytes"] or 0)
@@ -171,46 +179,14 @@ def restatement_rows(conn, batch_id: str) -> list[int]:
     return found
 
 
-def summarize_restatement_removal(conn, batch_ids) -> dict:
-    """What bringing these cards in line with how imports work now would remove, and what would stay.
-
-    Counted by the code that performs the write, like the clearing preview beside it, so the sentence
-    agreed to is the one carried out.
-    """
-    summary = {"cards": 0, "rows": 0, "bytes": 0, "rows_kept": 0, "flagged_kept": 0}
-    for batch_id in _clean_ids(batch_ids):
-        rows = restatement_rows(conn, batch_id)
-        if not rows:
-            continue
-        placeholders = ", ".join("?" * len(rows))
-        counts = conn.execute(
-            f"""
-            SELECT COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes
-            FROM   import_batch_duplicate
-            WHERE  batch_id = ? AND row_number IN ({placeholders})
-            """,
-            (batch_id, *rows),
-        ).fetchone()
-        kept = conn.execute(
-            f"""
-            SELECT COUNT(*) AS rows_kept,
-                   COALESCE(SUM({_UNREVIEWED_SQL}), 0) AS flagged_kept
-            FROM   import_batch_duplicate
-            WHERE  batch_id = ? AND row_number NOT IN ({placeholders})
-            """,
-            (*ADVISORY_REVIEW_SUBSTATES, batch_id, *rows),
-        ).fetchone()
-        summary["cards"] += 1
-        summary["rows"] += len(rows)
-        summary["bytes"] += int(counts["bytes"] or 0)
-        summary["rows_kept"] += int(kept["rows_kept"] or 0)
-        summary["flagged_kept"] += int(kept["flagged_kept"] or 0)
-    return summary
-
-
 def remove_batch_restatements(conn, batch_ids) -> dict:
     """Remove the report rows an import running today would not have written, and move each card's
-    counts to match.
+    counts to match. Returns how many cards and rows it changed.
+
+    Run once over every card by migration v72 (and again after restoring a backup older than that), so a
+    report written before imports stopped storing these reads as one written after. It is not offered as
+    an action: there is nothing in such a row to keep, so a choice about it would only be a chance to
+    keep a second copy of a transaction the ledger already holds.
 
     Deliberately **not** the clearing path with a narrower WHERE, because two of that path's steps would
     be wrong here. It does not release the card's trashed confirmed-duplicates to the Trash: that happens
@@ -220,7 +196,7 @@ def remove_batch_restatements(conn, batch_ids) -> dict:
     counts, out of `deduped_count` and into `ignored_count` — which is the whole point, since that is
     the shape the same file would have produced had it been imported today.
     """
-    done = summarize_restatement_removal(conn, batch_ids)
+    done = {"cards": 0, "rows": 0}
     for batch_id in _clean_ids(batch_ids):
         rows = restatement_rows(conn, batch_id)
         if not rows:
@@ -239,6 +215,8 @@ def remove_batch_restatements(conn, batch_ids) -> dict:
             """,
             (len(rows), len(rows), batch_id),
         )
+        done["cards"] += 1
+        done["rows"] += len(rows)
     return done
 
 
