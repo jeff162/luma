@@ -2396,6 +2396,10 @@ export default function Dashboard() {
   // rather than on every render so it never fights the user's own scrolling. The offset is computed from
   // the same layout the plot is drawn at, not from the bar width: those are the same number only while
   // the buckets are what sets the width, and a stretched plot spreads its bars over the extra room.
+  //
+  // "The bucket set" is which periods are drawn and which are selected, not the array holding them: the
+  // totals reload on every ledger change, and a reload that brings back the same buckets must leave the
+  // pan alone. So the effect is keyed on `trendBucketsKey` and reads the buckets through a ref.
   const trendSelectedIndex = useMemo(() => {
     const selected = trend.flatMap((b, i) => (b.isSelected ? [i] : []))
     return selected.length ? selected[Math.floor((selected.length - 1) / 2)] : -1
@@ -2412,14 +2416,18 @@ export default function Dashboard() {
     })
     if (index >= 0) trendAnchorMonth.current = bucketAnchorMonth(trend[index])
   }, [trend, trendPlot])
+  const trendBucketsKey = trend.map(b => `${b.rangeStart}:${b.rangeEnd}:${b.isSelected ? 1 : 0}`).join(',')
+  const latestTrend = useRef(trend)
+  useLayoutEffect(() => { latestTrend.current = trend }, [trend])
   useLayoutEffect(() => {
     const el = trendScrollRef.current
-    if (!el || trend.length === 0) return
+    const buckets = latestTrend.current
+    if (!el || buckets.length === 0) return
     const index = trendScrollTargetIndex({
-      buckets: trend, selectedIndex: trendSelectedIndex, anchorMonth: trendAnchorMonth.current,
+      buckets, selectedIndex: trendSelectedIndex, anchorMonth: trendAnchorMonth.current,
     })
     el.scrollLeft = centeredScrollLeft({ index, layout: trendPlot, viewportWidth: el.clientWidth })
-  }, [trend, trendSelectedIndex, trendPlot])
+  }, [trendBucketsKey, trendSelectedIndex, trendPlot])
 
   // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
   // transaction-change refresh so an edit updates them without resetting the user's drill.

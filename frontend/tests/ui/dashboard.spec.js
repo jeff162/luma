@@ -65,6 +65,33 @@ test('single-period trend tooltips stay inside the visible part of a narrowed sc
   }
 })
 
+// A refresh that brings back the same buckets must leave the pan where it was. The page reloads its totals
+// on every ledger change, and re-centring on each reload moved the plot under the reader and dropped an
+// open tooltip. The scroll area is narrowed as above so the demo's few months overflow it.
+test('single-period trend keeps its pan through a refresh that changes nothing', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await page.getByRole('button', { name: 'Single period' }).click()
+
+  const findScroller = `[...document.querySelectorAll('div')].filter(el => (
+    getComputedStyle(el).overflowX === 'auto' && el.querySelector('.recharts-bar-rectangle')
+  )).pop()`
+  await expect.poll(() => page.evaluate(`!!(${findScroller})`)).toBe(true)
+  const scroller = await page.evaluateHandle(findScroller)
+  await scroller.evaluate(el => { el.style.maxWidth = '220px' })
+  await expect.poll(() => scroller.evaluate(el => el.scrollLeft)).toBeGreaterThan(0)
+
+  // Panned to a spot that centres no bucket, so a re-centre on any of them would move it.
+  await scroller.evaluate(el => { el.scrollLeft = 90 })
+  const reloaded = page.waitForResponse(response => response.url().includes('/summary/monthly-trend'))
+  await page.evaluate(() => window.dispatchEvent(new Event('luma:transactions-changed')))
+  await reloaded
+  // The reload lands a render after its response; the bars are redrawn from it either way.
+  await page.waitForTimeout(500)
+  expect(await scroller.evaluate(el => el.scrollLeft)).toBe(90)
+})
+
 // The Trends tab's monthly-averages table drills like the rest of the page: a group row opens that
 // group's categories, and a category's ↗ opens the transactions behind its figure, in a report scoped to
 // the category and the table's window.
