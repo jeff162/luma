@@ -30,6 +30,7 @@ from . import backup, core, preview, profiles, amazon, rule_suggestion_actions, 
 from .core import *  # noqa: F401,F403
 from .core import (  # noqa: F401  (underscore-prefixed helpers exercised directly by tests)
     _get_system_rule_suggestion_review_state,
+    _load_batch_duplicate_details,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
 )

@@ -27,8 +27,8 @@ from fastapi import HTTPException
 from backend.routers.import_export import (
     BatchCreateProfileRequest,
     BatchDuplicateReviewRequest,
+    _load_batch_duplicate_details,
     create_profile_from_batch,
-    get_batch_duplicates,
     make_hash,
     mark_batch_duplicates_reviewed,
     run_import,
@@ -68,8 +68,14 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             return await run_import(file=upload, config=json.dumps(config))
 
     def _get_duplicates(self, batch_id: str) -> dict:
-        with self._use_db_path():
-            return get_batch_duplicates(batch_id)
+        # The rows an import refused as duplicates, with the reason recorded for each — read through the
+        # loader the import-anyway path uses, since that is the stored record these tests are about.
+        with self._use_db_path(), get_db() as conn:
+            batch = conn.execute(
+                "SELECT id, filename, config_snapshot FROM import_batch WHERE id = ?", (batch_id,),
+            ).fetchone()
+            _, rows = _load_batch_duplicate_details(conn, batch)
+        return {"rows": rows}
 
     def _undo_batch(self, batch_id: str) -> dict:
         with self._use_db_path():

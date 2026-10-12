@@ -4115,26 +4115,6 @@ def run_import_parsed(
     }
 
 
-@router.get("/batches/{batch_id}/duplicates")
-def get_batch_duplicates(batch_id: str):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, filename, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-
-        headers, duplicate_rows = _load_batch_duplicate_details(conn, batch)
-        return {
-            "batch_id": batch_id,
-            "filename": batch["filename"],
-            "headers": headers,
-            "rows": duplicate_rows,
-            "count": len(duplicate_rows),
-        }
-
-
 class MoneyMovementRulesRequest(BaseModel):
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
