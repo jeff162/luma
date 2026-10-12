@@ -275,12 +275,17 @@ Note the difference from **Set aside**: setting a label aside only *parks* it ou
 "needs sorting" pool — the category stays active and imports keep categorizing to it. Use Set aside
 for "I've triaged this, leave it in Unassigned"; use Delete for "stop bringing this in as a category."
 
-### "Where did a removed duplicate go?"
+### A transaction was imported, then removed as a duplicate
 
-A row removed by a Replace, a Reject or a merge stays on its own file's **duplicate report**, under
-**Removed later**. A Replace removes the older copy, so the row can belong to a different file than the
-one where the decision was made; that file's ledger (the `↗`) links to it. **Restore** puts it back;
-detaching a merged account restores every removal the merge made.
+Most duplicates are caught during the import and never reach the ledger; **Import anyway** on the
+duplicate report is the way back for those. A few are removed afterwards: the older copy when a Review
+row is settled with **Replace existing**, the newer one when it is settled with **Discard new**, the
+copies an account merge finds, or a doubled charge merged on the Amazon reconciliation report. Such a transaction was in its file's ledger and no longer is.
+
+It stays on the **duplicate report** of the import it came from, under **Removed later**. A Replace
+removes the older copy, so that can be a different file from the one where the decision was made. The
+**Removed as duplicates** line in that file's ledger (the `↗`) opens the report on just those rows.
+**Restore** puts the row back; detaching a merged account restores every removal the merge made.
 
 ### Finding a transaction in a long ledger
 
