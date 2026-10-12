@@ -33,6 +33,11 @@
  * of text are fine -- they collapse to a single space. The failure is invisible in
  * the source and only shows in the rendered body, so check the output rather than
  * the JSX when a paragraph is reflowed.
+ *
+ * Emphasis: `<strong>` is for anything the reader can find on the screen by that name -- a button, tab,
+ * pill, field label or heading -- and for the term a passage or list item is defining. `<em>` is for
+ * stress on a word, example values, and the names of data rather than controls: categories, groups and
+ * tags, the built-in ones included (<em>Money movement</em>, <em>Skip</em>).
  */
 
 import HelpLink from './HelpLink.jsx'
@@ -518,12 +523,12 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Report types:</strong> <em>Expense, Income, Cash Flow</em> select the type of report.
+            <strong>Report types:</strong> <strong>Expense, Income, Cash Flow</strong> select the type of report.
             Expense and Income are pie charts, Cash Flow is a
             Sankey diagram (<HelpLink to="/help/dashboard-cash-flow">cash flow</HelpLink>).
           </li>
           <li>
-            <strong>Report sub-types:</strong> <em>Single, Compare, Trends</em> toggle between examining
+            <strong>Report sub-types:</strong> <strong>Single, Compare, Trends</strong> toggle between examining
             a period of time, comparing two periods and examining trends over time.
           </li>
           <li>
@@ -537,14 +542,14 @@ export const HELP_TOPICS = [
           </li>
           <li>
             The <strong>period</strong> selector at the top of the page sets the time frame for the{' '}
-            <em>Single period</em> report. <em>Compare</em> chooses its two periods with its own
-            selectors, and <em>Trends</em> chooses its year with its own selector.
+            <strong>Single period</strong> report. <strong>Compare</strong> chooses its two periods with its own
+            selectors, and <strong>Trends</strong> chooses its year with its own selector.
           </li>
           <li>
             In the single period report, the <strong>Trend</strong> chart at the bottom of the page shows
             the same report over all of the data, with the selected period highlighted. Clicking a bar
             selects that bar's period, and the selector beside the chart groups the bars by month,
-            quarter or year. For a period such as <em>Year to date</em>, it can also repeat that exact
+            quarter or year. For a period such as <strong>Year to date</strong>, it can also repeat that exact
             span in each earlier year.
           </li>
         </ul>
@@ -646,8 +651,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Click <strong>+ Tag report</strong> in the picker to build one. Check the tags
-          to include and either press <em>Save &amp; display</em> to save the report
-          or <em>Display</em> to see the report without saving.
+          to include and either press <strong>Save &amp; display</strong> to save the report
+          or <strong>Display</strong> to see the report without saving.
           Right-click (or use the &middot;&middot;&middot; menu) to rename a saved report, change its
           tags, or delete it. The same menu on an unsaved report changes its tags or saves it under a name.
         </p>
@@ -684,7 +689,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           <strong>Bulk Edit</strong> turns the list into a selectable set, for categorizing, tagging,
-          marking reviewed, trashing. <em>Bulk Edit</em> is also how several payments get linked
+          marking reviewed, trashing. <strong>Bulk Edit</strong> is also how several payments get linked
           together into a single purchase.
         </p>
         <p>
@@ -750,7 +755,7 @@ export const HELP_TOPICS = [
             case where everything is correct. A single click shows an <strong>Undo</strong> for a few seconds,
             for a transaction that turns out to need checking elsewhere first, and the row stays where it is
             in the list until the <strong>↻</strong> beside the page title refreshes it, even with the Needs review filter on.
-            The quick filter beside the search box, just above the transaction table, has a <em>Needs review</em> choice so all the transactions
+            The quick filter beside the search box, just above the transaction table, has a <strong>Needs review</strong> choice so all the transactions
             to be reviewed can be cleared at once in a bulk-edit option after the ones which needed
             editing have been dealt with. The main filter at the top of the page can be used to limit
             the display to a particular owner, account (or any other set of criteria) if only some of the entries
@@ -759,7 +764,7 @@ export const HELP_TOPICS = [
           <li>
             The import cards on the Import page have a pill with the number of transactions in
             the import which need review. Clicking the pill opens the import&apos;s transactions with the
-            <em>Needs review</em> quick filter already on; the same filter turns off to show the rest of the import.
+            <strong>Needs review</strong> quick filter already on; the same filter turns off to show the rest of the import.
             Next to the pill is a button to <strong>mark all reviewed</strong>.
           </li>
         </ul>
@@ -915,7 +920,7 @@ export const HELP_TOPICS = [
           meanwhile. <strong>Remove split</strong> there returns the form to a single category.
         </p>
         <p>
-          The split transaction editor reads as a small ledger &mdash; <em>Description</em>, <em>Category</em>, <em>Amount</em>,
+          The split transaction editor reads as a small ledger &mdash; <strong>Description</strong>, <strong>Category</strong>, <strong>Amount</strong>,
           in the same order the transaction list uses. The description is optional and names what the portion
           is. Filling this in is useful as it is displayed when hovering over the
           transaction. <strong>+ Item</strong> adds another line. A split transaction needs at least two pieces.
@@ -1093,7 +1098,7 @@ export const HELP_TOPICS = [
           that is a member of the system's <em>Reimbursable</em> group.{' '}
           <strong>Reimbursable</strong> is similar to the <strong>Transfers</strong> group. Both of them
           are created by the system, cannot be deleted, and are excluded from
-          spending. <strong>Reimbursable</strong> is different in that the <em>Reimbursements</em> button
+          spending. <strong>Reimbursable</strong> is different in that the <strong>Reimbursements</strong> button
           on the Transactions page looks in this category for unresolved transactions that need to be
           joined as a reimbursement pair. Pairing is useful because it allows the system to generate alerts
           if repayment is not received in a timely fashion.
@@ -1532,7 +1537,7 @@ export const HELP_TOPICS = [
         <p>
           To hide an inherited tag on a single transaction, uncheck it in that transaction's tag
           picker (the row's tag popover or the transaction editor). It stays on every other
-          transaction that inherits it, and a strike-through <em>hidden here</em> entry in the picker
+          transaction that inherits it, and a strike-through <strong>hidden here</strong> entry in the picker
           can be checked to restore it. Removing the tag from the category, group, or account drops
           it from every transaction under that level.
         </p>
@@ -1672,10 +1677,10 @@ export const HELP_TOPICS = [
           Most categorization happens automatically as transactions arrive. Each imported or synced
           transaction runs through the categorization rules -- the same process triggered by
           the <strong>Categorize</strong> button on the Rules page. For CSV import this only happens
-          if <em>Apply categorization rules on import</em> is selected, which it is by default.
+          if <strong>Apply categorization rules on import</strong> is selected, which it is by default.
         </p>
         <p>
-          A file imported with <em>use the categories present in the data</em> can also bring its own
+          A file imported with <strong>use the categories present in the data</strong> can also bring its own
           categories, generally as part of an initial seeding from another tool. Rules still come first:
           the file's category fills in only rows no rule claims. That stays true afterward -- a rule
           created later takes those rows the next time <strong>Categorize</strong> runs, just as it would
@@ -1695,17 +1700,17 @@ export const HELP_TOPICS = [
           categorized by a rule or by a trusted import, and those still uncategorized. It deliberately
           leaves alone anything categorized <em>by hand</em>. It only ever <em>sets</em>
           or <em>changes</em> a category, never removes one: a rule-assigned row that no longer matches
-          any rule <strong>keeps</strong> its category, so deleting or narrowing a rule doesn't
+          any rule <em>keeps</em> its category, so deleting or narrowing a rule doesn't
           silently un-categorize the transactions it already handled. It is the pass to run after adding
           or changing rules, to refresh categorization without disturbing earlier work.
         </p>
         <p>
           To deliberately <em>undo</em> a rule's categorizations -- when a rule was wrong -- use the{' '}
-          <em>re-evaluate this rule's transactions</em> option offered when a rule is deleted or
+          <strong>re-evaluate this rule's transactions</strong> option offered when a rule is deleted or
           edited. It re-runs just those rows against the remaining rules, so they fall to another matching
           rule, rather than keeping the removed rule's category. A row no remaining rule claims goes back to
-          the category its file gave it, when it came from a file imported with <em>use the categories
-            present in the data</em>, and otherwise to uncategorized.
+          the category its file gave it, when it came from a file imported with <strong>use the categories
+            present in the data</strong>, and otherwise to uncategorized.
         </p>
         <h4>Apply a rule to its matching transactions</h4>
         <p>
@@ -1729,7 +1734,7 @@ export const HELP_TOPICS = [
             overwrites it; it is reverted only by the opt-in <em>re-evaluate</em> when the rule is deleted
             or edited.</li>
           <li><strong>Trusted import</strong> -- the category came from a file imported with
-            <em> use the categories present in the data</em>, and no rule claims the row. Not pinned: any
+            <strong> use the categories present in the data</strong>, and no rule claims the row. Not pinned: any
             matching rule takes it, whether through Categorize or a rule apply, turning it into a rule
             categorization. The Generate-rules conflict screen can also re-categorize it in place -- see
             below.</li>
@@ -1755,8 +1760,8 @@ export const HELP_TOPICS = [
           even a full-force rule apply, which reports how many it skipped rather than overwriting them.
         </p>
         <p>
-          To check a single transaction's current source, open its detail panel: a small <em>manual</em>
-          label sits beside a pinned category, and the details show a <em>Categorized by</em> line naming
+          To check a single transaction's current source, open its detail panel: a small <strong>manual</strong>
+          label sits beside a pinned category, and the details show a <strong>Categorized by</strong> line naming
           the source -- a rule, a manual edit, or the category present in the source data.
         </p>
       </>
@@ -1820,7 +1825,7 @@ export const HELP_TOPICS = [
         <p>
           Plenty of the nesting pairs are deliberate, so those can be <strong>dismissed</strong> -- an
           acknowledgement, not a fix, which drops the pair from the list and from the counts so what is
-          left is what still wants a decision. Nothing is lost: <em>Show dismissed</em> brings the
+          left is what still wants a decision. Nothing is lost: <strong>Show dismissed</strong> brings the
           acknowledged set back, and each one can be restored. A dismissal covers the situation it was
           made about rather than the pair of rules forever, so an edit that changes what the finding says
           -- a narrower rule that becomes surplus and can now be deleted -- raises it again.
@@ -1903,7 +1908,7 @@ export const HELP_TOPICS = [
       <>
         <p>
           If the data comes from another tool where the transactions already carry meaningful categories,
-          tell {APP_NAME} the import's category data is useful (turn on <em>"use the categories present in the data"</em>
+          tell {APP_NAME} the import's category data is useful (turn on <strong>use the categories present in the data</strong>
           on the file's card). {APP_NAME} keeps that categorization on the imported transactions, adds new categories to
           the pool of categories to be grouped by <strong>Group Imported Categories</strong>, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data.
@@ -1931,17 +1936,17 @@ export const HELP_TOPICS = [
             scope, amount range, rename, or tags),</li>
           <li><strong>Defer</strong> it to decide later, or</li>
           <li><strong>Discard</strong> -- reject the proposed rule. The two buttons
-            under <em>discard and&hellip;</em> choose what happens to the rows it covered:
+            under <strong>discard and&hellip;</strong> choose what happens to the rows it covered:
             <ul>
               <li>
-                <em>keep categorization</em> leaves them exactly as imported -- the file's category
+                <strong>keep categorization</strong> leaves them exactly as imported -- the file's category
                 stays, and a matching rule created later still takes them, as it would any imported row.
                 This is the choice for a file category that is right but not worth a rule (an annual fee
                 filed under its own category). To keep a row out of every rule's reach, set its category by
                 hand instead.
               </li>
               <li>
-                <em>remove categorization</em> clears the category
+                <strong>remove categorization</strong> clears the category
                 instead, freeing the rows for rules to categorize later (the discarded file label is kept on
                 the row but is never re-applied). This is for a file category that was wrong or messy.
               </li>
@@ -1977,23 +1982,23 @@ export const HELP_TOPICS = [
         <p>
           Rules are forward-looking, so a merchant pattern with no recent activity is unlikely to recur.
           As an aid when importing older transaction history, suggested rules whose newest matching transaction
-          falls outside the <em>Look back</em> window move
-          off the main <em>pending</em> list onto a separate <em>older</em> pill, so the pending count
+          falls outside the <strong>Look back</strong> window move
+          off the main <strong>Pending</strong> list onto a separate <strong>Older</strong> pill, so the pending count
           reflects only patterns that are still live. Nothing is lost -- widening the look-back window
           brings them back, and the underlying rows are untouched by the lens itself.
         </p>
         <p>
           Because older suggestions are already out of the way, settling them is optional -- a stale tail
-          can simply be left alone. Alternatively, open the <em>older</em> pill, select several
+          can simply be left alone. Alternatively, open the <strong>Older</strong> pill, select several
           rows at once, and apply a bulk disposition:
         </p>
         <ul>
-          <li><em>Discard, keep categories</em> marks them
+          <li><strong>Discard, keep categories</strong> marks them
             reviewed while leaving their rows exactly as imported (for a pattern not
             worth a rule)
           </li>
           <li>
-            <em>Discard, clear categories</em> additionally clears those rows so future rules may categorize them
+            <strong>Discard, clear categories</strong> additionally clears those rows so future rules may categorize them
           </li>
         </ul>
         <p>
@@ -2097,7 +2102,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           A newly found series is a <strong>suggestion</strong> for review. Confirm the ones that are correct; mark the
-          rest <em>not recurring</em> and they will not be proposed again.
+          rest <strong>Not recurring</strong> and they will not be proposed again.
         </p>
 
         <h4>When the scan cannot see it</h4>
@@ -2124,10 +2129,10 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             <strong>Remove from the series</strong> -- for a transaction the scan swept in by mistake. It stays
-            out across future scans. An <em>Amount changed</em> finding offers the same thing
-            as <em>Exclude from series</em>. A removal is reversible: undo it from the prompt, from the removed
-            transaction's own right-click menu (<em>Restore to recurring series</em>), or from
-            the <em>removed</em> list inside the series.
+            out across future scans. An <strong>Amount changed</strong> finding offers the same thing
+            as <strong>Exclude from series</strong>. A removal is reversible: undo it from the prompt, from the removed
+            transaction's own right-click menu (<strong>Restore to recurring series</strong>), or from
+            the <strong>removed</strong> list inside the series.
           </li>
         </ul>
         <p>
@@ -2148,8 +2153,8 @@ export const HELP_TOPICS = [
         </p>
         <p>
           A transaction carries a small ↻ marker while it belongs to a series, and its editor links through
-          to that series. Right-clicking a transaction offers <em>Mark as recurring</em>, <em>Remove</em>,
-          or <em>Restore</em>, whichever fits.
+          to that series. Right-clicking a transaction offers <strong>Mark as recurring</strong>, <strong>Remove</strong>,
+          or <strong>Restore</strong>, whichever fits.
         </p>
 
         <h4>Transfers between two accounts</h4>
@@ -2174,7 +2179,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           One situation stops a transfer being matched up, and it is listed
-          under <em>Transfer &amp; payment review</em> on the Recurring page: where more than one
+          under <strong>Transfer &amp; payment review</strong> on the Recurring page: where more than one
           transaction matches equally well, nothing is paired at all, because the data does not say
           which is the other half. Choosing the right one there settles it, and the answer is remembered.
         </p>
@@ -2187,15 +2192,15 @@ export const HELP_TOPICS = [
         <h4>What needs attention</h4>
         <p>
           The Recurring page has three views, chosen from the selector under its title: the
-          <em> Series</em> list itself, <em>Needs attention</em>, and <em>Upcoming</em>. The count beside
-          <em> Needs attention</em> is how many findings are open.
+          <strong> Series</strong> list itself, <strong>Needs attention</strong>, and <strong>Upcoming</strong>. The count beside
+          <strong> Needs attention</strong> is how many findings are open.
         </p>
         <ul>
           <li>
             <strong>Missing charge</strong> -- an occurrence is overdue. Lateness is
             measured against how current the data is rather than against the calendar.
             After a couple of missed cycles the series is treated as probably canceled, and
-            <em> Mark ended</em> is offered as an option. Nothing is ended automatically.
+            <strong> Mark ended</strong> is offered as an option. Nothing is ended automatically.
           </li>
           <li>
             <strong>Amount changed</strong> -- a charge that differs from what the series normally charges.
@@ -2207,7 +2212,7 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           Opening the <em>series report</em> on a finding opens the related transactions in a panel below the
-          findings, without leaving the list being worked through. <em>Details</em> under a finding shows the
+          findings, without leaving the list being worked through. <strong>Details</strong> under a finding shows the
           series card itself -- cadence, amount setting, range, and the last and next dates -- with the same
           controls as the series list.
         </p>
@@ -2272,15 +2277,15 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           An excluded charge can be put back from the prompt that appears, from its right-click menu
-          (<em>Restore to recurring series</em>), or from the <em>removed</em> list inside the series.
+          (<strong>Restore to recurring series</strong>), or from the <strong>removed</strong> list inside the series.
         </p>
 
         <h4>What is coming up</h4>
         <p>
-          The <em>Upcoming</em> view lists the charges due in the next month with what they are expected
+          The <strong>Upcoming</strong> view lists the charges due in the next month with what they are expected
           to cost. Nothing there is wrong, so it carries no actions, no dismissal, and never
           appears on the Tasks page -- it is there to be consulted, not resolved. It sits alongside
-          <em> Needs attention</em> rather than inside it for that reason.
+          <strong> Needs attention</strong> rather than inside it for that reason.
         </p>
 
         <h4>Ended is not the same as not recurring</h4>
@@ -2522,8 +2527,8 @@ export const HELP_TOPICS = [
           as the vault which holds the secrets can only be unlocked manually.
         </p>
         <p>
-          Data connections are established and managed on the <em>Connections</em> tab on
-          the <em>Import</em> page. Connection settings and Disconnect connection are on
+          Data connections are established and managed on the <strong>Connections</strong> tab on
+          the <strong>Import</strong> page. Connection settings and Disconnect connection are on
           the per-connection menu.
         </p>
         <h4>Secrets Vault</h4>
@@ -3075,11 +3080,11 @@ export const HELP_TOPICS = [
                 <strong>Trash</strong> sends one to Trash &mdash; the escape
                 hatch for that unpaired duplicate. It acts on the whole row and also has the bulk
                 operation, <strong>Move to trash</strong>. Discarded rows land in
-                Settings → Trash's <em>Transactions</em> section.
+                Settings → Trash's <strong>Transactions</strong> section.
               </li>
               <li>
                 <strong>Discard</strong> on a stacked duplicate row works per-copy.
-                Discarded rows land in Settings → Trash's <em>Duplicate transactions</em>.
+                Discarded rows land in Settings → Trash's <strong>Duplicate transactions</strong>.
                 Useful when a charge is just a purchase the export didn't cover (nothing to fix).
               </li>
               <li>
@@ -3092,7 +3097,7 @@ export const HELP_TOPICS = [
             <strong>Matched</strong> &mdash; the order and the charge(s) it excluded. If a pairing is wrong
             (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
             order's), <strong>Unlink</strong> detaches the charge &mdash; its original category is
-            restored and the order returns to <em>No charge found</em>, where <strong>Link charges…</strong>
+            restored and the order returns to <strong>No charge found</strong>, where <strong>Link charges…</strong>
             can pair it correctly. An unlinked charge is never matched to that order again automatically.</li>
         </ul>
         <p>
@@ -3264,7 +3269,7 @@ export const HELP_TOPICS = [
           <li><strong>Matched &middot; review</strong> and <strong>Rejected &middot; review</strong> &mdash;
             the <strong>Matched nearby date</strong> and <strong>No specific match</strong> outcomes of a
             covered range. These were already rejected at import and are <em>advisory</em> &mdash; they do
-            <strong> not</strong> count as pending work. Examine them to confirm the rejection was right; a row
+            <em> not</em> count as pending work. Examine them to confirm the rejection was right; a row
             that should <em>not</em> have been rejected can be retained with <strong>Import anyway</strong>,
             and the rest can be left alone or cleared from the pills with <strong>Mark reviewed</strong> (in
             bulk). Often a <strong>No specific match</strong> transaction can be matched to a transaction
@@ -3596,17 +3601,17 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
-            <em>Dismissed duplicate pairs</em> lists the pairs of transactions that have
+            <strong>Dismissed duplicate pairs</strong> lists the pairs of transactions that have
             been marked as not duplicates. These are stored so a subsequent pass does not
             suggest them as duplicates again. Mistakes can be corrected by reopening a dismissed
             pair and then returning to the duplicate detection report to resolve it.{' '}
-            <em>Distinct account pairs</em> lists the pairs of accounts that have been
+            <strong>Distinct account pairs</strong> lists the pairs of accounts that have been
             identified as distinct because a cross-account duplicate was surfaced and the action
             was to accept both transactions. Cross-account duplicates exist because different sources
             may identify the same account differently so what appears to be a cross-account duplicate
             may in fact be the same transaction in the same account with two different names. This
             table is about tracking the pairs which are not the same. Mistakes can be removed with
-            the <em>Forget</em> button.
+            the <strong>Forget</strong> button.
           </li>
           <li>
             <strong>Import storage</strong> clears the record each import keeps of the rows it
@@ -3866,7 +3871,7 @@ export const HELP_TOPICS = [
         </p>
         <p>*needs review*</p>
         <p>
-          The switch under <em>Sign-in protection</em> on the{' '}
+          The switch under <strong>Sign-in protection</strong> on the{' '}
           <HelpLink to="/help/page-administration">Administration</HelpLink> page turns sign-in
           protection on and off.
           Turning it on sets a password for the administrator's own account; any other users choose
@@ -3879,20 +3884,20 @@ export const HELP_TOPICS = [
           all users, and it can be tightened or relaxed at any time.
         </p>
         <p>
-          Each user's own password is changed under <em>Sign-in methods</em> on the{' '}
+          Each user's own password is changed under <strong>Sign-in methods</strong> on the{' '}
           <HelpLink to="/help/page-settings">Settings</HelpLink> page. The current password is
           required, and the change signs the account out of every other browser.
         </p>
         <p>*needs review*</p>
         <p>
           <strong>Passkeys</strong> sign in with a fingerprint, face or device PIN instead of a typed
-          password. Each device gets its own passkey, added under <em>Sign-in methods</em> while
+          password. Each device gets its own passkey, added under <strong>Sign-in methods</strong> while
           signed in. The account password keeps working and is still what signs in on a connection
           that cannot run a passkey &mdash; passkeys need an HTTPS connection to a named host, so an
           instance reached by IP address cannot use them at all.
         </p>
         <p>
-          A passkey is <strong>not</strong> a vault passkey. The vault's passkeys unlock stored data
+          A passkey is <em>not</em> a vault passkey. The vault's passkeys unlock stored data
           connection credentials (see{' '}
           <HelpLink to="/help/data-providers">data providers</HelpLink>); these sign in to the
           application. Adding one here grants nothing in the vault, and an account may hold both.
