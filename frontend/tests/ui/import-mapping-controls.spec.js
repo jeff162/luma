@@ -140,10 +140,7 @@ async function expectInferredMappingSuggestions(scope) {
   await expect(scope.getByText('Accept Account')).toBeVisible()
 }
 
-// The chooser card, located by the two things only it has. Scoped rather than addressed page-wide
-// because a saved source's name appears **twice** on this screen — once as a pill in here, and once in
-// the "Data sources" card further down, whose rename control is also a button carrying the same name.
-// A bare `getByRole('button', { name })` matches both and fails on strict mode.
+// The chooser card, located by the two things only it has, so that what it offers is asserted inside it.
 function sourceChooser(page) {
   return page.locator('div')
     .filter({ has: page.getByText('Available choices') })
@@ -161,7 +158,7 @@ async function openSourceChooser(page) {
   return chooser
 }
 
-// One row of the File Import tab's data-source list, located by the two buttons it is guaranteed to hold
+// One row of the File Sources tab's data-source list, located by the two buttons it is guaranteed to hold
 // rather than by nesting depth: among the divs containing both, the row itself is the innermost, and
 // so the last in document order.
 function managerRow(page, profileName) {
@@ -190,6 +187,29 @@ test('a dropped file matching no saved source falls back to a temporary draft', 
   // inference offering the columns it could work out.
   await expect(page.getByRole('button', { name: 'temporary draft' })).toBeVisible()
   await expectInferredMappingSuggestions(page)
+})
+
+test('an import in progress holds the rest of the app until it is imported or cancelled', async ({ page }) => {
+  await page.goto('/import-export')
+  await page.locator('#csv-file-input').setInputFiles(sampleCsvFile())
+  const mapping = page.getByRole('dialog', { name: 'Import file' })
+  await expect(mapping).toBeVisible()
+
+  // A tab or a page chosen now would unmount the importer and lose the mapping, so neither can be reached.
+  const reachable = locator => locator.evaluate(el => {
+    const box = el.getBoundingClientRect()
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+  })
+  const tab = page.getByRole('button', { name: 'Connections', exact: true })
+  const navLink = page.getByRole('link', { name: 'Transactions' })
+  expect(await reachable(tab)).toBe(false)
+  expect(await reachable(navLink)).toBe(false)
+  await page.keyboard.press('Escape')
+  await expect(mapping).toBeVisible()
+
+  await mapping.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(mapping).toHaveCount(0)
+  expect(await reachable(tab)).toBe(true)
 })
 
 test('a dropped file matching one saved source applies it without asking', async ({ page, request }) => {
@@ -249,9 +269,10 @@ test('a dropped file matching several saved sources asks which to use', async ({
     await page.goto('/import-export')
     await page.locator('#csv-file-input').setInputFiles(sampleCsvFile())
 
+    // Each choice's button carries its "possible match" tag in its name, so the match is not exact.
     await expect(page.getByText('Which data source?')).toBeVisible()
-    await expect(page.getByRole('button', { name: firstName, exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: secondName, exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: firstName })).toBeVisible()
+    await expect(page.getByRole('button', { name: secondName })).toBeVisible()
 
     // Skipping the choice is still available, and takes the same temporary draft a non-matching file
     // would have taken.
@@ -354,7 +375,7 @@ test('shared mapping suggestions stay aligned between the import flow and the da
 
   // The same file, loaded as a template in the data-source editor, has to produce the same
   // suggestions: both screens render ImportColumnMappingSection, and that is the point of sharing it.
-  await page.goto('/import-export')
+  await page.goto('/import-export?tab=sources')
   await page.getByRole('button', { name: '+ New data source' }).click()
 
   await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())
@@ -382,7 +403,7 @@ test('a template suggestion stays a suggestion, and the editor will not save unt
   })
 
   try {
-    await page.goto('/import-export')
+    await page.goto('/import-export?tab=sources')
     await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
     await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())
 
@@ -424,7 +445,7 @@ test('the data source editor can create its account, and saving keeps what impor
   })
 
   try {
-    await page.goto('/import-export')
+    await page.goto('/import-export?tab=sources')
     await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
 
     await page.getByText('— Select account or column —').click()
@@ -460,16 +481,18 @@ test('deleting a data source removes it from the import page immediately', async
 
   try {
     await page.goto('/import-export')
-    // The saved source is reachable through the on-demand chooser; closing it again leaves the page
-    // on the drop zone, with the source list beneath it.
+    // The saved source is reachable through the on-demand chooser, and listed on the File Sources tab.
     const chooser = await openSourceChooser(page)
     await expect(chooser.getByRole('button', { name: profileName, exact: true })).toBeVisible()
-    await chooser.getByRole('button', { name: 'Cancel — just drop a file' }).click()
 
+    await page.getByRole('button', { name: 'File Sources', exact: true }).click()
     await managerRow(page, profileName).getByRole('button', { name: '×', exact: true }).click()
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
-    // Gone from the source list and from the chooser above it, without a reload.
+    // Gone from the source list and from the still-open chooser on the other tab, without a reload.
+    await expect(page.getByRole('button', { name: profileName, exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Data Import', exact: true }).click()
+    await expect(sourceChooser(page).getByText('Available choices')).toBeVisible()
     await expect(page.getByRole('button', { name: profileName, exact: true })).toHaveCount(0)
   } finally {
     await deleteImportProfile(request, profileId)
@@ -511,7 +534,7 @@ test('a finished import lands on its card in the import history and frees the im
   await page.getByRole('button', { name: /Import \d+ rows/ }).click()
 
   try {
-    // The history tab opens on the card the import wrote, marked, with the summary above it.
+    // The history under the drop zone shows the card the import wrote, marked, with the summary above it.
     await expect(page.getByText('Import complete')).toBeVisible()
     const batches = await (await request.get('/api/import-export/batches')).json()
     expect(batches).toHaveLength(1)
@@ -532,7 +555,7 @@ test('a finished import lands on its card in the import history and frees the im
       return scroller.scrollTop
     })
     expect(scrolled, 'the history must actually scroll for this to prove anything').toBeGreaterThan(40)
-    const tabRow = await page.getByRole('button', { name: 'Import History', exact: true }).boundingBox()
+    const tabRow = await page.getByRole('button', { name: 'Data Import', exact: true }).boundingBox()
     const summary = await page.getByText('Import complete').boundingBox()
     expect(summary.y - (tabRow.y + tabRow.height)).toBeLessThan(50)
     expect(summary.y).toBeGreaterThan(tabRow.y + tabRow.height)

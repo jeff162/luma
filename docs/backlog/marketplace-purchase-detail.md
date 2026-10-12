@@ -220,7 +220,7 @@ resolve the duplicate itself: which copy is wrong is a ledger question.
 ## Where it lives on the Import page
 
 A vendor is a data source rather than a tab (`ui-patterns.md` → *Marketplace accounts get their own
-import form*): eBay gets a **row in the File Import tab's data-source list**, beside Amazon's, carrying its
+import form*): eBay gets a **row in the File Sources tab's data-source list**, beside Amazon's, carrying its
 "how to get the export" help; its files are dropped on the ordinary drop zone; and its imports land on
 their cards in the Import History. eBay needs no setup, so it may need no form at all where Amazon has
 one, and the list of rows is the list of supported vendors. That also means an eBay row would have no marketplace

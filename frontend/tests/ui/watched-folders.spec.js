@@ -106,11 +106,11 @@ test('a watched folder imports what it can and hands back what it cannot', async
 
     await page.getByRole('button', { name: /Import…/ }).click()
 
-    // The ordinary import flow, holding the file the scan could not take: the upload stage (and with it
-    // the panel) is gone, and the mapping grid is asking the question the scan refused to answer.
-    await expect(page.getByText('Drop file to import here, or click to browse')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Spec Watched Source', exact: true })).toBeVisible()
-    await expect(page.getByText(UNMAPPED).first()).toBeVisible()
+    // The ordinary import flow, holding the file the scan could not take: the mapping screen is open
+    // over the page, and its grid is asking the question the scan refused to answer.
+    const mapping = page.getByRole('dialog', { name: 'Import file' })
+    await expect(mapping.getByRole('button', { name: 'Spec Watched Source', exact: true })).toBeVisible()
+    await expect(mapping.getByText(UNMAPPED).first()).toBeVisible()
   } finally {
     if (takenBatchId) await request.delete(`/api/import-export/batches/${takenBatchId}?force=true`)
     await request.delete(`/api/import-export/batches/${proofBatchId}?force=true`)

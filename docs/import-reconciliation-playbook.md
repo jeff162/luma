@@ -175,9 +175,9 @@ import by giving them the same target.
 
 ### The same export gets downloaded every month and imported by hand
 
-A data source can watch a folder instead. **Folder**, on the source's row in the **Data sources** list on the File Import tab,
+A data source can watch a folder instead. **Folder**, on the source's row on the File Sources tab,
 takes a directory path; a CSV that appears there is imported the next time the app is opened, and shows
-up on the Import History tab as an ordinary file card with all the usual review on it.
+up in the import history as an ordinary file card with all the usual review on it.
 
 Two things about that folder are worth knowing before setting one. It is read on the machine running
 the app — the same machine only when the app runs on the desktop; on a server or in a container it is a

@@ -2184,7 +2184,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'The Import page',
     surfaces: ['Import'],
-    summary: 'Where transactions come in. File Import and Connections bring them in, and the Import History tab keeps a card per file or sync recording what it did.',
+    summary: 'Where transactions come in. The Data Import tab takes files and syncs and keeps a card per file or sync recording what it did. File Sources and Connections are where each is set up.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2202,7 +2202,7 @@ export const HELP_TOPICS = [
           in the file card&apos;s duplicate-detection report.
         </p>
 
-        <HelpHeading anchor="import-tab">File Import</HelpHeading>
+        <HelpHeading anchor="import-tab">Data Import</HelpHeading>
         <div className="help-table-scroll">
           <table>
             <thead>
@@ -2218,24 +2218,24 @@ export const HELP_TOPICS = [
                   of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
               </tr>
               <tr>
-                <td><strong>Data sources</strong></td>
-                <td>The <HelpLink to="/help/unknown-data-source">saved data sources</HelpLink>, each
-                  with its rename, <strong>Folder</strong>, <strong>Edit</strong> and delete controls.
-                  Saving a file&apos;s mapping as a data source means the next file from the same place
-                  needs none of the mapping again. Amazon is listed here as well; it has no mapping to
-                  edit.</td>
+                <td><strong>Data connections</strong></td>
+                <td>Shown once a <HelpLink to="/help/data-providers">data provider</HelpLink> is
+                  connected. <strong>Sync now</strong> pulls new transactions from every connection,
+                  and <strong>Connections</strong> lists each one with when it last synced and anything
+                  waiting on it. Connecting and mapping are on the Connections tab.</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p>
-          A finished import opens the <strong>Import History</strong> tab on the card for the file just
-          imported, and the File Import tab is ready for the next file.
+          A finished import brings the card for the file just imported into view in the import history,
+          and the drop area is ready for the next file.
         </p>
 
-        <HelpHeading anchor="history-tab">Import History</HelpHeading>
+        <HelpHeading anchor="history-tab">Import history</HelpHeading>
         <p>
-          Every import and sync, grouped by where it came from: a saved data source, Amazon, a connection,
+          Under the drop area on the Data Import tab: every import and sync, grouped by where it came
+          from: a saved data source, Amazon, a connection,
           or <HelpLink to="/help/unknown-data-source">no saved source</HelpLink>.
         </p>
         <div className="help-table-scroll">
@@ -2261,7 +2261,7 @@ export const HELP_TOPICS = [
 
         <HelpHeading anchor="file-cards">A file&apos;s card</HelpHeading>
         <p>
-          Each imported file gets a card on the Import History tab; a connection&apos;s syncs are filed
+          Each imported file gets a card in the import history; a connection&apos;s syncs are filed
           on cards by month.
         </p>
         <div className="help-table-scroll">
@@ -2300,7 +2300,7 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="amazon-tab">Amazon</HelpHeading>
         <p>
           Marketplace orders arrive in their own shape and are matched against card charges already in
-          the ledger. The order and item files are dropped on the File Import tab like any other file;
+          the ledger. The order and item files are dropped on the Data Import tab like any other file;
           they are recognized by their contents and open the Amazon import form.
         </p>
         <div className="help-table-scroll">
@@ -2336,13 +2336,22 @@ export const HELP_TOPICS = [
           </table>
         </div>
 
+        <HelpHeading anchor="sources-tab">File Sources</HelpHeading>
+        <p>
+          The <HelpLink to="/help/unknown-data-source">saved data sources</HelpLink>, each
+          with its rename, <strong>Folder</strong>, <strong>Edit</strong> and delete controls.
+          Saving a file&apos;s mapping as a data source means the next file from the same place
+          needs none of the mapping again. Amazon is listed here as well; it has no mapping to
+          edit.
+        </p>
+
         <HelpHeading anchor="connections-tab">Connections</HelpHeading>
         <p>
           Where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
           and maintained. This is also where the mapping of accounts from the provider to accounts in
           the application occurs. <strong>Sync now</strong> pulls new transactions from every connection,
-          and what each sync brings in joins the Import History tab &mdash; <strong>View in import
-            history</strong>, on a finished sync, opens the cards it added to.
+          and what each sync brings in joins the import history on the Data Import tab &mdash; <strong>View
+            in import history</strong>, on a finished sync, opens the cards it added to.
         </p>
       </>
     ),
@@ -2351,7 +2360,7 @@ export const HELP_TOPICS = [
     id: 'data-providers',
     section: 'importing',
     title: 'Data providers and connections',
-    surfaces: ['Import (Connections)'],
+    surfaces: ['Import (Connections)', 'Import (Data Import → Data connections)'],
     summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
     body: () => (
       <>
@@ -2433,8 +2442,8 @@ export const HELP_TOPICS = [
         <h4>Syncing</h4>
         <p>
           New transactions are pulled on request using the sync control in the navigation pane or
-          from <strong>Sync now</strong> on the <strong>Connections</strong> tab of the Import
-          page. Per-connection Import cards on the Import page records
+          from <strong>Sync now</strong> on the <strong>Data Import</strong> or <strong>Connections</strong> tab
+          of the Import page. Per-connection Import cards on the Import page records
           what arrived, similar to an imported file. Importing a file generates a single card, the
           data connections create a card for the <strong>Initial import</strong> and then one
           per month.
@@ -2532,24 +2541,24 @@ export const HELP_TOPICS = [
     id: 'unknown-data-source',
     section: 'importing',
     title: 'Saved data sources (import file profiles)',
-    surfaces: ['Import (Data sources)', 'Import History'],
+    surfaces: ['Import (File Sources)', 'Import history'],
     summary: 'Imported files not linked to a saved mapping are listed under "unknown data source" or "temporary draft". A data source is a saved mapping which is useful if other files with the same format (e.g. from the same source) will be imported later.',
     body: () => (
       <>
         <p>
           A <strong>data source</strong> is a saved template of the settings from the
           import mapping screen describing the fields and account mapping. Imported files
-          are organized on the Import History tab by data source. If there will be future
+          are organized in the import history on the Data Import tab by data source. If there will be future
           imports from the same data source it is useful to save the mapping so it does not
           need to be recreated each time. A file lands under <strong>unknown data source</strong> or a <strong>temporary
             draft</strong> when it isn't linked to a data source.
         </p>
         <p>
           The saved mapping can be created during the import or afterwards from
-          the file&apos;s row on the Import History tab.
+          the file&apos;s row in the import history.
         </p>
         <p>
-          The <strong>Data sources</strong> list on the File Import tab allows for editing, deleting
+          The <strong>Data sources</strong> list on the File Sources tab allows for editing, deleting
           and can also be used to create new data sources. Deleting a data source does not remove any
           files, just the mapping template.
         </p>
@@ -2585,7 +2594,7 @@ export const HELP_TOPICS = [
     id: 'watched-folders',
     section: 'importing',
     title: 'Importing from a watched folder',
-    surfaces: ['Import (Watched folders)', 'Import (Data sources → Folder)'],
+    surfaces: ['Import (Watched folders)', 'Import (File Sources → Folder)'],
     summary: 'A data source can watch a folder instead of waiting for a file to be dropped on the import page. Files placed there are imported on the next visit; anything the saved mapping cannot answer on its own is left for review rather than guessed at.',
     body: () => (
       <>
@@ -2593,8 +2602,8 @@ export const HELP_TOPICS = [
         <p>
           A monthly export usually follows the same route every time: download the file, open the import
           page, pick the data source, import. A <strong>watched folder</strong> removes the middle of
-          that. The <strong>Folder</strong> button on a data source's row in the <strong>Data
-            sources</strong> list takes a directory; a CSV that appears in it is imported the next time the app
+          that. The <strong>Folder</strong> button on a data source's row on the <strong>File
+            Sources</strong> tab takes a directory; a CSV that appears in it is imported the next time the app
           is opened, and arrives in the import history as an ordinary file card with the usual duplicate,
           rejected-row and rule-suggestion review on it.
         </p>
@@ -2693,7 +2702,7 @@ export const HELP_TOPICS = [
     id: 'amazon-import',
     section: 'importing',
     title: 'Importing Amazon order detail (AZAD Chrome extension)',
-    surfaces: ['Import (Data sources → Amazon)'],
+    surfaces: ['Import (File Sources → Amazon)'],
     summary: 'Capture Amazon order detail using a Chrome browser extension to export order history. Per-item detail can be captured as well, which is what allows an order to be split across categories. The corresponding Amazon charges are re-categorized as money movement to avoid double counting the charges.',
     body: () => (
       <>
@@ -2753,7 +2762,7 @@ export const HELP_TOPICS = [
         </ol>
         <p><strong>Loading the Orders and Items files:</strong></p>
         <p>
-          Load the files using the file drop area on the <strong>File Import</strong> tab.
+          Load the files using the file drop area on the <strong>Data Import</strong> tab.
           The files are recognized by their contents and so
           upload order does not matter. The importer has a
           <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> that tracks
@@ -2783,7 +2792,7 @@ export const HELP_TOPICS = [
       <>
         <p>
           These settings appear in the form that opens once Amazon CSV files have been dropped on the
-          File Import tab. Producing the files
+          Data Import tab. Producing the files
           themselves is covered in <HelpLink to="/help/amazon-import">importing Amazon order
             detail</HelpLink>.
         </p>
@@ -2824,7 +2833,7 @@ export const HELP_TOPICS = [
     id: 'amazon-reconciliation',
     section: 'importing',
     title: 'Amazon reconciliation report',
-    surfaces: ['Import History (transactions ↗ pill)'],
+    surfaces: ['Import history (transactions ↗ pill)'],
     summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in the ledger, and includes tools to resolve ambiguous situations.',
     body: () => (
       <>

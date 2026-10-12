@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The Import History tab: every card an import or a sync has produced, grouped under the source it came
+// The import history, under the drop zone on the Import page's Data Import tab: every card an import or a
+// sync has produced, grouped under the source it came
 // from (a saved data source, a marketplace vendor, a connection, the temporary draft, or the unknown
 // bucket), with the Group-imported-categories / Generate-rules follow-up actions above the list. A card
 // carries its own outcome and drill-ins (file ledger, not-imported, duplicates, reconciliation, undo), so
 // this is also where a finished import or sync lands: `focus` names the cards to bring into view —
 // their rows are opened, the first is scrolled to, and each is marked until the focus changes. The
-// sources themselves are managed on the File Import tab, not here. Purely presentational — all state
+// sources themselves are managed on the File Sources tab, not here. Purely presentational — all state
 // and callbacks live in ImportTab and arrive as props.
 
 import { useEffect, useMemo, useRef } from 'react'
@@ -101,7 +102,8 @@ export function ImportHistorySection({
             style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg)', paddingTop: 12, marginTop: -12, paddingBottom: 10 }}
           >
             {notice}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', }}>
+              <div style={{ fontSize: 16, fontWeight: 600, marginRight: 'auto' }}>Import history</div>
               <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
                 <Button
                   small
@@ -130,7 +132,7 @@ export function ImportHistorySection({
               </Tooltip>
             </div>
           </div>
-          {/* Callouts only. Once dismissed, the saved-sources guidance is the `?` on the File Import tab's
+          {/* Callouts only. Once dismissed, the saved-sources guidance is the `?` on the File Sources tab's
               source list, and the needs-review one is reached from the page's help — it explains the
               pills on the cards, so a `?` up here had nothing to sit beside. */}
           <ContextualExplainer topic="unknown-data-source" persistentButton={false} style={{ marginBottom: 12 }}

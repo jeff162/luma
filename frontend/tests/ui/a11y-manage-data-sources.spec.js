@@ -95,7 +95,7 @@ async function collectVisibleControlFindings(page) {
 
 test('@a11y manage data sources editor exposes labels for visible controls', async ({ page, request }) => {
   await clearAllImportProfiles(request)
-  await page.goto('/import-export')
+  await page.goto('/import-export?tab=sources')
   await page.getByRole('button', { name: '+ New data source' }).click()
 
   await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())

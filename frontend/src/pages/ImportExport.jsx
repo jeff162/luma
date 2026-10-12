@@ -16,6 +16,7 @@ import {
   AppConfirmDialog,
   AppNoticeDialog,
   AppTextEntryDialog,
+  OverlayBackdrop,
 } from '../components/ui.jsx'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
@@ -46,6 +47,7 @@ import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
 import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
+import { DataConnectionsPanel } from '../components/connections/DataConnectionsPanel.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
 import { useReconciliationViewer } from '../contexts/ReconciliationViewerContext.jsx'
@@ -153,8 +155,12 @@ function formatImportingLabel(fileProgress, rowProgress) {
   return rows ? `Importing ${rows}…` : 'Importing…'
 }
 
+// Where an import in progress sits: above the page, the navigation pane and the floating reports, and
+// beneath the mapping screen's own pickers (720) and every dialog it opens.
+const IMPORT_IN_PROGRESS_Z_INDEX = 700
+
 // Keep the import UI recoverable if a preview or mapping render crashes.
-function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
+function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConnections }) {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId, demoLoaded } = useAppSession()
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
@@ -458,6 +464,8 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
     handledRunsRef.current = runsFinished
     api.listBatches().then(setBatches).catch(() => { })
   }, [runsFinished])
+  // For a change to the cards that no sync run reports (a connection's synced transactions removed).
+  const refreshBatches = useCallback(() => api.listBatches().then(setBatches).catch(() => { }), [])
 
   // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
   // screen back to the drop zone with that source applied.
@@ -646,11 +654,22 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
     })
   }, [importedCategoryChoices])
 
-  // One component owns both the File Import tab and the Import History tab, because they are two views
-  // of one state — the batch list, the saved sources, the temporary draft — and an import in progress
-  // has to survive a look at the history. `view` picks which is on screen; the dialogs and floating
-  // reports below belong to both.
-  const shownStage = view === 'import' ? stage : null
+  // One component owns both the Data Import tab and the File Sources tab, because they are two views
+  // of one state — the batch list, the saved sources, the temporary draft. `view` picks which is on
+  // screen; the dialogs and floating reports below belong to both, and so does an import in progress,
+  // which a new source's sample file starts from the File Sources tab.
+  //
+  // An import in progress is modal: from the mapping screen until it is imported or cancelled, the rest
+  // of the app sits behind a scrim. Its state lives in this component, so a tab or a page chosen in the
+  // middle of one would unmount it and throw the mapping away. The browser's own leave warning covers
+  // the refresh and the closed tab, which a scrim cannot.
+  const importInProgress = stage !== 'upload'
+  useEffect(() => {
+    if (!importInProgress) return
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [importInProgress])
   const managerHostData = useMemo(
     () => ({ profiles, accounts, batches, loading: initialDataStatus === 'loading' }),
     [profiles, accounts, batches, initialDataStatus],
@@ -2542,9 +2561,9 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
     setProfiles(updated)
   }
 
-  // A finished import is shown where its record lives: its card on the Import History tab, which the
-  // landing opens, scrolls to and marks. The File Import tab goes straight back to the drop zone, so
-  // the next file can be dropped without dismissing anything. What a card cannot say — that this is the
+  // A finished import is shown where its record lives: its card in the history under the drop zone,
+  // which the landing scrolls to and marks. The importer goes straight back to the drop zone, so the
+  // next file can be dropped without dismissing anything. What a card cannot say — that this is the
   // import just run, the first-run prompts, files skipped from a multi-file selection — rides above
   // the list as a notice for as long as the landing is on screen.
   function landOnImport(result, batchIds, skipLines = []) {
@@ -2559,8 +2578,15 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
     onShowHistory({ batchIds })
   }
   useEffect(() => {
-    if (view !== 'history') setLandedImport(null)
+    if (view !== 'import') setLandedImport(null)
   }, [view])
+  // The drop zone is at the top of the tab the landing scrolled down.
+  const tabTopRef = useRef(null)
+  function importAnotherFile() {
+    setLandedImport(null)
+    onShowImport()
+    tabTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   // An Amazon import lands the same way, on the cards its files became. It does not reset the importer:
   // a CSV dropped alongside the Amazon files may be part-way through its mapping underneath.
@@ -2936,7 +2962,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
             <span style={{ color: 'var(--muted)' }}> — {headline}{heldNote}</span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button small onClick={onShowImport}>Import another file</Button>
+            <Button small onClick={importAnotherFile}>Import another file</Button>
             <Button small variant="ghost" onClick={() => setLandedImport(null)}>Dismiss</Button>
           </div>
         </div>
@@ -3008,7 +3034,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
   })() : null
 
   return (
-    <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
+    <div ref={tabTopRef} style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
       {amazonFiles ? (
         <AmazonImportDialog
           files={amazonFiles}
@@ -3120,7 +3146,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
         />
       ) : null}
 
-      {shownStage === 'upload' && demoLoadable ? (
+      {view === 'import' && demoLoadable ? (
         <Card style={{
           marginBottom: 16,
           display: 'flex',
@@ -3148,19 +3174,24 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
 
       {/* Above the file importer, because what it reports is work already waiting rather
           than another thing to start. Renders nothing at all until some source names a folder. */}
-      {shownStage === 'upload' && (
+      {view === 'import' && (
         <WatchedFoldersPanel
           onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
           onImported={() => api.listBatches().then(setBatches).catch(() => { })}
         />
       )}
 
-      {shownStage === 'upload' && (
-        <div style={{ marginBottom: 20 }}>
+      {/* The two ways data arrives, side by side: drop a file, or pull from a connection. They are the
+          same intent and produce the same artifact — an import card in the history below. The connections
+          card renders nothing until something is connected, and the row wraps once it cannot fit both. */}
+      {view === 'import' && (
+        <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 20 }}>
+          <div style={{ flex: '1 1 340px', minWidth: 0 }}>
           <ImportUploadStage
             demoLoaded={demoLoaded}
             chooserOpen={sourceChooserOpen}
-            hasSelectedSource={hasSelectedUploadSource}
+            // A dropped file's detected source is the mapping screen's to show, not the drop zone's behind it.
+            hasSelectedSource={hasSelectedUploadSource && !importInProgress}
             onOpenChooser={() => setSourceChooserOpen(true)}
             onCloseChooser={() => setSourceChooserOpen(false)}
             uploadUsesManualDraft={uploadUsesManualDraft}
@@ -3185,10 +3216,36 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
             handleFiles={handleFiles}
             loading={loading || !!filesAwaitingInitialData}
           />
+          </div>
+          <DataConnectionsPanel
+            style={{ flex: '1 1 320px', minWidth: 0 }}
+            batches={batches}
+            onShowHistory={onShowHistory}
+            onShowConnections={onShowConnections}
+            onChanged={refreshBatches}
+          />
         </div>
       )}
 
-      {shownStage === 'mapping' && preview && (
+      {/* Held while the unreadable-rows viewer, which floats above this, still needs the staged file. */}
+      {stage === 'review-rows' ? <OverlayBackdrop zIndex={IMPORT_IN_PROGRESS_Z_INDEX} /> : null}
+
+      {/* No way out but Import and Cancel: neither the backdrop nor Escape dismisses it. */}
+      {stage === 'mapping' && preview && (
+        <OverlayBackdrop zIndex={IMPORT_IN_PROGRESS_Z_INDEX} alignItems="flex-start">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Import file"
+          style={{
+            width: 'min(948px, 100%)', maxHeight: '100%', display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', borderRadius: 16, background: 'var(--bg)', border: '1px solid var(--border)',
+            boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
+          }}
+        >
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 24 }}>
+        {/* The column is a child of the scrolling body, not the body itself: as flex items of a
+            height-limited container the cards would shrink to fit it instead of scrolling. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'flex-start' }}>
           {preview.previous_batch && (
             <div style={{ width: IMPORT_CONFIG_MAX_WIDTH, background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))', border: '1px solid var(--warning)', borderRadius: 8, padding: '12px 16px' }}>
@@ -3971,8 +4028,11 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
               </div>
             ) : null}
           </div>
+        </div>
+        </div>
 
-          <div style={{ display: 'flex', gap: 10 }}>
+          {/* The two ways out, pinned under the scrolling mapping so neither is a scroll away. */}
+          <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
               <Button
                 onClick={runImport}
@@ -3991,9 +4051,10 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
             <Button variant="ghost" onClick={resetImport}>Cancel</Button>
           </div>
         </div>
+        </OverlayBackdrop>
       )}
 
-      {shownStage === 'review-data' && importResult && (
+      {stage === 'review-data' && importResult && (
         <div
           style={{
             position: 'fixed',
@@ -4072,9 +4133,9 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
         />
       ) : null}
 
-      {shownStage === 'upload' && (
+      {view === 'sources' && (
         <>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 28, marginBottom: 10 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <FeatureExplainer topic="unknown-data-source" placement="bottom-left" />
             <div style={{ fontSize: 16, fontWeight: 600 }}>Data sources</div>
           </div>
@@ -4091,7 +4152,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport }) {
         </>
       )}
 
-      {view === 'history' && (
+      {view === 'import' && (
         <ImportHistorySection
           dataSourceRows={dataSourceRows}
           profiles={profiles}
@@ -4259,39 +4320,51 @@ function AmazonSourceRow({ batches }) {
   )
 }
 
-const IMPORT_TABS = [['import', 'File Import'], ['connections', 'Connections'], ['history', 'Import History']]
+const IMPORT_TABS = [['import', 'Data Import'], ['sources', 'File Sources'], ['connections', 'Connections']]
+const IMPORT_TAB_STORAGE_KEY = 'import.activeTab'
+// `?tab=history` is the Data Import tab under the name it had while the history was a tab of its own.
+const tabFromLink = value => (value === 'history' ? 'import' : IMPORT_TABS.some(([id]) => id === value) ? value : null)
 
 export default function ImportExport() {
   const [searchParams, setSearchParams] = useSearchParams()
-  // `?tab=` is how a link from elsewhere (a Tasks entry, the welcome flow) lands on a particular tab.
-  const [tab, setTab] = useState(() => {
-    const fromUrl = searchParams.get('tab')
-    return IMPORT_TABS.some(([id]) => id === fromUrl) ? fromUrl : 'import'
+  // Active in-page tab, session-scoped as on the Accounts page (sticks while the app is open, resets to
+  // Data Import next launch). `?tab=` is how a link from elsewhere (a Tasks entry, the welcome flow)
+  // lands on a particular tab, and takes precedence on arrival.
+  const [tab, setTabState] = useState(() => {
+    const fromUrl = tabFromLink(searchParams.get('tab'))
+    if (fromUrl) return fromUrl
+    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(IMPORT_TAB_STORAGE_KEY) : null
+    return IMPORT_TABS.some(([id]) => id === stored) ? stored : 'import'
   })
-  // What the Import History tab is being opened *on*: `{ batchIds, connectionIds }` naming the cards a
-  // finished import, a sync, or a "to review" pill is about, which the tab opens, scrolls to and
-  // marks. `token` makes each landing a distinct event, so landing on the same card twice scrolls
+  const setTab = useCallback((next) => {
+    setTabState(next)
+    try { sessionStorage.setItem(IMPORT_TAB_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+  }, [])
+  // What the import history is being opened *on*: `{ batchIds, connectionIds }` naming the cards a
+  // finished import, a sync, or a "to review" pill is about, which the Data Import tab opens, scrolls to
+  // and marks. `token` makes each landing a distinct event, so landing on the same card twice scrolls
   // twice. Choosing a tab by hand is not a landing and clears it.
   const [historyFocus, setHistoryFocus] = useState(null)
   const focusToken = useRef(0)
   const showInHistory = useCallback((focus = null) => {
     focusToken.current += 1
     setHistoryFocus(focus ? { ...focus, token: focusToken.current } : null)
-    setTab('history')
-  }, [])
-  const chooseTab = useCallback((id) => { setHistoryFocus(null); setTab(id) }, [])
+    setTab('import')
+  }, [setTab])
+  const chooseTab = useCallback((id) => { setHistoryFocus(null); setTab(id) }, [setTab])
   const showFileImport = useCallback(() => chooseTab('import'), [chooseTab])
+  const showConnections = useCallback(() => chooseTab('connections'), [chooseTab])
   // Honor a `?tab=` link followed while the page is already mounted, then strip it so it neither lingers
-  // in the URL nor overrides later manual tab switches. `?tab=history` may name its landing with
-  // `batch=` or `connection=` (comma-separated ids).
+  // in the URL nor overrides later manual tab switches. A link to the Data Import tab may name its
+  // landing with `batch=` or `connection=` (comma-separated ids).
   useEffect(() => {
-    const fromUrl = searchParams.get('tab')
-    if (!fromUrl) return
-    if (fromUrl === 'history') {
+    if (!searchParams.get('tab')) return
+    const fromUrl = tabFromLink(searchParams.get('tab'))
+    if (fromUrl === 'import') {
       const batchIds = (searchParams.get('batch') || '').split(',').filter(Boolean)
       const connectionIds = (searchParams.get('connection') || '').split(',').filter(Boolean)
       showInHistory(batchIds.length || connectionIds.length ? { batchIds, connectionIds } : null)
-    } else if (IMPORT_TABS.some(([id]) => id === fromUrl)) {
+    } else if (fromUrl) {
       chooseTab(fromUrl)
     }
     const next = new URLSearchParams(searchParams)
@@ -4317,10 +4390,10 @@ export default function ImportExport() {
             to the scroll area's padding edge, so padding here would leave a strip above it that the
             history scrolls through. */}
         <div style={{ paddingTop: 24 }}>
-        {/* One mount for both tabs, so switching between them keeps an import in progress. */}
-        {(tab === 'import' || tab === 'history') && (
+        {/* One mount for both tabs: they are two views of one state. */}
+        {(tab === 'import' || tab === 'sources') && (
           <ImportErrorBoundary>
-            <ImportTab view={tab} historyFocus={historyFocus} onShowHistory={showInHistory} onShowImport={showFileImport} />
+            <ImportTab view={tab} historyFocus={historyFocus} onShowHistory={showInHistory} onShowImport={showFileImport} onShowConnections={showConnections} />
           </ImportErrorBoundary>
         )}
         {tab === 'connections' && <ImportErrorBoundary><ConnectionsTab onShowHistory={showInHistory} /></ImportErrorBoundary>}

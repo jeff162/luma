@@ -445,7 +445,7 @@ function loadPlaidScript() {
   return plaidScriptPromise
 }
 
-// `onShowHistory({ connectionIds })` opens the Import History tab on those connections' cards, which
+// `onShowHistory({ connectionIds })` opens the Data Import tab's history on those connections' cards, which
 // are what a sync writes to.
 export default function ConnectionsTab({ onShowHistory }) {
   const { currentUser, setCurrentUser, authEnabled } = useAppSession()
@@ -516,7 +516,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   const [syncLogScope, setSyncLogScope] = useState(null)
   // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
-  // cross-source duplicates surface here as a badge that jumps to the File Import tab's history to resolve them.
+  // cross-source duplicates surface here as a badge that jumps to the Data Import tab's history to resolve them.
   const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
   // Every non-configuration action a connection has — sync, deepen history, rebuild accounts, remove
   // synced rows — with its own dialogs, from `lib/useConnectionOperations.js`.
@@ -527,7 +527,7 @@ export default function ConnectionsTab({ onShowHistory }) {
     dialogsNode: connectionDialogsNode,
   } = useConnectionOperations({ onChanged: async () => { await onAccountsChanged?.(); await refresh() } })
 
-  // The same floating import-card ledger the File Import tab's history opens, hosted here so a connection's
+  // The same floating import-card ledger the Data Import tab's history opens, hosted here so a connection's
   // last sync can be reviewed without leaving the tab. Reused rather than rebuilt: that panel is already
   // read-write for categories and already knows how to page, sort, search and bulk-edit a card's rows.
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({ categories, onAddCategory })

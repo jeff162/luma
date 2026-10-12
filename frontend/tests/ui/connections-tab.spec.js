@@ -83,3 +83,19 @@ test('a connection’s account row opens the account panel in place', async ({ p
   await expect(page.getByText(`Monthly activity — ${ACCOUNT}`)).toBeVisible()
   await expect(page).toHaveURL(/\/import-export$/)
 })
+
+test('the Data Import tab offers the sync above the import history, and the page reopens on the tab last chosen', async ({ page }) => {
+  await supplyConnection(page)
+  await page.goto('/import-export')
+
+  await expect(page.getByText('Import history', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '↻ Sync now' })).toBeVisible()
+  await page.getByRole('button', { name: 'Connections (1)' }).click()
+  await expect(page.getByRole('button', { name: 'Actions for Harborline Bank' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'File Sources', exact: true }).click()
+  await expect(page.getByRole('button', { name: '+ New data source' })).toBeVisible()
+  await page.goto('/tasks')
+  await page.goto('/import-export')
+  await expect(page.getByRole('button', { name: '+ New data source' })).toBeVisible()
+})

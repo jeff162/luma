@@ -69,7 +69,7 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
   )
 }
 
-// The Amazon import form, opened over the File Import tab when AZAD order-history files are dropped on
+// The Amazon import form, opened over the Data Import tab when AZAD order-history files are dropped on
 // it (the drop zone recognizes them by their header). Mirrors the CSV import-mapping page: the dropped
 // files up top, then the target account + the excluded category for the matched card charge, then a row
 // per payment card found in the files (mapped to the account it charges), an "apply my rules" toggle,
