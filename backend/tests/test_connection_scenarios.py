@@ -706,6 +706,12 @@ class ConnectionScenarioTests(unittest.TestCase):
                              f"the per-connection {field} figures must add up to the call's own")
         self.assertGreater(rows[0]["added"], 0, "this backfill imported rows; the breakdown must say so")
         self.assertIsNone(rows[0]["error"])
+        # The cards those rows landed on, which is what a finished run links to in the import history.
+        with self._db() as conn:
+            cards = {r[0] for r in conn.execute(
+                "SELECT DISTINCT import_batch_id FROM txn WHERE import_batch_id IS NOT NULL")}
+        self.assertTrue(cards)
+        self.assertEqual(set(rows[0]["card_ids"]), cards)
 
     def test_a_connection_that_could_not_sync_says_so_in_its_own_row(self):
         # A run is many calls over many connections, and a client showing a row each needs the failure

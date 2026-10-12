@@ -888,17 +888,25 @@ export default function ImportProfilesManager({
   onDataChange,
   initialMode = 'list',
   onProfileCreated,
+  hostData = null,
+  onReviewMoneyMovement,
 } = {}) {
   // This manager keeps saved data-source administration inside Import:
   // the list stays embedded in the page, while add/edit happens in a floating
   // form so users can manage recurring CSV sources without leaving the workflow.
+  //
+  // `hostData` (`{ profiles, accounts, batches, loading }`) is the host page's own copy of the lists
+  // this manager shows. Given one, the manager follows it instead of loading at mount: the list is on
+  // screen from the first render, and a write made outside the manager — an import, an undo — shows
+  // here without a second fetch. The manager's own writes still publish through `onDataChange`.
   const rootRef = useRef(null)
   const formPanelRef = useRef(null)
   const formPanelDragStartRef = useRef(null)
-  const [profiles, setProfiles] = useState([])
-  const [accounts, setAccounts] = useState([])
-  const [batches, setBatches] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [profiles, setProfiles] = useState(hostData?.profiles || [])
+  const [accounts, setAccounts] = useState(hostData?.accounts || [])
+  const [batches, setBatches] = useState(hostData?.batches || [])
+  const [ownLoading, setOwnLoading] = useState(!hostData)
+  const loading = hostData ? !!hostData.loading : ownLoading
   const [showAdd, setShowAdd] = useState(false)
   const [formPanelPos, setFormPanelPos] = useState(null)
   const [formPanelDragging, setFormPanelDragging] = useState(false)
@@ -972,9 +980,18 @@ export default function ImportProfilesManager({
     onDataChange?.({ profiles: p, accounts: a, batches: b })
   }, [onDataChange])
 
+  const hosted = !!hostData
   useEffect(() => {
-    refreshManagerData().finally(() => setLoading(false))
-  }, [refreshManagerData])
+    if (hosted) return
+    refreshManagerData().finally(() => setOwnLoading(false))
+  }, [hosted, refreshManagerData])
+
+  const hostProfiles = hostData?.profiles
+  const hostAccounts = hostData?.accounts
+  const hostBatches = hostData?.batches
+  useEffect(() => { if (hostProfiles) setProfiles(hostProfiles) }, [hostProfiles])
+  useEffect(() => { if (hostAccounts) setAccounts(hostAccounts) }, [hostAccounts])
+  useEffect(() => { if (hostBatches) setBatches(hostBatches) }, [hostBatches])
 
   useEffect(() => {
     api.getAuthStatus()
@@ -1201,29 +1218,13 @@ export default function ImportProfilesManager({
         </div>
       ) : null}
 
-      {loading && profiles.length === 0 ? <Spinner /> : profiles.length === 0 && !showAdd ? (
-        <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-          <div>
-            {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}
-          </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            style={{
-              marginTop: 10,
-              background: 'var(--accent)', color: '#fff',
-              border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer',
-            }}
-          >
-            + Create first data source
-          </button>
-        </div>
-      ) : (
+      {loading && profiles.length === 0 ? <Spinner /> : (
         <>
           {profiles.map(profile => (
             <div key={profile.id}>
               <div
                 style={{
-                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px 100px',
+                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px auto', columnGap: 12,
                   padding: '10px 16px', alignItems: 'center', fontSize: 13,
                   borderBottom: '1px solid var(--border)',
                 }}
@@ -1302,7 +1303,20 @@ export default function ImportProfilesManager({
                           {stats.fileCount} {stats.fileCount === 1 ? 'file' : 'files'} · {stats.rowCount.toLocaleString()} {stats.rowCount === 1 ? 'row' : 'rows'}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                        {profile.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
+                          <button
+                            onClick={() => onReviewMoneyMovement(profile.id)}
+                            title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
+                            style={{
+                              background: 'none', border: '1px solid var(--border)',
+                              borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
+                              fontSize: 12, padding: '3px 8px', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Review transfer classifications
+                          </button>
+                        ) : null}
                         <button
                           onClick={() => setWatchProfile(profile)}
                           style={{
@@ -1349,7 +1363,7 @@ export default function ImportProfilesManager({
               style={{
                 display: 'block', width: '100%', background: 'none', border: 'none',
                 padding: '10px 16px', textAlign: 'center', cursor: 'pointer',
-                fontSize: 13, color: 'var(--muted)', borderTop: '1px solid var(--border)',
+                fontSize: 13, color: 'var(--muted)',
               }}
             >
               + New data source

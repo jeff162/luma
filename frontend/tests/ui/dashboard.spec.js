@@ -364,8 +364,14 @@ test('single-period trend keeps its grain chooser through bar clicks and compare
   expect(ranges.at(-1)).toBe(`${thisMonth}-01:${today}`)
   expect(ranges.every(range => range.slice(8, 10) === '01' && Number(range.slice(-2)) <= now.getDate())).toBe(true)
 
-  // A bar click selects that exact span, keeps the chooser and its pick, and the back-step keeps it too.
-  await (await firstPlotBar()).click()
+  // A click in a bar's column selects that exact span, keeps the chooser and its pick, and the back-step
+  // keeps it too. The click lands at the top of the plot rather than on the bar: the whole column is the
+  // target, so a bar too short to hit is still selectable.
+  const bar = await firstPlotBar()
+  await bar.scrollIntoViewIfNeeded()
+  const barBox = await bar.boundingBox()
+  const plotBox = await bar.locator('xpath=ancestor::*[local-name()="svg"][1]').boundingBox()
+  await page.mouse.click(barBox.x + barBox.width / 2, plotBox.y + 12)
   const back = page.getByRole('button', { name: /^← Back to Month to date/ })
   await expect(back).toBeVisible()
   await expect(grain).toHaveValue('span')

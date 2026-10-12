@@ -42,7 +42,7 @@ test('a file report lists the rows the import left out, with the reason for each
 
   try {
     await page.goto(`/import-export?openBatch=${batchId}`)
-    await expect(page.getByText('spec-left-behind.csv')).toBeVisible()
+    await expect(page.getByText('spec-left-behind.csv').first()).toBeVisible()
 
     // Two rows did not come in, and the control says so before it is opened.
     const notImported = page.getByRole('button', { name: /Not imported/ })

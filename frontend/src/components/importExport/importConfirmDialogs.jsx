@@ -10,7 +10,6 @@
 //     screen marks which ones changed (see run_import_parsed).
 //   - CompatibleBatchAttachDialog: a just-saved profile looks compatible with
 //     existing uncategorized imports; offers to attach them or leave them.
-//   - DuplicateImportConfirmDialog: confirm re-importing N skipped duplicate rows.
 //   - PossibleAccountMatchChooserDialog: a source account being given a NEW account looks like one or
 //     more accounts that already exist; pick one and map to it or nest under it, or keep separate from
 //     all of them.
@@ -273,69 +272,6 @@ export function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attac
             {attaching ? 'Attaching…' : `Attach ${batches.length} import${batches.length === 1 ? '' : 's'}`}
           </Button>
         </DialogActions>
-      </FloatingPanel>
-    </OverlayBackdrop>
-  )
-}
-
-export function DuplicateImportConfirmDialog({
-  pending,
-  importing = false,
-  onCancel,
-  onConfirm,
-}) {
-  const dialogRef = useRef(null)
-
-  useEffect(() => {
-    dialogRef.current?.focus()
-  }, [])
-
-  if (!pending) return null
-
-  return (
-    <OverlayBackdrop
-      onClick={onCancel}
-      zIndex={1250}
-      tint="rgba(15, 23, 42, 0.45)"
-    >
-      <FloatingPanel
-        ref={dialogRef}
-        tabIndex={-1}
-        onClick={event => event.stopPropagation()}
-        onKeyDownCapture={event => {
-          if (event.key === 'Enter') {
-            event.preventDefault()
-            event.stopPropagation()
-          }
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            event.stopPropagation()
-            onCancel?.()
-          }
-        }}
-        style={{
-          width: 'min(360px, calc(100% - 48px))',
-          border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-          padding: '18px 18px 16px',
-          display: 'grid',
-          gap: 10,
-          outline: 'none',
-        }}
-      >
-        <div style={{ fontSize: 16, fontWeight: 600, textAlign: 'center' }}>Confirm import?</div>
-        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, textAlign: 'center' }}>
-          {pending.importAll
-            ? `Import all ${pending.count} row${pending.count === 1 ? '' : 's'}?`
-            : `Import ${pending.count} selected row${pending.count === 1 ? '' : 's'}?`}
-        </div>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-          <Button small variant="ghost" onClick={onCancel} disabled={importing}>
-            Cancel
-          </Button>
-          <Button small variant="ghost" onClick={onConfirm} disabled={importing}>
-            {importing ? 'Importing…' : 'Import duplicates'}
-          </Button>
-        </div>
       </FloatingPanel>
     </OverlayBackdrop>
   )

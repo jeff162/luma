@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The "Data sources" history section shown below the import form on every stage
-// except mapping: the Manage-sources / Group-imported-categories / Generate-rules
-// header actions, and the per-source list with expandable recent-import file
-// rows (inline rename + description, imported-category usage toggle, assigning an
-// unsaved file — temporary draft or unknown — to a data source, per-file detail / not-imported /
-// duplicates drill-ins, and undo). Purely presentational — all state and callbacks live in
-// ImportTab and arrive as props.
+// The Import History tab: every card an import or a sync has produced, grouped under the source it came
+// from (a saved data source, a marketplace vendor, a connection, the temporary draft, or the unknown
+// bucket), with the Group-imported-categories / Generate-rules follow-up actions above the list. A card
+// carries its own outcome and drill-ins (file ledger, not-imported, duplicates, reconciliation, undo), so
+// this is also where a finished import or sync lands: `focus` names the cards to bring into view —
+// their rows are opened, the first is scrolled to, and each is marked until the focus changes. The
+// sources themselves are managed on the File Import tab, not here. Purely presentational — all state
+// and callbacks live in ImportTab and arrive as props.
 
-import TransientTextInput from '../TransientTextInput.jsx'
+import { useEffect, useMemo, useRef } from 'react'
 import { Button, Card, EmptyState, Tooltip } from '../ui.jsx'
 import { ActionCountBadge, BatchCoverageCell, HistoryAttentionPill, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { SourceAccountChip } from './SourceAccountChip.jsx'
@@ -20,7 +21,6 @@ import { describeDataSourceRow, partitionImportHistory, summarizeBatchAttention 
 import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
-import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import {
   summarizeImportedCategorySettings,
   extractImportedCategorySettings,
@@ -29,26 +29,16 @@ import {
 export function ImportHistorySection({
   dataSourceRows,
   profiles,
+  focus,
+  notice,
   expandedSourceRows,
   setExpandedSourceRows,
-  setShowDataSourceManager,
   openSystemCategoryWorkspace,
   totalSystemCategoryWorkspaceCount,
   pendingSystemCategoryCount,
   openRuleSuggestionReview,
   hasSystemRuleSuggestionWork,
   pendingSystemRuleSuggestionCount,
-  editingSourceNameKey,
-  setEditingSourceNameKey,
-  getSourceNameEditKey,
-  sourceNameDraft,
-  setSourceNameDraft,
-  saveSourceName,
-  editingSourceDescriptionId,
-  setEditingSourceDescriptionId,
-  sourceDescriptionDraft,
-  setSourceDescriptionDraft,
-  saveSourceDescription,
   manualDraftRecord,
   openManualDraftSaveEditor,
   setAssignNewSourceBatchId,
@@ -61,83 +51,96 @@ export function ImportHistorySection({
   openBatchDetail,
   markBatchReviewed,
   handleUndoClick,
-  onReviewMoneyMovement,
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
 }) {
+  // A saved source that has imported nothing has no history; it is listed with the sources.
+  const historyRows = useMemo(() => dataSourceRows.filter(row => row.batches.length > 0), [dataSourceRows])
+  const { rowKeys: focusedRowKeys, batchIds: focusedBatchIds } = useMemo(
+    () => resolveHistoryFocus(historyRows, focus), [historyRows, focus],
+  )
+
+  // Bring the focused cards into view once, when they first exist: a focus can arrive before the
+  // batch list that holds its cards has loaded, and a card only reaches the DOM a render after its row
+  // opens, so the scroll waits on the card itself rather than on the focus.
+  const listRef = useRef(null)
+  const pinnedRef = useRef(null)
+  const landedFocusRef = useRef(null)
+  const scrollPendingRef = useRef(false)
+  useEffect(() => {
+    if (!focus || landedFocusRef.current === focus.token || focusedRowKeys.length === 0) return
+    landedFocusRef.current = focus.token
+    scrollPendingRef.current = true
+    setExpandedSourceRows(prev => ({
+      ...(prev && typeof prev === 'object' ? prev : {}),
+      ...Object.fromEntries(focusedRowKeys.map(key => [key, true])),
+    }))
+  }, [focus, focusedRowKeys, setExpandedSourceRows])
+  useEffect(() => {
+    if (!scrollPendingRef.current) return
+    const list = listRef.current
+    // A row with no card singled out (a connection with nothing waiting) is landed on by its heading.
+    const target = focusedBatchIds.size > 0
+      ? list?.querySelector('[data-focused-card="true"]')
+      : list?.querySelector('[data-focused-row="true"]')
+    if (!target) return
+    scrollPendingRef.current = false
+    // Rest the target just beneath the pinned block, which would otherwise cover it.
+    list.style.setProperty('--pinned-height', `${pinnedRef.current?.offsetHeight || 0}px`)
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+
   return (
         <>
-          <div style={{ marginTop: 28, marginBottom: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <FeatureExplainer topic="unknown-data-source" placement="bottom-left" />
-                <div style={{ fontSize: 16, fontWeight: 600 }}>Data sources</div>
-                <button
-                  type="button"
-                  onClick={() => setShowDataSourceManager(true)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    minHeight: 24,
-                    padding: '2px 9px',
-                    borderRadius: 999,
-                    border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                    background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
-                    color: 'var(--muted)',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    boxShadow: '0 1px 1px rgba(15, 23, 42, 0.04)',
-                    whiteSpace: 'nowrap',
-                    position: 'relative',
-                    top: -5,
-                  }}
+          {/* Pinned to the top of the page's scroll area, so the summary of an import stays on screen
+              beside the card it landed on however far down the history that card sits. The padding
+              and matching negative margin keep a gap under the tab row once the block is stuck. */}
+          <div
+            ref={pinnedRef}
+            style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg)', paddingTop: 12, marginTop: -12, paddingBottom: 10 }}
+          >
+            {notice}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', }}>
+              <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
+                <Button
+                  small
+                  variant="ghost"
+                  onClick={openSystemCategoryWorkspace}
+                  disabled={totalSystemCategoryWorkspaceCount === 0}
                 >
-                  Manage sources
-                </button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
-                  <Button
-                    small
-                    variant="ghost"
-                    onClick={openSystemCategoryWorkspace}
-                    disabled={totalSystemCategoryWorkspaceCount === 0}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <span>Group imported categories</span>
-                      <ActionCountBadge count={pendingSystemCategoryCount} tone="warning" />
-                    </span>
-                  </Button>
-                </Tooltip>
-                <Tooltip content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
-                  <Button
-                    small
-                    variant="ghost"
-                    onClick={() => openRuleSuggestionReview()}
-                    disabled={!hasSystemRuleSuggestionWork}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <span>Generate rules</span>
-                      <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
-                    </span>
-                  </Button>
-                </Tooltip>
-              </div>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <span>Group imported categories</span>
+                    <ActionCountBadge count={pendingSystemCategoryCount} tone="warning" />
+                  </span>
+                </Button>
+              </Tooltip>
+              <Tooltip content={hasSystemRuleSuggestionWork ? '' : 'Mark a categorized import as clean to generate rules'}>
+                <Button
+                  small
+                  variant="ghost"
+                  onClick={() => openRuleSuggestionReview()}
+                  disabled={!hasSystemRuleSuggestionWork}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <span>Generate rules</span>
+                    <ActionCountBadge count={pendingSystemRuleSuggestionCount} />
+                  </span>
+                </Button>
+              </Tooltip>
             </div>
           </div>
-          {/* Callouts only. Once dismissed, the saved-sources guidance is the heading's own `?` above, and
-              the needs-review one is reached from the page's help — it explains the pills on the cards,
-              so a `?` up here had nothing to sit beside. */}
+          {/* Callouts only. Once dismissed, the saved-sources guidance is the `?` on the File Import tab's
+              source list, and the needs-review one is reached from the page's help — it explains the
+              pills on the cards, so a `?` up here had nothing to sit beside. */}
           <ContextualExplainer topic="unknown-data-source" persistentButton={false} style={{ marginBottom: 12 }}
-            active={dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown')} />
+            active={historyRows.some(row => row.kind === 'manual' || row.kind === 'unknown')} />
           <ContextualExplainer topic="reviewing-transactions" persistentButton={false} style={{ marginBottom: 12 }}
-            active={dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0))} />
+            active={historyRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0))} />
           <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
-            {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
+            <div ref={listRef}>
+            {historyRows.length === 0 ? <EmptyState message="Nothing imported yet" /> : (
               <>
-                {dataSourceRows.map(row => {
+                {historyRows.map(row => {
                   // A marketplace group (Amazon, …) renders through the shared marketplace section (its
                   // own file ledger / undo / reconciliation / review pills), not the CSV data-source row.
                   if (row.kind === 'marketplace') {
@@ -216,8 +219,9 @@ export function ImportHistorySection({
                       batchImportedCategoryChoices,
                       { hideAllScopeLabel: true },
                     )
+                    const focused = focusedBatchIds.has(b.id)
                     return (
-                      <div key={b.id}>
+                      <div key={b.id} data-focused-card={focused ? 'true' : undefined} style={focused ? FOCUSED_CARD_STYLE : undefined}>
                         <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: (b.accounts?.length || summary.rejectedCount > 0 || duplicateTotal > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px 90px', gap: 12, alignItems: 'start' }}>
                             <div style={{ minWidth: 0 }}>
@@ -247,7 +251,16 @@ export function ImportHistorySection({
                             <BatchCoverageCell batch={b} />
                             {/* From the same summary the duplicate and rejected pills read, so the headline
                                 cannot be one tally while the pills beside it are another. */}
-                            <span style={{ textAlign: 'center' }}>{summary.totalRows} rows</span>
+                            <span style={{ textAlign: 'center' }}>
+                              {summary.totalRows} rows
+                              {/* How many of them landed, where that is not all of them — the figure a
+                                  finished import leads with, kept on the card that outlives it. */}
+                              {summary.importedCount !== summary.totalRows ? (
+                                <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                                  {summary.importedCount} imported
+                                </span>
+                              ) : null}
+                            </span>
                           </div>
 
                           {/* A file that re-states a period an earlier import already covered lands
@@ -575,7 +588,7 @@ export function ImportHistorySection({
                   }
 
                   return (
-                    <div key={row.key}>
+                    <div key={row.key} data-focused-row={focusedRowKeys.includes(row.key) ? 'true' : undefined} style={{ scrollMarginTop: LANDING_SCROLL_MARGIN }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 16px', fontSize: 13, borderBottom: rowExpanded ? 'none' : '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                           {canExpand ? (
@@ -593,55 +606,7 @@ export function ImportHistorySection({
                           ) : <span style={{ width: 20, height: 20 }} />}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
-                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isConnection ? row.label : isMarketplace ? row.label : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
-                                <TransientTextInput
-                                  value={sourceNameDraft}
-                                  onChange={setSourceNameDraft}
-                                  onCommit={() => saveSourceName(row.profile.id)}
-                                  onCancel={() => {
-                                    setEditingSourceNameKey('')
-                                    setSourceNameDraft('')
-                                  }}
-                                  restoreOnEscape
-                                  placeholder="Data source name"
-                                  style={{
-                                    width: 220,
-                                    maxWidth: '100%',
-                                    background: 'var(--surface2)',
-                                    color: 'var(--text)',
-                                    border: '1px solid var(--accent)',
-                                    borderRadius: 999,
-                                    padding: '4px 10px',
-                                    fontSize: 13,
-                                    fontWeight: 500,
-                                    outline: 'none',
-                                  }}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingSourceDescriptionId('')
-                                    setSourceDescriptionDraft('')
-                                    setEditingSourceNameKey(getSourceNameEditKey('list', row.profile.id))
-                                    setSourceNameDraft(row.profile.name || '')
-                                  }}
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    padding: 0,
-                                    margin: 0,
-                                    color: 'inherit',
-                                    font: 'inherit',
-                                    fontStyle: 'normal',
-                                    cursor: 'pointer',
-                                    textAlign: 'left',
-                                  }}
-                                  title="Click to rename this data source"
-                                >
-                                  {row.profile.name}
-                                </button>
-                              )}
+                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isConnection ? row.label : row.profile.name}
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                               {isManual ? (
@@ -657,51 +622,8 @@ export function ImportHistorySection({
                                 // them history. Its cards are kept because they are the provenance of
                                 // transactions still in the ledger.
                                 <span>{describeDataSourceRow(row, providerLabel).qualifier}</span>
-                              ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
-                                <TransientTextInput
-                                  value={sourceDescriptionDraft}
-                                  onChange={setSourceDescriptionDraft}
-                                  onCommit={() => saveSourceDescription(row.profile.id)}
-                                  onCancel={() => {
-                                    setEditingSourceDescriptionId('')
-                                    setSourceDescriptionDraft('')
-                                  }}
-                                  restoreOnEscape
-                                  placeholder="Description"
-                                  style={{
-                                    width: 190,
-                                    maxWidth: '100%',
-                                    background: 'var(--surface2)',
-                                    color: 'var(--text)',
-                                    border: '1px solid var(--accent)',
-                                    borderRadius: 999,
-                                    padding: '4px 10px',
-                                    fontSize: 11,
-                                    outline: 'none',
-                                  }}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingSourceNameKey('')
-                                    setSourceNameDraft('')
-                                    setEditingSourceDescriptionId(row.profile.id)
-                                    setSourceDescriptionDraft(row.profile.filename_pattern || '')
-                                  }}
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    padding: 0,
-                                    margin: 0,
-                                    color: 'var(--muted)',
-                                    fontSize: 11,
-                                    cursor: 'pointer',
-                                  }}
-                                  title={row.profile.filename_pattern ? 'Click to edit description' : 'Click to add description'}
-                                >
-                                  {row.profile.filename_pattern || 'add description'}
-                                </button>
+                              ) : isUnknown ? null : (
+                                row.profile.filename_pattern ? <span>{row.profile.filename_pattern}</span> : null
                               )}
                               {!rowExpanded ? (
                                 <>
@@ -762,16 +684,6 @@ export function ImportHistorySection({
                           </div>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
-                          {row.profile?.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
-                            <button
-                              type="button"
-                              onClick={() => onReviewMoneyMovement(row.profile.id)}
-                              title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
-                              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}
-                            >
-                              Review transfer classifications
-                            </button>
-                          ) : null}
                           {isManual && row.manualDraftRecord ? (
                             <button
                               type="button"
@@ -803,6 +715,7 @@ export function ImportHistorySection({
                           {recentBatches.map(renderBatchCard)}
                           <ImportHistoryArchive
                             archive={archivedBatches}
+                            revealIds={focusedBatchIds}
                             renderBatch={renderBatchCard}
                             noun={isConnection ? 'cards' : 'imports'}
                           />
@@ -813,7 +726,37 @@ export function ImportHistorySection({
                 })}
               </>
             )}
+            </div>
           </Card>
         </>
   )
+}
+
+// Where a landing comes to rest: `--pinned-height` is set on the list when it scrolls.
+const LANDING_SCROLL_MARGIN = 'calc(var(--pinned-height, 0px) + 8px)'
+
+const FOCUSED_CARD_STYLE = {
+  boxShadow: 'inset 3px 0 0 var(--accent)',
+  background: 'color-mix(in srgb, var(--accent) 7%, transparent)',
+  scrollMarginTop: LANDING_SCROLL_MARGIN,
+}
+
+// What a landing opens and marks. Cards are named outright (a finished import, the cards a sync wrote
+// to); a connection named without cards opens its row and marks whichever of its cards still hold
+// something to review, which is what the pill that leads here was counting.
+function resolveHistoryFocus(rows, focus) {
+  if (!focus) return { rowKeys: [], batchIds: new Set() }
+  const batchIds = new Set(focus.batchIds || [])
+  const connectionIds = new Set(focus.connectionIds || [])
+  const rowKeys = []
+  for (const row of rows) {
+    const named = connectionIds.has(row.connectionId)
+    if (named) {
+      row.batches
+        .filter(b => summarizeBatchAttention([b]).unresolvedDuplicates > 0)
+        .forEach(b => batchIds.add(b.id))
+    }
+    if (named || row.batches.some(b => batchIds.has(b.id))) rowKeys.push(row.key)
+  }
+  return { rowKeys, batchIds }
 }

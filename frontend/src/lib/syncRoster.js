@@ -21,6 +21,8 @@ const emptyEntry = row => ({
   provider: row.provider,
   institution: row.institution,
   added: 0, updated: 0, removed: 0, skipped: 0,
+  // The import cards the run has added rows to, for the link from a finished run to those cards.
+  cardIds: [],
   // Whether any response has described this connection. A run this tab is not driving has no responses to
   // read, so those rows fall back to `observed` — the last progress the poll saw before the marker
   // cleared. Second-hand and possibly a page short, but far better than reporting a busy sync as zero.
@@ -56,6 +58,7 @@ export function foldResponse(prev, connections, provider) {
       updated: e.updated + (c.updated || 0),
       removed: e.removed + (c.removed || 0),
       skipped: e.skipped + (c.skipped || 0),
+      cardIds: mergeCardIds(e.cardIds, c.card_ids),
       fromResponse: true,
       // The response *is* the end of the call the live figure described, so whatever the last poll saw of
       // it is now counted twice — once here and once in `live`. Cleared rather than left for the next
@@ -73,10 +76,22 @@ export function foldResponse(prev, connections, provider) {
     next.push({
       ...emptyEntry({ connectionId: c.connection_id, provider, institution: c.institution }),
       added: c.added || 0, updated: c.updated || 0, removed: c.removed || 0, skipped: c.skipped || 0,
+      cardIds: mergeCardIds([], c.card_ids),
       fromResponse: true, error: c.error || null,
     })
   }
   return next
+}
+
+// A month's card is written to by call after call, so the ids are a set.
+const mergeCardIds = (have, more) => {
+  const added = (more || []).filter(id => !have.includes(id))
+  return added.length ? [...have, ...added] : have
+}
+
+// Every import card the run added rows to, across the given roster rows.
+export function rosterCardIds(roster) {
+  return [...new Set(roster.flatMap(e => e.cardIds || []))]
 }
 
 // Overlay the in-flight call's progress. When a connection's progress disappears its call has ended, so

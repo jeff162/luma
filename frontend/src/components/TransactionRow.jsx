@@ -930,7 +930,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
                     title: txn.import_batch_filename || 'Possible duplicates',
                   })
                 } else {
-                  navigate('/import-export')
+                  navigate('/import-export?tab=history')
                 }
               }}
               aria-label="Possible duplicate — review"

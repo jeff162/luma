@@ -1186,9 +1186,9 @@ CSV import creates supporting records for workflow and recovery:
 
 - **What an import *changed* rather than added** (`import_batch.updated_count`): rows that corrected a
   transaction already held, counted apart from imported and deduped because they are neither — the
-  ledger moved and no row was created. It is reported on the card and not only on the completion screen
-  because nothing else records it: the corrected row shows its revised figure and no longer says it
-  moved, so an unreported correction is invisible the moment the import screen is closed. Three such
+  ledger moved and no row was created. It is reported on the card because nothing else records it: the
+  corrected row shows its revised figure and no longer says it moved, so an unreported correction is
+  invisible. Three such
   pairs sat in a real ledger for two and four months before anyone looked.
 
 - **Clearing a card's stored detail** (`detail_cleared_at`): an import keeps a **duplicate report** —

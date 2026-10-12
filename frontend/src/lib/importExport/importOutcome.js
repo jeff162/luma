@@ -4,9 +4,7 @@
 // Pure normalizers for an import's outcome counts. `summarizeImportOutcome`
 // reconciles the several shapes the backend uses for a finished import (the live
 // importResult, a saved batch record, a re-fetched batch) into one stable set of
-// counts the history cards and completion screen render. `getUndoTargetForSource`
-// wraps that so the undo dialog's arithmetic always has real numbers regardless
-// of which shape it was handed.
+// counts the history cards and the landing notice render.
 
 export function summarizeImportOutcome(source) {
   if (!source) {
@@ -170,18 +168,4 @@ export function mergeMoneyMovementProposals(proposalLists) {
   return [...byType.values()].sort(
     (a, b) => (Number(b.money_movement) - Number(a.money_movement)) || (b.count - a.count) || a.type.localeCompare(b.type),
   )
-}
-
-export function getUndoTargetForSource(source) {
-  if (!source) return null
-  // importResult and batch records expose count fields under different shapes.
-  // Normalize them here so the undo dialog arithmetic always has real numbers.
-  const summary = summarizeImportOutcome(source)
-  return {
-    ...source,
-    id: source.id || source.batch_id || '',
-    row_count: summary.totalRows,
-    skipped_count: summary.skippedCount,
-    deduped_count: summary.dedupedCount,
-  }
 }

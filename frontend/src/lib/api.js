@@ -1055,7 +1055,6 @@ export const api = {
   previewBatchDetailClearing: (batchIds)  => request('/import-export/batches/clear-detail-preview', { method: 'POST', body: JSON.stringify({ batch_ids: batchIds }) }),
   clearBatchDetail:           (batchIds)  => request('/import-export/batches/clear-detail', { method: 'POST', body: JSON.stringify({ batch_ids: batchIds }) }),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
-  getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
   getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),
   getBatchRemovedDuplicates: (id) => request(`/import-export/batches/${id}/removed-duplicates`),
   getBatchNotImported: (id) => request(`/import-export/batches/${id}/not-imported`),

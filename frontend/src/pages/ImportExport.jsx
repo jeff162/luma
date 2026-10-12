@@ -19,8 +19,6 @@ import {
   AppConfirmDialog,
   AppNoticeDialog,
   AppTextEntryDialog,
-  getFloatingPanelHeaderBackground,
-  getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import DropZone from '../components/DropZone.jsx'
@@ -41,12 +39,9 @@ import {
   MultipleSourceMatchDialog,
   MultiFileSourceChooserDialog,
   CompatibleBatchAttachDialog,
-  DuplicateImportConfirmDialog,
   PossibleAccountMatchChooserDialog,
 } from '../components/importExport/importConfirmDialogs.jsx'
 import { ImportedCategorySettingsDialog } from '../components/importExport/ImportedCategorySettingsDialog.jsx'
-import { RejectedRowsDialog } from '../components/importExport/RejectedRowsDialog.jsx'
-import { DuplicateRowsDialog } from '../components/importExport/DuplicateRowsDialog.jsx'
 import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import WatchedFoldersPanel from '../components/importExport/WatchedFoldersPanel.jsx'
@@ -84,7 +79,6 @@ import {
 } from '../lib/importExport/importDraft.js'
 import {
   summarizeImportOutcome,
-  getUndoTargetForSource,
   buildMultiFileResult,
   formatSkippedImportMessage,
 } from '../lib/importExport/importOutcome.js'
@@ -114,7 +108,6 @@ import {
   IMPORT_CONFIG_MAX_WIDTH,
   MANUAL_DATA_SOURCE_VALUE,
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
-  DATA_SOURCE_MANAGER_POS_PREF_KEY,
   AMAZON_IMPORT_ACCOUNT_PREF_KEY,
   DEMO_IMPORT_DISABLED_MESSAGE,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
@@ -141,18 +134,6 @@ import {
   findLikelyAccountMatch,
   buildAccountImportStateSnapshot,
 } from '../lib/importExport/importAccountMatching.js'
-
-function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerWidth, height: window.innerHeight }) {
-  if (!pos) return null
-  const panelWidth = Number(size?.width || 0)
-  const panelHeight = Number(size?.height || 0)
-  const maxX = Math.max(24, viewport.width - panelWidth - 24)
-  const maxY = Math.max(24, viewport.height - panelHeight - 24)
-  return {
-    x: Math.max(24, Math.min(maxX, Math.round(pos.x))),
-    y: Math.max(24, Math.min(maxY, Math.round(pos.y))),
-  }
-}
 
 // `UnifiedDuplicatesDialog` lives at the App level so it can stay open while the user navigates
 // between Import, Accounts, Transactions, etc. — see
@@ -182,12 +163,11 @@ function formatImportingLabel(fileProgress, rowProgress) {
 }
 
 // Keep the import UI recoverable if a preview or mapping render crashes.
-function ImportTab({ onAmazonDetected }) {
+function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onAmazonDetected }) {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId, demoLoaded } = useAppSession()
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
-  const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
   const [stage, setStage] = useState('upload')
   const [preview, setPreview] = useState(null)
   // Multi-file selection: the same-source group of files to import under the current mapping (the
@@ -249,15 +229,8 @@ function ImportTab({ onAmazonDetected }) {
   const [savingManualDraftSource, setSavingManualDraftSource] = useState(false)
   const [compatibleBatchPrompt, setCompatibleBatchPrompt] = useState(null)
   const [attachingCompatibleBatches, setAttachingCompatibleBatches] = useState(false)
-  const [showDataSourceManager, setShowDataSourceManager] = useState(false)
-  const [dataSourceManagerInitialMode, setDataSourceManagerInitialMode] = useState('list')
-  const [dataSourceManagerEditing, setDataSourceManagerEditing] = useState(false)
-  const [dataSourceManagerPos, setDataSourceManagerPos] = useState(null)
-  const [dataSourceManagerDragging, setDataSourceManagerDragging] = useState(false)
   const [editingSourceNameKey, setEditingSourceNameKey] = useState('')
   const [sourceNameDraft, setSourceNameDraft] = useState('')
-  const [editingSourceDescriptionId, setEditingSourceDescriptionId] = useState('')
-  const [sourceDescriptionDraft, setSourceDescriptionDraft] = useState('')
 
   const [selectedProfile, setSelectedProfile] = useState('')
   const [accountId, setAccountId] = useState('')
@@ -301,6 +274,7 @@ function ImportTab({ onAmazonDetected }) {
   // Post-import categorization nudge: shown on the done screen when an import brought no categories and
   // the user hasn't started categorizing yet (no leaf categories). It self-suppresses once they engage.
   const [showStarterRules, setShowStarterRules] = useState(false)
+  const [landedImport, setLandedImport] = useState(null)
   const [starterPromptDismissed, setStarterPromptDismissed] = useState(false)
   const [addingStarterCats, setAddingStarterCats] = useState(false)
   // While demo data is loaded (`demoLoaded`, from the session) the backend blocks imports; the upload
@@ -336,8 +310,6 @@ function ImportTab({ onAmazonDetected }) {
     }
   }
   const [showRaw, setShowRaw] = useState(false)
-  const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
-  const [duplicateRowsViewer, setDuplicateRowsViewer] = useState(null)
   // Unified duplicates viewer state was lifted to UnifiedDuplicatesViewerContext so the floating
   // report can survive route changes. We hold onto the context handles here to open it and to
   // know when it has reloaded (so the file-card pill counts can be refreshed in step).
@@ -354,8 +326,6 @@ function ImportTab({ onAmazonDetected }) {
       batch.id === batchId && batch.needs_review_count !== count ? { ...batch, needs_review_count: count } : batch
     ))),
   })
-  const [duplicateImporting, setDuplicateImporting] = useState(false)
-  const [pendingDuplicateImport, setPendingDuplicateImport] = useState(null)
   const [pendingProfileMismatch, setPendingProfileMismatch] = useState(null)
   const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
   const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
@@ -365,9 +335,6 @@ function ImportTab({ onAmazonDetected }) {
   const [assignNewSourceName, setAssignNewSourceName] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [dateFormatLocked, setDateFormatLocked] = useState(false)
-  const duplicateViewerRequestRef = useRef(0)
-  const dataSourceManagerRef = useRef(null)
-  const dataSourceManagerDragStartRef = useRef(null)
 
   useEffect(() => {
     Promise.all([
@@ -420,7 +387,6 @@ function ImportTab({ onAmazonDetected }) {
   // A leaf category means the user has already started categorizing (starter set, imported categories,
   // or their own), so the post-import starter nudge stops appearing.
   const hasAnyLeafCategory = useMemo(() => categories.some(category => category.parent_id), [categories])
-  useEffect(() => { setStarterPromptDismissed(false) }, [importResult?.batch_id])
   const pendingSystemRuleSuggestionCount = useMemo(() => countPendingRuleSuggestions(batches), [batches])
 
   // Also invoked by the App-level duplicate-detection dialog's drill-through arrow — through
@@ -456,7 +422,9 @@ function ImportTab({ onAmazonDetected }) {
       openBatchDetail({ ...sourceBatch, _dateFilter })
     }
     navigate('/import-export', { replace: true })
-  }, [location.search, batches, navigate, openBatchDetail])
+    // Arriving for one card means the history is the page behind its ledger, with that card marked.
+    if (sourceBatch) onShowHistory({ batchIds: [targetBatchId] })
+  }, [location.search, batches, navigate, openBatchDetail, onShowHistory])
 
   // `?review=paypal` is the Tasks entry's way into the PayPal reconciliation, which is about the whole
   // ledger rather than one file. Honored once on arrival, then cleaned from the URL like the one above.
@@ -517,26 +485,6 @@ function ImportTab({ onAmazonDetected }) {
     }
   }, [profiles, selectedUploadSource])
 
-  function getDataSourceManagerDefaultPosition() {
-    if (typeof window === 'undefined') return { x: 360, y: 180 }
-    const width = Math.min(1040, window.innerWidth - 96)
-    const height = Math.max(380, Math.min(window.innerHeight * 0.78, 640))
-    return clampFloatingPanelPosition(
-      {
-        x: Math.max(340, Math.round(window.innerWidth * 0.24)),
-        y: 180,
-      },
-      { width, height },
-    )
-  }
-
-  function closeDataSourceManager() {
-    setShowDataSourceManager(false)
-    setDataSourceManagerInitialMode('list')
-    setDataSourceManagerEditing(false)
-    setDataSourceManagerDragging(false)
-  }
-
   // Memoized so the data-source manager's `refreshManagerData` (which depends on this via `onDataChange`)
   // keeps a stable identity — otherwise its load effect re-fires on every parent render, which the manager
   // triggers by calling back here, and the two ping-pong into an infinite accounts/batches/profiles
@@ -547,70 +495,6 @@ function ImportTab({ onAmazonDetected }) {
     if (Array.isArray(nextAccounts)) setAccounts(nextAccounts)
     if (Array.isArray(nextBatches)) setBatches(nextBatches)
   }, [])
-
-  function startDataSourceManagerDrag(event) {
-    if (dataSourceManagerEditing || !dataSourceManagerRef.current) return
-    const rect = dataSourceManagerRef.current.getBoundingClientRect()
-    dataSourceManagerDragStartRef.current = {
-      mouseX: event.clientX,
-      mouseY: event.clientY,
-      x: dataSourceManagerPos?.x ?? rect.left,
-      y: dataSourceManagerPos?.y ?? rect.top,
-      width: rect.width,
-      height: rect.height,
-    }
-    setDataSourceManagerDragging(true)
-    event.preventDefault()
-  }
-
-  useEffect(() => {
-    if (!showDataSourceManager) return
-    const saved = savedDataSourceManagerPos && typeof savedDataSourceManagerPos === 'object'
-      ? savedDataSourceManagerPos
-      : null
-    const rect = dataSourceManagerRef.current?.getBoundingClientRect()
-    const nextPos = saved
-      ? clampFloatingPanelPosition(saved, rect || { width: Math.min(1040, window.innerWidth - 96), height: Math.max(380, Math.min(window.innerHeight * 0.78, 640)) })
-      : getDataSourceManagerDefaultPosition()
-    setDataSourceManagerPos(nextPos)
-  }, [savedDataSourceManagerPos, showDataSourceManager])
-
-  useEffect(() => {
-    if (!showDataSourceManager) return undefined
-    function handleResize() {
-      const rect = dataSourceManagerRef.current?.getBoundingClientRect()
-      setDataSourceManagerPos(prev => clampFloatingPanelPosition(prev || getDataSourceManagerDefaultPosition(), rect || { width: Math.min(1040, window.innerWidth - 96), height: Math.max(380, Math.min(window.innerHeight * 0.78, 640)) }))
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [showDataSourceManager])
-
-  useEffect(() => {
-    if (!dataSourceManagerDragging) return undefined
-    function handleMove(event) {
-      const start = dataSourceManagerDragStartRef.current
-      if (!start) return
-      setDataSourceManagerPos(clampFloatingPanelPosition({
-        x: start.x + (event.clientX - start.mouseX),
-        y: start.y + (event.clientY - start.mouseY),
-      }, { width: start.width, height: start.height }))
-    }
-    function handleUp() {
-      setDataSourceManagerDragging(false)
-      const start = dataSourceManagerDragStartRef.current
-      if (!start) return
-      setSavedDataSourceManagerPos(prev => {
-        const next = dataSourceManagerPos || prev || getDataSourceManagerDefaultPosition()
-        return next
-      }).catch(() => { })
-    }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-    }
-  }, [dataSourceManagerDragging, dataSourceManagerPos, setSavedDataSourceManagerPos])
 
   // Every file being imported under the current mapping: the multi-file group when there is one, else
   // just the single previewed file. The account-column mapping unions across all of them so no value is
@@ -769,6 +653,15 @@ function ImportTab({ onAmazonDetected }) {
     })
   }, [importedCategoryChoices])
 
+  // One component owns both the File Import tab and the Import History tab, because they are two views
+  // of one state — the batch list, the saved sources, the temporary draft — and an import in progress
+  // has to survive a look at the history. `view` picks which is on screen; the dialogs and floating
+  // reports below belong to both.
+  const shownStage = view === 'import' ? stage : null
+  const managerHostData = useMemo(
+    () => ({ profiles, accounts, batches, loading: initialDataStatus === 'loading' }),
+    [profiles, accounts, batches, initialDataStatus],
+  )
   const dataSourceRows = useMemo(
     () => buildDataSourceRows({ profiles, batches, manualDraftRecord }),
     [profiles, batches, manualDraftRecord],
@@ -2359,39 +2252,30 @@ function ImportTab({ onAmazonDetected }) {
         await autoSaveProfile(refreshedAccounts).catch(() => { })
       }
       if (result.multiFile) {
-        // Each file landed as its own card in the history below; summarize and return to the upload
-        // screen rather than the single-file review (whose per-file dialogs don't apply to an aggregate).
-        // If a PayPal money-movement review takes over (the actionable follow-up), skip the summary
-        // notice so two dialogs don't stack — the per-file counts remain on the history cards.
-        const reviewOpened = await maybeOpenMoneyMovementReview(result)
+        // Each file landed as its own card, and the landing marks all of them; the per-file counts
+        // are on the cards.
+        maybeOpenMoneyMovementReview(result)
         const skipped = result.skipped || []
-        const parts = [`${result.imported} transaction${result.imported === 1 ? '' : 's'} added`]
-        if (result.deduped) parts.push(`${result.deduped} duplicate row${result.deduped === 1 ? '' : 's'} skipped`)
-        if (result.enriched_count) parts.push(`${result.enriched_count} enriched`)
-        if (result.rejected_count) parts.push(`${result.rejected_count} row${result.rejected_count === 1 ? '' : 's'} rejected`)
-        const importedLine = result.fileCount > 0
-          ? `${parts.join(', ')}. Each file is a separate card below — open one for its per-file detail.`
-          : ''
         const skipLines = skipped.map(formatSkippedImportMessage)
-        const totalSelected = result.fileCount + skipped.length
-        if (!reviewOpened) {
+        if (result.fileCount > 0) {
+          landOnImport(result, (result.perFile || []).map(entry => entry?.result?.batch_id).filter(Boolean), skipLines)
+        } else {
+          // Every file was already imported, so there is no new card to land on.
           setNoticeDialog({
-            title: skipped.length
-              ? `Imported ${result.fileCount} of ${totalSelected} files`
-              : `Imported ${result.fileCount} files`,
-            description: (
-              <>
-                {importedLine ? <div>{importedLine}</div> : null}
-                {skipLines.map((line, i) => (
-                  <div key={i} style={{ marginTop: (importedLine || i) ? 6 : 0 }}>{line}</div>
-                ))}
-              </>
-            ),
+            title: 'Nothing new to import',
+            description: skipLines.map((line, i) => <div key={i} style={{ marginTop: i ? 6 : 0 }}>{line}</div>),
           })
+          resetImport()
         }
-        resetImport()
+      } else if (result.trailing_non_transaction_suspected) {
+        setStage('review-data')
+        maybeOpenMoneyMovementReview(result)
+      } else if (result.invalid_rows_suspected) {
+        // Held on the raw-file viewer opened above, which needs the staged file; closing it lands.
+        setStage('review-rows')
+        maybeOpenMoneyMovementReview(result)
       } else {
-        setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
+        landOnImport(result, [result.batch_id])
         maybeOpenMoneyMovementReview(result)
       }
     } catch (e) {
@@ -2486,8 +2370,6 @@ function ImportTab({ onAmazonDetected }) {
   async function handleManagerProfileCreated({ profileId, sampleFile } = {}) {
     if (!profileId) return
     selectUploadSource(profileId)
-    setShowDataSourceManager(false)
-    setDataSourceManagerInitialMode('list')
     if (sampleFile && stage === 'upload' && !preview) {
       await handleFile(sampleFile, { sourceIdOverride: profileId })
     }
@@ -2552,26 +2434,6 @@ function ImportTab({ onAmazonDetected }) {
       })
     } finally {
       setSavingManualDraftSource(false)
-    }
-  }
-
-  async function saveSourceDescription(profileId) {
-    const nextValue = sourceDescriptionDraft.trim()
-    setProfiles(prev => prev.map(item => (
-      item.id === profileId
-        ? { ...item, filename_pattern: nextValue || null }
-        : item
-    )))
-    setEditingSourceDescriptionId('')
-    setSourceDescriptionDraft('')
-    try {
-      await api.updateImportProfile(profileId, { filename_pattern: nextValue || null })
-    } catch (error) {
-      api.getImportProfiles().then(setProfiles)
-      setNoticeDialog({
-        title: 'Could not save the data source description',
-        description: error?.message || 'Please try again.',
-      })
     }
   }
 
@@ -2692,43 +2554,29 @@ function ImportTab({ onAmazonDetected }) {
     setProfiles(updated)
   }
 
-  // Returning to the upload stage re-renders the drop zone at the top of the page, but the scroll
-  // position stays wherever the triggering control was (e.g. the "Import another file" button down by
-  // the result card with several file cards open above it), leaving the picker off-screen. When a reset
-  // is meant to put the user back at the picker, arm this so the effect below scrolls it into view once
-  // the upload stage has mounted.
-  const uploadStageRef = useRef(null)
-  const scrollToUploadOnMount = useRef(false)
-  useEffect(() => {
-    if (stage === 'upload' && scrollToUploadOnMount.current) {
-      scrollToUploadOnMount.current = false
-      uploadStageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }, [stage])
-
-  // Same problem at the other end of the flow: finishing an import leaves the scroll position wherever
-  // the Import button was — typically far down the mapping screen — and the newly-expanded source row
-  // adds file cards above it, so the result lands off-screen and the import reads as if nothing happened.
-  // Bring the summary into view once it has mounted. Keyed on the batch id so importing a second file
-  // scrolls again rather than only on the first transition into `done`.
-  const doneStageRef = useRef(null)
-  useEffect(() => {
-    if (stage === 'done' && importResult?.batch_id) {
-      doneStageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }, [stage, importResult?.batch_id])
-
-  function importAnotherFile() {
-    scrollToUploadOnMount.current = true
+  // A finished import is shown where its record lives: its card on the Import History tab, which the
+  // landing opens, scrolls to and marks. The File Import tab goes straight back to the drop zone, so
+  // the next file can be dropped without dismissing anything. What a card cannot say — that this is the
+  // import just run, the first-run prompts, files skipped from a multi-file selection — rides above
+  // the list as a notice for as long as the landing is on screen.
+  function landOnImport(result, batchIds, skipLines = []) {
+    setStarterPromptDismissed(false)
+    setLandedImport({
+      result,
+      batchIds,
+      skipLines,
+      usedImportedCategories: !!(useImportedCategories && colCategory),
+    })
     resetImport()
+    onShowHistory({ batchIds })
   }
+  useEffect(() => {
+    if (view !== 'history') setLandedImport(null)
+  }, [view])
 
   function resetImport() {
     setStage('upload'); setPreview(null); setImportResult(null)
     setAccountMap({})
-    setRejectedRowsViewer(null)
-    setDuplicateRowsViewer(null)
-    setDuplicateImporting(false)
     setColPending(null)
     setColCurrency(null)
     setColTransactionId(null)
@@ -2760,6 +2608,11 @@ function ImportTab({ onAmazonDetected }) {
       setImportResult(null)
       setStage('upload')
     }
+    setLandedImport(prev => {
+      if (!prev?.batchIds.includes(batch.id)) return prev
+      const batchIds = prev.batchIds.filter(id => id !== batch.id)
+      return batchIds.length ? { ...prev, batchIds } : null
+    })
     const remainingBatches = batches.filter(b => b.id !== batch.id)
     if (!batch.profile_id) {
       const remainingManual = remainingBatches.filter(b => !b.profile_id)
@@ -2982,7 +2835,7 @@ function ImportTab({ onAmazonDetected }) {
 
   function advancePastDataReview() {
     setShowRaw(false)
-    setStage('done')
+    landOnImport(importResult, [importResult.batch_id])
   }
 
   async function cancelTrailingDataReview() {
@@ -3009,26 +2862,6 @@ function ImportTab({ onAmazonDetected }) {
     }
   }
 
-  // The live import's own rejected rows, on the done screen, where the file is still staged and the
-  // raw-file hand-off below is therefore still possible. A *saved* batch's rows are not shown here —
-  // they are a tab on the file's report (`ImportBatchNotImported`), which holds every class of
-  // refusal rather than the three this summary carries, and outlives the session.
-  function openRejectedRowsViewer({
-    source,
-    title,
-    allowRawViewer = false,
-  }) {
-    const summary = summarizeImportOutcome(source)
-    if (summary.rejectedCount <= 0) return
-    setRejectedRowsViewer({
-      headers: summary.rejectedHeaders,
-      rows: summary.rejectedRows,
-      count: summary.rejectedCount,
-      title,
-      allowRawViewer,
-    })
-  }
-
   // Opens the unified duplicate-detection report for a batch. The dialog is rendered at the
   // App level by `UnifiedDuplicatesViewerRenderer` so it persists across route navigation; this
   // thin wrapper just normalizes the file-card payload into the context's `open` contract.
@@ -3038,134 +2871,109 @@ function ImportTab({ onAmazonDetected }) {
     unifiedDuplicatesViewer.open({ batchId, title })
   }
 
-  async function openDuplicateRowsViewer({
-    source,
-    title,
-  }) {
-    const summary = summarizeImportOutcome(source)
-    if (summary.dedupedCount <= 0) return
-    const batchId = source?.batch_id || source?.id || ''
-    if (!batchId) return
-    const requestId = duplicateViewerRequestRef.current + 1
-    duplicateViewerRequestRef.current = requestId
-    try {
-      const result = await api.getBatchDuplicates(batchId)
-      if (duplicateViewerRequestRef.current !== requestId) return
-      setDuplicateRowsViewer({
-        batchId,
-        headers: Array.isArray(result.headers) ? result.headers : [],
-        rows: Array.isArray(result.rows) ? result.rows : [],
-        count: Number(result.count || summary.dedupedCount) || 0,
-        title,
-        loading: false,
-        error: '',
-      })
-    } catch (error) {
-      if (duplicateViewerRequestRef.current !== requestId) return
-      setDuplicateRowsViewer({
-        batchId,
-        headers: [],
-        rows: [],
-        count: summary.dedupedCount,
-        title,
-        loading: false,
-        error: error?.message || 'Could not load duplicate rows.',
-      })
-    }
-  }
-
-  async function syncDuplicateImportState(batchId) {
-    const refreshedBatches = await api.listBatches()
-    setBatches(refreshedBatches)
-    const updatedBatch = refreshedBatches.find(item => item.id === batchId) || null
-    if (updatedBatch && importResult?.batch_id === batchId) {
-      const updatedSummary = summarizeImportOutcome(updatedBatch)
-      setImportResult(prev => prev ? {
-        ...prev,
-        imported: updatedSummary.importedCount,
-        deduped: updatedSummary.dedupedCount,
-        duplicate_count: updatedSummary.dedupedCount,
-        import_summary: updatedBatch.import_summary,
-      } : prev)
-    }
-    if (!updatedBatch) {
-      setDuplicateRowsViewer(null)
-      return
-    }
-    const updatedSummary = summarizeImportOutcome(updatedBatch)
-    if (updatedSummary.dedupedCount > 0) {
-      setDuplicateRowsViewer(prev => prev ? {
-        ...prev,
-        count: updatedSummary.dedupedCount,
-        loading: true,
-        error: '',
-      } : prev)
-      try {
-        const result = await api.getBatchDuplicates(batchId)
-        setDuplicateRowsViewer(prev => prev ? {
-          ...prev,
-          headers: Array.isArray(result.headers) ? result.headers : [],
-          rows: Array.isArray(result.rows) ? result.rows : [],
-          count: Number(result.count || updatedSummary.dedupedCount) || 0,
-          loading: false,
-          error: '',
-        } : prev)
-      } catch (error) {
-        setDuplicateRowsViewer(prev => prev ? {
-          ...prev,
-          headers: [],
-          rows: [],
-          loading: false,
-          error: error?.message || 'Could not refresh duplicate rows.',
-        } : prev)
-      }
-    } else {
-      setDuplicateRowsViewer(null)
-    }
-  }
-
-  async function importSelectedDuplicates(batchId, rowNumbers = [], importAll = false) {
-    if (!batchId) return
-    setDuplicateImporting(true)
-    try {
-      const result = await api.importBatchDuplicates(batchId, {
-        import_all: importAll,
-        row_numbers: importAll ? null : rowNumbers,
-      })
-      await syncDuplicateImportState(batchId)
-      if (result.not_importable_count > 0) {
-        setNoticeDialog({
-          title: 'Some duplicate rows could not be imported',
-          description: `${result.not_importable_count} selected duplicate row${result.not_importable_count === 1 ? '' : 's'} could not be imported from this saved batch.`,
-        })
-      }
-    } catch (error) {
-      setNoticeDialog({
-        title: 'Could not import duplicate rows',
-        description: error?.message || 'Please try again.',
-      })
-    } finally {
-      setDuplicateImporting(false)
-    }
-  }
-
-  function requestDuplicateImportConfirmation(batchId, rowNumbers = [], importAll = false, count = 0) {
-    if (!batchId) return
-    if (!importAll && (!Array.isArray(rowNumbers) || rowNumbers.length === 0)) return
-    setPendingDuplicateImport({
-      batchId,
-      rowNumbers,
-      importAll,
-      count: importAll ? Number(count || 0) : rowNumbers.length,
+  const landingNotice = landedImport ? (() => {
+    const { result, skipLines, usedImportedCategories } = landedImport
+    // A single file's figures are read from its card once the batch list has it, so the notice and the
+    // card beneath it cannot disagree (and a row imported from the duplicate report moves both).
+    const landedBatch = result.multiFile ? null : batches.find(b => b.id === landedImport.batchIds[0])
+    const summary = summarizeImportOutcome(landedBatch || result)
+    const alreadyHeldCount = summary.dedupedCount + summary.ignoredCount
+    // Lead with what actually happened. A file whose rows all duplicate existing history is a
+    // *successful* import for an enrich-oriented source (a PayPal export duplicates what the bank
+    // already shows; the value delivered is the detail folded into those matches) — so it says so
+    // rather than reporting "0 transactions imported", which reads as a failure.
+    const headline = result.multiFile
+      ? `${result.fileCount} file${result.fileCount === 1 ? '' : 's'} imported — ${result.imported} transaction${result.imported === 1 ? '' : 's'} added.`
+      : summary.importedCount > 0
+        ? `${summary.importedCount} transaction${summary.importedCount === 1 ? '' : 's'} imported.`
+        : alreadyHeldCount > 0 && alreadyHeldCount === summary.totalRows
+          ? 'No new transactions — every row was already in the ledger.'
+          : 'No new transactions imported.'
+    const calloutStyle = tone => ({
+      marginTop: 12,
+      padding: '12px 14px',
+      borderRadius: 12,
+      background: `color-mix(in srgb, var(--${tone}) 7%, var(--surface2))`,
+      border: `1px solid color-mix(in srgb, var(--${tone}) 24%, var(--border))`,
     })
-  }
-
-  async function confirmDuplicateImport() {
-    if (!pendingDuplicateImport) return
-    const current = pendingDuplicateImport
-    setPendingDuplicateImport(null)
-    await importSelectedDuplicates(current.batchId, current.rowNumbers, current.importAll)
-  }
+    return (
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 15 }}>
+            <span style={{ fontWeight: 600 }}>✅ Import complete</span>
+            <span style={{ color: 'var(--muted)' }}> — {headline}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button small onClick={onShowImport}>Import another file</Button>
+            <Button small variant="ghost" onClick={() => setLandedImport(null)}>Dismiss</Button>
+          </div>
+        </div>
+        {skipLines.map((line, i) => (
+          <div key={i} style={{ marginTop: 6, fontSize: 13, color: 'var(--muted)' }}>{line}</div>
+        ))}
+        {result.has_imported_categories ? (
+          <div style={calloutStyle('accent')}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              Categorized rows were imported with this file.
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
+              {usedImportedCategories
+                ? 'Because categories present in the data were used for this file, missing categories were added under Unassigned, the imported transactions kept those categories, and the file now contributes to system-wide rule suggestions.'
+                : 'This file appears to already carry its own categories. If that data is clean and curated, turn on “categories present in the data” on its card below — that keeps those categories on the imported transactions and uses them to suggest rules. If only some accounts or owners are curated, you can scope it to just those.'}
+            </div>
+          </div>
+        ) : null}
+        {!result.has_imported_categories && !hasAnyLeafCategory && !starterPromptDismissed ? (
+          <div style={calloutStyle('accent2')}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              Want to sort these into categories?
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55, marginBottom: 10 }}>
+              Categories group transactions so the dashboard can report on them — groceries, utilities,
+              dining, and so on. This file didn&apos;t bring its own, so you can start from a common set
+              now, or skip it and build your own as you go. Nothing here is permanent.
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Button
+                small
+                disabled={addingStarterCats}
+                onClick={async () => {
+                  setAddingStarterCats(true)
+                  try {
+                    await api.generateStarterSet({ include_leaves: true })
+                    await api.getCategories().then(setCategories).catch(() => { })
+                    setStarterPromptDismissed(true)
+                  } catch {
+                    // Leave the prompt up so the user can retry.
+                  } finally {
+                    setAddingStarterCats(false)
+                  }
+                }}
+              >
+                {addingStarterCats ? 'Adding…' : 'Add starter categories'}
+              </Button>
+              <Button small variant="ghost" onClick={() => setShowStarterRules(true)}>
+                Add starter rules…
+              </Button>
+              <Button small variant="ghost" onClick={() => setStarterPromptDismissed(true)}>
+                Not now
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {result.new_accounts_without_owner > 0 && (
+          <div style={{ ...calloutStyle('accent2'), fontSize: 13 }}>
+            {result.new_accounts_without_owner} new account{result.new_accounts_without_owner > 1 ? 's were' : ' was'} created without an owner.
+            {' '}These accounts have no owner assigned — visit{' '}
+            <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
+              Accounts
+            </Link>
+            {' '}to assign one.
+          </div>
+        )}
+      </Card>
+    )
+  })() : null
 
   return (
     <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
@@ -3254,50 +3062,15 @@ function ImportTab({ onAmazonDetected }) {
           lineNumberOffset={rawViewerOffset}
           title={rawViewerTitle}
           note={rawViewerNote}
-          onClose={() => setShowRaw(false)}
+          onClose={() => {
+            setShowRaw(false)
+            if (stage === 'review-rows' && importResult) landOnImport(importResult, [importResult.batch_id])
+          }}
           onLoadMore={rawViewerSupportsLoadMore ? loadMoreRawLines : null}
           canLoadMore={rawViewerCanLoadMore}
           loadingMore={rawViewerLoadingMore}
         />
       )}
-
-      {rejectedRowsViewer ? (
-        <RejectedRowsDialog
-          headers={rejectedRowsViewer.headers}
-          rows={rejectedRowsViewer.rows}
-          count={rejectedRowsViewer.count}
-          title={rejectedRowsViewer.title}
-          onClose={() => setRejectedRowsViewer(null)}
-          onOpenRawViewer={rejectedRowsViewer.allowRawViewer ? () => {
-            setRejectedRowsViewer(null)
-            setShowRaw(true)
-          } : undefined}
-        />
-      ) : null}
-
-      {duplicateRowsViewer ? (
-        <DuplicateRowsDialog
-          headers={duplicateRowsViewer.headers}
-          rows={duplicateRowsViewer.rows}
-          count={duplicateRowsViewer.count}
-          title={duplicateRowsViewer.title}
-          loading={!!duplicateRowsViewer.loading}
-          error={duplicateRowsViewer.error || ''}
-          importing={duplicateImporting}
-          onClose={() => setDuplicateRowsViewer(null)}
-          onImportSelected={rowNumbers => requestDuplicateImportConfirmation(duplicateRowsViewer.batchId, rowNumbers, false, rowNumbers.length)}
-          onImportAll={() => requestDuplicateImportConfirmation(duplicateRowsViewer.batchId, [], true, duplicateRowsViewer.count)}
-        />
-      ) : null}
-
-      {pendingDuplicateImport ? (
-        <DuplicateImportConfirmDialog
-          pending={pendingDuplicateImport}
-          importing={duplicateImporting}
-          onCancel={() => setPendingDuplicateImport(null)}
-          onConfirm={confirmDuplicateImport}
-        />
-      ) : null}
 
       {compatibleBatchPrompt ? (
         <CompatibleBatchAttachDialog
@@ -3308,7 +3081,7 @@ function ImportTab({ onAmazonDetected }) {
         />
       ) : null}
 
-      {stage === 'upload' && demoLoadable ? (
+      {shownStage === 'upload' && demoLoadable ? (
         <Card style={{
           marginBottom: 16,
           display: 'flex',
@@ -3336,15 +3109,15 @@ function ImportTab({ onAmazonDetected }) {
 
       {/* Above the file importer, because what it reports is work already waiting rather
           than another thing to start. Renders nothing at all until some source names a folder. */}
-      {stage === 'upload' && (
+      {shownStage === 'upload' && (
         <WatchedFoldersPanel
           onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
           onImported={() => api.listBatches().then(setBatches).catch(() => { })}
         />
       )}
 
-      {stage === 'upload' && (
-        <div ref={uploadStageRef} style={{ marginBottom: 20 }}>
+      {shownStage === 'upload' && (
+        <div style={{ marginBottom: 20 }}>
           <ImportUploadStage
             demoLoaded={demoLoaded}
             chooserOpen={sourceChooserOpen}
@@ -3362,8 +3135,6 @@ function ImportTab({ onAmazonDetected }) {
             setSourceNameDraft={setSourceNameDraft}
             saveSourceName={saveSourceName}
             setEditingSourceNameKey={setEditingSourceNameKey}
-            setEditingSourceDescriptionId={setEditingSourceDescriptionId}
-            setSourceDescriptionDraft={setSourceDescriptionDraft}
             showUploadSourceCreate={showUploadSourceCreate}
             setShowUploadSourceCreate={setShowUploadSourceCreate}
             uploadSourceDraftName={uploadSourceDraftName}
@@ -3378,7 +3149,7 @@ function ImportTab({ onAmazonDetected }) {
         </div>
       )}
 
-      {stage === 'mapping' && preview && (
+      {shownStage === 'mapping' && preview && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'flex-start' }}>
           {preview.previous_batch && (
             <div style={{ width: IMPORT_CONFIG_MAX_WIDTH, background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))', border: '1px solid var(--warning)', borderRadius: 8, padding: '12px 16px' }}>
@@ -4183,7 +3954,7 @@ function ImportTab({ onAmazonDetected }) {
         </div>
       )}
 
-      {stage === 'review-data' && importResult && (
+      {shownStage === 'review-data' && importResult && (
         <div
           style={{
             position: 'fixed',
@@ -4252,252 +4023,6 @@ function ImportTab({ onAmazonDetected }) {
         </div>
       )}
 
-      {stage === 'done' && importResult && (
-        // Wrapper rather than a ref on Card: Card is a plain function component, so a ref passed to it
-        // would be dropped (and warn) instead of reaching the DOM node the scroll needs.
-        <div ref={doneStageRef}>
-        <Card>
-          <div style={{ fontSize: 18, marginBottom: 12 }}>✅ Import complete</div>
-          {importResult.has_imported_categories ? (
-            <div style={{
-              marginBottom: 16,
-              padding: '12px 14px',
-              borderRadius: 12,
-              background: 'color-mix(in srgb, var(--accent) 7%, var(--surface2))',
-              border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                Categorized rows were imported with this file.
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
-                {useImportedCategories && colCategory
-                  ? 'Because categories present in the data were used for this file, missing categories were added under Unassigned, the imported transactions kept those categories, and the file now contributes to system-wide rule suggestions.'
-                  : 'This file appears to already carry its own categories. If that data is clean and curated, turn on “categories present in the data” on its card under Recent imports — that keeps those categories on the imported transactions and uses them to suggest rules. If only some accounts or owners are curated, you can scope it to just those.'}
-              </div>
-            </div>
-          ) : null}
-          {(() => {
-            const summary = summarizeImportOutcome(importResult)
-            const parts = []
-            if (summary.accountSkippedCount > 0) {
-              parts.push(
-                <span key="skipped-accounts">{summary.accountSkippedCount} from skipped accounts</span>
-              )
-            }
-            if (summary.rejectedCount > 0) {
-              parts.push(
-                <button
-                  key="rejected-rows"
-                  type="button"
-                  onClick={() => openRejectedRowsViewer({
-                    source: importResult,
-                    title: 'this import',
-                    allowRawViewer: true,
-                  })}
-                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
-                >
-                  {summary.rejectedCount} rejected row{summary.rejectedCount === 1 ? '' : 's'}
-                </button>
-              )
-            }
-            if (summary.zeroAmountCount > 0) {
-              parts.push(
-                <span key="zero-amount-rows">{summary.zeroAmountCount} zero amount</span>
-              )
-            }
-            if (summary.currencyRejectedCount > 0) {
-              parts.push(
-                <span key="currency-rows">{summary.currencyRejectedCount} in another currency</span>
-              )
-            }
-            if (summary.validationErrorCount > 0) {
-              parts.push(
-                <span key="validation-errors">{summary.validationErrorCount} validation error{summary.validationErrorCount === 1 ? '' : 's'}</span>
-              )
-            }
-            if (summary.trailingNonTransactionCount > 0) {
-              parts.push(
-                <span key="non-transaction-rows">{summary.trailingNonTransactionCount} non-transaction rows</span>
-              )
-            }
-            if (summary.otherSkippedCount > 0) {
-              parts.push(
-                <span key="other-skipped">{summary.otherSkippedCount} other skipped</span>
-              )
-            }
-
-            // Lead with what actually happened. A file whose rows all duplicate existing history is a
-            // *successful* import for an enrich-oriented source (a PayPal export duplicates what the bank
-            // already shows; the value delivered is the detail folded into those matches) — so it says so
-            // rather than reporting "0 transactions imported", which reads as a failure. The row counts
-            // then appear once each, in their own lines, instead of a combined breakdown whose
-            // "0 imported, 0 not imported, 59 deduped" arithmetic contradicted itself.
-            // Both ways a row can already be held: refused with a report row, and refused as this
-            // source restating its own prior import, which keeps no report row at all. The headline
-            // reads the same to the user either way, so it counts them together — keyed on only one of
-            // them, a wholly-restated file reported "No new transactions imported", which is the
-            // failure-reading this headline exists to avoid.
-            const alreadyHeldCount = summary.dedupedCount + summary.ignoredCount
-            const everyRowDuplicate = summary.importedCount === 0
-              && alreadyHeldCount > 0
-              && alreadyHeldCount === summary.totalRows
-            const headline = summary.importedCount > 0
-              ? `${summary.importedCount} transaction${summary.importedCount === 1 ? '' : 's'} imported.`
-              : everyRowDuplicate
-                ? 'No new transactions — every row was already in the ledger.'
-                : 'No new transactions imported.'
-
-            return (
-              <div style={{
-                marginBottom: 16,
-                padding: '10px 14px',
-                borderRadius: 12,
-                border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
-                background: 'color-mix(in srgb, var(--surface2) 26%, transparent)',
-              }}>
-                <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}>
-                  {headline}
-                </div>
-                {summary.totalRows > 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.totalRows} row{summary.totalRows === 1 ? '' : 's'} in this file.
-                  </div>
-                ) : null}
-                {summary.dedupedCount > 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => openDuplicateRowsViewer({
-                        source: importResult,
-                        title: 'this import',
-                      })}
-                      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
-                    >
-                      {summary.dedupedCount} duplicate row{summary.dedupedCount === 1 ? '' : 's'}
-                    </button>
-                    {' '}matched existing transactions.
-                  </div>
-                ) : null}
-                {summary.enrichedCount > 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    New detail added from {summary.enrichedCount} duplicate row{summary.enrichedCount === 1 ? '' : 's'}.
-                  </div>
-                ) : null}
-                {/* A changed amount on an existing row is the one outcome here that leaves no trace of
-                    itself: no row appears, and the row that moved looks like it always held that figure. */}
-                {summary.updatedCount > 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount.
-                  </div>
-                ) : null}
-                {/* Stated only when the headline above has not already said it, which it does for a file
-                    that landed nothing at all. */}
-                {summary.ignoredCount > 0 && !everyRowDuplicate ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.ignoredCount} row{summary.ignoredCount === 1 ? '' : 's'} already in the ledger.
-                  </div>
-                ) : null}
-                {summary.skippedCount > 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.skippedCount} row{summary.skippedCount === 1 ? '' : 's'} couldn&rsquo;t be imported
-                    {parts.length > 0 ? (
-                      <>
-                        {' ('}
-                        {parts.map((part, index) => (
-                          <span key={index}>
-                            {index > 0 ? ', ' : ''}
-                            {part}
-                          </span>
-                        ))}
-                        {')'}
-                      </>
-                    ) : null}
-                    .
-                  </div>
-                ) : null}
-              </div>
-            )
-          })()}
-          {!importResult.has_imported_categories && !hasAnyLeafCategory && !starterPromptDismissed ? (
-            <div style={{
-              marginBottom: 16,
-              padding: '12px 14px',
-              borderRadius: 12,
-              background: 'color-mix(in srgb, var(--accent2) 7%, var(--surface2))',
-              border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                Want to sort these into categories?
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55, marginBottom: 10 }}>
-                Categories group transactions so the dashboard can report on them — groceries, utilities,
-                dining, and so on. This file didn&apos;t bring its own, so you can start from a common set
-                now, or skip it and build your own as you go. Nothing here is permanent.
-              </div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Button
-                  small
-                  disabled={addingStarterCats}
-                  onClick={async () => {
-                    setAddingStarterCats(true)
-                    try {
-                      await api.generateStarterSet({ include_leaves: true })
-                      await api.getCategories().then(setCategories).catch(() => { })
-                      setStarterPromptDismissed(true)
-                    } catch {
-                      // Leave the prompt up so the user can retry.
-                    } finally {
-                      setAddingStarterCats(false)
-                    }
-                  }}
-                >
-                  {addingStarterCats ? 'Adding…' : 'Add starter categories'}
-                </Button>
-                <Button small variant="ghost" onClick={() => setShowStarterRules(true)}>
-                  Add starter rules…
-                </Button>
-                <Button small variant="ghost" onClick={() => setStarterPromptDismissed(true)}>
-                  Not now
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          {importResult.new_accounts_without_owner > 0 && (
-            <div style={{
-              fontSize: 13, marginBottom: 16, padding: '8px 12px',
-              background: 'color-mix(in srgb, var(--accent2) 8%, var(--surface2))',
-              border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
-              borderRadius: 8,
-            }}>
-              {importResult.new_accounts_without_owner} new account{importResult.new_accounts_without_owner > 1 ? 's were' : ' was'} created without an owner.
-              {' '}These accounts have no owner assigned — visit{' '}
-              <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
-                Accounts
-              </Link>
-              {' '}to assign one.
-            </div>
-          )}
-          {importResult.errors?.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--danger)' }}>{importResult.errors.length} validation error{importResult.errors.length === 1 ? '' : 's'}:</div>
-              {importResult.errors.map((e, i) => <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 3 }}>Row {e.row}: {e.reason}</div>)}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {importResult?.batch_id ? (
-              <Button
-                variant="ghost"
-                onClick={() => openUndo(getUndoTargetForSource(importResult))}
-              >
-                Undo import
-              </Button>
-            ) : null}
-            <Button onClick={importAnotherFile}>Import another file</Button>
-          </div>
-        </Card>
-        </div>
-      )}
-
       {showStarterRules ? (
         <StarterRulesDialog
           onClose={() => setShowStarterRules(false)}
@@ -4508,31 +4033,38 @@ function ImportTab({ onAmazonDetected }) {
         />
       ) : null}
 
-      {stage !== 'mapping' && (
+      {shownStage === 'upload' && (
+        <>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 28, marginBottom: 10 }}>
+            <FeatureExplainer topic="unknown-data-source" placement="bottom-left" />
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Data sources</div>
+          </div>
+          <Card style={{ padding: 0, overflow: 'visible', width: '100%' }}>
+            <ImportProfilesManager
+              embedded
+              hostData={managerHostData}
+              onDataChange={handleManagerDataChange}
+              onProfileCreated={handleManagerProfileCreated}
+              onReviewMoneyMovement={reviewMoneyMovementForProfile}
+            />
+          </Card>
+        </>
+      )}
+
+      {view === 'history' && (
         <ImportHistorySection
           dataSourceRows={dataSourceRows}
           profiles={profiles}
-          onReviewMoneyMovement={reviewMoneyMovementForProfile}
+          focus={historyFocus}
+          notice={landingNotice}
           expandedSourceRows={expandedSourceRows}
           setExpandedSourceRows={setExpandedSourceRows}
-          setShowDataSourceManager={setShowDataSourceManager}
           openSystemCategoryWorkspace={openSystemCategoryWorkspace}
           totalSystemCategoryWorkspaceCount={totalSystemCategoryWorkspaceCount}
           pendingSystemCategoryCount={pendingSystemCategoryCount}
           openRuleSuggestionReview={openRuleSuggestionReview}
           hasSystemRuleSuggestionWork={hasSystemRuleSuggestionWork}
           pendingSystemRuleSuggestionCount={pendingSystemRuleSuggestionCount}
-          editingSourceNameKey={editingSourceNameKey}
-          setEditingSourceNameKey={setEditingSourceNameKey}
-          getSourceNameEditKey={getSourceNameEditKey}
-          sourceNameDraft={sourceNameDraft}
-          setSourceNameDraft={setSourceNameDraft}
-          saveSourceName={saveSourceName}
-          editingSourceDescriptionId={editingSourceDescriptionId}
-          setEditingSourceDescriptionId={setEditingSourceDescriptionId}
-          sourceDescriptionDraft={sourceDescriptionDraft}
-          setSourceDescriptionDraft={setSourceDescriptionDraft}
-          saveSourceDescription={saveSourceDescription}
           manualDraftRecord={manualDraftRecord}
           openManualDraftSaveEditor={openManualDraftSaveEditor}
           setAssignNewSourceBatchId={setAssignNewSourceBatchId}
@@ -4549,83 +4081,6 @@ function ImportTab({ onAmazonDetected }) {
           openReconciliationViewer={reconciliationViewer.open}
         />
       )}
-
-      {showDataSourceManager ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 320,
-            background: 'rgba(15, 23, 42, 0.42)',
-          }}
-        >
-          {(() => {
-            const managerPanelStyle = getFloatingPanelSurfaceStyle({
-              active: !dataSourceManagerEditing,
-              radius: 16,
-            })
-            return (
-              <div
-                ref={dataSourceManagerRef}
-                onClick={event => event.stopPropagation()}
-                style={{
-                  width: 'min(1040px, calc(100vw - 96px))',
-                  minHeight: 380,
-                  maxHeight: '78vh',
-                  position: 'fixed',
-                  left: (dataSourceManagerPos || getDataSourceManagerDefaultPosition()).x,
-                  top: (dataSourceManagerPos || getDataSourceManagerDefaultPosition()).y,
-                  overflow: 'hidden',
-                  display: 'grid',
-                  gridTemplateRows: 'auto minmax(0, 1fr)',
-                  userSelect: dataSourceManagerDragging ? 'none' : 'auto',
-                  ...managerPanelStyle,
-                }}
-              >
-                <div
-                  onMouseDown={startDataSourceManagerDrag}
-                  style={{
-                    padding: '16px 20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    borderBottom: '1px solid var(--border)',
-                    background: getFloatingPanelHeaderBackground(!dataSourceManagerEditing),
-                    cursor: dataSourceManagerEditing ? 'default' : (dataSourceManagerDragging ? 'grabbing' : 'grab'),
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: 17, fontWeight: 600 }}>Manage data sources</div>
-                    <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-                      Edit saved CSV data sources without leaving Import.
-                      {!dataSourceManagerEditing ? ' Drag to move.' : ''}
-                    </div>
-                  </div>
-                  {!dataSourceManagerEditing ? (
-                    <Button
-                      variant="ghost"
-                      onMouseDown={event => event.stopPropagation()}
-                      onClick={closeDataSourceManager}
-                    >
-                      Close
-                    </Button>
-                  ) : <div style={{ width: 74 }} />}
-                </div>
-                <div style={{ overflow: 'auto', background: 'color-mix(in srgb, var(--surface2) 30%, var(--surface))' }}>
-                  <ImportProfilesManager
-                    embedded
-                    onEditingChange={setDataSourceManagerEditing}
-                    onDataChange={handleManagerDataChange}
-                    initialMode={dataSourceManagerInitialMode}
-                    onProfileCreated={handleManagerProfileCreated}
-                  />
-                </div>
-              </div>
-            )
-          })()}
-        </div>
-      ) : null}
 
       {pendingProfileMismatch ? (
         <DataSourceMismatchDialog
@@ -5237,7 +4692,7 @@ function AmazonImportTab({ initialFiles }) {
   )
 }
 
-const IMPORT_TABS = [['import', 'File Import'], ['amazon', 'Amazon'], ['connections', 'Connections']]
+const IMPORT_TABS = [['import', 'File Import'], ['amazon', 'Amazon'], ['connections', 'Connections'], ['history', 'Import History']]
 
 export default function ImportExport() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -5246,36 +4701,68 @@ export default function ImportExport() {
     const fromUrl = searchParams.get('tab')
     return IMPORT_TABS.some(([id]) => id === fromUrl) ? fromUrl : 'import'
   })
+  // What the Import History tab is being opened *on*: `{ batchIds, connectionIds }` naming the cards a
+  // finished import, a sync, or a "to review" pill is about, which the tab opens, scrolls to and
+  // marks. `token` makes each landing a distinct event, so landing on the same card twice scrolls
+  // twice. Choosing a tab by hand is not a landing and clears it.
+  const [historyFocus, setHistoryFocus] = useState(null)
+  const focusToken = useRef(0)
+  const showInHistory = useCallback((focus = null) => {
+    focusToken.current += 1
+    setHistoryFocus(focus ? { ...focus, token: focusToken.current } : null)
+    setTab('history')
+  }, [])
+  const chooseTab = useCallback((id) => { setHistoryFocus(null); setTab(id) }, [])
+  const showFileImport = useCallback(() => chooseTab('import'), [chooseTab])
   // Honor a `?tab=` link followed while the page is already mounted, then strip it so it neither lingers
-  // in the URL nor overrides later manual tab switches.
+  // in the URL nor overrides later manual tab switches. `?tab=history` may name its landing with
+  // `batch=` or `connection=` (comma-separated ids).
   useEffect(() => {
     const fromUrl = searchParams.get('tab')
     if (!fromUrl) return
-    if (IMPORT_TABS.some(([id]) => id === fromUrl)) setTab(fromUrl)
+    if (fromUrl === 'history') {
+      const batchIds = (searchParams.get('batch') || '').split(',').filter(Boolean)
+      const connectionIds = (searchParams.get('connection') || '').split(',').filter(Boolean)
+      showInHistory(batchIds.length || connectionIds.length ? { batchIds, connectionIds } : null)
+    } else if (IMPORT_TABS.some(([id]) => id === fromUrl)) {
+      chooseTab(fromUrl)
+    }
     const next = new URLSearchParams(searchParams)
     next.delete('tab')
+    next.delete('batch')
+    next.delete('connection')
     setSearchParams(next, { replace: true })
-  }, [searchParams, setSearchParams])
-  const showFileImport = useCallback(() => setTab('import'), [])
+  }, [searchParams, setSearchParams, showInHistory, chooseTab])
   // A file dropped on the general importer that sniffs as an AZAD Amazon export is handed up here and
   // routed to the Amazon tab, which preloads it (see ImportTab.handleFile → onAmazonDetected).
   const [amazonHandoffFiles, setAmazonHandoffFiles] = useState(null)
-  const routeToAmazon = useCallback((files) => { setAmazonHandoffFiles(files); setTab('amazon') }, [])
+  const routeToAmazon = useCallback((files) => { setAmazonHandoffFiles(files); chooseTab('amazon') }, [chooseTab])
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         {/* The header's help follows the tab: the Connections tab is a subject of its own, with its own topic. */}
         <PageHeader title="Import" help={<FeatureExplainer topic={tab === 'connections' ? 'data-providers' : 'page-import-export'} placement="bottom-left" />} />
-      </div>
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
-        <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
+        {/* Outside the scroll area, so the tabs stay put while a tab's content scrolls. */}
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
           {IMPORT_TABS.map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
+            <button key={id} onClick={() => chooseTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
           ))}
         </div>
-        {tab === 'import' && <ImportErrorBoundary><ImportTab onAmazonDetected={routeToAmazon} /></ImportErrorBoundary>}
+      </div>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+        {/* The gap under the tab row belongs to the content, not to the scroll area: a pinned block sticks
+            to the scroll area's padding edge, so padding here would leave a strip above it that the
+            history scrolls through. */}
+        <div style={{ paddingTop: 24 }}>
+        {/* One mount for both tabs, so switching between them keeps an import in progress. */}
+        {(tab === 'import' || tab === 'history') && (
+          <ImportErrorBoundary>
+            <ImportTab view={tab} historyFocus={historyFocus} onShowHistory={showInHistory} onShowImport={showFileImport} onAmazonDetected={routeToAmazon} />
+          </ImportErrorBoundary>
+        )}
         {tab === 'amazon' && <ImportErrorBoundary><AmazonImportTab initialFiles={amazonHandoffFiles} /></ImportErrorBoundary>}
-        {tab === 'connections' && <ImportErrorBoundary><ConnectionsTab onShowFileImport={showFileImport} /></ImportErrorBoundary>}
+        {tab === 'connections' && <ImportErrorBoundary><ConnectionsTab onShowHistory={showInHistory} /></ImportErrorBoundary>}
+        </div>
       </div>
     </div>
   )

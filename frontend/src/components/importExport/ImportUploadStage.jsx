@@ -29,8 +29,6 @@ export function ImportUploadStage({
   setSourceNameDraft,
   saveSourceName,
   setEditingSourceNameKey,
-  setEditingSourceDescriptionId,
-  setSourceDescriptionDraft,
   showUploadSourceCreate,
   setShowUploadSourceCreate,
   uploadSourceDraftName,
@@ -88,8 +86,6 @@ export function ImportUploadStage({
                 <button
                   type="button"
                   onClick={() => {
-                    setEditingSourceDescriptionId('')
-                    setSourceDescriptionDraft('')
                     setEditingSourceNameKey(getSourceNameEditKey('upload', selectedUploadSource))
                     setSourceNameDraft(uploadSelectionLabel)
                   }}

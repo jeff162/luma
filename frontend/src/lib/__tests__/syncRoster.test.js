@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  addToRoster, foldLiveProgress, foldResponse, rosterAdded, rosterMayHaveChangedLedger, rosterRequests,
+  addToRoster, foldLiveProgress, foldResponse, rosterAdded, rosterCardIds, rosterMayHaveChangedLedger, rosterRequests,
 } from '../syncRoster.js'
 
 const seed = (...ids) => addToRoster([], ids.map(id => ({
@@ -38,6 +38,13 @@ describe('the run roster', () => {
     roster = foldResponse(roster, response('a', 12), 'acme')
     roster = foldResponse(roster, response('a', 7), 'acme')
     expect(rosterAdded(roster[0])).toBe(19)
+  })
+
+  it('collects the cards a run wrote to, once each, across its calls', () => {
+    let roster = foldResponse(seed('a'), response('a', 12, { card_ids: ['sep', 'oct'] }), 'acme')
+    roster = foldResponse(roster, response('a', 3, { card_ids: ['oct'] }), 'acme')
+    roster = foldResponse(roster, response('a', 0), 'acme')
+    expect(rosterCardIds(roster)).toEqual(['sep', 'oct'])
   })
 
   it('adds the call in flight to what earlier calls settled', () => {

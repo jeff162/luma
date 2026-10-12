@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { useSyncStatus } from '../../contexts/SyncStatusContext.jsx'
+import { rosterCardIds } from '../../lib/syncRoster.js'
 import { Card, Button, Spinner, Select, Input, PasswordInput, Tooltip, AppDialog, AppConfirmDialog, AppNoticeDialog, OverlayBackdrop } from '../ui.jsx'
 import SectionCard from '../SectionCard.jsx'
 import { LastSyncSummary, LastSyncedLine, StatusPill } from './ConnectionStatus.jsx'
@@ -444,8 +445,9 @@ function loadPlaidScript() {
   return plaidScriptPromise
 }
 
-// `onShowFileImport` switches to the File Import tab, whose history holds the cards a sync writes to.
-export default function ConnectionsTab({ onShowFileImport }) {
+// `onShowHistory({ connectionIds })` opens the Import History tab on those connections' cards, which
+// are what a sync writes to.
+export default function ConnectionsTab({ onShowHistory }) {
   const { currentUser, setCurrentUser, authEnabled } = useAppSession()
   const [accounts, setAccounts] = useState([])
   // For the import-card ledger a connection card opens in place: its rows are categorizable, which is
@@ -477,7 +479,7 @@ export default function ConnectionsTab({ onShowFileImport }) {
   // away mid-backfill left its poll loop running in a detached closure writing to an unmounted component —
   // the work carried on invisibly and its results landed nowhere. The cards below still read the same
   // shape, they just no longer own it.
-  const { syncState, runsFinished, runProviders, watching } = useSyncStatus()
+  const { syncState, runsFinished, runProviders, runConnections, watching } = useSyncStatus()
   const [configTarget, setConfigTarget] = useState(null)
   const [connectTarget, setConnectTarget] = useState(null)  // provider whose token-connect dialog is open
   // Every action needing an open vault goes through this gate: it prompts and the action then continues
@@ -1140,6 +1142,7 @@ export default function ConnectionsTab({ onShowFileImport }) {
       {configured.map(p => {
         const connections = p.connections || []
         const ss = syncState[p.provider] || {}
+        const syncedCardIds = rosterCardIds(runConnections.filter(e => e.provider === p.provider))
         // Any connection of this provider reporting a live sync — the server's own view, which outlives
         // the page that started it (see `sync_started_at`).
         const serverSyncing = connections.some(c => c.syncing)
@@ -1219,7 +1222,10 @@ export default function ConnectionsTab({ onShowFileImport }) {
                   </StatusPill>
                 ) : null}
                 {s.review ? (
-                  <StatusPill tone="warning" onClick={() => onShowFileImport?.()}
+                  <StatusPill tone="warning"
+                    onClick={() => onShowHistory?.({
+                      connectionIds: connections.filter(c => syncSummaryByConnection[c.id]?.suspects > 0).map(c => c.id),
+                    })}
                     title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review`}>
                     ⚠ {s.review} to review
                   </StatusPill>
@@ -1292,6 +1298,16 @@ export default function ConnectionsTab({ onShowFileImport }) {
                       : ss.result.added || ss.result.updated || ss.result.removed
                         ? `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}`
                         : 'Sync complete — nothing new'}
+                  {/* The cards this run added rows to, in the history where their outcome is kept. */}
+                  {syncedCardIds.length ? (
+                    <button
+                      type="button"
+                      onClick={() => onShowHistory?.({ batchIds: syncedCardIds })}
+                      style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
+                    >
+                      View in import history →
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1312,7 +1328,7 @@ export default function ConnectionsTab({ onShowFileImport }) {
                           {syncSummary?.suspects > 0 ? (
                             <button
                               type="button"
-                              onClick={() => onShowFileImport?.()}
+                              onClick={() => onShowHistory?.({ connectionIds: [c.id] })}
                               title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import history to review this connection's sync cards`}
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: 4,

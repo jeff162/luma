@@ -4,7 +4,7 @@
 // exactly the kind of thing a backend field rename would silently break, so these pin it.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeImportOutcome, getUndoTargetForSource, buildMultiFileResult, formatSkippedImportMessage, mergeMoneyMovementProposals } from '../importOutcome.js'
+import { summarizeImportOutcome, buildMultiFileResult, formatSkippedImportMessage, mergeMoneyMovementProposals } from '../importOutcome.js'
 
 describe('summarizeImportOutcome', () => {
   it('returns an all-zero shape for a null source', () => {
@@ -73,20 +73,6 @@ describe('summarizeImportOutcome', () => {
       import_summary: { account_skipped_count: 5, zero_amount_count: 5 },
     })
     expect(s.otherSkippedCount).toBe(0)
-  })
-})
-
-describe('getUndoTargetForSource', () => {
-  it('maps normalized counts onto the batch-style fields the undo dialog needs', () => {
-    const target = getUndoTargetForSource({ batch_id: 'b1', imported: 5, skipped: 2, deduped: 1 })
-    expect(target.id).toBe('b1')           // id falls back to batch_id
-    expect(target.row_count).toBe(8)        // totalRows
-    expect(target.skipped_count).toBe(2)
-    expect(target.deduped_count).toBe(1)
-  })
-
-  it('returns null for a null source', () => {
-    expect(getUndoTargetForSource(null)).toBeNull()
   })
 })
 

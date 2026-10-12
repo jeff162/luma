@@ -161,7 +161,7 @@ async function openSourceChooser(page) {
   return chooser
 }
 
-// One row of the data-source manager's list, located by the two buttons it is guaranteed to hold
+// One row of the File Import tab's data-source list, located by the two buttons it is guaranteed to hold
 // rather than by nesting depth: among the divs containing both, the row itself is the innermost, and
 // so the last in document order.
 function managerRow(page, profileName) {
@@ -355,13 +355,7 @@ test('shared mapping suggestions stay aligned between the import flow and the da
   // The same file, loaded as a template in the data-source editor, has to produce the same
   // suggestions: both screens render ImportColumnMappingSection, and that is the point of sharing it.
   await page.goto('/import-export')
-  await page.getByRole('button', { name: 'Manage sources' }).click()
-  await expect(page.getByText('Manage data sources')).toBeVisible()
-
-  // beforeEach clears all saved sources, so the manager always opens on its empty state.
-  const createFirst = page.getByRole('button', { name: '+ Create first data source' })
-  await expect(createFirst).toBeVisible()
-  await createFirst.click()
+  await page.getByRole('button', { name: '+ New data source' }).click()
 
   await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())
 
@@ -389,7 +383,6 @@ test('a template suggestion stays a suggestion, and the editor will not save unt
 
   try {
     await page.goto('/import-export')
-    await page.getByRole('button', { name: 'Manage sources' }).click()
     await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
     await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())
 
@@ -432,7 +425,6 @@ test('the data source editor can create its account, and saving keeps what impor
 
   try {
     await page.goto('/import-export')
-    await page.getByRole('button', { name: 'Manage sources' }).click()
     await managerRow(page, profileName).getByRole('button', { name: 'Edit', exact: true }).click()
 
     await page.getByText('— Select account or column —').click()
@@ -462,23 +454,22 @@ test('the data source editor can create its account, and saving keeps what impor
   }
 })
 
-test('deleting a data source from the manager updates the import page list immediately', async ({ page, request }) => {
+test('deleting a data source removes it from the import page immediately', async ({ page, request }) => {
   const profileName = uniqueDataSourceName('PW delete source')
   const profileId = await createImportProfile(request, { name: profileName })
 
   try {
     await page.goto('/import-export')
     // The saved source is reachable through the on-demand chooser; closing it again leaves the page
-    // on the drop zone, which is where the manager is opened from.
+    // on the drop zone, with the source list beneath it.
     const chooser = await openSourceChooser(page)
     await expect(chooser.getByRole('button', { name: profileName, exact: true })).toBeVisible()
     await chooser.getByRole('button', { name: 'Cancel — just drop a file' }).click()
 
-    await page.getByRole('button', { name: 'Manage sources' }).click()
     await managerRow(page, profileName).getByRole('button', { name: '×', exact: true }).click()
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
-    // Gone from the manager and from the chooser behind it, without a reload.
+    // Gone from the source list and from the chooser above it, without a reload.
     await expect(page.getByRole('button', { name: profileName, exact: true })).toHaveCount(0)
   } finally {
     await deleteImportProfile(request, profileId)
@@ -507,4 +498,55 @@ test('creating a new mapped account keeps import disabled until the user chooses
 
   await typeSelect.selectOption('depository')
   await expect(importButton).toBeEnabled()
+})
+
+test('a finished import lands on its card in the import history and frees the importer', async ({ page, request }) => {
+  await page.goto('/import-export')
+  await page.locator('#csv-file-input').setInputFiles(newAccountCsvFile())
+  for (const suggestion of ['Accept Date', 'Accept Description', 'Accept Amount', 'Accept Account']) {
+    await page.getByText(suggestion).click()
+  }
+  await page.getByRole('button', { name: '+New' }).click()
+  await page.locator(`select[name="account-new-type-${NEW_ACCOUNT_LABEL}"]`).selectOption('depository')
+  await page.getByRole('button', { name: /Import \d+ rows/ }).click()
+
+  try {
+    // The history tab opens on the card the import wrote, marked, with the summary above it.
+    await expect(page.getByText('Import complete')).toBeVisible()
+    const batches = await (await request.get('/api/import-export/batches')).json()
+    expect(batches).toHaveLength(1)
+    const card = page.locator('[data-focused-card="true"]')
+    await expect(card).toHaveCount(1)
+    await expect(card).toContainText(batches[0].filename)
+    await expect(card).toBeInViewport()
+
+    // Scrolled, the summary stays pinned directly under the tab row — no strip between them for the
+    // history to show through. A short window, so one card is enough to scroll.
+    const notNow = page.getByRole('button', { name: 'Not now' })
+    if (await notNow.count()) await notNow.click()
+    await page.setViewportSize({ width: 1280, height: 380 })
+    const scrolled = await card.evaluate(el => {
+      let scroller = el.parentElement
+      while (scroller && getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement
+      scroller.scrollTop = scroller.scrollHeight
+      return scroller.scrollTop
+    })
+    expect(scrolled, 'the history must actually scroll for this to prove anything').toBeGreaterThan(40)
+    const tabRow = await page.getByRole('button', { name: 'Import History', exact: true }).boundingBox()
+    const summary = await page.getByText('Import complete').boundingBox()
+    expect(summary.y - (tabRow.y + tabRow.height)).toBeLessThan(50)
+    expect(summary.y).toBeGreaterThan(tabRow.y + tabRow.height)
+    await page.setViewportSize({ width: 1280, height: 720 })
+
+    // The importer was reset behind the landing, so the next file needs nothing dismissed first.
+    await page.getByRole('button', { name: 'Import another file' }).click()
+    await expect(page.getByText('Import complete')).toHaveCount(0)
+    await expect(page.locator('[data-focused-card="true"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'choose a data source' })).toBeVisible()
+  } finally {
+    const batches = await (await request.get('/api/import-export/batches')).json()
+    for (const batch of batches) await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+    const accounts = await (await request.get('/api/accounts?include_children=true')).json()
+    for (const account of accounts) await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+  }
 })

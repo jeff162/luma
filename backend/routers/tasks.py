@@ -354,10 +354,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
 
         if suspect_dupes:
             # The unified duplicate-detection report is scoped to a single import batch and
-            # is opened from /import-export (each file card with unresolved soft flags carries
-            # its own entry-point pill, and collapsed data-source rows surface an aggregate
-            # badge). Linking the task here to /import-export lets the user pick which
-            # batch's report to open rather than dropping them into a global cross-batch view.
+            # is opened from the Import History tab (each file card with unresolved soft flags
+            # carries its own entry-point pill, and collapsed data-source rows surface an aggregate
+            # badge). Linking the task there lets the user pick which batch's report to open
+            # rather than dropping them into a global cross-batch view.
             verb = "s match" if suspect_dupes != 1 else " matches"
             if in_account_dupes == 0:
                 relationship = "an existing row on a different account"
@@ -371,8 +371,8 @@ def _build_tasks(request: Request | None) -> list[dict]:
                 "description": f"{suspect_dupes} transaction{verb} {relationship}. "
                                "Open the import that flagged them to review each one.",
                 "count":       suspect_dupes,
-                "link":        "/import-export",
-                "link_label":  "Open Import",
+                "link":        "/import-export?tab=history",
+                "link_label":  "Open Import History",
                 "severity":    SEVERITY_WARNING,
             })
 
@@ -393,8 +393,8 @@ def _build_tasks(request: Request | None) -> list[dict]:
                                "reconciling — a duplicate charge to resolve, or a split-shipment match to confirm. "
                                "Open the import and review its Amazon reconciliation report.",
                 "count":       amazon_attention,
-                "link":        "/import-export",
-                "link_label":  "Open Import",
+                "link":        "/import-export?tab=history",
+                "link_label":  "Open Import History",
                 "severity":    SEVERITY_WARNING,
             })
 

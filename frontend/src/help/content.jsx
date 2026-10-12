@@ -2184,7 +2184,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'The Import page',
     surfaces: ['Import'],
-    summary: 'Where transactions come in. Three tabs cover File Import, Amazon and Connections, and the import history below keeps a card per file recording what it did.',
+    summary: 'Where transactions come in. File Import, Amazon and Connections bring them in, and the Import History tab keeps a card per file or sync recording what it did.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2192,7 +2192,7 @@ export const HELP_TOPICS = [
             what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
             are how the page itself is divided. */}
         <p>
-          Where transactions come in. The page has three tabs, and the sections
+          Where transactions come in. The page has four tabs, and the sections
           below follow them: each row names something on the page, says what it is for, and links the
           topic that explains it.
         </p>
@@ -2218,11 +2218,31 @@ export const HELP_TOPICS = [
                   of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
               </tr>
               <tr>
-                <td><strong>Data sources</strong> and <strong>Manage sources</strong></td>
-                <td>The import history, grouped by <HelpLink to="/help/unknown-data-source">saved data
-                  source</HelpLink>. Saving a file&apos;s mapping as a data source means the next file from
-                  the same place needs none of the mapping again.</td>
+                <td><strong>Data sources</strong></td>
+                <td>The <HelpLink to="/help/unknown-data-source">saved data sources</HelpLink>, each
+                  with its rename, <strong>Folder</strong>, <strong>Edit</strong> and delete controls.
+                  Saving a file&apos;s mapping as a data source means the next file from the same place
+                  needs none of the mapping again.</td>
               </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          A finished import opens the <strong>Import History</strong> tab on the card for the file just
+          imported, and the File Import tab is ready for the next file.
+        </p>
+
+        <HelpHeading anchor="history-tab">Import History</HelpHeading>
+        <p>
+          Every import and sync, grouped by where it came from: a saved data source, Amazon, a connection,
+          or <HelpLink to="/help/unknown-data-source">no saved source</HelpLink>.
+        </p>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>On the page</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
               <tr>
                 <td><strong>Group imported categories</strong></td>
                 <td>Sorting the categories a file brought with it into groups, and removing the unwanted
@@ -2240,8 +2260,8 @@ export const HELP_TOPICS = [
 
         <HelpHeading anchor="file-cards">A file&apos;s card</HelpHeading>
         <p>
-          Each imported file gets a card in the import history; a connection&apos;s syncs are filed on
-          cards by month.
+          Each imported file gets a card on the Import History tab; a connection&apos;s syncs are filed
+          on cards by month.
         </p>
         <div className="help-table-scroll">
           <table>
@@ -2318,7 +2338,8 @@ export const HELP_TOPICS = [
           Where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
           and maintained. This is also where the mapping of accounts from the provider to accounts in
           the application occurs. <strong>Sync now</strong> pulls new transactions from every connection,
-          and what each sync brings in joins the import history on the File Import tab.
+          and what each sync brings in joins the Import History tab &mdash; <strong>View in import
+            history</strong>, on a finished sync, opens the cards it added to.
         </p>
       </>
     ),
@@ -2508,26 +2529,26 @@ export const HELP_TOPICS = [
     id: 'unknown-data-source',
     section: 'importing',
     title: 'Saved data sources (import file profiles)',
-    surfaces: ['Import (Recent imports)'],
+    surfaces: ['Import (Data sources)', 'Import History'],
     summary: 'Imported files not linked to a saved mapping are listed under "unknown data source" or "temporary draft". A data source is a saved mapping which is useful if other files with the same format (e.g. from the same source) will be imported later.',
     body: () => (
       <>
         <p>
           A <strong>data source</strong> is a saved template of the settings from the
           import mapping screen describing the fields and account mapping. Imported files
-          are organized in the import history section by data source. If there will be future
+          are organized on the Import History tab by data source. If there will be future
           imports from the same data source it is useful to save the mapping so it does not
           need to be recreated each time. A file lands under <strong>unknown data source</strong> or a <strong>temporary
             draft</strong> when it isn't linked to a data source.
         </p>
         <p>
           The saved mapping can be created during the import or afterwards from
-          the import summary on the Import page.
+          the file&apos;s row on the Import History tab.
         </p>
         <p>
-          The <strong>Manage sources</strong> button allows for editing, deleting and can also
-          be used to create new data sources. Deleting a data source does not remove any files,
-          just the mapping template.
+          The <strong>Data sources</strong> list on the File Import tab allows for editing, deleting
+          and can also be used to create new data sources. Deleting a data source does not remove any
+          files, just the mapping template.
         </p>
         <h4>Transaction IDs</h4>
         <p>*needs review*</p>
@@ -2561,7 +2582,7 @@ export const HELP_TOPICS = [
     id: 'watched-folders',
     section: 'importing',
     title: 'Importing from a watched folder',
-    surfaces: ['Import (Watched folders)', 'Manage data sources (Folder)'],
+    surfaces: ['Import (Watched folders)', 'Import (Data sources → Folder)'],
     summary: 'A data source can watch a folder instead of waiting for a file to be dropped on the import page. Files placed there are imported on the next visit; anything the saved mapping cannot answer on its own is left for review rather than guessed at.',
     body: () => (
       <>
@@ -2569,8 +2590,8 @@ export const HELP_TOPICS = [
         <p>
           A monthly export usually follows the same route every time: download the file, open the import
           page, pick the data source, import. A <strong>watched folder</strong> removes the middle of
-          that. The <strong>Folder</strong> button on a data source's row under <strong>Manage data
-            sources</strong> takes a directory; a CSV that appears in it is imported the next time the app
+          that. The <strong>Folder</strong> button on a data source's row in the <strong>Data
+            sources</strong> list takes a directory; a CSV that appears in it is imported the next time the app
           is opened, and arrives in the import history as an ordinary file card with the usual duplicate,
           rejected-row and rule-suggestion review on it.
         </p>

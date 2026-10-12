@@ -13,6 +13,8 @@
 //   * The newest archived year opens with the archive and older ones stay shut, so the common case —
 //     one year of older cards — costs one click rather than two, and a decade of history still opens
 //     to a list of years rather than to every card at once.
+//   * A card the host is landing on (`revealIds`) opens the archive and its year around it — a file
+//     of old transactions is archived the moment it is imported, and its card is what the import shows.
 
 
 import { useState } from 'react'
@@ -97,9 +99,21 @@ function AttentionPills({ batches, noun }) {
  * `archive` is `partitionImportHistory`'s by-year output; `renderBatch` is the host's own card
  * renderer, so an archived card is the same card it would have been in the list above.
  */
-export function ImportHistoryArchive({ archive, renderBatch, noun = 'imports' }) {
+export function ImportHistoryArchive({ archive, renderBatch, noun = 'imports', revealIds }) {
   const [open, setOpen] = useState(false)
   const [closedYears, setClosedYears] = useState(() => new Set(archive.slice(1).map(group => group.year)))
+  // Opened once per set of cards to reveal, during render so they are in the DOM in the same commit
+  // as the row around them; afterwards the disclosures are the reader's to close again.
+  const revealYears = archive.filter(group => group.batches.some(b => revealIds?.has(b.id))).map(group => group.year)
+  const revealKey = revealYears.join('|') + (revealYears.length ? `#${[...revealIds].join(',')}` : '')
+  const [revealed, setRevealed] = useState('')
+  if (revealKey !== revealed) {
+    setRevealed(revealKey)
+    if (revealYears.length) {
+      setOpen(true)
+      setClosedYears(prev => new Set([...prev].filter(year => !revealYears.includes(year))))
+    }
+  }
   if (!archive.length) return null
   const total = archivedCardCount(archive)
 

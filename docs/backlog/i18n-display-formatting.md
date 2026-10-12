@@ -25,7 +25,7 @@ about a number.
 - **A date-format preference**, threaded into `formatDate` / `monthLabel` in `lib/utils.js`.
 - **Sweep the renders the central helpers do not reach.** A grep for `formatDate` misses roughly nine
   spots that render a raw ISO `{x.date}` directly, clustered in the duplicate and import surfaces
-  (`UnifiedDuplicatesDialog`, `ImportBatchDetail`, `DuplicateRowsDialog`, `TransactionDetail`, plus
+  (`UnifiedDuplicatesDialog`, `ImportBatchDetail`, `TransactionDetail`, plus
   `Settings` / `Transactions` / `ImportExport`). Without this the app keeps showing ISO after the user
   picks a format — the shape of bug where "I set my format and half the app ignored it".
 

@@ -1879,6 +1879,8 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 "removed":       e["removed"],
                 "skipped":       e["skipped"],
                 "error":         e["error"],
+                # The import cards this call added rows to, so whatever reports the run can link to them.
+                "card_ids":      [c["id"] for c in (e.get("card_counts") or []) if c.get("id")],
             }
             for e in sync_diagnostics
         ],

@@ -472,14 +472,21 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
     const el = scrollRef.current
     if (el) el.scrollLeft = el.scrollWidth
   }, [data])
-  // Clicking a year's bar focuses the monthly charts on that year (drives the year picker). The active
+  // Clicking a year's column focuses the monthly charts on that year (drives the year picker). The active
   // year's bar is highlighted so it's clear which one the charts above are showing.
   const selectable = typeof onSelectYear === 'function'
   return (
     <div ref={scrollRef} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
       <div style={{ minWidth: Math.max(260, data.length * 46), height: 180 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
+          <BarChart
+            data={data}
+            onClick={selectable ? (state => {
+              const year = data[state?.activeTooltipIndex]?.year
+              if (year) onSelectYear(year)
+            }) : undefined}
+            style={selectable ? { cursor: 'pointer' } : undefined}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 11 }} interval={0} />
             {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
@@ -498,8 +505,6 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
               dataKey="total"
               radius={[3, 3, 0, 0]}
               name="Total"
-              onClick={selectable ? (d => d?.year && onSelectYear(d.year)) : undefined}
-              style={selectable ? { cursor: 'pointer' } : undefined}
             >
               {data.map(d => (
                 <Cell
@@ -1422,7 +1427,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
 
   function handleMonthBarClick(d) {
     if (!d?.monthKey || !onOpenMonth) return
-    // Recharts doesn't surface a dblclick event on Bar, so detect it manually with a short window
+    // Recharts doesn't surface a dblclick event on a chart, so detect it manually with a short window
     // between two single clicks on the same month.
     const now = Date.now()
     const prev = lastBarClickRef.current
@@ -1571,7 +1576,12 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
               the visible panel edge instead of the off-screen far edge of a wider chart. */}
           <div style={{ width: '100%', height: 180 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={monthlyTotal} margin={{ top: 6, right: 12, bottom: 6, left: 0 }}>
+              <ComposedChart
+                data={monthlyTotal}
+                margin={{ top: 6, right: 12, bottom: 6, left: 0 }}
+                onClick={onOpenMonth ? (state => handleMonthBarClick(monthlyTotal[state?.activeTooltipIndex])) : undefined}
+                style={onOpenMonth ? { cursor: 'pointer' } : undefined}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis
                   dataKey="month"
@@ -1593,8 +1603,6 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
                   fill="var(--accent)"
                   radius={[3, 3, 0, 0]}
                   name="Total"
-                  onClick={onOpenMonth ? handleMonthBarClick : undefined}
-                  style={onOpenMonth ? { cursor: 'pointer' } : undefined}
                 />
                 {/* Trailing-12-month run rate — the trend line; flat-ish means steady spending, sloped means drifting. */}
                 <Line
@@ -3433,6 +3441,10 @@ export default function Dashboard() {
                               height={TREND_CHART_HEIGHT}
                               data={trendData}
                               margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
+                              // On the chart, not the bar: the target is the whole hovered column, so a
+                              // short bar is as easy to pick as a tall one.
+                              onClick={state => handleTrendBarClick(trendData[state?.activeTooltipIndex])}
+                              style={{ cursor: 'pointer' }}
                             >
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                               <XAxis
@@ -3470,9 +3482,7 @@ export default function Dashboard() {
                                 radius={[4, 4, 0, 0]}
                                 shape={<ClippedBar />}
                                 name={viewIsCashFlow ? 'Net' : viewIsIncome ? 'Income' : 'Spending'}
-                                onClick={handleTrendBarClick}
                                 isAnimationActive={false}
-                                style={{ cursor: 'pointer' }}
                               >
                                 {trendData.map((entry, idx) => (
                                   <Cell

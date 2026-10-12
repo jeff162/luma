@@ -21,9 +21,10 @@
 // it going" answers "what happened" once it is over, without ever changing size. The roster and the
 // arithmetic behind it live in `SyncStatusContext` and `lib/syncRoster.js`.
 
+import { useNavigate } from 'react-router-dom'
 import { AppDialog, Button } from './ui.jsx'
 import { providerLabel } from '../lib/importSourceFields.js'
-import { rosterAdded, rosterRequests } from '../lib/syncRoster.js'
+import { rosterAdded, rosterCardIds, rosterRequests } from '../lib/syncRoster.js'
 
 // A row-sized "still working" mark. The shared `Spinner` is a page-level block — 40px of padding around
 // the word "Loading…" — so dropping it into a status line both dwarfed the line and said the wrong thing:
@@ -120,6 +121,8 @@ export function SyncStatusPanel({ connections = [], syncState = {}, runProviders
   const rostered = new Set(connections.map(e => e.provider))
   const starting = runProviders.filter(p => syncState[p]?.syncing && !rostered.has(p))
   const active = connections.some(isRunning) || starting.length > 0
+  const cardIds = rosterCardIds(connections)
+  const navigate = useNavigate()
   return (
     <AppDialog
       draggable
@@ -143,7 +146,19 @@ export function SyncStatusPanel({ connections = [], syncState = {}, runProviders
               Minimize
             </Button>
           ) : (
-            <Button onClick={onClose}>Close</Button>
+            <>
+              {/* A finished run is reported on the cards it wrote to; this is the way to them from
+                  whichever page the sync was started on. Absent when nothing arrived. */}
+              {cardIds.length ? (
+                <Button variant="ghost" onClick={() => {
+                  navigate(`/import-export?tab=history&batch=${cardIds.join(',')}`)
+                  onClose()
+                }}>
+                  View in import history
+                </Button>
+              ) : null}
+              <Button onClick={onClose}>Close</Button>
+            </>
           )}
         </>
       )}
