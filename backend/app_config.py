@@ -430,6 +430,10 @@ def data_location() -> dict:
         "db_display_path": _home_relative(db_path),
         "control_db_path": str(control_db_path),
         "control_db_display_path": _home_relative(control_db_path),
+        # The name this server goes by, which is not necessarily the one on screen: the interface's is
+        # fixed when it is built. It rides here because it answers the same question the paths do —
+        # which copy is this — and is the only thing telling two copies' saved passkeys apart.
+        "app_name": value_of("app_name"),
         "show_by_default": (
             not stock_location
             or distribution_form() == DIST_FORM_CHECKOUT

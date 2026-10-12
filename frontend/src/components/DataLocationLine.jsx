@@ -7,12 +7,17 @@
 // copy am I looking at — and the two are read together: a checkout pointed at a restored backup and one
 // pointed at real data are otherwise indistinguishable from anywhere in the app.
 //
+// The server's own name joins it when that differs from the name on screen. The interface's name is
+// fixed at build time, so an installation renamed by `APP_NAME` — which is what labels its passkeys on
+// a device — would otherwise show the change nowhere.
+//
 // Admin-or-local only, and enforced by the *server*: the path rides `/auth/status` solely for a session
 // that could already read it from the configuration report, so this component renders nothing for
 // everyone else without holding a second copy of that rule.
 
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip } from './ui.jsx'
+import { APP_NAME } from '../lib/appConfig.js'
 import { describeDataLocation, NAV_DATA_LOCATION_PREF_KEY } from '../lib/dataLocation.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 
@@ -50,7 +55,21 @@ export default function DataLocationLine({ dataLocation }) {
     timerRef.current = setTimeout(() => setCopied(null), COPIED_MESSAGE_MS)
   }
 
+  const serverName = String(dataLocation.app_name || '').trim()
+
   return (
+    <>
+    {serverName && serverName !== APP_NAME ? (
+      <div
+        data-testid="server-app-name"
+        style={{
+          marginTop: 2, color: 'var(--muted)', fontSize: 11, lineHeight: 1.4,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+      >
+        {serverName}
+      </div>
+    ) : null}
     <Tooltip
       align="left"
       maxWidth={420}
@@ -107,5 +126,6 @@ export default function DataLocationLine({ dataLocation }) {
         </span>
       </button>
     </Tooltip>
+    </>
   )
 }

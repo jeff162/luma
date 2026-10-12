@@ -49,7 +49,10 @@ they move there.
 - **Luma hands out Caddy's root certificate.** Caddy serves it on its loopback admin API, so Luma can
   fetch it on request with no file path or permission to configure. The download needs no sign-in — the
   certificate is public, and a device has to hold it before a password can safely be typed — and sits
-  beside per-device install steps, reached from the sign-in screen and from the *Set up HTTPS* task.
+  beside per-device install steps, reached from the sign-in screen and from the *Set up HTTPS* task. The page
+  shows the certificate's fingerprint and the server prints the same one at startup, so a certificate
+  swapped on a device's first visit — the one moment it is fetched over a connection nothing vouches
+  for — can be caught by comparing the two.
 - **Sign-in protection is steered, not required.** An operator who trusts their network may leave it
   off; the existing recommendation and task do the steering.
 - **Windows and macOS can be the server.** The mode, the responder and Caddy are all cross-platform.
@@ -69,8 +72,6 @@ they move there.
 
 ### Open
 
-- **Whether the download page shows the certificate's fingerprint**, to compare against the server's
-  startup output. It answers a certificate swapped on a device's first visit; undecided.
 - **Three things to verify on a real network**, none of which a development machine can show: that a
   `.local` name is accepted as a WebAuthn RP id (it should be, since the RP id is set *equal* to the
   host), that the client devices in use resolve `.local` at all, and that the responder coexists with

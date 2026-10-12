@@ -115,4 +115,15 @@ describe('the navigation pane data-location line', () => {
     // `~` is readable but not pasteable everywhere the user is going with it.
     expect(writeText).toHaveBeenCalledWith('/home/someone/ledgers/household/luma-data.db')
   })
+
+  it('names the server only when its name is not the one on screen', () => {
+    // The interface's name is fixed at build time, so a renamed server is otherwise invisible — and the
+    // default case, where the two agree, must not repeat the logo beside it.
+    renderLine({ dataLocation: { ...LOCATION, app_name: 'Ledger Demo' } })
+    expect(screen.getByTestId('server-app-name').textContent).toBe('Ledger Demo')
+    cleanup()
+
+    renderLine({ dataLocation: { ...LOCATION, app_name: 'Luma' } })
+    expect(screen.queryByTestId('server-app-name')).toBeNull()
+  })
 })
