@@ -24,8 +24,10 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from backend.authorization import require_admin_or_local
+from backend.db.database import get_db
 from backend.runtime_config import bundled_license_path, third_party_notices
 from backend.services import update_check
+from backend.services.storage_summary import storage_summary
 
 router = APIRouter()
 
@@ -141,3 +143,11 @@ def run_update_check():
 def auto_update_check():
     update_check.maybe_check()
     return update_check.status()
+
+
+@router.get("/storage-summary")
+def get_storage_summary():
+    """What the trash holds and how much the import records take, against the size of the database —
+    read once by Settings so its section list can say so before a section is opened."""
+    with get_db() as conn:
+        return storage_summary(conn)

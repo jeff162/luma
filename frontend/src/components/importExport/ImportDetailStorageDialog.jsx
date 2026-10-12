@@ -29,13 +29,7 @@ import { HistoryAttentionPill } from './importPresentational.jsx'
 import { buildDataSourceRows } from '../../lib/importExport/dataSourceRows.js'
 import { describeDataSourceRow, formatCoverageRange } from '../../lib/importExport/importHistoryWindow.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
-
-const formatBytes = bytes => {
-  const n = Number(bytes || 0)
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
-  if (n >= 1024) return `${Math.round(n / 1024)} KB`
-  return `${n} B`
-}
+import { formatBytes, formatShare } from '../../lib/storageFormat.js'
 
 const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`
 
@@ -127,7 +121,9 @@ function CardRow({ entry, checked, onToggle }) {
 // Compared as calendar days, which both shapes `imported_at` arrives in begin with.
 const importedBefore = (batch, cutoffDay) => String(batch.imported_at || '').slice(0, 10) < cutoffDay
 
-export function ImportDetailStorageDialog({ onClose }) {
+// `onChanged` tells the page that opened this that a clear went through, so what it shows of these sizes
+// follows.
+export function ImportDetailStorageDialog({ onClose, onChanged }) {
   const [loaded, setLoaded] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   // For this visit only: a source with dozens of imports can be folded away to bring the others into
@@ -139,12 +135,19 @@ export function ImportDetailStorageDialog({ onClose }) {
   // The cards and sources are read here rather than handed in, so the screen groups imports exactly as
   // the history does without the page that opens it having to hold the history.
   const load = useCallback(async () => {
-    const [storage, batches, profiles] = await Promise.all([
+    // The database's size rides along so every figure here can be read against it: 4 MB is worth an
+    // afternoon in a 10 MB ledger and nobody's time in a 2 GB one.
+    const [storage, batches, profiles, summary] = await Promise.all([
       api.getBatchDetailStorage().catch(() => ({})),
       api.listBatches().catch(() => []),
       api.getImportProfiles().catch(() => []),
+      api.getStorageSummary().catch(() => null),
     ])
-    setLoaded({ storage, dataSourceRows: buildDataSourceRows({ profiles, batches }) })
+    setLoaded({
+      storage,
+      dataSourceRows: buildDataSourceRows({ profiles, batches }),
+      databaseBytes: summary?.database_bytes || 0,
+    })
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -161,6 +164,12 @@ export function ImportDetailStorageDialog({ onClose }) {
       (sum, entry) => sum + (selected.has(entry.batch.id) ? entry.stored.bytes : 0), 0,
     ), 0,
   ), [groups, selected])
+  const databaseBytes = loaded?.databaseBytes || 0
+  // A size with its share of the database beside it, where the database's size is known.
+  const sized = bytes => {
+    const share = formatShare(bytes, databaseBytes)
+    return share ? `${formatBytes(bytes)} (${share})` : formatBytes(bytes)
+  }
   const olderIds = useMemo(() => {
     const cutoffDay = format(subYears(new Date(), 1), 'yyyy-MM-dd')
     return groups.flatMap(group => group.cards)
@@ -192,6 +201,7 @@ export function ImportDetailStorageDialog({ onClose }) {
       setPreview(null)
       setSelected(new Set())
       await load()
+      onChanged?.()
     } finally {
       setBusy(false)
     }
@@ -206,7 +216,7 @@ export function ImportDetailStorageDialog({ onClose }) {
         <>
           <Button variant="ghost" onClick={onClose}>Close</Button>
           <Button onClick={askToClear} disabled={selected.size === 0}>
-            {`Clear detail${selected.size === 0 ? '' : ` · ${formatBytes(selectedBytes)}`}`}
+            {`Clear detail${selected.size === 0 ? '' : ` · ${sized(selectedBytes)}`}`}
           </Button>
         </>
       )}
@@ -236,7 +246,7 @@ export function ImportDetailStorageDialog({ onClose }) {
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {plural(totals.rows, 'stored row')} across {plural(groups.reduce((n, g) => n + g.cards.length, 0), 'import')} · {formatBytes(totals.bytes)}
+              {plural(totals.rows, 'stored row')} across {plural(groups.reduce((n, g) => n + g.cards.length, 0), 'import')} · {databaseBytes ? `${sized(totals.bytes)} of a ${formatBytes(databaseBytes)} database` : formatBytes(totals.bytes)}
             </span>
             {/* Replaces the selection rather than adding to it, so what is ticked afterwards is exactly
                 the set the label names. */}

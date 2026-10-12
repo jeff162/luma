@@ -21,6 +21,7 @@ import uuid
 from backend.db.database import compact_if_worthwhile, get_db
 from backend.services.recurring_detection import payee_keys_for_ids, rescan_edited_transactions
 from backend.services.import_batch_totals import delete_transactions
+from backend.services.storage_summary import TRASH_DELETED_SQL, TRASH_DUPLICATES_SQL
 from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_attributes import attribute_require_all_sql, attribute_vocabulary
 from backend.services.transaction_facets import (
@@ -2250,7 +2251,18 @@ def restore_transaction(txn_id: str):
 
 
 @router.get("/trash")
-def list_trashed_transactions(limit: int = Query(200, le=1000)):
+def list_trashed_transactions(limit: int = Query(200, le=1000), scope: str = "all"):
+    """The most recently trashed transactions. ``scope`` narrows to one Trash section, as it does for
+    emptying, so each section's page is drawn from its own rows — one page shared between the two let a
+    run of removed duplicates crowd every direct delete off it."""
+    if scope == "deleted":
+        section = f" AND NOT ({TRASH_DUPLICATES_SQL})"
+    elif scope == "duplicates":
+        section = f" AND {TRASH_DUPLICATES_SQL}"
+    elif scope == "all":
+        section = ""
+    else:
+        raise HTTPException(status_code=400, detail="Unknown trash scope")
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -2277,6 +2289,7 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
               -- origin) is their undo path.
               AND NOT (COALESCE(t.rejection_reason, '') = 'duplicate_confirmed'
                        AND COALESCE(t.dedupe_resolved_by, '') NOT IN ('amazon_merge', 'amazon_discard'))
+            """ + section + """
             ORDER  BY t.trashed_at DESC, t.date DESC
             LIMIT  ?
             """,
@@ -2304,8 +2317,8 @@ def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
     "undo reject" (user) rely on to restore them."""
     # The two visible slices. Amazon removals are exactly the duplicate_confirmed rows tagged
     # amazon_*; direct deletes are the untagged remainder (the dedupe flow's rows match neither).
-    amazon = "COALESCE(dedupe_resolved_by, '') IN ('amazon_merge', 'amazon_discard')"
-    direct = "COALESCE(rejection_reason, '') <> 'duplicate_confirmed'"
+    amazon = TRASH_DUPLICATES_SQL
+    direct = TRASH_DELETED_SQL
     if scope == "deleted":
         visible = direct
     elif scope == "duplicates":

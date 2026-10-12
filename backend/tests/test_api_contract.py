@@ -37,6 +37,16 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             self.assertIn("transactions", r.json())
 
+    def test_storage_summary_answers_for_the_session_s_own_database(self):
+        # Settings reads these before any section opens; an empty ledger still has a size to compare with.
+        with api_client() as (client, _):
+            r = client.get("/api/app/storage-summary")
+            self.assertEqual(r.status_code, 200)
+            body = r.json()
+            self.assertGreater(body["database_bytes"], 0)
+            self.assertEqual(body["import_detail"], {"rows": 0, "bytes": 0})
+            self.assertEqual(body["trash"], {"transactions": 0, "duplicates": 0, "rules": 0})
+
     def test_seeded_data_is_served_from_the_temp_db(self):
         # init_db seeds the category group skeleton (incl. the protected Unassigned group); starter
         # leaves and rules are opt-in, so they aren't present on a fresh temp DB. The served skeleton

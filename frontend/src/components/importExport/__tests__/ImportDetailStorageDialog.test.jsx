@@ -14,6 +14,7 @@ import { ImportDetailStorageDialog } from '../ImportDetailStorageDialog.jsx'
 vi.mock('../../../lib/api.js', () => ({
   api: {
     getBatchDetailStorage: vi.fn(),
+    getStorageSummary: vi.fn(),
     listBatches: vi.fn(),
     getImportProfiles: vi.fn(),
     previewBatchDetailClearing: vi.fn(),
@@ -46,8 +47,9 @@ const storage = {
   b2020: { report_rows: 59, rejected_rows: 0, unreviewed_rows: 0, enriched_rows: 0, bytes: 512 * 1024 },
 }
 
-function renderDialog({ stored = storage, cards = batches } = {}) {
+function renderDialog({ stored = storage, cards = batches, databaseBytes = 0 } = {}) {
   api.getBatchDetailStorage.mockResolvedValue(stored)
+  api.getStorageSummary.mockResolvedValue({ database_bytes: databaseBytes })
   api.listBatches.mockResolvedValue(cards)
   api.getImportProfiles.mockResolvedValue(profiles)
   render(<ImportDetailStorageDialog onClose={vi.fn()} />)
@@ -67,6 +69,14 @@ describe('the stored-detail screen', () => {
 
     expect(screen.getByText('3.5 MB')).toBeTruthy()
     expect(screen.queryByText('nothing-stored.csv')).toBeNull()
+  })
+
+  // 3.5 MB means nothing without the size it would come out of.
+  it('states what is held against the size of the database', async () => {
+    renderDialog({ databaseBytes: 35 * 1024 * 1024 })
+    await waitFor(() => expect(screen.getByText(/activity-2019\.csv/)).toBeTruthy())
+
+    expect(screen.getByText(/3\.5 MB \(about 10%\) of a 35\.0 MB database/)).toBeTruthy()
   })
 
   // Nothing left in a report is a row nobody could want, so what a clear would take is stated per

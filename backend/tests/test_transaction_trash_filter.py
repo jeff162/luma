@@ -30,6 +30,7 @@ from backend.routers.transactions import (
     spending_by_group,
     trash_transaction,
 )
+from backend.services.storage_summary import trash_counts
 from backend.services.documents import (
     INGEST_GRACE_SECONDS,
     document_file_path,
@@ -351,6 +352,24 @@ class TrashFilterCoverageTests(unittest.TestCase):
         with self._use_db_path():
             self.assertEqual(empty_transaction_trash(scope="duplicates")["removed"], 1)
         self.assertFalse(self._txn_exists(merged))
+
+    def test_each_section_lists_and_counts_only_its_own_rows(self):
+        # The count Settings shows beside a section has to be the section's own, and so does the page it
+        # lists: with one page shared between the two, enough removed duplicates hid every direct delete.
+        account, group, _, user_trash = self._seed_two()
+        merged = self._insert_txn(account_id=account, category_id=group, amount=30.00, date="2026-04-25")
+        auto = self._insert_txn(account_id=account, category_id=group, amount=40.00, date="2026-04-26")
+        with self._use_db_path():
+            trash_transaction(user_trash)
+            self._mark_confirmed_duplicate(merged, resolved_by="amazon_merge")
+            self._mark_confirmed_duplicate(auto, resolved_by="auto_merge")   # the dedupe flow's own
+            deleted = [row["id"] for row in list_trashed_transactions(limit=200, scope="deleted")]
+            duplicates = [row["id"] for row in list_trashed_transactions(limit=200, scope="duplicates")]
+            with get_db() as conn:
+                counts = trash_counts(conn)
+        self.assertEqual(deleted, [user_trash])
+        self.assertEqual(duplicates, [merged])
+        self.assertEqual((counts["transactions"], counts["duplicates"]), (1, 1))
 
     def _backdate_trashed_at(self, txn_id: str, modifier: str) -> None:
         """Push a trashed row's trashed_at into the past by a SQLite datetime modifier (e.g. '-7 months'),

@@ -64,7 +64,8 @@ function trashEmptyDescription(timeframe, noun, note) {
 
 // Load / restore / empty plumbing shared by the two transaction-trash sections. `filter` selects the
 // section's slice of the trash; `scope` keeps its Empty button from deleting the other section's rows.
-function useTrashedTransactions(filter, scope) {
+// `onChanged` reports a restore or an emptying to the page, which shows each section's count.
+function useTrashedTransactions(filter, scope, onChanged) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [workingId, setWorkingId] = useState('')
@@ -76,7 +77,7 @@ function useTrashedTransactions(filter, scope) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const rows = await api.getTrashedTransactions()
+      const rows = await api.getTrashedTransactions(scope)
       setItems((Array.isArray(rows) ? rows : []).filter(filter))
       setError('')
     } catch (err) {
@@ -84,7 +85,7 @@ function useTrashedTransactions(filter, scope) {
     } finally {
       setLoading(false)
     }
-  }, [filter])
+  }, [filter, scope])
 
   useEffect(() => { load() }, [load])
 
@@ -94,6 +95,7 @@ function useTrashedTransactions(filter, scope) {
     try {
       await txnMutations.restoreTransaction(txnId)
       await load()
+      onChanged?.()
     } catch (err) {
       setError(err.message || 'Failed to restore transaction')
     } finally {
@@ -115,6 +117,7 @@ function useTrashedTransactions(filter, scope) {
     try {
       await api.emptyTransactionTrash(scope, timeframe)
       await load()
+      onChanged?.()
     } catch (err) {
       setError(err.message || 'Failed to empty trash')
     } finally {
@@ -160,12 +163,23 @@ function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
   )
 }
 
-export function TransactionsTrashSection() {
+// The section lists a page of the most recent; `count` is the whole bucket, so a longer one says the
+// list is not all of it.
+function ListedOfCount({ listed, count }) {
+  if (!(count > listed)) return null
+  return (
+    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+      Showing the {listed.toLocaleString()} most recently trashed of {count.toLocaleString()}.
+    </div>
+  )
+}
+
+export function TransactionsTrashSection({ count, onChanged }) {
   // Transactions deleted directly (the transactions page, detail panels, bulk edit) — the import
   // source isn't meaningful for these, so it's a flat list. Duplicate copies removed by import
   // reconciliation live in the sibling DuplicateTransactionsTrashSection. Restoration just clears
   // the `trashed_at` flag; emptying drops this section's records permanently.
-  const t = useTrashedTransactions(isDirectDelete, 'deleted')
+  const t = useTrashedTransactions(isDirectDelete, 'deleted', onChanged)
 
   return (
     <>
@@ -210,6 +224,8 @@ export function TransactionsTrashSection() {
           </div>
         )}
 
+        <ListedOfCount listed={t.items.length} count={count} />
+
         {t.error ? (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{t.error}</div>
         ) : null}
@@ -218,12 +234,12 @@ export function TransactionsTrashSection() {
   )
 }
 
-export function DuplicateTransactionsTrashSection() {
+export function DuplicateTransactionsTrashSection({ count, onChanged }) {
   // Duplicate charge copies removed by import reconciliation (Merge → keep one / per-copy Discard),
   // organized by the file each copy came from — that provenance is the whole reason these sit apart
   // from ordinary deletes. Groups collapse for scanning; a lone file starts open. Restore brings a
   // copy back, and the reconciliation report simply re-derives its grouping.
-  const t = useTrashedTransactions(isReconRemoval, 'duplicates')
+  const t = useTrashedTransactions(isReconRemoval, 'duplicates', onChanged)
   const [openGroups, setOpenGroups] = useState(null)   // null = default (a lone group starts open)
 
   const groups = []
@@ -298,6 +314,8 @@ export function DuplicateTransactionsTrashSection() {
           )
         })}
 
+        <ListedOfCount listed={t.items.length} count={count} />
+
         {t.error ? (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{t.error}</div>
         ) : null}
@@ -306,7 +324,7 @@ export function DuplicateTransactionsTrashSection() {
   )
 }
 
-export function RulesTrashSection() {
+export function RulesTrashSection({ onChanged }) {
   // Trashed categorization rules (from the Rules page delete / stale-rule cleanup). Restore brings a rule
   // back to active (refused if an active rule now shares its matcher); purge removes it for good.
   const [items, setItems] = useState([])
@@ -331,19 +349,19 @@ export function RulesTrashSection() {
 
   async function restore(id) {
     setWorkingId(id); setError('')
-    try { await api.restoreRule(id); await load() }
+    try { await api.restoreRule(id); await load(); onChanged?.() }
     catch (err) { setError(err.message || 'Failed to restore rule') }
     finally { setWorkingId('') }
   }
   async function purge(id) {
     setWorkingId(id); setError('')
-    try { await api.purgeRule(id); await load() }
+    try { await api.purgeRule(id); await load(); onChanged?.() }
     catch (err) { setError(err.message || 'Failed to remove rule') }
     finally { setWorkingId('') }
   }
   async function emptyTrash() {
     setConfirmEmpty(false); setEmptying(true); setError('')
-    try { await api.purgeAllTrashedRules(); await load() }
+    try { await api.purgeAllTrashedRules(); await load(); onChanged?.() }
     catch (err) { setError(err.message || 'Failed to empty rules trash') }
     finally { setEmptying(false) }
   }

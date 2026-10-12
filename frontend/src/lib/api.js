@@ -681,7 +681,9 @@ export const api = {
   // `actions` is an ordered list of { type, ...payload }. Returns { updated_count }.
   bulkUpdateTransactions: (selection, actions) =>
     request('/transactions/bulk', { method: 'POST', body: JSON.stringify({ selection, actions }) }),
-  getTrashedTransactions: ()        => request('/transactions/trash'),
+  getTrashedTransactions: (scope = 'all') => request(`/transactions/trash?scope=${encodeURIComponent(scope)}`),
+  // Trash counts, the import records' size and the database's, for the Settings section list.
+  getStorageSummary: ()             => request('/app/storage-summary'),
   emptyTransactionTrash: (scope = 'all', olderThan = 'all') => request(`/transactions/trash/empty?scope=${encodeURIComponent(scope)}&older_than=${encodeURIComponent(olderThan)}`, { method: 'POST' }),
   // Soft-flag duplicate review. Flagging happens in the backend during import (new account,
   // soft match) and account merge; the per-batch unified report (UnifiedDuplicatesDialog)

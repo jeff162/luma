@@ -71,6 +71,7 @@ export default function CurrencySection() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select
           name="ledger-currency"
+          aria-label="Ledger currency"
           value={selected}
           disabled={saving}
           onChange={e => setSelected(e.target.value)}

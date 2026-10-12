@@ -113,6 +113,21 @@ def detail_storage(conn) -> dict:
     return by_batch
 
 
+def detail_storage_total(conn) -> dict:
+    """The same two tables as one figure — every card's stored rows and what they hold — for a summary
+    that has no use for the per-card split."""
+    report = conn.execute(
+        f"SELECT COUNT(*) AS n, COALESCE(SUM({_REPORT_BYTES}), 0) AS bytes FROM import_batch_duplicate"
+    ).fetchone()
+    rejected = conn.execute(
+        f"SELECT COUNT(*) AS n, COALESCE(SUM({_REJECTED_BYTES}), 0) AS bytes FROM import_batch_rejected_row"
+    ).fetchone()
+    return {
+        "rows": int(report["n"]) + int(rejected["n"]),
+        "bytes": int(report["bytes"]) + int(rejected["bytes"]),
+    }
+
+
 def _account_header(config_snapshot: Optional[str]) -> str:
     """The file header the import read each row's source label from, or "" when there is none.
 

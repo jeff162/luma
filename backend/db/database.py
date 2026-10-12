@@ -125,6 +125,11 @@ def _megabytes(byte_count: int) -> str:
     return f"{byte_count / (1024 * 1024):.1f} MB"
 
 
+def database_bytes(conn) -> int:
+    """The size of the database file this connection is on, free pages included."""
+    return _free_and_total_bytes(conn)[1]
+
+
 def _free_and_total_bytes(conn) -> tuple[int, int]:
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     page_count = conn.execute("PRAGMA page_count").fetchone()[0]

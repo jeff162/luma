@@ -57,9 +57,10 @@ export function Subsection({ title, children }) {
 }
 
 /*
- * `sections` is `[{ key, title, description, help, refresh, content }]`; a falsy entry is skipped, so a
- * page lists a conditional section as `condition && { ... }`. `help` and `refresh` sit on the section's
- * title, as they do on a page's.
+ * `sections` is `[{ key, title, note, description, help, refresh, content }]`; a falsy entry is skipped,
+ * so a page lists a conditional section as `condition && { ... }`. `help` and `refresh` sit on the
+ * section's title, as they do on a page's. `note` is a few characters beside the section's name in the
+ * list — how much it holds — for a section whose contents decide whether it is worth opening.
  */
 export default function SectionListPage({ title, help, sections }) {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -91,7 +92,14 @@ export default function SectionListPage({ title, help, sections }) {
                 onClick={() => select(section.key)}
                 style={isSelected ? selectedListItemStyle : listItemStyle}
               >
-                {section.title}
+                {section.note ? (
+                  <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                    <span>{section.title}</span>
+                    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                      {section.note}
+                    </span>
+                  </span>
+                ) : section.title}
               </button>
             )
           })}
