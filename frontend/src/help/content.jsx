@@ -418,7 +418,7 @@ export const HELP_TOPICS = [
         <h4>Using both</h4>
         <p>
           A common shape is files once for the older history and a connection from then on. The
-          overlap is safe, because every import is compared against the ledger &mdash; provided the
+          overlap is safe, because every import is compared against the ledger, provided the
           same bank account maps to the same account in {APP_NAME} from both.
         </p>
         <h4>Sources worth adding either way</h4>
@@ -465,8 +465,8 @@ export const HELP_TOPICS = [
       <>
         <p>*needs review*</p>
         <p>
-          Once the accounts are in, the same handful of steps repeats, at whatever interval suits
-          &mdash; monthly is typical.
+          Once the accounts are in, the same handful of steps repeats, at whatever interval suits.
+          Monthly is typical.
         </p>
         <ol>
           <li>
@@ -492,8 +492,8 @@ export const HELP_TOPICS = [
           <li>
             <strong>Look over what arrived.</strong> The needs-review count on each card opens just
             those transactions. Correct the ones a rule filed wrongly, categorize the ones no rule
-            caught &mdash; accepting the offered rule means the same payee is filed next time &mdash;
-            and mark the rest reviewed. See <HelpLink to="/help/reviewing-transactions">needs
+            caught, and mark the rest reviewed. Accepting the offered rule means the same payee is
+            filed next time. See <HelpLink to="/help/reviewing-transactions">needs
               review</HelpLink>.
           </li>
           <li>
@@ -2533,17 +2533,10 @@ export const HELP_TOPICS = [
         </p>
         <h4>Secrets Vault</h4>
         <p>
-          The vault is used to encrypt the data connection credentials stored on disk. The passphrase
-          protects the encryption key which allows for multiple ways to protect the same key. This is both
-          to support multiple users and so a single user can have multiple authentication methods such as a
-          passphrase and a passkey. This also allows for a recovery key which can be stored in a secure
-          location separate from the passphrase (as there is no point in storing them in the same location as
-          then they will both get lost together).
-        </p>
-        <p>
-          To get started with data connections set a Vault Passphrase. The Set Vault Passphrase button
-          gets replaced with Vault Settings and there there is a Lock button. The Vault automatically locks
-          after a period of time (8 hours?) unless locked earlier with the Locked button.
+          The credentials a connection stores on disk are encrypted in
+          the <HelpLink to="/help/credential-vault">credential vault</HelpLink>. To get started with
+          data connections use <strong>Set vault passphrase</strong> on the Connections tab. The vault
+          has to be unlocked to connect or sync.
         </p>
         <h4>Connecting</h4>
         <p>
@@ -2635,6 +2628,177 @@ export const HELP_TOPICS = [
           Disconnecting retains the accounts and their transactions. If disconnecting the
           account revokes the provider's access the confirmation page will indicate this.
         </p>
+      </>
+    ),
+  },
+  {
+    id: 'credential-vault',
+    section: 'importing',
+    title: 'The credential vault',
+    surfaces: ['Import (Connections, the vault strip)'],
+    summary: 'The vault encrypts the data provider credentials stored on disk. It is opened with a passphrase or a passkey, and has to be open to connect or sync.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          The vault encrypts the credentials a{' '}
+          <HelpLink to="/help/data-providers">data provider</HelpLink> connection stores on disk.
+          Nothing else is encrypted: transactions, accounts, categories and rules are not in the vault
+          and are not affected by anything done to it. The vault has to be open to connect a provider
+          or to sync. Everything else in {APP_NAME} works with it locked.
+        </p>
+        <p>
+          The strip at the top of the <strong>Connections</strong> tab shows the state of the vault and
+          what can be done next.
+        </p>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>On the strip</th><th>What it is for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Set vault passphrase</strong></td>
+                <td>Shown before a vault exists. The passphrase protects the key the credentials are
+                  encrypted with, so it has to be a strong one. The dialog shows what is still missing
+                  and can suggest one.</td>
+              </tr>
+              <tr>
+                <td><strong>Unlock with a passphrase</strong>, <strong>Unlock with a passkey</strong></td>
+                <td>Shown while the vault is locked. The passkey button appears once a passkey has been
+                  added in <HelpLink to="/help/vault-settings">Vault settings</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td><strong>Lock</strong></td>
+                <td>Closes the vault now. Left alone it locks after eight hours without use, and when
+                  the application restarts. An unlock belongs to the browser it was made in; another
+                  browser or device unlocks separately.</td>
+              </tr>
+              <tr>
+                <td><strong>Vault settings</strong></td>
+                <td>Shown while the vault is unlocked: the unlock methods, the recovery code, who else
+                  can open the vault, and replacing the key. See{' '}
+                  <HelpLink to="/help/vault-settings">Vault settings</HelpLink>.</td>
+              </tr>
+              <tr>
+                <td><strong>Request vault access</strong></td>
+                <td>Shown to a user of an installation where someone else has already created the vault.
+                  The request sets that user&apos;s own passphrase, and then waits until someone who can
+                  already open the vault approves it in Vault settings. The strip tells that person a
+                  request is waiting.</td>
+              </tr>
+              <tr>
+                <td><strong>Can&apos;t open it?</strong></td>
+                <td>Shown while the vault is locked, for a forgotten passphrase. It lists the ways back
+                  in, cheapest first: a passkey, another person who can open the vault, the recovery
+                  code, a credentials backup. The last resort rebuilds the vault. That keeps the ledger
+                  and each connection&apos;s account mapping, and every connection has to be
+                  reconnected.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </>
+    ),
+  },
+  {
+    id: 'vault-settings',
+    section: 'importing',
+    title: 'Vault settings',
+    surfaces: ['Vault settings (Import, Connections)'],
+    summary: 'How the vault is opened, who else can open it, and what to do when a passphrase or a copy of the database may have been exposed.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          <strong>Vault settings</strong> opens from the strip at the top of the Connections tab while
+          the <HelpLink to="/help/credential-vault">credential vault</HelpLink> is unlocked. A change
+          to how the vault opens needs the passphrase or a passkey presented within the last five
+          minutes, so some of the controls ask for it again.
+        </p>
+
+        <HelpHeading anchor="unlock-methods">Unlock methods</HelpHeading>
+        <p>
+          The passphrase, and any number of passkeys. Any one of them opens the vault. A passkey is
+          added per device and is the convenient everyday unlock; the passphrase stays as it was. The
+          last remaining method cannot be removed.
+        </p>
+        <p>
+          A vault passkey is separate from a passkey used to sign in to {APP_NAME} (see{' '}
+          <HelpLink to="/help/account-security">account security</HelpLink>). Neither does the
+          other&apos;s job.
+        </p>
+
+        <HelpHeading anchor="recovery-code">Recovery code</HelpHeading>
+        <p>
+          A one-time code that opens the vault and sets a new passphrase. Nothing is reconnected
+          afterwards, and a fresh code is issued in place of the one used. It matters most when only
+          one person can open the vault, since a forgotten passphrase then has no other way back.
+        </p>
+        <p>
+          The code is shown once and is not stored. Keep it somewhere other than where the passphrase
+          is kept: stored together, the two are lost together. <strong>Replace code</strong> issues a
+          new one and the old one stops working.
+        </p>
+
+        <HelpHeading anchor="vault-access">Vault access</HelpHeading>
+        <p>
+          The people who can open the vault, and anyone waiting to be approved. Approving shares the
+          key that decrypts the provider credentials and nothing else, since the ledger is already
+          shared. A request marked <strong>lost their passphrase</strong> comes from someone who
+          already had access and is asking for it back under a new passphrase; it is worth checking
+          with that person before approving. <strong>Remove access</strong> is available to an
+          administrator.
+        </p>
+
+        <HelpHeading anchor="replace-key">Replace the vault key</HelpHeading>
+        <p>
+          Generates a new key and re-encrypts every stored credential under it, so a copy of the old
+          key stops being useful. The unlock methods are unchanged, and the vault locks in every other
+          running session.
+        </p>
+
+        <HelpHeading anchor="exposure">Respond to an exposure</HelpHeading>
+        <p>
+          For when the database or a backup may have been copied. <strong>Replace connection
+            credentials&hellip;</strong> has each provider issue a new credential where the provider
+          supports that, so the copied ones stop working and the connections keep syncing. The rest are
+          listed with what to do at the provider. A credentials backup made earlier holds the replaced
+          credentials, so a new <HelpLink to="/help/data-and-backups">backup</HelpLink> is needed
+          afterwards.
+        </p>
+
+        <HelpHeading anchor="which-to-use">Which to use</HelpHeading>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>Situation</th><th>What to do</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>The passphrase is forgotten</td>
+                <td><strong>Can&apos;t open it?</strong> on the vault strip, which is shown while the
+                  vault is locked.</td>
+              </tr>
+              <tr>
+                <td>The passphrase or a passkey may have been seen or copied</td>
+                <td>Change or remove it under <strong>Unlock methods</strong>,
+                  then <strong>Replace vault key&hellip;</strong>. The first retires the unlock method
+                  and the second retires the key it could reach.</td>
+              </tr>
+              <tr>
+                <td>Someone should no longer be able to open the vault</td>
+                <td><strong>Remove access</strong>, then <strong>Replace vault key&hellip;</strong>, in
+                  that order.</td>
+              </tr>
+              <tr>
+                <td>The database or a backup may have been copied</td>
+                <td><strong>Replace connection credentials&hellip;</strong>, then change the passphrase,
+                  then <strong>Replace vault key&hellip;</strong>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </>
     ),
   },
@@ -3899,7 +4063,7 @@ export const HELP_TOPICS = [
         <p>
           A passkey is <em>not</em> a vault passkey. The vault's passkeys unlock stored data
           connection credentials (see{' '}
-          <HelpLink to="/help/data-providers">data providers</HelpLink>); these sign in to the
+          <HelpLink to="/help/vault-settings">Vault settings</HelpLink>); these sign in to the
           application. Adding one here grants nothing in the vault, and an account may hold both.
         </p>
         <p>

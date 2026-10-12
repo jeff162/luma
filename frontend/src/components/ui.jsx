@@ -502,6 +502,8 @@ export function AppDialog({
   draggable = false,
   // A `RefreshButton`, attached to the title like a page's (see `PageHeader`).
   refresh = null,
+  // A `FeatureExplainer`, placed before the title like a page's (see `PageHeader`).
+  help = null,
 }) {
   const [drag, setDrag] = useState({ x: 0, y: 0 })
   const panelRef = useRef(null)
@@ -574,6 +576,7 @@ export function AppDialog({
             <div>
               {title ? (
                 <div style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {help ? <span onMouseDown={event => event.stopPropagation()} style={{ display: 'inline-flex', fontWeight: 400 }}>{help}</span> : null}
                   {title}
                   {/* Kept out of the drag: a press on it must not also pick the dialog up. */}
                   {refresh ? <span onMouseDown={event => event.stopPropagation()} style={{ display: 'inline-flex' }}>{refresh}</span> : null}

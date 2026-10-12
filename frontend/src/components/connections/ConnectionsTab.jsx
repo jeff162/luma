@@ -15,6 +15,7 @@ import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
 import { EXISTING_SECRET_PROPS, NO_AUTOFILL_PROPS } from '../../lib/sensitiveFields.js'
 import { VaultSettingsDialog } from '../VaultSettingsDialog.jsx'
 import { VaultRecoveryDialog } from '../VaultRecoveryDialog.jsx'
+import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { useVaultPasskeyUnlock, VAULT_PASSKEY_LABEL } from '../../lib/useVaultPasskeyUnlock.js'
 import {
   connectionAccountsLabel, connectionProviderLabel as providerLabel, lastSyncReportCards,
@@ -347,9 +348,12 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
     fontSize: 13,
   })
+  // On every state of the strip, since the first of them is what a new user meets before any vault exists.
+  const help = <FeatureExplainer topic="credential-vault" placement="bottom-left" />
   if (!vault.configured) {
     return (
       <div style={box('var(--surface2)', 'var(--border)')}>
+        {help}
         <span style={{ color: 'var(--muted)' }}>Data provider credentials are kept in an encrypted vault. Set a passphrase to begin.</span>
         <Button small onClick={onSet} style={{ marginLeft: 'auto' }}>Set vault passphrase</Button>
       </div>
@@ -360,6 +364,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
   if (vault.accessPending) {
     return (
       <div style={box('var(--surface2)', 'var(--border)')}>
+        {help}
         <span style={{ color: 'var(--muted)' }}>
           Vault access requested. Someone who can already open the vault needs to approve it before you
           can connect or sync data providers.
@@ -370,6 +375,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
   if (!vault.hasPassphrase) {
     return (
       <div style={box('var(--surface2)', 'var(--border)')}>
+        {help}
         <span style={{ color: 'var(--muted)' }}>
           This workspace already has a credential vault. Set your own passphrase to ask for access to it.
         </span>
@@ -380,6 +386,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
   if (!vault.unlocked) {
     return (
       <div style={box('rgba(234, 179, 8, 0.12)', 'rgba(234, 179, 8, 0.4)')}>
+        {help}
         <span>The vault is locked. Unlock it to connect or sync.</span>
         {/* Offered first where it exists, because it is the day-to-day unlock the passkey slot was added
             for: a touch or a glance against retyping a 20-character passphrase. */}
@@ -416,6 +423,7 @@ function VaultStrip({ vault, waiting = [], onSet, onRequest, onUnlock, onUnlockP
   }
   return (
     <div style={box('var(--surface2)', 'var(--border)')}>
+      {help}
       <span style={{ color: 'var(--muted)' }}>Vault unlocked for this session.</span>
       {/* Reachable only while unlocked, and that is the gate rather than the styling: approving someone
           and replacing the key both need the key in hand. The waiting count rides the button because

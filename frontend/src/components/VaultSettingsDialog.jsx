@@ -22,6 +22,7 @@ import { api } from '../lib/api.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { formatDate } from '../lib/utils.js'
 import { connectionProviderLabel } from '../lib/connectionSummary.js'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 function Section({ title, description, children, style }) {
   return (
@@ -240,6 +241,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
   return (
     <AppDialog
       title="Vault settings"
+      help={<FeatureExplainer topic="vault-settings" placement="bottom-left" />}
       description="How this vault is opened, who else can open it, and the key protecting your data provider credentials."
       onClose={onClose}
       width="min(560px, 100%)"
