@@ -461,7 +461,8 @@ and dropping the overrides would create empty databases beside data that still e
 report reads the value in force from the module that owns it rather than re-deriving it — it cannot name
 a database the process never opened. The bind port and the frontend/Vite ports, which
 are consumed before the server binds or before the app process exists. The launcher knobs
-(`LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT`), read by the start scripts before Python runs.
+(`LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT`), read by the start scripts before Python runs, and
+`SERVER_MODE`, read by the launcher (`backend/desktop.py`) before it has a server to configure.
 `SESSION_COOKIE_SECURE`, a transport guarantee set at the deployment edge and deliberately not derived
 from app state. `CORS_ORIGINS` names other web origins allowed to call the API from a browser *with
 cookies*; it defaults to empty because every topology serves the app and the API on one origin (the dev
@@ -714,11 +715,13 @@ and every alternative turned down — is in `security-model.md` → *Secret cust
 - **Transport** is a per-topology property, not an app mode: the backend always speaks HTTP; a
   client-server deployment terminates TLS at a reverse proxy (Caddy) with uvicorn on `--proxy-headers`,
   so `request.url.scheme` reflects the external scheme. `backend/transport.py` detects loopback-vs-network
-  and HTTPS **per request**. The permissible-HTTP rule: plain HTTP on a networked bind is fine only with
-  no perimeter to defeat (no sign-in, no provider); either trigger ⇒ HTTPS. Enforced/nudged by
-  `SESSION_COOKIE_SECURE` (→ cookie `Secure`, set by the install, not derived from the profile), a
-  `transport_warning` when connecting a provider on a cleartext link, and a **computed "Set up HTTPS"
-  task** (`tasks.py`) — required/non-dismissible for a provider, recommended/suppressible for plain
+  and HTTPS **per request**, reading loopback from the client's address (the accepted peer, or what a
+  loopback proxy forwarded for it) and never from the `Host` header. The permissible-HTTP rule: plain
+  HTTP on a networked bind is fine only with no perimeter to defeat (no sign-in, no provider); either
+  trigger ⇒ HTTPS. Enforced/nudged by `SESSION_COOKIE_SECURE` (→ cookie `Secure`, set by the install, not
+  derived from the profile), `transport.require_protected_link` — which refuses the operations that
+  carry a provider secret when they arrive from another device in cleartext — and a **computed "Set up
+  HTTPS" task** (`tasks.py`) — required/non-dismissible for a provider, recommended/suppressible for plain
   client-server, self-clearing over HTTPS, and shown only to an admin (or anyone, with sign-in
   protection off), since a member cannot set it up.
 
@@ -1208,6 +1211,8 @@ Luma is intended to run on:
 Where commands differ, the repo should provide script wrappers or document the differences clearly in `README.md`.
 
 **Running it as one thing.** `python -m backend.desktop` is the standalone mode: it serves the SPA and the API from a single process on loopback and opens a browser at it, so no second process and no proxy is involved. Two details there are load-bearing rather than incidental. The bind is `127.0.0.1` but the URL handed out is `http://localhost:<port>`, because a WebAuthn Relying Party id has to be a domain — opening the address form would disable every passkey vault slot with nothing on screen to explain why (see *Token vault & transport security* for the two preconditions). And the port — `FRONTEND_PORT`, since the browser's port carries that name in every topology and this process is the frontend, so `BACKEND_PORT` is not read — is preferred-not-guaranteed, falling back to an ephemeral one when the configured port is busy; nothing durable is keyed to it, since cookies are not port-scoped and an RP id is the host alone.
+
+**The same launcher is the LAN server.** Server mode (`SERVER_MODE`, or `--server`) is this process with the desktop conveniences withheld — no browser, no in-app stop, no joining a running instance — and the port made a requirement, because a reverse proxy on the same machine is configured with it. The bind stays loopback where a TLS proxy is what the network reaches, and follows `FRONTEND_HOST` where the process is put on the network itself, over plain HTTP. `operations.md` → *LAN server* has the operator's view.
 
 A lockfile in the data directory records the port so a second launch opens a tab against the running instance instead of starting a second process onto the same SQLite pair. It records a port, not a claim of liveness — it survives a crash, so `/api/health` is what settles whether the recorded instance is really there. It only sees instances the launcher started, which is why falling back off a busy configured port says so rather than doing it silently: a separately-started `uvicorn` on the same databases is exactly what that case usually means.
 

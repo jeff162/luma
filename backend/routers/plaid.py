@@ -15,6 +15,7 @@ the questions (what gets encrypted, what adopts an existing account) that must n
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from backend import transport
 from backend.db.database import get_db
 from backend.routers.accounts import upsert_connection_accounts, resolve_default_owner_id
 from backend.routers.providers import establish_connection, require_app_config
@@ -109,6 +110,9 @@ def get_link_token(request: Request, connection_id: str | None = None):
     `reauth_required` badge can never clear because nothing will ever sync it again. Update mode
     re-authorizes the Item Luma already holds, so the repair lands on the row that needed it.
     """
+    # Refused here rather than at the exchange: by then the user has signed in at their bank, and the
+    # connect this token opens could not be finished.
+    transport.require_protected_link(request)
     app_config = require_app_config(request, PROVIDER)
     connection = _connection(connection_id) if connection_id else None
     access_token = _credential(request, connection) if connection else None

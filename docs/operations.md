@@ -24,7 +24,7 @@ Two other boundaries, so nothing is stated twice:
 | | Reached by | Serves the interface | Binds | Perimeter |
 | --- | --- | --- | --- | --- |
 | **Desktop** | one machine | the backend itself | loopback | usually off |
-| **LAN server** | several devices | a TLS-terminating proxy, or the backend | loopback behind the proxy | on |
+| **LAN server** | several devices | the backend, behind a TLS-terminating proxy or directly | loopback behind the proxy, or the network | on |
 | **Containers** | one machine or a LAN | an nginx container proxying `/api` | the published ports | either |
 
 They are the **same application**. What differs is only how uvicorn is launched, whether something
@@ -85,9 +85,10 @@ The grace is bounded from outside and unbounded from inside: the server waits on
 indefinitely, while the macOS wrapper allows 20 seconds after SIGTERM before SIGKILL, and a supervisor
 elsewhere allows whatever its unit specifies. A stop during a long operation can therefore be cut short —
 which costs the in-flight transaction (rolled back) and leaves the lockfile behind, both of which the
-next launch already handles. The in-app control is **registered by the launcher**, so an instance started with
-plain uvicorn does not offer it: on a supervised box, stopping the process from a browser is either
-futile or a way for one signed-in user to take the service from everyone else.
+next launch already handles. The in-app control is **registered by the launcher, and only as a desktop
+application**, so neither server mode nor an instance started with plain uvicorn offers it: on a
+supervised box, stopping the process from a browser is either futile or a way for one signed-in user to
+take the service from everyone else.
 
 **Where the output goes.** An application started from Finder on MacOS has no terminal, so both streams are
 redirected to `luma-desktop.log` beside the data. That is detected from the environment LaunchServices
@@ -127,23 +128,67 @@ with, which stays in the file and raises nothing.
 
 ## LAN server
 
-**This shape is documented, not shipped.** No Caddyfile and no systemd unit are in the repository; the
-operator writes both. What follows is what they have to satisfy.
+**The same downloaded build as Desktop, started in server mode** — `SERVER_MODE=true` in `.env`, or
+`luma --server`. The command line wins over the file in both directions (`--no-server`), and the file is
+the only form that reaches a macOS app started from Finder. It is a way of starting the process, not a
+stored topology: how a request is judged is still detected per request.
 
-- **uvicorn binds `127.0.0.1`**, not every interface — only the proxy reaches it.
-- **A TLS-terminating reverse proxy** (Caddy is the assumed one) serves the built interface and
-  reverse-proxies `/api` to uvicorn.
-- **Run uvicorn with `--proxy-headers`**, or `request.url.scheme` reports the internal HTTP hop and
-  every HTTPS-conditional behavior reads the deployment as cleartext.
+Server mode takes away what assumed a person at the machine:
+
+- **No browser is opened**, and the in-app *Shut down* is not offered.
+- **The port is fixed.** Whatever reaches the server is configured with `FRONTEND_PORT`, so a busy one
+  refuses the start where Desktop would move to a free one — an instance on another port would be
+  running and unreachable.
+- **A second launch fails** with a nonzero status rather than joining the first, so a supervisor sees it.
+- **It answers for a name on the local network** — `MDNS_NAME`, without the `.local` ending — so a
+  device reaches `https://<name>.local` without knowing which
+  machine the server is on. The proxy's site address has to be that same name, since its certificate is
+  issued for it. A name another machine already answers for refuses the start, which is how two
+  installations on one network are kept apart: give the second its own `MDNS_NAME`. The address
+  advertised is the one this machine reaches the local network from, read at startup.
+
+**It reaches the network one of two ways, and the bind address says which.**
+
+| | Behind a proxy | Directly |
+| --- | --- | --- |
+| `FRONTEND_HOST` | unset — the process stays on `127.0.0.1` | `0.0.0.0`, or one address of the machine |
+| Other devices open | `https://<name>.local` | `http://<name>.local:<port>` |
+| On the wire | TLS, terminated by the proxy | cleartext |
+| Passkeys | available | not available — a browser will not run one over HTTP |
+| Connecting a data source, saving or revealing a provider secret | from any device | from a browser on the server only |
+| Extra setup | the proxy, and its certificate trusted on each device | none |
+
+The second column is a real configuration, not a degraded one: it is the least setup there is, and for
+a ledger fed by imported files on a network its owner trusts it gives up little. What it gives up is
+enforced and explained by the app as it is met — `security-model.md` → *Transport security* has the
+rule and the reasoning — so nothing here has to be remembered at install time. Desktop is never on the
+network: outside server mode the address setting is not read.
+
+**The proxy and the supervisor are not shipped.** No Caddyfile and no systemd unit are in the
+repository; the operator writes both. What they have to satisfy, the first three for the proxied form
+only:
+
+- **A TLS-terminating reverse proxy on the same machine** (Caddy is the assumed one) that passes every
+  request to the port above. It serves no files: the process serves the interface as well as the API.
+- **The proxy states the scheme and the client address** (`X-Forwarded-Proto`, `X-Forwarded-For`), which
+  Caddy does unasked. uvicorn honors them from a loopback peer only, which is where the proxy is;
+  without them `request.url.scheme` reports the internal HTTP hop and every HTTPS-conditional behavior
+  reads the deployment as cleartext.
 - **Set `SESSION_COOKIE_SECURE=true`** at the deployment edge. It is deliberately not derived from the
   security profile — see `security-model.md` → *Considered and rejected*.
-- **A supervisor** (systemd) keeps uvicorn alive across reboots.
+- **A supervisor** (systemd) keeps the process alive across reboots, and stops it with SIGTERM, which is
+  a graceful stop (see *Stopping it*).
 - **SQLite is adequate at household concurrency.** No database change is needed for this shape.
+
+**A source checkout can serve a network the same way, without the name.** The backend serves the built
+interface (`frontend/dist`) on `BACKEND_PORT` as well as the API, and listens to its own machine unless
+`BACKEND_HOST` widens it. Widened, it is the direct form above run from a checkout: plain HTTP, the same
+refusals, and no advertised name, since that belongs to the launcher. What it serves is the last
+*build* — it does not follow edits to the source the way the development server does.
 
 **An mDNS name and HTTPS are a pair, not two conveniences.** A LAN address like `192.168.x.x` can never
 host passkeys however it is served, and a name without HTTPS still fails WebAuthn's secure-context
-requirement. Neither alone makes passkeys reachable over the LAN. The mDNS name itself is not built —
-see *Open*.
+requirement. Neither alone makes passkeys reachable over the LAN.
 
 ## Containers
 
@@ -154,6 +199,11 @@ honored when present and not required.
 This is a **third** topology rather than a variant of the other two, and it is the one where the
 data-directory question has an answer that is not the default: the databases live in the mounted
 volume, so backing up the host directory is backing up the installation.
+
+**Every request to a container reads as coming from the network, including one from the same machine.**
+The backend sees the nginx container as its peer, never a loopback client, and the compose file gives it
+no proxy to trust and no scheme to read. So the provider-secret operations are refused there outright
+until this shape gets a TLS path of its own — see *Open*.
 
 ## Where the data lives, and how the app decides
 
@@ -195,8 +245,8 @@ nowhere earlier to read them from:
 | | |
 | --- | --- |
 | **Data location** | `DATA_DIR`, with `DB_PATH` / `CONTROL_DB_PATH` honored per file |
-| **Ports** | `BACKEND_PORT`, `FRONTEND_PORT`, `FRONTEND_DOCKER_PORT`, `VITE_API_PROXY_TARGET` |
-| **Launcher knobs** | `LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT` |
+| **Ports and addresses** | `BACKEND_PORT`, `BACKEND_HOST`, `FRONTEND_PORT`, `FRONTEND_HOST`, `FRONTEND_DOCKER_PORT`, `VITE_API_PROXY_TARGET` |
+| **Launcher knobs** | `SERVER_MODE`, `MDNS_NAME`, `LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT` |
 | **Deployment gates** | `SESSION_COOKIE_SECURE`, `LUMA_DEVELOPER_OPTIONS` |
 
 **The per-file overrides are permanent, not a deprecation.** Fixing the default filenames is exactly
@@ -440,13 +490,14 @@ a destructive restore. See *Open*.
 
 ## Open
 
-- **The LAN-server shape is notes, not an implementation.** No Caddyfile, no systemd unit, no
-  documented install sequence. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
-- **An mDNS service name**, env-only alongside the ports. Not merely convenience: with HTTPS it is what
-  makes passkeys reachable on a LAN at all. The plumbing is one `Setting(...)` row in
-  `backend/app_config.py` with `stored=False`, after which it appears in the configuration report on its
-  own; the open part is the **default name** when two installations share a network. No separate backlog
-  item — this topic owns it.
+- **The LAN-server shape is half built.** Server mode, its network name and the transport rule exist;
+  the proxy configuration, the systemd unit, the install sequence and the certificate hand-out do not.
+  → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
+- **Containers cannot connect a data source.** The compose file publishes the backend port directly and
+  its nginx forwards neither the scheme nor the client address, so no request there can be read as
+  protected. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
+- **The advertised address does not follow the machine.** It is read once at startup, so a server whose
+  address changes while it runs goes on answering with the old one until it is restarted.
 - **Database diagnostics are not built.** The structural half is small and unambiguous — both pragmas
   against both databases, reported next to the connection sync log — but four things need deciding
   first: whether it is user-facing or developer-gated; what a failure tells someone to *do*, given a

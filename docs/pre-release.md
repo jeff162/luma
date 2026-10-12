@@ -445,22 +445,6 @@ Two things it moved that matter to the steps below:
   attaching the five artifacts and their `.sha256` files to a written release is a manual step, and
   nothing is downloadable until it happens.
 
-## Pre-public audit closure
-
-The 2026-09-07 security review found the issue below, which still has to be closed before a client-server
-install is made public. When it lands, keep `security-model.md` → *Transport security* accurate to the
-enforced rule and delete this section.
-
-**Enforce secure transport before any provider-secret operation.** A network HTTP request can configure a
-provider app secret, start a credential-bearing connection, or reveal a decrypted secret; the current
-transport check only warns after accepting the value. Reject non-loopback cleartext requests in a
-server-side dependency shared by all provider and credential-bearing vault operations, and derive loopback
-from the trusted peer/proxy boundary rather than the Host header.
-
-**Deferred to the client-server deployment work (decided 2026-09-13).** That topology has not been built
-yet, and the decisions this needs — which proxy is trusted, and how loopback is recognized behind it —
-belong to it.
-
 ## Sequencing
 
 1. **Streaming backup (5) before receipts (1).** The storage decision is settled, but shipping documents

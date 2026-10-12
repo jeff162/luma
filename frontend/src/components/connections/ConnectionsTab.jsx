@@ -184,6 +184,14 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
 // Plaid card so the two cannot drift apart. "All available history" is bounded by whatever the provider
 // itself will return, which for a cursor provider is its published cap and for a walking provider is where
 // its history actually runs out.
+// Why connecting is refused, and the two ways out. The server refuses the same request with the same
+// reasoning (`backend/transport.py`), so this is the answer arriving before the vault prompt and the
+// provider's own screens, not a second rule.
+const UNPROTECTED_LINK_NOTICE = {
+  title: 'Not available over plain HTTP from another device',
+  description: 'Connecting sends a data provider\u2019s secret to the server, and this browser reaches the server over the network without HTTPS. Connect from a browser on the computer the server runs on, or set up HTTPS first.',
+}
+
 const HISTORY_DEPTH_OPTIONS = [
   { value: '0', label: 'All available history' },
   { value: '730', label: 'Last 2 years' },
@@ -702,11 +710,8 @@ export default function ConnectionsTab({ onShowHistory }) {
   )
 
   async function saveConfig(provider, payload) {
-    const result = await api.saveProviderConfig(provider, payload)
+    await api.saveProviderConfig(provider, payload)
     await refresh()
-    if (result?.transport_warning) {
-      setNotice({ title: 'Saved — check your connection security', description: result.transport_warning })
-    }
     setConfigTarget(null)
   }
 
@@ -747,10 +752,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   async function connect(p) {
     if (!(await ensureVault())) return
     if (httpsBlocked) {
-      setNotice({
-        title: 'HTTPS required to connect',
-        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data provider, so bank credentials never cross the network in cleartext.',
-      })
+      setNotice(UNPROTECTED_LINK_NOTICE)
       return
     }
     if (p.connect_spec?.style === 'token') { setConnectTarget(p); return }
@@ -763,10 +765,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   async function reconnect(connection) {
     if (!(await ensureVault())) return
     if (httpsBlocked) {
-      setNotice({
-        title: 'HTTPS required to connect',
-        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data provider, so bank credentials never cross the network in cleartext.',
-      })
+      setNotice(UNPROTECTED_LINK_NOTICE)
       return
     }
     startPlaidLink(connection)
@@ -1163,7 +1162,7 @@ export default function ConnectionsTab({ onShowHistory }) {
         const connectDisabled = noVaultSlot || httpsBlocked
         const connectTitle = vault.accessPending ? 'Waiting for your vault access to be approved'
           : noVaultSlot ? 'Request access to this workspace’s credential vault first'
-            : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
+            : httpsBlocked ? 'Needs HTTPS, or a browser on the computer the server runs on'
               : ''
         const s = providerSummary(p)
         const lastSyncedLabel = formatTimestamp(s.lastSynced)

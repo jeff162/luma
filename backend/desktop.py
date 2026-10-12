@@ -31,6 +31,19 @@ Three decisions carry the design:
   end of a pipe and hands over the read end, and a read that returns *zero bytes* means every write end
   is closed, which can only happen once the wrapper is gone. The kernel guarantees that even for SIGKILL,
   which is what makes it a dead man's switch rather than a courtesy.
+- **Server mode is the same process with the desktop conveniences taken away.** `SERVER_MODE`, or
+  `--server`, is the LAN shape from `docs/operations.md` -> "LAN server". What changes is everything
+  that assumed a person at this machine — no browser is opened, a second launch is refused rather than
+  joined, and the in-app stop is not offered, since the process is supervised and one signed-in user
+  must not be able to take it from the rest. The port stops being a convenience there: other devices, or
+  the proxy in front, are configured with it, so a busy one refuses the start instead of moving. And the
+  process answers for a name on the local network (`backend/mdns.py`), which is how those devices find
+  the server at all.
+- **Server mode reaches the network one of two ways, and the bind says which.** Left on loopback, a
+  TLS-terminating proxy on the same machine is what other devices reach and this process is the hop
+  behind it. Given a wider `FRONTEND_HOST`, the process is on the network itself, over plain HTTP. The
+  second is a choice someone made by configuring it; what it costs is enforced and explained per
+  request (`backend/transport.py`), not here.
 - **Where there is no console, the output goes to a file.** A macOS `.app` started from Finder has no
   terminal attached, which turns that contract into nothing at all: the URL is invisible, and — the part
   that actually matters — a failure to start presents as an icon that bounces once and disappears. So a
@@ -44,6 +57,7 @@ really there.
 """
 
 import argparse
+import ipaddress
 import os
 import signal
 import socket
@@ -61,7 +75,7 @@ import uvicorn
 
 # First, before anything that can reach the database modules (see the module). `app_config` below does.
 import backend.load_env_file  # noqa: F401
-from backend import account_recovery, app_config, app_log_file, runtime_config, spa
+from backend import account_recovery, app_config, app_log_file, mdns, runtime_config, spa
 from backend.main import app, spa_mounted
 from backend.routers import app_control
 
@@ -257,17 +271,34 @@ def _running_instance_port() -> int | None:
     return None
 
 
-def _port_is_free(port: int) -> bool:
+def _server_bind_host() -> str:
+    """Where server mode listens: loopback unless `FRONTEND_HOST` names something wider. That setting is
+    the browser-facing server's address in every way of running the app, as `FRONTEND_PORT` is its port.
+    Its default is the name `localhost`, which is spelled as the address here for the same reason the
+    desktop bind is (see the module docstring)."""
+    host = app_config.value_of("frontend_host").strip()
+    if host.lower() == BROWSER_HOST:
+        return BIND_HOST
+    try:
+        return BIND_HOST if ipaddress.ip_address(host).is_loopback else host
+    except ValueError:
+        return host
+
+
+def _port_is_free(port: int, host: str = BIND_HOST) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            probe.bind((BIND_HOST, port))
+            probe.bind((host, port))
         except OSError:
             return False
     return True
 
 
-def _choose_port() -> int:
+def _choose_port(*, fixed: bool = False, host: str = BIND_HOST) -> int | None:
+    """The port this run listens on. `fixed` is server mode, where something else is configured with the
+    port and an instance that moved off it would be running and unreachable — so there a port that cannot
+    be had is None, with the reason printed, rather than a fallback."""
     # `frontend_port`, not `backend_port`. This one process serves the interface as well as the API, so
     # the port the browser opens is the frontend's — the setting that names the browser's port when
     # running from source too, where `backend_port` is the internal hop behind Vite. One meaning per name
@@ -277,8 +308,18 @@ def _choose_port() -> int:
     except (TypeError, ValueError):
         configured = 0
 
-    if configured and _port_is_free(configured):
+    if configured and _port_is_free(configured, host):
         return configured
+
+    if fixed:
+        print(
+            f"Port {configured} is in use, and a server installation does not move to another: whatever "
+            "reaches it is configured with this one. Free the port or set FRONTEND_PORT."
+            if configured else
+            "FRONTEND_PORT is not a port number, and a server installation needs a fixed one.",
+            file=sys.stderr,
+        )
+        return None
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind((BIND_HOST, 0))
@@ -375,6 +416,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Start the server and print its URL without opening a browser.",
     )
     parser.add_argument(
+        "--server",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Run as a server behind a reverse proxy on this machine: no browser is opened and the port "
+             "is fixed. Overrides SERVER_MODE in either direction.",
+    )
+    parser.add_argument(
         "--reset-password",
         nargs="?",
         const="",
@@ -401,9 +449,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    server_mode = app_config.server_mode_enabled() if args.server is None else args.server
+
     already_running = _running_instance_port()
     if already_running is not None:
         url = f"http://{BROWSER_HOST}:{already_running}"
+        if server_mode:
+            # Nonzero, so a supervisor reports it: there is no tab to open on a server, and exiting
+            # cleanly would read as the service having started.
+            print(f"{runtime_config.app_name()} is already running at {url}.", file=sys.stderr)
+            return 1
         # No version here, and deliberately: the instance being joined is a different process, possibly a
         # different build, and `/api/health` reports only that something answered. Naming this process's
         # version would be a claim about a program that is not running.
@@ -412,8 +467,23 @@ def main(argv: list[str] | None = None) -> int:
             _open_browser(url)
         return 0
 
-    port = _choose_port()
+    bind_host = _server_bind_host() if server_mode else BIND_HOST
+    behind_proxy = bind_host == BIND_HOST
+    port = _choose_port(fixed=server_mode, host=bind_host)
+    if port is None:
+        return 1
     url = f"http://{BROWSER_HOST}:{port}"
+
+    advertisement = None
+    if server_mode:
+        try:
+            advertisement = mdns.advertise(
+                app_config.value_of("mdns_name"), plain_http_port=None if behind_proxy else port,
+            )
+        except mdns.MdnsError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+
     # The port is settled here and nowhere else — a busy configured one falls back to an ephemeral port —
     # so the launcher is the only place that can tell the log file which address this run is on. Declared
     # before the server runs, because the lifespan that writes the start marker is inside `server.run()`.
@@ -424,26 +494,33 @@ def main(argv: list[str] | None = None) -> int:
     lock.write_text(str(port))
 
     server = _GracefulServer(uvicorn.Config(
-        app, host=BIND_HOST, port=port, log_level="warning", timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+        app, host=bind_host, port=port, log_level="warning", timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
     ))
     # Four different pieces of news, one way to act on them. The in-app control, a stop signal, and the
     # parent wrapper's death all set `server.should_exit`, which is uvicorn's graceful shutdown — the same
     # one Ctrl+C takes — so in-flight requests finish, the `finally` below clears the lockfile, and a
     # response already on its way out (the one saying "stopping") is delivered before anything closes.
     # None of them can be registered any earlier: the capability *is* the server object, and until one
-    # exists there is nothing to ask.
-    app_control.register_shutdown_handler(lambda: setattr(server, "should_exit", True))
+    # exists there is nothing to ask. Server mode withholds the in-app one (see the module docstring).
+    if not server_mode:
+        app_control.register_shutdown_handler(lambda: setattr(server, "should_exit", True))
     _install_stop_signal_handlers(server)
 
     if _parent_pipe_is_attached():
         threading.Thread(target=_watch_for_parent_exit, args=(server,), daemon=True).start()
-    if not args.no_browser:
+    if not args.no_browser and not server_mode:
         threading.Thread(target=_open_browser_when_ready, args=(server, url), daemon=True).start()
 
     # Ctrl+C is advice only where somebody is watching a terminal. Where this is going to a log instead,
     # the address is the whole of what the line is for, and how to stop a windowless build is documented
     # beside it (`READ_ME_MACOS` in `scripts/build_desktop.py`) and offered inside the app.
     running = f"{runtime_config.app_name()} (v{runtime_config.APP_VERSION}) is running at {url}"
+    if server_mode:
+        running += " in server mode; other devices reach it at " + (
+            f"https://{advertisement.hostname} through the reverse proxy on this machine"
+            if behind_proxy else
+            f"http://{advertisement.hostname}:{port}, over plain HTTP"
+        )
     if _has_console():
         print(f"{running}. Press Ctrl+C to stop.")
     else:
@@ -455,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
         server.run()
     finally:
         lock.unlink(missing_ok=True)
+        if advertisement is not None:
+            advertisement.close()
 
     print(f"{runtime_config.app_name()} has stopped.")
     return 0

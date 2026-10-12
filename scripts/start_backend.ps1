@@ -87,6 +87,13 @@ if ([string]::IsNullOrWhiteSpace($backendPort)) {
   $backendPort = '8011'
 }
 
+# This computer only unless BACKEND_HOST widens it: the backend serves the built interface as well as
+# the API, so a wide bind is the whole application on the network over plain HTTP.
+$backendHost = Get-EnvValue $envPath 'BACKEND_HOST'
+if ([string]::IsNullOrWhiteSpace($backendHost)) {
+  $backendHost = '127.0.0.1'
+}
+
 if (Test-PortInUse ([int]$backendPort)) {
   throw "Backend port $backendPort is already in use. Stop the running backend before starting another one."
 }
@@ -95,7 +102,7 @@ Push-Location $rootDir
 try {
   Write-Host "Checking/installing backend dependencies. This can take a minute on first run..."
   & $venvPython -m pip install -r backend/requirements.txt
-  Write-Host "Starting backend on port $backendPort"
+  Write-Host "Starting backend on $backendHost port $backendPort"
   # This intentionally does not match the Linux launcher, which sets WATCHFILES_FORCE_POLLING=false.
   # watchfiles force-enables stat-polling only when the kernel release contains "microsoft-standard"
   # AND the platform is Linux, i.e. on WSL, where it costs a measured ~28% of a core polling the whole
@@ -105,7 +112,7 @@ try {
   #
   # The exception is running this script under PowerShell on Linux or WSL, which it is not written for.
   # If that ever happens, add:  $env:WATCHFILES_FORCE_POLLING = 'false'
-  & $venvPython -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port $backendPort
+  & $venvPython -m uvicorn backend.main:app --reload --reload-dir backend --host $backendHost --port $backendPort
 } finally {
   Pop-Location
   if (-not [string]::IsNullOrWhiteSpace($LogPath)) {

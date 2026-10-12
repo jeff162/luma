@@ -510,8 +510,19 @@ deployment is HTTPS" and "the app is HTTP" are both true at once.
 
 **Topology is detected per request, not chosen.** Standalone versus client-server is just *"did this
 request arrive over loopback or over the network?"* — which is strictly more correct than a stored preset,
-because the same install is loopback from its own box and networked from another. The one genuine user
-choice is forward-looking — *will you connect a data provider?* — and it has to be asked ahead of time
+because the same install is loopback from its own box and networked from another.
+
+**Where a request came from is read from the connection, never from what the request says.** Loopback
+is the client's address: the peer the server accepted, or the address a proxy on the same machine
+forwarded for it. The server honors a forwarded address from a loopback peer only, so a device on the
+network cannot name itself local, and the `Host` header — which the client writes and a proxy may rewrite
+— is not consulted. A client with no readable address counts as the network. One question is answered
+from the host instead, and deliberately: whether the *browser* will treat a page as a secure context for
+a passkey is a rule it applies to the origin it was given, so a browser on the server itself that opened
+the machine's network name over HTTP is a loopback client and still cannot run a ceremony. Nothing is
+granted on that reading; it only lets a refusal the browser would make anyway be explained.
+
+The one genuine user choice is forward-looking — *will you connect a data provider?* — and it has to be asked ahead of time
 because standing up HTTPS is not instantaneous and the requirement cannot first be discovered at
 connect-time.
 
@@ -527,6 +538,27 @@ defeat; enabling sign-in or connecting a source implies HTTPS.
 guidance and a computed task); real HTTPS availability drives *enforcement* (the connect gate). Coupling
 them would either block a user who has not declared anything or wave through one who declared and never
 configured.
+
+**What is enforced is the provider secret, and it is enforced by the server.** A request from another
+device over plain HTTP is refused — `transport.require_protected_link` — wherever it would carry a
+provider's secret in either direction: saving an app secret, revealing one, connecting a source (the
+pasted token, or the exchange that ends a Link session), and opening the Link session that leads to
+one. The same request from a browser on the server, or over HTTPS, goes through, and the refusal says
+so, because both ways out are ordinary. The interface refuses first for the sake of the explanation;
+the server's refusal is the rule.
+
+**What the gate leaves out, and why each is a decision rather than a gap:**
+
+- **The vault passphrase** — setting, changing, unlocking, recovering. It does cross the wire, and on a
+  cleartext network it can be read there. It is left to the operator for the reason the sign-in password
+  is: running plain HTTP on a network is a statement of trust in that network, and refusing the unlock
+  would stop an install that made that choice from syncing at all. What a captured passphrase cannot do
+  from the network is reach a provider secret through the app, which is exactly what the gate holds.
+- **Sign-in.** Recommended, never required, as above.
+- **The credentials backup, in both directions.** Its payload is ciphertext under the vault key, so it
+  is no more exposed crossing the network than the passphrase that opens it.
+- **Finishing a Link repair, syncing, refreshing accounts, disconnecting.** No secret travels between
+  the browser and the server in any of them; the server talks to the provider.
 
 **Recommended versus required is a real distinction and the UI must keep it.** For plain client-server
 HTTPS is only recommended — it protects the login credential, which is the operator's call on their own
@@ -546,14 +578,22 @@ and an RP id must be a **domain**. Two consequences that look like packaging tri
 Both are detected server-side and returned as *stated reasons*, because the answer to each is "use a
 passphrase on this connection" and a raw browser exception would never say so.
 
-**The two development servers bind differently, and neither is an oversight.** The backend keeps a wide
-bind because LAN reachability is a supported deployment and topology is a detected per-request fact — a
-socket pinned to loopback would make the networked half of this model unreachable and untestable. The
-frontend dev server binds loopback for an unrelated reason that is **not** about Luma's perimeter at all:
-a known esbuild advisory (**GHSA-67mh-4wv8-2f99**) lets any page the developer visits reach the Vite dev
-server and read the responses. That is a third-party toolchain hole on the developer's machine, not
-fixable short of a major upgrade, so narrowing the bind is the mitigation. Testing from another device
-stays available as one environment value (`FRONTEND_HOST`) rather than an edit.
+**Every way of running the app listens to its own machine unless told otherwise.** A backend run from
+source serves the built interface as well as the API, so a wide bind there is the whole application on
+the network over plain HTTP — a configuration someone may want, and one they should have chosen
+(`BACKEND_HOST`). The frontend dev server binds loopback for an unrelated reason that is **not** about
+Luma's perimeter at all: a known esbuild advisory (**GHSA-67mh-4wv8-2f99**) lets any page the developer
+visits reach the Vite dev server and read the responses. That is a third-party toolchain hole on the
+developer's machine, not fixable short of a major upgrade, so narrowing the bind is the mitigation.
+Testing from another device stays available as one environment value (`FRONTEND_HOST`) rather than an
+edit. The networked half of this model does not need a wide socket to be testable: it is a property of
+the request, and the test harness states where a request comes from.
+
+**Plain HTTP on a network is supported where someone configures it, and the app says what it costs.**
+The rule above is the whole policy; nothing refuses the configuration itself. What follows from it is
+reported where it is met rather than in a setup step: passkeys report themselves unavailable with the
+reason, the *Set up HTTPS* task appears once there is a perimeter or a provider, and the provider-secret
+operations are refused from other devices with the two ways to do them.
 
 ## Secrets in backup and export
 
@@ -764,9 +804,6 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
   per-request detection it needs exists. Standalone-vs-client-server is a *detected* fact, so only the
   data-source declaration is a real question to put to anyone, and only when networked. No backlog item —
   this topic owns it.
-- **An mDNS service name.** Env-only, alongside the ports. Not merely convenience: with HTTPS it is what
-  makes passkeys reachable on a LAN at all. The open part is the default name when two installations share
-  a network. → [`operations.md`](operations.md) → *Open*
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
   which is the ladder's first real rung and the only one nothing exercises end to end.
   → `backlog/test-coverage-gaps.md`

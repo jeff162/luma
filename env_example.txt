@@ -43,9 +43,17 @@
 # FRONTEND_PORT [download] [source]
 # The port the browser connects to (under Docker, FRONTEND_DOCKER_PORT plays this part). If it is busy, a
 # downloaded build starts on a free port and reports which: in the terminal, or in luma-desktop.log beside
-# the data for the macOS app. The start scripts refuse to start instead, naming the busy port.
+# the data for the macOS app. The start scripts refuse to start instead, naming the busy port, and so
+# does a downloaded build in server mode.
 # Default: 8010
 # FRONTEND_PORT=8010
+
+# BACKEND_HOST [source]
+# Address the backend listens on. This computer only by default. 0.0.0.0 makes it reachable from other
+# devices on the network, where it serves the built interface as well, over plain HTTP: from another
+# device there are no passkeys, and a data source can only be connected from this computer.
+# Default: 127.0.0.1
+# BACKEND_HOST=0.0.0.0
 
 # BACKEND_PORT [source] [docker]
 # The port the backend listens on behind the frontend server. Under Docker, the port the backend is also
@@ -53,10 +61,12 @@
 # Default: 8011
 # BACKEND_PORT=8011
 
-# FRONTEND_HOST [source]
-# Address the development frontend listens on. Loopback by default, so other devices cannot reach it.
-# 0.0.0.0 makes it reachable from a phone or another machine on the network. A downloaded build always
-# accepts connections from this computer only. Default: localhost
+# FRONTEND_HOST [download] [source]
+# Address the browser connects to: the development frontend from source, and a downloaded build in
+# server mode. This computer only by default. 0.0.0.0 makes it reachable from other devices on the
+# network over plain HTTP, with the limits described under BACKEND_HOST; a downloaded build in server
+# mode is otherwise meant to sit behind a reverse proxy that provides HTTPS. Outside server mode a
+# downloaded build always accepts connections from this computer only. Default: localhost
 # FRONTEND_HOST=0.0.0.0
 
 # FRONTEND_DOCKER_PORT [docker]
@@ -78,9 +88,24 @@
 # signs everyone out.
 # SESSION_SECRET=
 
-# SESSION_COOKIE_SECURE [source] [docker]
+# SERVER_MODE [download]
+# Runs a downloaded build as a server for other devices to reach: no browser is opened, the port is
+# fixed, and the app cannot be shut down from inside it. Other devices reach it through a reverse proxy
+# on the same machine that provides HTTPS, or directly over plain HTTP when FRONTEND_HOST is widened.
+# Starting the program with --server or --no-server overrides this. Default: false
+# SERVER_MODE=true
+
+# MDNS_NAME [download]
+# The name a server-mode installation answers to on the local network, without the .local ending, so
+# other devices reach it at <name>.local. A reverse proxy in front has to be configured with the same
+# name. Two installations on one network need different names: one already in use refuses to start.
+# Default: luma
+# MDNS_NAME=luma
+
+# SESSION_COOKIE_SECURE [all]
 # Sends the session cookie only over HTTPS. For a server installation behind a TLS-terminating reverse
-# proxy. A downloaded build serves plain HTTP to this computer only and must leave it off. Default: false
+# proxy. A downloaded build outside server mode serves plain HTTP to this computer only and must leave
+# it off. Default: false
 # SESSION_COOKIE_SECURE=false
 
 # CORS_ORIGINS [source] [docker]

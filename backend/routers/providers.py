@@ -17,7 +17,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import transport
-from backend.db.control_database import auth_required
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id, upsert_connection_accounts
@@ -123,6 +122,9 @@ def establish_connection(request: Request, provider: str, payload: dict,
     the handle is known there is no authorizing again to act on a different answer — which is why this
     takes a decision rather than returning candidates for one.
     """
+    # First, before the provider is asked for anything: the payload is the authorization itself, and a
+    # refusal after the handshake would have already spent a single-use claim.
+    transport.require_protected_link(request)
     with get_db() as conn:
         if is_demo_data_loaded(conn):
             raise HTTPException(status_code=409, detail={
@@ -348,6 +350,10 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
             "code": "no_app_credential",
             "message": "This data provider has no app-level credentials to configure.",
         })
+    # Only a save that carries the secret: the client id and the environment are not secrets, and the
+    # dialog leaves the secret blank to mean "unchanged".
+    if body.secret:
+        transport.require_protected_link(request)
     # No environment gate here any more. Switching to Production used to demand a strong passphrase,
     # because Sandbox accepted a weak one; with the weak tier gone the check could only ever pass, and
     # keeping it would tell the user that the environment is what governs their passphrase — which is
@@ -366,13 +372,7 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
         })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    result = get_provider_config_status(provider)
-    # Configuring a provider puts a live bank secret in play; warn when this instance is reachable over a
-    # cleartext network link. Nothing refuses the request for it yet — HTTPS enforcement is still to be built.
-    warning = transport.cleartext_warning(request, perimeter_on=auth_required(), provider_intended=True)
-    if warning:
-        result["transport_warning"] = warning
-    return result
+    return get_provider_config_status(provider)
 
 
 @router.get("/{provider}/secret")
@@ -395,6 +395,7 @@ def get_secret(provider: str, request: Request):
     """
     require_admin_or_local(request)
     _validate_provider(provider)
+    transport.require_protected_link(request)
     try:
         app_config = resolve_app_config(request.state.user, provider)
     except crypto_service.VaultLocked:

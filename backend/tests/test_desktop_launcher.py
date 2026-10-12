@@ -153,6 +153,101 @@ def test_a_busy_configured_port_falls_back_instead_of_refusing_to_start():
     assert 1024 < chosen < 65536
 
 
+def test_server_mode_refuses_a_busy_port_instead_of_moving_off_it():
+    """The reverse proxy is configured with the port, so an instance that fell back to another would be
+    running and unreachable — a failure that looks like success from the server's own console."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        occupied.bind((desktop.BIND_HOST, 0))
+        occupied.listen()
+        taken = occupied.getsockname()[1]
+
+        with mock.patch.object(desktop.app_config, "value_of", return_value=str(taken)):
+            assert desktop._choose_port(fixed=True) is None
+
+
+def _launch(argv: list[str], *, env_server_mode: str | None, running_on: int | None = None, advertise=None):
+    """Run `main` to completion against a server that returns at once, reporting its exit status, whether
+    the in-app stop was registered and whether a browser was asked for. `SERVER_MODE` is pinned either
+    way, since the developer's own `.env` is in the environment by the time this runs."""
+    stopped = mock.Mock()
+    stopped.run.return_value = None
+    advertise = advertise or mock.Mock(return_value=mock.Mock(hostname="ledger.local"))
+    env = {} if env_server_mode is None else {"SERVER_MODE": env_server_mode}
+    with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env):
+        if env_server_mode is None:
+            os.environ.pop("SERVER_MODE", None)
+        with mock.patch.object(desktop, "spa_mounted", True), \
+             mock.patch.object(desktop, "_install_stop_signal_handlers"), \
+             mock.patch.object(desktop, "_lock_path", return_value=Path(tmp) / "luma-desktop.lock"), \
+             mock.patch.object(desktop, "_running_instance_port", return_value=running_on), \
+             mock.patch.object(desktop, "_choose_port", return_value=8123), \
+             mock.patch.object(desktop, "_GracefulServer", return_value=stopped) as server_class, \
+             mock.patch.object(desktop, "_open_browser") as opened, \
+             mock.patch.object(desktop.threading, "Thread") as thread, \
+             mock.patch.object(desktop.mdns, "advertise", advertise), \
+             mock.patch.object(desktop.app_control, "register_shutdown_handler") as registered:
+            status = desktop.main(argv)
+            _launch.server_ran = stopped.run.called
+            _launch.bound_host = server_class.call_args.args[0].host if server_class.called else None
+    return status, registered.called, opened.called or thread.called
+
+
+def test_server_mode_offers_neither_a_browser_nor_the_in_app_stop():
+    """A server is supervised and shared: nobody is sitting at it to want a tab, and a stop offered in
+    the app would let one signed-in user take the service from everyone else."""
+    assert _launch([], env_server_mode="true") == (0, False, False)
+    assert _launch([], env_server_mode=None) == (0, True, True)
+
+
+def test_the_command_line_overrides_the_env_setting_in_both_directions():
+    assert _launch(["--server"], env_server_mode="false") == (0, False, False)
+    assert _launch(["--no-server"], env_server_mode="true") == (0, True, True)
+
+
+def test_a_second_server_launch_fails_rather_than_joining_the_first():
+    """Joining means opening a tab, which a server has no use for — and exiting cleanly would tell a
+    supervisor the service had started."""
+    assert _launch(["--server"], env_server_mode=None, running_on=8123)[0] == 1
+    assert _launch([], env_server_mode=None, running_on=8123)[0] == 0
+
+
+def test_only_a_server_answers_for_a_network_name_and_withdraws_it_on_the_way_out():
+    advertise = mock.Mock(return_value=mock.Mock(hostname="ledger.local"))
+    _launch([], env_server_mode=None, advertise=advertise)
+    assert not advertise.called
+
+    _launch(["--server"], env_server_mode=None, advertise=advertise)
+    assert advertise.return_value.close.called
+
+
+def test_only_server_mode_can_be_put_on_the_network():
+    """A wide bind is the whole application over plain HTTP to whoever can reach the machine, so it takes
+    both halves of the configuration to get one: a desktop start ignores the address setting."""
+    advertise = mock.Mock(return_value=mock.Mock(hostname="ledger.local"))
+    with mock.patch.object(desktop, "_server_bind_host", return_value="0.0.0.0"):
+        _launch([], env_server_mode=None)
+        assert _launch.bound_host == desktop.BIND_HOST
+
+        _launch(["--server"], env_server_mode=None, advertise=advertise)
+        assert _launch.bound_host == "0.0.0.0"
+    # On the network directly, what is advertised is this process's own port rather than a proxy's.
+    assert advertise.call_args.kwargs["plain_http_port"] == 8123
+
+
+def test_the_default_address_setting_is_a_loopback_bind():
+    for configured, bound in (("localhost", "127.0.0.1"), ("127.0.0.1", "127.0.0.1"), ("0.0.0.0", "0.0.0.0")):
+        with mock.patch.object(desktop.app_config, "value_of", return_value=configured):
+            assert desktop._server_bind_host() == bound
+
+
+def test_a_name_that_cannot_be_advertised_refuses_the_start():
+    """Devices find the proxy by this name and its certificate is issued for it, so a server running
+    without it — or beside another one answering to it — is up and unreachable."""
+    taken = mock.Mock(side_effect=desktop.mdns.MdnsError("in use"))
+    assert _launch(["--server"], env_server_mode=None, advertise=taken)[0] == 1
+    assert _launch.server_ran is False
+
+
 def test_the_browser_port_is_the_frontend_port_not_the_backend_port():
     """One process serves the interface and the API, so the port the browser opens is `FRONTEND_PORT` —
     the name that means "the browser's port" when running from source as well. `BACKEND_PORT` names the
@@ -487,3 +582,18 @@ def test_the_launcher_reads_database_locations_from_the_env_file():
 
     control_path, data_path = result.stdout.strip().splitlines()[-2:]
     assert Path(control_path).parent == target and Path(data_path).parent == target
+
+
+def test_a_network_name_is_one_label_however_it_was_typed():
+    assert desktop.mdns.normalize_name("Ledger.local") == "ledger"
+    for bad in ("two.labels", "under_score", "-leading", ""):
+        with pytest.raises(desktop.mdns.MdnsError):
+            desktop.mdns.normalize_name(bad)
+
+
+def test_this_machines_own_answer_is_not_a_name_conflict():
+    """A machine whose host name equals the configured name is already answered for by its operating
+    system, with this machine's addresses — which is the same server, not a second one."""
+    own = {"192.0.2.10", "127.0.0.1"}
+    assert not desktop.mdns.answered_by_another_machine({"192.0.2.10"}, own)
+    assert desktop.mdns.answered_by_another_machine({"192.0.2.10", "192.0.2.77"}, own)

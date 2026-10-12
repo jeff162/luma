@@ -33,14 +33,31 @@ from backend.services import attempt_limiter, crypto_service, sign_in_sessions
 STRONG_PASSPHRASE = "a-strong-vault-passphrase"
 
 
-@contextmanager
-def api_client(base_url: str | None = None):
-    """The default `http://testserver` is right for everything that does not care what host it is on.
+# A device elsewhere on the network, for `api_client(client_host=...)`. From the range reserved for
+# documentation, so it is nobody's address.
+LAN_CLIENT = "192.0.2.10"
 
-    `base_url` exists for the cases that do: transport detection reads the request's host and scheme, so
-    a passkey ceremony refuses to run on `testserver` over HTTP exactly as it would on a real cleartext
-    LAN address. Passing `http://localhost` puts the harness on the loopback host those tests need, which
-    is also what the desktop build actually serves.
+
+def _arriving_from(app, client_host: str):
+    """`app`, with every request made to look as if it came from `client_host`. Starlette's test client
+    reports a fixed, non-address peer, and where a request came from is exactly what transport detection
+    reads — so the harness has to be able to say."""
+    async def wrapped(scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            scope = {**scope, "client": (client_host, 50000)}
+        await app(scope, receive, send)
+    return wrapped
+
+
+@contextmanager
+def api_client(base_url: str | None = None, client_host: str = "127.0.0.1"):
+    """A client on the server's own machine by default, which is what the desktop build serves and is
+    right for everything that does not care how it is reached.
+
+    The two arguments are for the cases that do. Transport detection reads the client's address and the
+    scheme: `client_host=LAN_CLIENT` is a request from another device, refused the secret-bearing
+    operations over HTTP, and an `https://` `base_url` is that same device behind TLS. The host in
+    `base_url` matters separately, to a passkey ceremony, whose Relying Party id it becomes.
     """
     tmp = tempfile.TemporaryDirectory()
     data_path = str(Path(tmp.name) / "data.db")
@@ -57,7 +74,7 @@ def api_client(base_url: str | None = None):
     control_database.init_control_db()
     from backend.main import app
     try:
-        with TestClient(app, base_url=base_url or "http://testserver") as client:
+        with TestClient(_arriving_from(app, client_host), base_url=base_url or "http://testserver") as client:
             # Establish a perimeter-off identity so the tenant middleware resolves a session (and routes
             # to the temp data DB). Every data endpoint runs as this selected identity.
             created = client.post("/api/auth/identities", json={"name": "Tester"})

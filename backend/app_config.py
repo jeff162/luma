@@ -37,6 +37,7 @@ from backend.runtime_config import (
     CONTROL_DB_FILENAME,
     DB_FILENAME,
     DEFAULT_APP_NAME,
+    DEFAULT_BACKEND_HOST,
     DEFAULT_BACKEND_PORT,
     DEFAULT_BACKEND_READY_TIMEOUT,
     DEFAULT_FRONTEND_DOCKER_PORT,
@@ -122,7 +123,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="app_name",
         env_var="APP_NAME",
         label="Application name",
-        help="Display name used in page titles, the sign-in issuer, provider link screens, and the label saved passkeys carry on the device. Set it per instance where several run on one host, so their passkey entries can be told apart.",
+        help="Display name used in the sign-in issuer, provider link screens, and the label saved passkeys carry on the device. Set it per instance where several run on one host, so their passkey entries can be told apart.",
         default=DEFAULT_APP_NAME,
         advanced=True,
     ),
@@ -201,20 +202,28 @@ SETTINGS: tuple[Setting, ...] = (
         advanced=True,
     ),
     Setting(
+        key="backend_host",
+        env_var="BACKEND_HOST",
+        label="Backend bind address",
+        help="Address the backend listens on when run from source. This computer only by default; set to 0.0.0.0 to reach it from another device on the network, over plain HTTP. A downloaded build uses Bind address instead.",
+        default=DEFAULT_BACKEND_HOST,
+        advanced=True,
+    ),
+    Setting(
         key="frontend_port",
         env_var="FRONTEND_PORT",
         # "Port", not "Frontend port": it is the one port a person looks for, and in a downloaded build it is
         # the only one. The variable keeps its FRONTEND_ name, which pairs it with FRONTEND_HOST and would
         # break every existing .env to rename.
         label="Port",
-        help="Port the browser connects to. A downloaded build serves everything on this one port, and starts on a free port instead if it is busy. Under Docker the browser port is Port (Docker).",
+        help="Port the browser connects to. A downloaded build serves everything on this one port, and starts on a free port instead if it is busy (in server mode it refuses to start). Under Docker the browser port is Port (Docker).",
         default=DEFAULT_FRONTEND_PORT,
     ),
     Setting(
         key="frontend_host",
         env_var="FRONTEND_HOST",
-        label="Frontend bind address",
-        help="Address the development server listens on. Loopback by default; set to 0.0.0.0 to reach it from another device on the network.",
+        label="Bind address",
+        help="Address the browser-facing server listens on: the development server when run from source, and a downloaded build in server mode. This computer only by default; set to 0.0.0.0 to reach it from another device on the network, over plain HTTP. A downloaded build outside server mode always listens to this computer only.",
         default=DEFAULT_FRONTEND_HOST,
     ),
     Setting(
@@ -223,6 +232,24 @@ SETTINGS: tuple[Setting, ...] = (
         label="Port (Docker)",
         help="Published frontend port when running under Docker.",
         default=DEFAULT_FRONTEND_DOCKER_PORT,
+        advanced=True,
+    ),
+    Setting(
+        key="server_mode",
+        env_var="SERVER_MODE",
+        label="Server mode",
+        help="Runs a downloaded build as a server for other devices to reach, behind a reverse proxy on the same machine or directly: no browser is opened, the port is fixed, and the in-app shutdown is not offered. The --server and --no-server options override it.",
+        default="false",
+        advanced=True,
+    ),
+    Setting(
+        key="mdns_name",
+        env_var="MDNS_NAME",
+        label="Network name",
+        help="The name a server-mode installation answers to on the local network, without the .local ending. Set it per installation where two share a network: a name already in use refuses the start. A reverse proxy in front has to use this name as its site address.",
+        # Fixed rather than following `APP_NAME`: the proxy's certificate is issued for this name, so
+        # it must not move because a display name was set for some other reason.
+        default=DEFAULT_APP_NAME.lower(),
         advanced=True,
     ),
     Setting(
@@ -447,6 +474,13 @@ def developer_options_enabled() -> bool:
     default, and env-only by design: it gates destructive tooling, so it is not something an in-app
     toggle should invite anyone to flip."""
     return truthy(value_of("developer_options"))
+
+
+def server_mode_enabled() -> bool:
+    """Whether the launcher runs as a server rather than a desktop application, before its command line
+    has had a say. Env-only because it is read before the server exists, and it is a property of how the
+    process is started — not the topology, which stays a per-request fact (`backend/transport.py`)."""
+    return truthy(value_of("server_mode"))
 
 
 @dataclass(frozen=True)

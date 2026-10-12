@@ -253,6 +253,7 @@ class TaskDismissalTests(TasksFixtureTestCase):
 
     def _request(self):
         return SimpleNamespace(
+            client=SimpleNamespace(host="127.0.0.1"),
             url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
             state=SimpleNamespace(user={"id": "test-user"}),
         )
@@ -322,6 +323,7 @@ class TaskDismissalTests(TasksFixtureTestCase):
         # fixed. A networked plain-HTTP request is what raises it.
         control_database.set_data_provider_intended(True)
         request = SimpleNamespace(
+            client=SimpleNamespace(host="192.168.1.10"),
             url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
             state=SimpleNamespace(user={"id": "test-user"}),
         )
@@ -337,6 +339,7 @@ class TaskDismissalTests(TasksFixtureTestCase):
         from backend.db.control_database import enable_auth_mode
         enable_auth_mode()
         request = SimpleNamespace(
+            client=SimpleNamespace(host="192.168.1.10"),
             url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
             state=SimpleNamespace(user={"id": "test-user", "role": "admin"}),
         )
@@ -350,6 +353,7 @@ class TaskDismissalTests(TasksFixtureTestCase):
         from backend.db.control_database import enable_auth_mode
         enable_auth_mode()
         request = SimpleNamespace(
+            client=SimpleNamespace(host="192.168.1.10"),
             url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
             state=SimpleNamespace(user={"id": "test-user", "role": "member"}),
         )
@@ -549,6 +553,7 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         # The Tasks page is a reminder: dismissing hides it, and the count rising brings it back. These
         # counts do not fall on their own, so "another connection" is what brings one back.
         request = SimpleNamespace(
+            client=SimpleNamespace(host="127.0.0.1"),
             url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
             state=SimpleNamespace(user={"id": "test-user"}),
         )
@@ -569,7 +574,8 @@ class ServerErrorTaskTests(TasksFixtureTestCase):
 
     def _task(self, role=None):
         user = {"id": "test-user", **({"role": role} if role else {})}
-        request = SimpleNamespace(url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
+        request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"),
+                                  url=SimpleNamespace(hostname="127.0.0.1", scheme="http"),
                                   state=SimpleNamespace(user=user))
         with self._use_db_path():
             result = get_tasks(request)

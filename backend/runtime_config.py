@@ -53,6 +53,10 @@ DEFAULT_FRONTEND_PORT = "8010"
 # `127.0.0.1` because the browser's origin becomes the WebAuthn Relying Party id, and an address is not
 # a domain — binding the numeric form would silently disable passkey vault slots in development.
 DEFAULT_FRONTEND_HOST = "localhost"
+# Loopback as well: a backend run from source also serves the built interface, so a wide bind puts the
+# whole application on the network over plain HTTP. That is a configuration someone may want, and it is
+# one they should have chosen.
+DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_FRONTEND_DOCKER_PORT = "3000"
 DEFAULT_BACKEND_READY_TIMEOUT = "180"
 

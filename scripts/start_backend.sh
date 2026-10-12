@@ -130,6 +130,11 @@ fi
 BACKEND_PORT="$(get_env_value "$ENV_PATH" BACKEND_PORT)"
 BACKEND_PORT="${BACKEND_PORT:-8011}"
 
+# This computer only unless BACKEND_HOST widens it: the backend serves the built interface as well as
+# the API, so a wide bind is the whole application on the network over plain HTTP.
+BACKEND_HOST="$(get_env_value "$ENV_PATH" BACKEND_HOST)"
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+
 if port_in_use "$BACKEND_PORT"; then
   echo "Backend port $BACKEND_PORT is already in use. Stop the running backend before starting another one."
   exit 1
@@ -138,7 +143,7 @@ fi
 cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r backend/requirements.txt
-echo "Starting backend on port $BACKEND_PORT"
+echo "Starting backend on $BACKEND_HOST port $BACKEND_PORT"
 # watchfiles (uvicorn's reloader) force-enables stat-polling whenever the kernel release contains
 # "microsoft-standard" — i.e. on all of WSL, keyed on the kernel string rather than on the path being
 # watched. The heuristic exists because inotify does not fire for edits made from Windows to a /mnt/c
@@ -153,5 +158,4 @@ export WATCHFILES_FORCE_POLLING=false
 # --proxy-headers lets request.url.scheme reflect X-Forwarded-Proto from a trusted reverse proxy
 # (Caddy terminating TLS in the client-server topology). It defaults to trusting only a loopback
 # proxy, so it is safe/inert for the direct-access dev case here.
-#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT" --proxy-headers
-"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT" --proxy-headers
+"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host "$BACKEND_HOST" --port "$BACKEND_PORT" --proxy-headers

@@ -64,6 +64,10 @@ export default defineConfig(({ mode }) => {
   // domain, so the numeric form disables passkey vault slots in development.
   const frontendHost = env.FRONTEND_HOST || 'localhost'
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8011}`
+  // `xfwd` passes the browser's own address on. The backend decides whether a request came from this
+  // machine by its client address (`backend/transport.py`), and without it every request arrives from
+  // this proxy — so a phone reaching a dev server opened with FRONTEND_HOST would read as local.
+  const apiProxy = { '/api': { target: apiProxyTarget, xfwd: true } }
 
   return {
     plugins: [
@@ -121,18 +125,14 @@ export default defineConfig(({ mode }) => {
     server: {
       host: frontendHost,
       port: frontendPort,
-      proxy: {
-        '/api': apiProxyTarget
-      }
+      proxy: apiProxy
     },
     // `vite preview` serves the *built* bundle, and it does not inherit `server`. Without the same
     // proxy every API call from a preview is a 404, so the one context that exercises what actually
     // ships would be the one context the app cannot run in. Port and host are left to the caller
     // (the smoke config passes them) so an ordinary `npm run preview` keeps Vite's own defaults.
     preview: {
-      proxy: {
-        '/api': apiProxyTarget
-      }
+      proxy: apiProxy
     }
   }
 })

@@ -11,10 +11,10 @@ Force Quit, and on Windows and Linux the answer would otherwise be "find the ter
 it from". A button in the app the user is already looking at is the one path that works everywhere.
 
 **The capability is registered, not assumed.** `backend/desktop.py` hands over a handler when it owns
-the server; nothing else does. A LAN deployment started with plain uvicorn therefore has no shutdown
-route at all — which is the intended asymmetry, since there the process is supervised, and stopping it
-from a browser is either futile (systemd restarts it) or a way for one signed-in user to take the
-service away from everyone else.
+the server as a desktop application; nothing else does. A server — the launcher in server mode, or plain
+uvicorn — therefore has no shutdown route at all, which is the intended asymmetry: there the process is
+supervised, and stopping it from a browser is either futile (systemd restarts it) or a way for one
+signed-in user to take the service away from everyone else.
 """
 
 from typing import Callable

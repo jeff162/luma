@@ -25,3 +25,7 @@ Pillow==12.3.0
 # OCR (tier 1 in docs/backlog/transaction-attachments.md). Pure Python with no dependencies of its
 # own, which is why it is preferred over the layout-aware alternatives.
 pypdf==6.7.0
+# Answers for the server's name on the local network in server mode (backend/mdns.py). The operating
+# system's own responder only publishes the machine's host name, and this is what makes a second name
+# work the same way on Windows, macOS and Linux. Imported only when a server starts.
+zeroconf==0.151.5

@@ -976,7 +976,7 @@ def _expected_origin(request: Request, rp_id: str) -> str:
     parsed = urllib.parse.urlparse(origin)
     if parsed.hostname != rp_id:
         raise HTTPException(status_code=400, detail="This page cannot run a passkey ceremony")
-    if parsed.scheme != "https" and not transport.request_is_loopback(request):
+    if parsed.scheme != "https" and not transport.page_is_secure_context(request):
         raise HTTPException(status_code=400, detail="Passkeys need an HTTPS connection")
     return origin
 
@@ -1584,7 +1584,7 @@ def _passkey_context(request: Request) -> dict:
     # TLS and arrive back at the same refusal.
     if is_address:
         return {"available": False, "reason": "ip_address_host", "rp_id": None}
-    if not (transport.request_is_https(request) or transport.request_is_loopback(request)):
+    if not transport.page_is_secure_context(request):
         return {"available": False, "reason": "insecure_context", "rp_id": None}
     return {"available": True, "reason": None, "rp_id": host}
 

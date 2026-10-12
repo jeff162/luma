@@ -55,7 +55,7 @@ Or start them individually:
 
 ```bash
 # backend — from the REPO ROOT, not from backend/, since the app is imported as backend.main
-uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8011
+uvicorn backend.main:app --reload --reload-dir backend --port 8011
 
 # frontend
 cd frontend

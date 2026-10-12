@@ -117,6 +117,9 @@ analysis = Analysis(
         collect_submodules("uvicorn")
         + collect_submodules("plaid")
         + collect_submodules("truststore")
+        # Its modules are compiled, so the imports between them are invisible to the analysis: without
+        # this the build succeeds and server mode dies on its first import.
+        + collect_submodules("zeroconf")
     ),
     hookspath=[],
     runtime_hooks=[],
