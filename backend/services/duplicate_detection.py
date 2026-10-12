@@ -20,9 +20,9 @@ Hard-reject rules (blocked at import; the row never enters the ledger, and the r
 in `import_batch_duplicate` so it can resurface if the rejecting batch is later undone), in evaluation
 order:
 
-  1-2. Coverage window — same-source (same csv_value, or the same data source under a different
-       csv_value landing on the same account; unconditional within the window), then in-scope
-       (same linked group, different csv_value). The in-scope rule fires only when the receiving
+  1-2. Coverage window — same-source (same csv_value, or the same data source landing on the same
+       account under a different csv_value or none; unconditional within the window), then in-scope
+       (same linked group, another source's claim). The in-scope rule fires only when the receiving
        account already had prior history in the matching scope, or the import explicitly declared it
        an alias; a brand-new sibling that only inherits its linked-group's coverage doesn't satisfy
        the precondition and falls through.
@@ -1186,13 +1186,13 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
     Three conditions, all structural rather than read off the reason text:
 
       - the rejection is a **coverage** hit (`covered`) whose claim came from this row's own source
-        account, which is Rule 1 and only Rule 1: the claim carries this row's source label, or Rule 1
-        marked it `same_source_account` — the same data source under another label, on the account
-        this row lands on. Rule 2's claim belongs to a different source describing the same account,
-        and that is a cross-source question the report should keep.
-      - a **non-empty** source label on both sides. A single-account import carries `csv_value = ''`,
-        which Rule 1 cannot fire on at all (an empty label is never indexed as coverage), so an empty
-        match here would be Rule 2 wearing Rule 1's shape.
+        account, which is Rule 1 and only Rule 1: Rule 1 marked it `same_source_account` — the same
+        data source, on the account this row lands on — or the claim carries this row's source label.
+        Rule 2's claim belongs to a different source describing the same account, and that is a
+        cross-source question the report should keep.
+      - where it is the label that says so, a **non-empty** one. A single-account import carries
+        `csv_value = ''`, which is never indexed as a label's coverage, so two empty labels agreeing
+        is Rule 2 wearing Rule 1's shape — two files that may or may not share a source.
       - **settled**: the rejection is not one of the two sub-states that ask something
         (`ADVISORY_REVIEW_SUBSTATES`) — a covered date that paired with nothing, or paired only two days
         out. A `transfer_match` is not among them: its verdict was made by the coverage rule and the
@@ -1207,12 +1207,10 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
     if not isinstance(matched, dict) or "covered" not in matched:
         return False
     covered = matched.get("covered", {})
-    source = str(covered.get("source_csv_value") or "").strip()
-    label = str(csv_value or "").strip()
-    if not source or not label:
-        return False
-    if source != label and not covered.get("same_source_account"):
-        return False
+    if not covered.get("same_source_account"):
+        source = str(covered.get("source_csv_value") or "").strip()
+        if not source or source != str(csv_value or "").strip():
+            return False
     return coverage_review_substate(matched) not in ADVISORY_REVIEW_SUBSTATES
 
 
@@ -1258,7 +1256,8 @@ class DedupeContext:
     import_coverage_by_csv_value: dict = field(default_factory=dict)
     import_coverage_by_scope_id: dict = field(default_factory=dict)
     # Coverage claimed by earlier files of the importing data source, keyed by the account each landed
-    # on. What lets Rule 1 recognise a source account the export has since renamed.
+    # on. What lets Rule 1 recognise a source account the export has since renamed, or one a
+    # single-account source never named at all.
     own_source_coverage_by_account: dict = field(default_factory=dict)
     terminal_day_candidates_by_csv_day: dict = field(default_factory=dict)
     terminal_day_candidates_by_scope_day: dict = field(default_factory=dict)
@@ -1613,7 +1612,8 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
       - candidate_count: len(candidates)                     (UI shortcut)
 
     `covered.same_source_account` is present only on a Rule 1 hit reached through the data source rather
-    than the label, where `source_csv_value` differs from the row's own and cannot say so by itself.
+    than the label, where `source_csv_value` differs from the row's own or is empty and cannot say so
+    by itself.
     """
     covered = {
         "start_date": cov.get("start_date"),
@@ -1741,11 +1741,11 @@ def evaluate_duplicate(
 
     # Rule 1: coverage window from a prior import of the same source account. That is the same
     # csv_value, or — failing that — an earlier file of the same data source that landed on this
-    # receiving account under a different one. The label is only what the exporter called the account
-    # on the day, and an aggregator renames accounts between exports; which account a data source's
-    # rows were filed on is recorded per batch and does not move afterwards (unlike a linked group,
-    # which can be attached and detached), so it identifies the source account where the label cannot.
-    # Both sides need a label: a single-account source has none and is left to the rules below.
+    # receiving account. The label is only what the exporter called the account on the day: an
+    # aggregator renames accounts between exports, and a single-account file carries no label at all.
+    # Which account a data source's rows were filed on is recorded per batch and does not move
+    # afterwards (unlike a linked group, which can be attached and detached), so it identifies the
+    # source account where the label cannot.
     #
     # When the rule fires we ALSO look for actual candidate rows by (receiving_account, date, amount)
     # so the report can show what we think the row matched (or flag "no specific match" if nothing
@@ -1760,12 +1760,9 @@ def evaluate_duplicate(
     # meant to reach the same state. It also fed the escape hatch below a false "nothing matched", so a
     # named payment already sitting on a sibling imported a second copy of itself.
     if context.coverage_strategy_enabled:
-        own_source_coverage = (
-            context.own_source_coverage_by_account.get(receiving_account_id, []) if csv_value else []
-        )
         cov = next(
             (entry for entry in (*context.import_coverage_by_csv_value.get(csv_value, []),
-                                 *own_source_coverage)
+                                 *context.own_source_coverage_by_account.get(receiving_account_id, []))
              if any(date_in_import_coverage_window(d, entry.get("start_date"), entry.get("end_date"))
                     for d in row_dates)),
             None,
@@ -1780,7 +1777,9 @@ def evaluate_duplicate(
             if verdict is not None:
                 return verdict
 
-    # Rule 2: in-scope coverage window — same linked group, different csv_value. Precondition: the
+    # Rule 2: in-scope coverage window — same linked group, a claim Rule 1 did not own. That is a
+    # different csv_value, or no csv_value on either side: two single-account files on one account,
+    # which Rule 1 takes only when they share a data source. Precondition: the
     # entry must be for the receiving account itself (or for an account the user explicitly
     # aliased this csv to). A brand-new sibling inheriting only its group's coverage does NOT
     # satisfy the precondition; the row falls through to the soft-flag sweep instead.
@@ -1792,7 +1791,7 @@ def evaluate_duplicate(
                 eligible_account_ids.add(alias_target)
         cov = next(
             (entry for entry in context.import_coverage_by_scope_id.get(scope_id or "", [])
-             if entry.get("csv_value") != csv_value
+             if (entry.get("csv_value") != csv_value or not csv_value)
              and entry.get("account_id") in eligible_account_ids
              and any(date_in_import_coverage_window(d, entry.get("start_date"), entry.get("end_date"))
                      for d in row_dates)),
@@ -1942,7 +1941,7 @@ def build_dedupe_context(
 
     `source_id` is the saved data source a file import runs under (`csv_import_profile.id`), None for
     a one-off file or a sync. It lets Rule 1 treat that source's earlier files on the same account as
-    the same source account even where the file names the account differently.
+    the same source account even where the file names the account differently or not at all.
 
     `exclude_batch_ids` makes the pass behave as though those batches were not there at all: their
     coverage claims, their terminal-window candidates, and **their rows** are all withheld. Used when
@@ -2273,7 +2272,7 @@ def build_dedupe_context(
         csv_value = str(row["csv_value"] or "").strip()
         scope_id = scope_id_for(row["account_id"], csv_value)
         own_source_account = bool(
-            source_id and csv_value and row["profile_id"] == source_id
+            source_id and row["profile_id"] == source_id
             and str(row["account_id"] or "") in relevant_account_ids
         )
         # Only coverage that could bear on THIS pass: the same source label, the same account scope,

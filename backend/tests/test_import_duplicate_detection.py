@@ -594,6 +594,50 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["deduped"], 0)
         self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 0)
 
+    async def _import_two_exports_without_an_account_column(self, *, as_one_data_source: bool) -> dict:
+        """A single-account file, then a later cumulative export of it whose one row inside the first
+        file's covered range has been reworded past what a text match would pair."""
+        checking_id = self._insert_account("Everyday Checking", account_type="depository", mask="1234")
+        config = {
+            "filename": "export.csv", "profile_id": None, "account_id": checking_id,
+            "single_account_new": None, "account_map": {}, "skip_accounts": [], "new_accounts": None,
+            "column_map": {"date": "Date", "description": "Description", "amount": "Amount"},
+            "date_format": "%Y-%m-%d", "amount_convention": "single_signed", "skip_rows": 0,
+            "apply_categorization": False, "use_imported_categories": False,
+        }
+        earlier = UploadFile(filename="earlier.csv", file=io.BytesIO((
+            "Date,Description,Amount\n"
+            "2025-11-03,CORNER DELI,-14.50\n"
+            "2025-11-20,CITY POWER,-88.00\n"
+        ).encode("utf-8")))
+        later = UploadFile(filename="later.csv", file=io.BytesIO((
+            "Date,Description,Amount\n"
+            "2025-11-03,POS PURCHASE 0042,-14.50\n"
+        ).encode("utf-8")))
+        with self._use_db_path():
+            first = await run_import(file=earlier, config=json.dumps(config))
+            if as_one_data_source:
+                config["profile_id"] = create_profile_from_batch(
+                    first["batch_id"], BatchCreateProfileRequest(name="Bank export"),
+                )["id"]
+            return await run_import(file=later, config=json.dumps(config))
+
+    async def test_a_single_account_data_source_restating_itself_leaves_no_report(self):
+        # No account column, so no label to recognise the source account by: the data source and the
+        # account it lands on are what say this is the same export again.
+        result = await self._import_two_exports_without_an_account_column(as_one_data_source=True)
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["ignored"], 1)
+        self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 0)
+
+    async def test_two_unsourced_single_account_files_are_covered_and_reported(self):
+        # The same two files with no data source behind them may be two sources describing one
+        # account, so the covered row is refused like any other cross-source claim and keeps its record.
+        result = await self._import_two_exports_without_an_account_column(as_one_data_source=False)
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["ignored"], 0)
+        self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 1)
+
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
         self._insert_existing_transaction(

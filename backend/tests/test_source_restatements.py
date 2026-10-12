@@ -8,9 +8,9 @@ every transaction put together, and it rode every backup. There is nothing in th
 the transaction each one duplicates is in the ledger, and is the record.
 
 So they are counted and not stored. What makes that safe is the narrowness of the predicate — it is
-Rule 1 only, with a real source label, and only where the rejection asks nothing of anyone. These pin
-each of those conditions, because widening any one of them would start discarding a refusal somebody
-would have wanted to look at.
+Rule 1 only, with a real source label or Rule 1's own mark, and only where the rejection asks nothing
+of anyone. These pin each of those conditions, because widening any one of them would start
+discarding a refusal somebody would have wanted to look at.
 """
 
 from __future__ import annotations
