@@ -3443,6 +3443,7 @@ def run_import_parsed(
             compare_targets=account_duplicate_compare_targets,
             alias_values=explicit_alias_csv_values,
             exclude_batch_ids=[replace_batch_id] if replace_batch_id else None,
+            source_id=profile_id,
             coverage_strategy_enabled=coverage_strategy_enabled,
             text_strategy_enabled=text_strategy_enabled,
         )

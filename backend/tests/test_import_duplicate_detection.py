@@ -558,6 +558,42 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["deduped"], 1)
         self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 1)
 
+    async def test_a_data_source_that_renamed_an_account_is_still_restating_itself(self):
+        # One data source, two exports, and the exporter renamed the account between them. Both labels
+        # are mapped to the same account, so the second file is the source restating its own import and
+        # leaves no report — the label is only what the file called the account that day.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        prior = await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+        with self._use_db_path():
+            source_id = create_profile_from_batch(
+                prior["batch_id"], BatchCreateProfileRequest(name="Aggregator"),
+            )["id"]
+        upload = UploadFile(
+            filename="renamed_export.csv",
+            file=io.BytesIO((
+                "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+                "2025-11-26,AMAZON MKTPLACE,Shopping,CREDIT CARD (...1234),AMAZON MKTPLACE,,-19.99,,Alex\n"
+            ).encode("utf-8")),
+        )
+        renamed_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"CREDIT CARD (...1234)": rewards_id},
+        )
+        renamed_config["profile_id"] = source_id
+        with self._use_db_path():
+            result = await run_import(file=upload, config=json.dumps(renamed_config))
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["ignored"], 1)
+        self.assertEqual(result["deduped"], 0)
+        self.assertEqual(len(self._get_duplicates(result["batch_id"])["rows"]), 0)
+
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
         self._insert_existing_transaction(

@@ -20,7 +20,8 @@ Hard-reject rules (blocked at import; the row never enters the ledger, and the r
 in `import_batch_duplicate` so it can resurface if the rejecting batch is later undone), in evaluation
 order:
 
-  1-2. Coverage window — same-source (same csv_value, unconditional within the window), then in-scope
+  1-2. Coverage window — same-source (same csv_value, or the same data source under a different
+       csv_value landing on the same account; unconditional within the window), then in-scope
        (same linked group, different csv_value). The in-scope rule fires only when the receiving
        account already had prior history in the matching scope, or the import explicitly declared it
        an alias; a brand-new sibling that only inherits its linked-group's coverage doesn't satisfy
@@ -1185,12 +1186,13 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
     Three conditions, all structural rather than read off the reason text:
 
       - the rejection is a **coverage** hit (`covered`) whose claim came from this row's own source
-        label, which is Rule 1 and only Rule 1. Rule 2's claim belongs to a sibling under the same
-        linked group — a different source describing the same account — and that is a cross-source
-        question the report should keep.
-      - a **non-empty** source label. A single-account import carries `csv_value = ''`, which Rule 1
-        cannot fire on at all (an empty label is never indexed as coverage), so an empty match here
-        would be Rule 2 wearing Rule 1's shape.
+        account, which is Rule 1 and only Rule 1: the claim carries this row's source label, or Rule 1
+        marked it `same_source_account` — the same data source under another label, on the account
+        this row lands on. Rule 2's claim belongs to a different source describing the same account,
+        and that is a cross-source question the report should keep.
+      - a **non-empty** source label on both sides. A single-account import carries `csv_value = ''`,
+        which Rule 1 cannot fire on at all (an empty label is never indexed as coverage), so an empty
+        match here would be Rule 2 wearing Rule 1's shape.
       - **settled**: the rejection is not one of the two sub-states that ask something
         (`ADVISORY_REVIEW_SUBSTATES`) — a covered date that paired with nothing, or paired only two days
         out. A `transfer_match` is not among them: its verdict was made by the coverage rule and the
@@ -1204,8 +1206,12 @@ def is_settled_source_restatement(matched: Optional[dict], *, csv_value: str) ->
     """
     if not isinstance(matched, dict) or "covered" not in matched:
         return False
-    source = str(matched.get("covered", {}).get("source_csv_value") or "").strip()
-    if not source or source != str(csv_value or "").strip():
+    covered = matched.get("covered", {})
+    source = str(covered.get("source_csv_value") or "").strip()
+    label = str(csv_value or "").strip()
+    if not source or not label:
+        return False
+    if source != label and not covered.get("same_source_account"):
         return False
     return coverage_review_substate(matched) not in ADVISORY_REVIEW_SUBSTATES
 
@@ -1251,6 +1257,9 @@ class DedupeContext:
     existing_rows_by_effective_account_amount: dict = field(default_factory=dict)
     import_coverage_by_csv_value: dict = field(default_factory=dict)
     import_coverage_by_scope_id: dict = field(default_factory=dict)
+    # Coverage claimed by earlier files of the importing data source, keyed by the account each landed
+    # on. What lets Rule 1 recognise a source account the export has since renamed.
+    own_source_coverage_by_account: dict = field(default_factory=dict)
     terminal_day_candidates_by_csv_day: dict = field(default_factory=dict)
     terminal_day_candidates_by_scope_day: dict = field(default_factory=dict)
     accounts_with_prior_history: set = field(default_factory=set)
@@ -1602,14 +1611,20 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
       - covered: { start_date, end_date, source_batch_id }   (always present)
       - candidates: list of compact candidate dicts          (may be empty → no specific match)
       - candidate_count: len(candidates)                     (UI shortcut)
+
+    `covered.same_source_account` is present only on a Rule 1 hit reached through the data source rather
+    than the label, where `source_csv_value` differs from the row's own and cannot say so by itself.
     """
+    covered = {
+        "start_date": cov.get("start_date"),
+        "end_date":   cov.get("end_date"),
+        "source_batch_id": cov.get("batch_id"),
+        "source_csv_value": cov.get("csv_value"),
+    }
+    if cov.get("same_source_account"):
+        covered["same_source_account"] = True
     return {
-        "covered": {
-            "start_date": cov.get("start_date"),
-            "end_date":   cov.get("end_date"),
-            "source_batch_id": cov.get("batch_id"),
-            "source_csv_value": cov.get("csv_value"),
-        },
+        "covered": covered,
         "candidates":      candidates,
         "candidate_count": len(candidates),
     }
@@ -1724,9 +1739,16 @@ def evaluate_duplicate(
     # still hard-rejects rows OUTSIDE any covered range, so nothing it caught before stops being
     # caught — it just no longer wins the label when coverage already explains the row.
 
-    # Rule 1: coverage window from a prior import of the same source (csv_value). When the rule
-    # fires we ALSO look for actual candidate rows by (receiving_account, date, amount) so the
-    # report can show what we think the row matched (or flag "no specific match" if nothing
+    # Rule 1: coverage window from a prior import of the same source account. That is the same
+    # csv_value, or — failing that — an earlier file of the same data source that landed on this
+    # receiving account under a different one. The label is only what the exporter called the account
+    # on the day, and an aggregator renames accounts between exports; which account a data source's
+    # rows were filed on is recorded per batch and does not move afterwards (unlike a linked group,
+    # which can be attached and detached), so it identifies the source account where the label cannot.
+    # Both sides need a label: a single-account source has none and is left to the rules below.
+    #
+    # When the rule fires we ALSO look for actual candidate rows by (receiving_account, date, amount)
+    # so the report can show what we think the row matched (or flag "no specific match" if nothing
     # plausible exists). The lookup is free — we already index existing rows by amount-key.
     #
     # **The lookup takes the linked group, like rule 2 does.** It used to pass `scope_id=None`, on the
@@ -1738,8 +1760,12 @@ def evaluate_duplicate(
     # meant to reach the same state. It also fed the escape hatch below a false "nothing matched", so a
     # named payment already sitting on a sibling imported a second copy of itself.
     if context.coverage_strategy_enabled:
+        own_source_coverage = (
+            context.own_source_coverage_by_account.get(receiving_account_id, []) if csv_value else []
+        )
         cov = next(
-            (entry for entry in context.import_coverage_by_csv_value.get(csv_value, [])
+            (entry for entry in (*context.import_coverage_by_csv_value.get(csv_value, []),
+                                 *own_source_coverage)
              if any(date_in_import_coverage_window(d, entry.get("start_date"), entry.get("end_date"))
                     for d in row_dates)),
             None,
@@ -1898,6 +1924,7 @@ def build_dedupe_context(
     alias_values: Optional[Iterable[str]] = None,
     exclude_batch_ids: Optional[Iterable[str]] = None,
     exclude_connection_ids: Optional[Iterable[str]] = None,
+    source_id: Optional[str] = None,
     coverage_strategy_enabled: bool = True,
     text_strategy_enabled: bool = True,
 ) -> DedupeContext:
@@ -1912,6 +1939,10 @@ def build_dedupe_context(
     bearing: an explicit alias asserts "the same physical account in another system", which unlocks
     the cross-account rules, whereas merely landing in a linked group does not (a sibling account is
     a different physical account, and hard-deduping across siblings would over-collapse).
+
+    `source_id` is the saved data source a file import runs under (`csv_import_profile.id`), None for
+    a one-off file or a sync. It lets Rule 1 treat that source's earlier files on the same account as
+    the same source account even where the file names the account differently.
 
     `exclude_batch_ids` makes the pass behave as though those batches were not there at all: their
     coverage claims, their terminal-window candidates, and **their rows** are all withheld. Used when
@@ -1977,6 +2008,7 @@ def build_dedupe_context(
     existing_rows_by_effective_account_amount: dict[str, dict[str, list[dict]]] = {}
     import_coverage_by_csv_value: dict[str, list[dict]] = {}
     import_coverage_by_scope_id: dict[str, list[dict]] = {}
+    own_source_coverage_by_account: dict[str, list[dict]] = {}
     terminal_day_candidates_by_csv_day: dict[tuple[str, str], list[dict]] = {}
     terminal_day_candidates_by_scope_day: dict[tuple[str, str], list[dict]] = {}
     accounts_with_prior_history: set[str] = set()
@@ -2219,7 +2251,7 @@ def build_dedupe_context(
     # back to the default of 1, the original single-terminal-day behavior.
     coverage_query = """
         SELECT iba.batch_id, iba.csv_value, iba.account_id,
-               iba.coverage_start_date, iba.coverage_end_date, iba.terminal_date,
+               iba.coverage_start_date, iba.coverage_end_date, iba.terminal_date, b.profile_id,
                COALESCE(p.terminal_window_days, ca.terminal_window_days) AS terminal_window_days
         FROM   import_batch_account iba
         JOIN   import_batch b ON b.id = iba.batch_id
@@ -2240,9 +2272,14 @@ def build_dedupe_context(
     for row in conn.execute(coverage_query, coverage_params).fetchall():
         csv_value = str(row["csv_value"] or "").strip()
         scope_id = scope_id_for(row["account_id"], csv_value)
-        # Only coverage that could bear on THIS pass: the same source label, or the same account
-        # scope. Everything else is another account's history and is irrelevant here.
-        if csv_value not in source_values and scope_id not in current_scope_ids:
+        own_source_account = bool(
+            source_id and csv_value and row["profile_id"] == source_id
+            and str(row["account_id"] or "") in relevant_account_ids
+        )
+        # Only coverage that could bear on THIS pass: the same source label, the same account scope,
+        # or this data source's own earlier file on an account this pass lands on. Everything else is
+        # another account's history and is irrelevant here.
+        if csv_value not in source_values and scope_id not in current_scope_ids and not own_source_account:
             continue
         entry = {
             "start_date": row["coverage_start_date"],
@@ -2255,6 +2292,10 @@ def build_dedupe_context(
             import_coverage_by_csv_value.setdefault(csv_value, []).append(entry)
         if scope_id and entry["start_date"] and entry["end_date"]:
             import_coverage_by_scope_id.setdefault(scope_id, []).append(entry)
+        if own_source_account and entry["start_date"] and entry["end_date"]:
+            own_source_coverage_by_account.setdefault(entry["account_id"], []).append(
+                {**entry, "same_source_account": True}
+            )
         terminal_date = str(row["terminal_date"] or "").strip()
         if terminal_date and entry["batch_id"]:
             # Index a candidate slot for EVERY day in the source's soft trailing window, not just the
@@ -2317,6 +2358,7 @@ def build_dedupe_context(
         existing_rows_by_effective_account_amount=existing_rows_by_effective_account_amount,
         import_coverage_by_csv_value=import_coverage_by_csv_value,
         import_coverage_by_scope_id=import_coverage_by_scope_id,
+        own_source_coverage_by_account=own_source_coverage_by_account,
         terminal_day_candidates_by_csv_day=terminal_day_candidates_by_csv_day,
         terminal_day_candidates_by_scope_day=terminal_day_candidates_by_scope_day,
         accounts_with_prior_history=accounts_with_prior_history,

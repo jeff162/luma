@@ -1161,13 +1161,25 @@ CSV import creates supporting records for workflow and recovery:
   (`scale-and-limits.md`). The count is kept **apart from `deduped_count`** rather than folded into it,
   so that count's contract holds by construction: it counts rows the report can actually show, which is
   what the duplicates pill offers to open. Three conditions narrow it, and each is load-bearing — the
-  claim must be **Rule 1** (this source's own coverage, not a sibling's under the same linked group),
-  the source label must be **non-empty** (a single-account import's empty label is never indexed as
-  coverage, so a match wearing one came from Rule 2), and the rejection must not be one of the two
+  claim must be **Rule 1** (this source's own coverage of this source account, not a different source's
+  claim on the same account), the source label must be **non-empty** (a single-account import's empty
+  label is never indexed as coverage, so a match wearing one came from Rule 2), and the rejection must
+  not be one of the two
   sub-states that **ask something** (`ADVISORY_REVIEW_SUBSTATES`: a covered date that paired with
   nothing, or paired only two days out). A `transfer_match` is not among them — its verdict was the
   coverage rule's and the probe only named a twin on another account — and that list is shared with the
-  card's "to review" count, so what the card ignores and what is never stored cannot drift apart. A row the
+  card's "to review" count, so what the card ignores and what is never stored cannot drift apart.
+  **"This source account" is the label, or the same data source landing on the same account under a
+  different label.** An aggregator renames accounts between exports, so the label is only what the file
+  called the account that day; which account a data source's rows were filed on is recorded per batch
+  (`import_batch_account`) and does not move afterwards — unlike a linked group, which can be attached
+  and detached — so it identifies the source account where the label cannot. Rule 1 marks such a claim
+  `covered.same_source_account`, since its `source_csv_value` differs from the row's own. Both the data
+  source **and** the account must match: a different source feeding the same account is the cross-source
+  case the report keeps, and a file with no saved data source has only its label. The verdict does not
+  change — Rule 2 already rejected these rows — only whether they are recorded. The after-the-fact pass
+  below reads stored verdicts, which carry no such mark on cards written before this, so a renamed
+  account's earlier report stays until its file is re-imported. A row the
   **id rung** recognizes is the other way in (see `txn.source_transaction_id`): the source's own id and an
   equal amount make it a restatement on the source's word, with none of the three conditions needed. A row that enriched its match keeps its record regardless, since that record is how
   the enrichment is undone, which is why the pruning runs after auto-enrich rather than instead of
