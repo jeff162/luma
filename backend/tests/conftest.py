@@ -77,11 +77,11 @@ _real_get_db = database.get_db
 _real_get_control_db = control_database.get_control_db
 
 
-def _guarded_get_db(db_path: str | None = None):
+def _guarded_get_db(db_path: str | None = None, **options):
     resolved = database._normalize_db_path(db_path)
     if resolved == _AMBIENT_DATA_PATH:
         _refuse_ambient("data database", resolved)
-    return _real_get_db(db_path)
+    return _real_get_db(db_path, **options)
 
 
 def _guarded_get_control_db():

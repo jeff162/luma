@@ -100,10 +100,20 @@ _BUSY_TIMEOUT_SECONDS = 15
 
 
 @contextmanager
-def get_db(db_path: str | None = None):
+def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
+    """Open a connection for the length of the block, committing on the way out.
+
+    `handed_between_threads` is for a connection held open across the steps of a streamed response body.
+    Each step of a sync generator runs on whichever worker thread is free, so the thread that opens the
+    connection is not reliably the one that reads the next row or closes it, and sqlite3 refuses a
+    connection outside its creating thread unless told otherwise. It is safe only because such a generator
+    is advanced one step at a time: the connection changes hands, it is never shared.
+    """
     resolved_path = _normalize_db_path(db_path)
     Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(resolved_path, timeout=_BUSY_TIMEOUT_SECONDS)
+    conn = sqlite3.connect(
+        resolved_path, timeout=_BUSY_TIMEOUT_SECONDS, check_same_thread=not handed_between_threads,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -12,10 +12,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+import anyio
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import export_transactions_csv
@@ -108,6 +111,29 @@ class ExportMatchesLedgerTests(unittest.TestCase):
             "facets", "sort_by", "sort_dir", "limit", "offset",
         }
         self.assertEqual(set(inspect.signature(transaction_list_filters).parameters), list_filters)
+
+    def test_export_survives_its_rows_being_read_on_different_worker_threads(self):
+        # The body is a sync generator, so each row is read on whichever pool worker is free, and the
+        # connection it holds open is opened on one and read or closed on another whenever other requests
+        # are using the pool. Here the worker that served a chunk is kept busy, so the next chunk has to
+        # be given a different one — on a quiet pool the same worker is reused and the fault never shows.
+        with self._use_db_path():
+            resp = export_transactions_csv(
+                columns="merchant_name", facets=TransactionFacets(),
+                filters=_defaults(transaction_list_filters), sort_by="date", sort_dir="desc",
+            )
+
+        async def drain_on_a_busy_pool():
+            rows, occupied = 0, []
+            async for _ in resp.body_iterator:
+                rows += 1
+                occupied.append(asyncio.ensure_future(anyio.to_thread.run_sync(time.sleep, 0.1)))
+                await asyncio.sleep(0.02)
+            await asyncio.gather(*occupied)
+            return rows
+
+        # The header and the four rows not in the trash.
+        self.assertEqual(asyncio.new_event_loop().run_until_complete(drain_on_a_busy_pool()), 5)
 
 
 if __name__ == "__main__":

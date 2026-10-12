@@ -495,7 +495,8 @@ def export_transactions_csv(
         w = csv.writer(buf)
         w.writerow(headers)
         yield buf.getvalue(); buf.seek(0); buf.truncate()
-        with get_db(db_path) as conn:
+        # Held open across yields, each of which may resume on a different worker thread.
+        with get_db(db_path, handed_between_threads=True) as conn:
             for row in conn.execute(f"""
                 SELECT {', '.join(select_exprs)}
                 FROM   {txn_effective_sql(conn, expand=expand_splits)} t
