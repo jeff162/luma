@@ -13,55 +13,10 @@
  *   owed an answer. The automatic one fails silently.
  */
 
-import { useEffect, useState } from 'react'
-import { api } from '../lib/api.js'
 import { RELEASES_URL } from '../lib/appConfig.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { useRelativeTimestamp } from '../lib/useRelativeTimestamp.js'
 import { Button, Toggle } from './ui.jsx'
-
-export function useUpdateCheck() {
-  const [status, setStatus] = useState(null)
-  const [checking, setChecking] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    api.getUpdateCheck()
-      .then(result => { if (!cancelled) setStatus(result) })
-      .catch(() => { })
-    return () => { cancelled = true }
-  }, [])
-
-  async function setEnabled(enabled) {
-    setSaving(true)
-    setNotice('')
-    try {
-      setStatus(await api.setUpdateCheckEnabled(enabled))
-    } catch (err) {
-      setNotice(err?.message || 'Could not save the setting.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function checkNow() {
-    setChecking(true)
-    setNotice('')
-    try {
-      const result = await api.checkForUpdateNow()
-      setStatus(result)
-      if (!result.reached) setNotice('The release list could not be reached.')
-    } catch (err) {
-      setNotice(err?.message || 'The check could not be run.')
-    } finally {
-      setChecking(false)
-    }
-  }
-
-  return { status, checking, saving, notice, setEnabled, checkNow }
-}
 
 export function UpdateCheckStatus({ status }) {
   const checked = useRelativeTimestamp(status?.last_checked_at)

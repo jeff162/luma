@@ -3,7 +3,8 @@
 
 import { APP_NAME, APP_VERSION, CC_BY_4_URL, EFF_WORDLIST_URL, LICENSE_CANONICAL_URL, PROJECT_URL } from '../../lib/appConfig.js'
 import { Card } from '../ui.jsx'
-import { UpdateCheckControls, UpdateCheckStatus, useUpdateCheck } from '../UpdateCheck.jsx'
+import { useUpdateCheck } from '../../lib/useUpdateCheck.js'
+import { UpdateCheckControls, UpdateCheckStatus } from '../UpdateCheck.jsx'
 
 function AboutRow({ label, value, help = '' }) {
   return (
