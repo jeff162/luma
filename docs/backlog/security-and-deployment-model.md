@@ -204,13 +204,13 @@ discussion now in `../security-model.md`:
    The 6a/6b seam was Plaid-shaped in three ways that were never universal, all of which became declared
    **adapter capabilities** rather than branches on provider name (`services/providers/base.py`):
 
-   - **Connect is not always Link.** `connect(app_config, payload)` is now the one abstract authorization
+- **Connect is not always Link.** `connect(app_config, payload)` is now the one abstract authorization
      op, with `connect_spec` describing what the UI must collect (a Link widget, or a pasted token). The
      whole tail after it — vault gates, credential encryption, the `(provider, external_id)` upsert,
      account recording — is one shared `providers.establish_connection`; `/plaid/exchange` and the new
      generic `POST /api/providers/{provider}/connect` converge on its first line, so the two paths cannot
      drift on credential custody or account adoption.
-   - **Not every provider has a cursor.** `ProviderAdapter.fetch_transactions_sync` now *defaults* to a
+- **Not every provider has a cursor.** `ProviderAdapter.fetch_transactions_sync` now *defaults* to a
      range pull, so a change-feed-less provider needs no special case in the sync loop. Its return grew
      three fields that were previously conflated into one: `backfill_complete` (is the history fetched to
      its end?) separate from the poll-stop signal, `resume_later` (stop polling but the backfill is
@@ -228,7 +228,7 @@ discussion now in `../security-model.md`:
      `history_empty_streak`, migration v28); `run_sync` builds `account_targets` from them and the adapter
      holds no history state at all. The catch-up, its scheduling hook, and the connection-level flags were
      deleted rather than refactored. See `docs/architecture.md` → "Provider connections".
-   - **Not every provider has an app-level credential.** `requires_app_config = False` stops "nothing
+- **Not every provider has an app-level credential.** `requires_app_config = False` stops "nothing
      configured" reading as "setup unfinished": such a provider counts as configured once *connected*,
      shows no Configure action and no environment badge, and — having no sandbox — is gated on a
      Production-strength vault at **connect** time, since it has no later moment at which to ask.
