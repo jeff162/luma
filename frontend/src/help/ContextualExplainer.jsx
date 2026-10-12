@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
 import FeatureExplainer from './FeatureExplainer.jsx'
 import { HelpPopoverPanel } from './helpPanel.jsx'
 import { useHelpTopicViewer } from './useHelpTopicViewer.jsx'
-import { HELP_HINTS_ENABLED_PREF_KEY, HELP_DISMISSED_TIPS_PREF_KEY } from './preferences.js'
+import { useTipCallout } from './useTipCallout.js'
 
 /*
  * Context-triggered "explain this" affordance — the counterpart to the always-present
@@ -24,9 +23,6 @@ import { HELP_HINTS_ENABLED_PREF_KEY, HELP_DISMISSED_TIPS_PREF_KEY } from './pre
  * surfaces can be dismissed independently. Content comes from the same registry as the
  * `?` popover and the /help pages, so the three never drift.
  */
-
-// Stable identity for the unset default so useUserPreference doesn't churn its return value.
-const EMPTY_DISMISSED = {}
 
 const CALLOUT_CARD_STYLE = {
   position: 'relative',
@@ -59,8 +55,7 @@ const TIP_ICON = (
 )
 
 export default function ContextualExplainer({ topic, active, tipKey = topic, placement = 'bottom-left', style, persistentButton = true }) {
-  const [hintsEnabled] = useUserPreference(HELP_HINTS_ENABLED_PREF_KEY, true)
-  const [dismissedTips, setDismissedTips] = useUserPreference(HELP_DISMISSED_TIPS_PREF_KEY, EMPTY_DISMISSED)
+  const { showing, dismiss } = useTipCallout(tipKey)
   const { openTopic, viewerNode } = useHelpTopicViewer()
   const entry = HELP_TOPICS_BY_ID[topic]
 
@@ -70,11 +65,9 @@ export default function ContextualExplainer({ topic, active, tipKey = topic, pla
   // dismissed; otherwise the guidance stays reachable through the persistent `?`. A host that already
   // provides its own re-access `?` elsewhere can pass `persistentButton={false}` so the dismissed
   // callout simply disappears instead of leaving a second `?` in place.
-  if (!hintsEnabled || dismissedTips?.[tipKey]) {
+  if (!showing) {
     return persistentButton ? <FeatureExplainer topic={topic} placement={placement} /> : null
   }
-
-  const dismiss = () => setDismissedTips(prev => ({ ...(prev || {}), [tipKey]: true }))
 
   return (
     <>

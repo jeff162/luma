@@ -79,8 +79,7 @@ export function connectionAccountsLabel(names, { max = 3 } = {}) {
 // --- Opening the last sync's rows ------------------------------------------------------------------
 //
 // Which import cards a connection's last sync actually wrote to, as batch descriptors the shared
-// card-ledger panel can open. Shared because both surfaces offer this and the rule has two edges neither
-// would rediscover.
+// card-ledger panel can open. Here rather than inline because the rule has two edges worth testing.
 //
 // **One pull can write to more than one card.** Rows are filed under their *own* transaction month, so
 // for a few days after a rollover the tail of the previous month arrives beside the current one. Opening
@@ -109,10 +108,7 @@ export function lastSyncReportCards(connection) {
 
 // --- What a provider's connections are collectively saying ------------------------------------------
 //
-// The states a surface has to report about one provider's connections, derived in one place because two
-// surfaces now render them: the Accounts page's configuration card (where the remedy for each of these
-// lives) and the Import connections panel (where the user finds out). Computed twice, they would
-// drift — and a badge that disagrees with itself across two pages is worse than one that is only on one.
+// The states the Connections tab's provider card has to report about one provider's connections.
 //
 // `unmappedByConnection` and `reviewByConnection` are passed in rather than read here: they come from
 // other endpoints (the connection's account mapping, and the sync cards' unresolved duplicates), and a

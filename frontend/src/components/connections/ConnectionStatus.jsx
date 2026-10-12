@@ -1,17 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// What a data connection says about itself, shared by every surface that shows one.
+// What a data connection says about itself on the Import page's Connections tab: the outcome pill, the
+// last-synced line, and the per-account chips, which are the same chips an import card's outcome row
+// uses — so a user reading a connection's card and then the cards its sync wrote cannot be told two
+// stories about one pull.
 //
-// Extracted when the connections tab was split in two: **configuration** stayed on the Accounts page
-// (connect, disconnect, account mapping, provider credentials) while the **operational** half — syncing,
-// and the record of what a sync did — moved to Import, beside the cards a sync writes to. Both
-// halves still have to describe the same connection, and they must not describe it differently: the
-// outcome pill and the per-account chips are the same components on both, so a user reading one page
-// minutes after the other cannot be told two stories about one pull.
-//
-// Nothing here fetches or acts. These are pure renderers over what the providers listing already says,
-// which is what lets the two pages own the actions and share the reporting.
+// Nothing here fetches or acts. These are pure renderers over what the providers listing already says.
 
 import { OutcomeChip, SourceAccountChip } from '../importExport/SourceAccountChip.jsx'
 import { useRelativeTimestamp } from '../../lib/useRelativeTimestamp.js'
@@ -84,7 +79,12 @@ const SYNC_OUTCOMES = {
 // The outcome of the last sync, laid out like the Import history card's own outcome row and built
 // from the same chips (`SourceAccountChip`) — a sync and a file import answer the same question, and a
 // user reads the two surfaces minutes apart, so they should not look like different features.
-export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog, onOpenReport }) {
+//
+// `onToggleDetail` makes the "Last sync" label a disclosure for the per-account chips, which the caller
+// supplies as `providerAccounts` while `detailOpen`. Closed by default at the call site: one chip per
+// account is most of a card's height for something most visits never look at.
+export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog, onOpenReport,
+  detailOpen = false, onToggleDetail = null }) {
   if (syncing) {
     return (
       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -139,7 +139,20 @@ export function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOp
   return (
     <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ color: 'var(--muted)' }}>Last sync</span>
+        {onToggleDetail ? (
+          <button type="button" onClick={onToggleDetail}
+            title={detailOpen
+              ? 'Hide what the last sync did for each account'
+              : 'Show what the last sync did for each account'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              font: 'inherit', color: 'var(--muted)',
+            }}>
+            <span aria-hidden style={{ fontSize: 10 }}>{detailOpen ? '▾' : '▸'}</span>
+            <span>Last sync</span>
+          </button>
+        ) : <span style={{ color: 'var(--muted)' }}>Last sync</span>}
         {outcome.tone
           ? <StatusPill tone={outcome.tone} title={outcome.title} onClick={onOpenLog}>{outcome.label}</StatusPill>
           : <span title={outcome.title} style={{ color: 'var(--text)' }}>{outcome.label}</span>}

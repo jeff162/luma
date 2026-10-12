@@ -263,7 +263,7 @@ const NAV_LINKS = [
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
-const DATA_PROVIDER_STARTUP_ROUTE = '/accounts'
+const DATA_PROVIDER_STARTUP_ROUTE = '/import-export?tab=connections'
 // Severity-to-color mapping for the nav Tasks badge. Mirrors the palette used by
 // `SEVERITY_COLORS` in Tasks.jsx so the badge in the nav reads as the same severity
 // the task cards on the page render with. Ordered by ascending urgency so that

@@ -598,10 +598,9 @@ function ConnectionSyncLogBody({ initialConnectionIds = EMPTY_IDS, initialProvid
 }
 
 
-// Opened from a button rather than standing on a page: the Data connections card on Import, and
-// on Accounts → Connections each provider's card and each connection's last-sync pill, opened in place
-// there rather than by sending the user to Import — someone who went looking for the log on the
-// connections page should find it without a detour.
+// Opened from a button rather than standing on a page, all on the Import page's Connections tab: the
+// whole log from the top of the tab, a provider's from its card, and a connection's from its last-sync
+// pill.
 //
 // It was a permanent section under the import history at first, which was wrong in the same way its old
 // home in Settings was wrong, just in the other direction: a diagnostic nobody needs most of the time

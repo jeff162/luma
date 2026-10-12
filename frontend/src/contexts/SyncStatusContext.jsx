@@ -137,7 +137,7 @@ export function SyncStatusProvider({ children }) {
   // Which providers belong to the run the panel is currently reporting on.
   //
   // `syncState` cannot answer this: it is keyed by provider and accumulates for the life of the page,
-  // because the Accounts cards each read their own provider's slot and expect the last result to stay
+  // because the Connections tab's cards each read their own provider's slot and expect the last result to stay
   // there. Rendering all of it made the panel show every provider synced since the page loaded — sync
   // Plaid, then SimpleFIN, and the panel still listed Plaid's result from ten minutes earlier as though
   // it were part of the run in progress.

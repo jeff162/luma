@@ -7,8 +7,8 @@
 //
 // The gate itself is `lib/useVaultGate.js` — a gated action awaits `ensureVault()` and then carries on in
 // its own call frame. What lives here is the *hosting* of it: the flags it reads, the passphrase dialog
-// that settles it, and the notice a request for access raises. All three used to sit inside the Accounts
-// page's Connections tab, which was fine while every gated action was on that tab and is not fine now
+// that settles it, and the notice a request for access raises. All three used to sit inside the
+// Connections tab, which was fine while every gated action was on that tab and is not fine now
 // that the navigation pane can start a sync. A gate whose dialog is mounted under one route cannot
 // suspend an action taken anywhere else: the promise would resolve only if the user happened to be on
 // that page, and the prompt would unmount underneath a pending action the moment they were not.
@@ -21,7 +21,7 @@
 // and it adds no fetch of its own: a page that read auth status for its own reasons can hand the answer
 // over, so a surface that *displays* the vault state self-corrects without a timer.
 //
-// What deliberately stays with the Accounts page: the vault *strip* (a configuration surface), the
+// What deliberately stays with the Connections tab: the vault *strip* (a configuration surface), the
 // change-passphrase dialog (nothing waits on it — see the comment at its call site), and the strip's own
 // passkey button, whose refusal is reported as a page notice rather than inline in a dialog.
 
@@ -63,7 +63,7 @@ export function VaultGateProvider({ children }) {
   // Take a fresh `/auth/status` user a *page* happened to fetch, but only when it actually says something
   // new about the vault.
   //
-  // The caller is the Accounts page, which reads auth status on every refresh for its transport check and
+  // The caller is the Connections tab, which reads auth status on every refresh for its transport check and
   // so holds the server's current answer in hand — worth adopting, because the server drops the key on its
   // idle timeout and a strip claiming the vault is open when it is not is wrong in the one place a user
   // looks to find out. The comparison is what makes it safe rather than merely nice: that page's refresh

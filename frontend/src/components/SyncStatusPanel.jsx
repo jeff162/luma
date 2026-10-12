@@ -100,7 +100,7 @@ function FinishedRow({ provider, state }) {
 export function SyncStatusPanel({ connections = [], syncState = {}, runProviders = [], watching = false,
                                   onClose, onMinimize }) {
   // Scoped to the run in progress, not to everything `syncState` has accumulated. That map is keyed by
-  // provider and keeps each one's last result for the life of the page (the Accounts cards read it that
+  // provider and keeps each one's last result for the life of the page (the Connections tab's cards read it that
   // way), so filtering it here is what stops a provider synced earlier from being reported as part of
   // this run — the panel is about *this* sync, while the cards are about *that connection*.
   const finished = runProviders

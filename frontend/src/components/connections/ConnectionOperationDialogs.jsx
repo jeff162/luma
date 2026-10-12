@@ -3,10 +3,8 @@
 
 // The dialogs a connection operation raises, rendered wherever the operation was started.
 //
-// They travel with `useConnectionOperations` rather than living on a page, because both surfaces that
-// can start these actions — the Accounts configuration card and the Import connections panel —
-// need the same confirmation, and a confirmation written twice is one that will eventually promise two
-// different things about the same destructive action.
+// They travel with `useConnectionOperations` rather than living on a page, so the confirmation for a
+// destructive action is written once, beside the action it confirms.
 //
 // Exported as a function returning a node rather than as a component, so the hook can hand it back
 // alongside its actions the way `useBatchDetailPanels` hands back `panelsNode`: the caller renders one

@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event'
 import { ImportHistorySection } from '../ImportHistorySection.jsx'
 
 vi.mock('../../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
+vi.mock('../../../help/useTipCallout.js', () => ({ useTipCallout: () => ({ showing: true, dismiss: () => {} }) }))
 
 afterEach(() => { cleanup(); vi.clearAllMocks() })
 

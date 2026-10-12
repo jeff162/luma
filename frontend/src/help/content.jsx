@@ -1886,7 +1886,7 @@ export const HELP_TOPICS = [
     section: 'accounts',
     title: 'The Accounts page',
     surfaces: ['Accounts'],
-    summary: 'Accounts, Owners and Connections. Transactions identify the account they came from, owners are matches to accounts for reporting , and connections lists the configured data providers. ',
+    summary: 'Accounts and Owners. Transactions identify the account they came from, and owners are matched to accounts for reporting. ',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -1919,155 +1919,6 @@ export const HELP_TOPICS = [
           than one owner exists, <em>shared</em> becomes available as a choice. Owner can be filtered
           and reported on and used in the selection criteria for rules. Each owner also chooses whether its new
           transactions arrive flagged <HelpLink to="/help/reviewing-transactions">needs review</HelpLink>.
-        </p>
-        <p>
-          <strong>Connections</strong> is where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
-          and maintained. This is also where the mapping of accounts from the provider to accounts in
-          the application occurs.
-        </p>
-      </>
-    ),
-  },
-  {
-    id: 'data-providers',
-    section: 'accounts',
-    title: 'Data providers and connections',
-    surfaces: ['Accounts (Connections)', 'Import (Data connections)'],
-    summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
-    body: () => (
-      <>
-        <p>
-          A <strong>data provider</strong> is an online service that retrieves transactions from various sources
-          so they arrive in {APP_NAME} without exporting and importing a file. The
-          supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>. There are
-          no credentials supplied in {APP_NAME}. SimpleFIN Bridge is a subscription model and provides access to most
-          financial institutions. Plaid offers a developer license which allows
-          a limited number of connections to be built.
-        </p>
-        <p>
-          The <strong>data provider</strong> defines the model. With SimpleFIN Bridge, the accounts are
-          connected on the SimpleFIN Bridge webpage and the <strong>connection</strong> provides the transaction data from
-          all of the connected accounts. For Plaid, the Plaid webpage has the secrets and after they are
-          entered, <strong>Institutions</strong> are connected in {APP_NAME} and that process defines
-          the accounts which will provide data.
-        </p>
-        <p>
-          Transactions from <em>data providers</em> go through the the same duplicate
-          detection process as file imports and the transaction record lives on the
-          Import page organized by Month rather than file.
-        </p>
-        <p>
-          Syncing is a manual process; there is no facility for a scheduled or automatic sync
-          as the vault which holds the secrets can only be unlocked manually.
-        </p>
-        <p>
-          Data connections are established and managed on the <em>Connections</em> tab on
-          the <em>Accounts</em> page. Connection settings and Disconnect connection are on
-          the per-connection menu.
-        </p>
-        <h4>Secrets Vault</h4>
-        <p>
-          The vault is used to encrypt the data connection credentials stored on disk. The passphrase
-          protects the encryption key which allows for multiple ways to protect the same key. This is both
-          to support multiple users and so a single user can have multiple authentication methods such as a
-          passphrase and a passkey. This also allows for a recovery key which can be stored in a secure
-          location separate from the passphrase (as there is no point in storing them in the same location as
-          then they will both get lost together).
-        </p>
-        <p>
-          To get started with data connections set a Vault Passphrase. The Set Vault Passphrase button
-          gets replaced with Vault Settings and there there is a Lock button. The Vault automatically locks
-          after a period of time (8 hours?) unless locked earlier with the Locked button.
-        </p>
-        <h4>Connecting</h4>
-        <p>
-          Perform the needed setup and configuration on the data provider end.
-        </p>
-        <ul>
-          <li>
-            <strong>Plaid</strong> &mdash; needs app credentials from a Plaid account, entered once
-            with <strong>Configure</strong> by an administrator. Once it is configured, use the <strong>+Connect Institution</strong> button
-            to connect accounts.
-          </li>
-          <li>
-            <strong>SimpleFIN Bridge</strong> &mdash; needs a one-time setup token generated at SimpleFIN Bridge.
-            Institutions and accounts are configured on the SimpleFIN Bridge side.
-          </li>
-        </ul>
-
-        <h4>Connecting and mapping accounts</h4>
-        <p>
-          Part of the connection process is mapping the accounts from the provider to accounts in
-          the application. Provider accounts can be skipped if they are not of interest. The
-          correct mapping is what allows duplicate detection to work properly across different
-          import methods. It is fine to import CSV files when there are data connections, as long
-          as the transactions all map to the same account from both sources.
-        </p>
-        <p>
-          An account added to a data connection after the initial mapping
-          shows up on the connection's card as <strong>to
-            map</strong> and on the <strong>Tasks</strong> page. Its transactions are skipped until it is mapped.
-          The mapping, and the set of extra details to capture can be changed
-          from <strong>Connection settings&hellip;</strong> in the card's menu.
-        </p>
-
-        <h4>Syncing</h4>
-        <p>
-          New transactions are pulled on request using the sync control in the navigation pane or
-          from <strong>Sync now</strong> on the <strong>Data connections</strong> card of the Import
-          page. Per-connection Import cards on the Import page records
-          what arrived, similar to an imported file. Importing a file generates a single card, the
-          data connections create a card for the <strong>Initial import</strong> and then one
-          per month.
-        </p>
-        <p>
-          Each connection carries a menu with the following actions:
-        </p>
-        <ul>
-          <li>
-            <strong>Fetch more history</strong> &mdash; pulls older transactions as far back as the bank and provider allow.
-          </li>
-          <li>
-            <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
-            stored credential. Needed after restoring a backup.
-          </li>
-          <li>
-            <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
-            synced so the next sync imports it again. This is the equivalent of Undo on a
-            file card.
-          </li>
-        </ul>
-        <p>
-          If a provider limits the time window for each request and limits the number
-          of requests per day, retrieving the initial
-          transaction history may take more than one day. The sync
-          reports <strong>more history to fetch</strong> and more will be fetched when the
-          limit refreshes. The initial sync stops before exhausting the provider's limit to
-          allow for subsequent fetches of the most recent data while waiting for the limits to
-          refresh.
-        </p>
-
-        <h4>When a connection needs attention</h4>
-        <p>
-          A connection with an action required indicates this on its card and on the Tasks
-          page.
-        </p>
-        <ul>
-          <li>
-            <strong>Reconnect needed</strong> means
-            the provider no longer accepts the stored credential, usually because access was revoked or
-            expired at the provider. Syncing stays stopped until it is connected again.
-          </li>
-          <li>
-            A <strong>provider notice</strong> is a problem the provider reported that did not stop the
-            sync, such as one bank on a multi-bank connection needing attention.
-          </li>
-        </ul>
-
-        <h4>Disconnecting</h4>
-        <p>
-          Disconnecting retains the accounts and their transactions. If disconnecting the
-          account revokes the provider's access the confirmation page will indicate this.
         </p>
       </>
     ),
@@ -2333,7 +2184,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'The Import page',
     surfaces: ['Import'],
-    summary: 'Where transactions come in. Two tabs cover Import and Amazon, and the import history below keeps a card per file recording what it did.',
+    summary: 'Where transactions come in. Three tabs cover File Import, Amazon and Connections, and the import history below keeps a card per file recording what it did.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2341,7 +2192,7 @@ export const HELP_TOPICS = [
             what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
             are how the page itself is divided. */}
         <p>
-          Where transactions come in. The page has two tabs, and the sections
+          Where transactions come in. The page has three tabs, and the sections
           below follow them: each row names something on the page, says what it is for, and links the
           topic that explains it.
         </p>
@@ -2351,7 +2202,7 @@ export const HELP_TOPICS = [
           in the file card&apos;s duplicate-detection report.
         </p>
 
-        <HelpHeading anchor="import-tab">Import</HelpHeading>
+        <HelpHeading anchor="import-tab">File Import</HelpHeading>
         <div className="help-table-scroll">
           <table>
             <thead>
@@ -2365,11 +2216,6 @@ export const HELP_TOPICS = [
                     represents money in and out</HelpLink>, and which account the rows belong to. For a file
                   that mixes currencies, mapping its currency column keeps rows in any other currency out
                   of the ledger; they are listed with the file&apos;s rejected rows instead.</td>
-              </tr>
-              <tr>
-                <td><strong>Data connections</strong> and <strong>Sync now</strong></td>
-                <td>Pulling transactions from a <HelpLink to="/help/data-providers">data
-                  provider</HelpLink>. What each sync brings in joins the import history below.</td>
               </tr>
               <tr>
                 <td><strong>Data sources</strong> and <strong>Manage sources</strong></td>
@@ -2466,6 +2312,158 @@ export const HELP_TOPICS = [
             </tbody>
           </table>
         </div>
+
+        <HelpHeading anchor="connections-tab">Connections</HelpHeading>
+        <p>
+          Where a <HelpLink to="/help/data-providers">data provider</HelpLink> is linked
+          and maintained. This is also where the mapping of accounts from the provider to accounts in
+          the application occurs. <strong>Sync now</strong> pulls new transactions from every connection,
+          and what each sync brings in joins the import history on the File Import tab.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'data-providers',
+    section: 'importing',
+    title: 'Data providers and connections',
+    surfaces: ['Import (Connections)'],
+    summary: `A data provider is an online service that fetches transactions directly from some source of interest.`,
+    body: () => (
+      <>
+        <p>
+          A <strong>data provider</strong> is an online service that retrieves transactions from various sources
+          so they arrive in {APP_NAME} without exporting and importing a file. The
+          supported providers are <strong>Plaid</strong> and <strong>SimpleFIN Bridge</strong>. There are
+          no credentials supplied in {APP_NAME}. SimpleFIN Bridge is a subscription model and provides access to most
+          financial institutions. Plaid offers a developer license which allows
+          a limited number of connections to be built.
+        </p>
+        <p>
+          The <strong>data provider</strong> defines the model. With SimpleFIN Bridge, the accounts are
+          connected on the SimpleFIN Bridge webpage and the <strong>connection</strong> provides the transaction data from
+          all of the connected accounts. For Plaid, the Plaid webpage has the secrets and after they are
+          entered, <strong>Institutions</strong> are connected in {APP_NAME} and that process defines
+          the accounts which will provide data.
+        </p>
+        <p>
+          Transactions from <em>data providers</em> go through the the same duplicate
+          detection process as file imports and the transaction record lives on the
+          Import page organized by Month rather than file.
+        </p>
+        <p>
+          Syncing is a manual process; there is no facility for a scheduled or automatic sync
+          as the vault which holds the secrets can only be unlocked manually.
+        </p>
+        <p>
+          Data connections are established and managed on the <em>Connections</em> tab on
+          the <em>Import</em> page. Connection settings and Disconnect connection are on
+          the per-connection menu.
+        </p>
+        <h4>Secrets Vault</h4>
+        <p>
+          The vault is used to encrypt the data connection credentials stored on disk. The passphrase
+          protects the encryption key which allows for multiple ways to protect the same key. This is both
+          to support multiple users and so a single user can have multiple authentication methods such as a
+          passphrase and a passkey. This also allows for a recovery key which can be stored in a secure
+          location separate from the passphrase (as there is no point in storing them in the same location as
+          then they will both get lost together).
+        </p>
+        <p>
+          To get started with data connections set a Vault Passphrase. The Set Vault Passphrase button
+          gets replaced with Vault Settings and there there is a Lock button. The Vault automatically locks
+          after a period of time (8 hours?) unless locked earlier with the Locked button.
+        </p>
+        <h4>Connecting</h4>
+        <p>
+          Perform the needed setup and configuration on the data provider end.
+        </p>
+        <ul>
+          <li>
+            <strong>Plaid</strong> &mdash; needs app credentials from a Plaid account, entered once
+            with <strong>Configure</strong> by an administrator. Once it is configured, use the <strong>+Connect Institution</strong> button
+            to connect accounts.
+          </li>
+          <li>
+            <strong>SimpleFIN Bridge</strong> &mdash; needs a one-time setup token generated at SimpleFIN Bridge.
+            Institutions and accounts are configured on the SimpleFIN Bridge side.
+          </li>
+        </ul>
+
+        <h4>Connecting and mapping accounts</h4>
+        <p>
+          Part of the connection process is mapping the accounts from the provider to accounts in
+          the application. Provider accounts can be skipped if they are not of interest. The
+          correct mapping is what allows duplicate detection to work properly across different
+          import methods. It is fine to import CSV files when there are data connections, as long
+          as the transactions all map to the same account from both sources.
+        </p>
+        <p>
+          An account added to a data connection after the initial mapping
+          shows up on the connection's card as <strong>to
+            map</strong> and on the <strong>Tasks</strong> page. Its transactions are skipped until it is mapped.
+          The mapping, and the set of extra details to capture can be changed
+          from <strong>Connection settings&hellip;</strong> in the card's menu.
+        </p>
+
+        <h4>Syncing</h4>
+        <p>
+          New transactions are pulled on request using the sync control in the navigation pane or
+          from <strong>Sync now</strong> on the <strong>Connections</strong> tab of the Import
+          page. Per-connection Import cards on the Import page records
+          what arrived, similar to an imported file. Importing a file generates a single card, the
+          data connections create a card for the <strong>Initial import</strong> and then one
+          per month.
+        </p>
+        <p>
+          Each connection carries a menu with the following actions:
+        </p>
+        <ul>
+          <li>
+            <strong>Fetch more history</strong> &mdash; pulls older transactions as far back as the bank and provider allow.
+          </li>
+          <li>
+            <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
+            stored credential. Needed after restoring a backup.
+          </li>
+          <li>
+            <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
+            synced so the next sync imports it again. This is the equivalent of Undo on a
+            file card.
+          </li>
+        </ul>
+        <p>
+          If a provider limits the time window for each request and limits the number
+          of requests per day, retrieving the initial
+          transaction history may take more than one day. The sync
+          reports <strong>more history to fetch</strong> and more will be fetched when the
+          limit refreshes. The initial sync stops before exhausting the provider's limit to
+          allow for subsequent fetches of the most recent data while waiting for the limits to
+          refresh.
+        </p>
+
+        <h4>When a connection needs attention</h4>
+        <p>
+          A connection with an action required indicates this on its card and on the Tasks
+          page.
+        </p>
+        <ul>
+          <li>
+            <strong>Reconnect needed</strong> means
+            the provider no longer accepts the stored credential, usually because access was revoked or
+            expired at the provider. Syncing stays stopped until it is connected again.
+          </li>
+          <li>
+            A <strong>provider notice</strong> is a problem the provider reported that did not stop the
+            sync, such as one bank on a multi-bank connection needing attention.
+          </li>
+        </ul>
+
+        <h4>Disconnecting</h4>
+        <p>
+          Disconnecting retains the accounts and their transactions. If disconnecting the
+          account revokes the provider's access the confirmation page will indicate this.
+        </p>
       </>
     ),
   },
@@ -2731,7 +2729,7 @@ export const HELP_TOPICS = [
         </ol>
         <p><strong>Loading the Orders and Items files:</strong></p>
         <p>
-          Load the files using either the CSV importer on the <strong>Import</strong> tab
+          Load the files using either the CSV importer on the <strong>File Import</strong> tab
           or on the <strong>Amazon</strong> tab.
           The files are recognized by their contents and so
           upload order does not matter. The importer has a

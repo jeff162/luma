@@ -942,17 +942,14 @@ came of leaving it unstated, in `docs/data-model.md`.
   vault gate. App credentials ride the **credentials backup** (`provider_configs`) alongside connections.
   There is **no `.env` → DB migration** — the credential is re-entered once via the Configure card
   (decided 2026-08-01).
-- **Connections-tab UI.** `DataSourceConnections` (in `pages/Accounts.jsx`) renders the
-  Connections tab as one card **per provider** (driven by `GET /api/providers`): a mode badge, admin-only
+- **Connections-tab UI.** `ConnectionsTab` (`components/connections/ConnectionsTab.jsx`) renders the
+  Import page's Connections tab as one card **per provider** (driven by `GET /api/providers`): a mode badge, admin-only
   **Configure** (the app credential — moved off the Settings form entirely; that section now only points
   here), **Connect bank**, a small per-connection **Sync** for checking what was just configured, and the
-  linked accounts. The tab is **configuration only**; the operational half (routine sync, fetch more
-  history, refresh accounts, remove synced transactions, and the sync log — which this tab also opens in
-  place) lives on the Import page in
-  `components/connections/DataConnectionsPanel.jsx`, with the actions shared through
-  `lib/useConnectionOperations.js` and the status rendering through `components/connections/ConnectionStatus.jsx`
-  so the two surfaces cannot describe one connection differently. See `ui-patterns.md` for why the split
-  runs where it does. It also hosts the **vault set-passphrase
+  linked accounts. Across the top are one **Sync now** for every connection and the whole sync log;
+  each connection's ⋯ menu carries fetch more history, refresh accounts and remove synced transactions.
+  The actions come from `lib/useConnectionOperations.js` and the status rendering from
+  `components/connections/ConnectionStatus.jsx`. It also hosts the **vault set-passphrase
   / unlock** *strip* — the vault UI deliberately rides the connection cards rather than owning a
   settings page of its own — set/unlock post to
   `/auth/vault/*` and refresh the session's vault flags. Everything needing an open vault (connect,

@@ -4,15 +4,11 @@
 // The things you *do* to a data connection that are not configuration: sync it, pull more of its history,
 // rebuild its accounts, and take its synced transactions back out.
 //
-// Extracted when the connections UI split in two. Configuration (connect, disconnect, account mapping,
-// the provider credential) stayed on the Accounts page because that is where those decisions are made and
-// where Plaid Link has to stay — its handler closure lives in that component, so navigating away
-// mid-connect loses the connection. The operations here moved to Import, beside the import cards
-// a sync writes to, because a sync is how new data arrives and belongs with the other way new data
-// arrives. Both surfaces still need *some* of these — the Accounts card keeps a per-connection sync so a
-// mapping change can be verified where it was made — so they live in one hook rather than being written
-// twice. Two implementations of "remove this connection's synced transactions" is not a thing this
-// codebase should have.
+// Kept apart from the Import page's Connections tab that calls them (`ConnectionsTab.jsx`), which holds
+// the configuration — connect, disconnect, account mapping, the provider credential — and the Plaid
+// Link handler that cannot be unmounted mid-connect. The tab offers these at two levels: one Sync now
+// for every connection, and per connection a small sync (so a mapping change can be verified where it
+// was made) and the rarer actions in its menu.
 //
 // **Every action is vault-gated the same way**, via `ensureVault()` from the App-level gate: the action
 // awaits it and then carries on in its own call frame, so a locked vault costs one passphrase rather than
@@ -44,9 +40,8 @@ export function useConnectionOperations({ onChanged } = {}) {
   const [removingSync, setRemovingSync] = useState(false)
 
   // Tells the host something changed that no sync run reports. The actions that end in a run (a sync, more
-  // history, rebuilt accounts) deliberately do not call it: every run's end already reaches the hosts —
-  // Accounts through `runsFinished`, the Import panel through the providers listing re-read at the
-  // same moment — and settling here as well reloaded the Accounts page twice per sync, once for each.
+  // history, rebuilt accounts) deliberately do not call it: every run's end already reaches the host
+  // through `runsFinished`, and settling here as well reloaded the Connections tab twice per sync.
   const settle = useCallback(async () => { await onChanged?.() }, [onChanged])
 
   // A 423 is the gate arriving late rather than a failure to report: the server drops the key on restart
@@ -73,7 +68,7 @@ export function useConnectionOperations({ onChanged } = {}) {
     }
   }, [retriedAfterUnlock, setSyncState, syncUntilComplete])
 
-  // A routine top-up. `connectionId` narrows it to one connection, which is what the Accounts card offers
+  // A routine top-up. `connectionId` narrows it to one connection, which is what a connection's card offers
   // so a mapping change can be checked where it was made; without one it covers the whole provider.
   const sync = useCallback(async function sync(provider, { connectionId = null } = {}) {
     if (syncState[provider]?.syncing) return
@@ -94,8 +89,8 @@ export function useConnectionOperations({ onChanged } = {}) {
   }, [ensureVault, retriedAfterUnlock, setSyncState, syncState, syncUntilComplete])
 
   // Every provider that has something to sync, as one run. This is what a page-level or app-level
-  // control means by "sync" — bring in everything new — as against the per-connection check the Accounts
-  // card offers. Failures are collected per provider rather than raised, so one bank being down neither
+  // control means by "sync" — bring in everything new — as against the per-connection check a
+  // connection's card offers. Failures are collected per provider rather than raised, so one bank being down neither
   // abandons the run nor hides that the others imported fine.
   const syncAll = useCallback(async (providers) => {
     const list = (providers || [])

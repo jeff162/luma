@@ -55,8 +55,7 @@ import { MoneyMovementTypeReportPanel } from '../components/importExport/MoneyMo
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
-import { ConnectionSyncLogDialog } from '../components/connections/ConnectionSyncLogDialog.jsx'
-import { DataConnectionsPanel } from '../components/connections/DataConnectionsPanel.jsx'
+import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
 import { MarketplaceImportHistory } from '../components/importExport/MarketplaceImportHistory.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { useSyncStatus } from '../contexts/SyncStatusContext.jsx'
@@ -183,7 +182,7 @@ function formatImportingLabel(fileProgress, rowProgress) {
 }
 
 // Keep the import UI recoverable if a preview or mapping render crashes.
-function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
+function ImportTab({ onAmazonDetected }) {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId, demoLoaded } = useAppSession()
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
@@ -346,12 +345,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
   const reconciliationViewer = useReconciliationViewer()
   // Shared per-batch file-ledger panels (the `↗`). This tab keeps its own drill-through / URL openers
   // below, which call `openBatchDetail`.
-  // The sync log opens as a report rather than standing on the page: it is read on the specific occasion
-  // that a sync brought in less than expected, and a diagnostic nobody needs most of the time should not
-  // occupy a screenful of a page people come to for importing files. A `?connection=` deep link from a
-  // connection's menu opens it straight away, scoped to that connection.
-  const [syncLogOpen, setSyncLogOpen] = useState(!!syncLogConnectionId)
-
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({
     categories,
     onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
@@ -3341,17 +3334,8 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         </Card>
       ) : null}
 
-      {/* The two ways data arrives, side by side and equally weighted: drop a file, or pull from a bank.
-          They are the same intent and produce the same artifact — an import card in the history below —
-          so neither is a subsection of the other.
-
-          The bases are what decide when they stack, and they are set low on purpose: at the original
-          sizes an ordinary window put the connections card *below* the importer, which reads as it being
-          a lesser thing rather than a peer. Both were trimmed (the drop target's padding most of all —
-          it had a screenful of blank space it did not need) so the side-by-side layout survives down to
-          a fairly narrow pane, and the row wraps rather than squeezing once it genuinely cannot. */}
-      {/* Above the two ways data arrives by hand, because what it reports is work already waiting rather
-          than a third thing to start. Renders nothing at all until some source names a folder. */}
+      {/* Above the file importer, because what it reports is work already waiting rather
+          than another thing to start. Renders nothing at all until some source names a folder. */}
       {stage === 'upload' && (
         <WatchedFoldersPanel
           onOpenFile={(file, profileId) => handleFile(file, { sourceIdOverride: profileId })}
@@ -3360,8 +3344,7 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
       )}
 
       {stage === 'upload' && (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 20 }}>
-        <div ref={uploadStageRef} style={{ flex: '1 1 340px', minWidth: 0 }}>
+        <div ref={uploadStageRef} style={{ marginBottom: 20 }}>
           <ImportUploadStage
             demoLoaded={demoLoaded}
             chooserOpen={sourceChooserOpen}
@@ -3392,11 +3375,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
             handleFiles={handleFiles}
             loading={loading || !!filesAwaitingInitialData}
           />
-        </div>
-        <DataConnectionsPanel
-          style={{ flex: '1 1 320px', minWidth: 0 }}
-          onOpenSyncLog={() => setSyncLogOpen(true)}
-        />
         </div>
       )}
 
@@ -4572,17 +4550,6 @@ function ImportTab({ onAmazonDetected, syncLogConnectionId = '' }) {
         />
       )}
 
-      {/* Under the history rather than beside it, because it explains the rows above: a synced card that
-          landed less than expected is read here. It sits on this tab at all because a sync's own record
-          belongs where the sync's output is, not in Settings — see `docs/ui-patterns.md`. Scoped by the
-          `?connection=` a connection card links with, so arriving from one lands filtered to it. */}
-      {syncLogOpen ? (
-        <ConnectionSyncLogDialog
-          initialConnectionIds={syncLogConnectionId ? [syncLogConnectionId] : []}
-          onClose={() => setSyncLogOpen(false)}
-        />
-      ) : null}
-
       {showDataSourceManager ? (
         <div
           style={{
@@ -5270,15 +5237,26 @@ function AmazonImportTab({ initialFiles }) {
   )
 }
 
+const IMPORT_TABS = [['import', 'File Import'], ['amazon', 'Amazon'], ['connections', 'Connections']]
+
 export default function ImportExport() {
-  // `?connection=<id>` is how a connection card links to this page's sync log. Read once, because it is a
-  // starting position rather than live state: the user is free to change tabs or clear the log's filter
-  // afterwards, and re-applying the parameter on every render would keep dragging them back to it.
-  const [searchParams] = useSearchParams()
-  const [syncLogConnectionId] = useState(() => searchParams.get('connection') || '')
-  // Import is the default tab and the sync log lives on it, so a deep link needs nothing further here.
-  // If the tab ever stops defaulting to import, a `?connection=` arrival has to force it.
-  const [tab, setTab] = useState('import')
+  const [searchParams, setSearchParams] = useSearchParams()
+  // `?tab=` is how a link from elsewhere (a Tasks entry, the welcome flow) lands on a particular tab.
+  const [tab, setTab] = useState(() => {
+    const fromUrl = searchParams.get('tab')
+    return IMPORT_TABS.some(([id]) => id === fromUrl) ? fromUrl : 'import'
+  })
+  // Honor a `?tab=` link followed while the page is already mounted, then strip it so it neither lingers
+  // in the URL nor overrides later manual tab switches.
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab')
+    if (!fromUrl) return
+    if (IMPORT_TABS.some(([id]) => id === fromUrl)) setTab(fromUrl)
+    const next = new URLSearchParams(searchParams)
+    next.delete('tab')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+  const showFileImport = useCallback(() => setTab('import'), [])
   // A file dropped on the general importer that sniffs as an AZAD Amazon export is handed up here and
   // routed to the Amazon tab, which preloads it (see ImportTab.handleFile → onAmazonDetected).
   const [amazonHandoffFiles, setAmazonHandoffFiles] = useState(null)
@@ -5286,16 +5264,18 @@ export default function ImportExport() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Import" help={<FeatureExplainer topic="page-import-export" placement="bottom-left" />} />
+        {/* The header's help follows the tab: the Connections tab is a subject of its own, with its own topic. */}
+        <PageHeader title="Import" help={<FeatureExplainer topic={tab === 'connections' ? 'data-providers' : 'page-import-export'} placement="bottom-left" />} />
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-          {[['import', 'Import'], ['amazon', 'Amazon']].map(([id, label]) => (
+          {IMPORT_TABS.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
           ))}
         </div>
-        {tab === 'import' && <ImportErrorBoundary><ImportTab onAmazonDetected={routeToAmazon} syncLogConnectionId={syncLogConnectionId} /></ImportErrorBoundary>}
+        {tab === 'import' && <ImportErrorBoundary><ImportTab onAmazonDetected={routeToAmazon} /></ImportErrorBoundary>}
         {tab === 'amazon' && <ImportErrorBoundary><AmazonImportTab initialFiles={amazonHandoffFiles} /></ImportErrorBoundary>}
+        {tab === 'connections' && <ImportErrorBoundary><ConnectionsTab onShowFileImport={showFileImport} /></ImportErrorBoundary>}
       </div>
     </div>
   )

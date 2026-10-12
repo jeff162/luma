@@ -178,9 +178,9 @@ only wholly empty pages, and the rebuild also packs partly empty ones.
 
 **Re-bounding the fetch is blocked on two things, and the order matters.** Paging that hides rows with
 no way to reach them would recreate the lossy cap under a new name, so the archive had to come first —
-it has. The second is less obvious and is the larger half: **five consumers of `GET /import-export/batches`
+it has. The second is less obvious and is the larger half: **four consumers of `GET /import-export/batches`
 read the whole list as an aggregate rather than as a page of history** — the Rules page's pending
-rule-suggestion count, the per-connection suspect rollups on Accounts and the connections panel, and the
+rule-suggestion count, the per-connection suspect rollup on the Import page's Connections tab, and the
 data-source manager's lifetime per-profile totals *and its set of known template hashes*, which guards
 against re-importing a file already imported. Page the endpoint and each of those silently answers from
 the first page; the hash guard becomes wrong rather than merely stale. They need their own aggregate
@@ -359,7 +359,7 @@ every assertion.
 
 ## Open
 
-- **Re-bounding the import-history fetch**, now that the archive exists — which means moving the five
+- **Re-bounding the import-history fetch**, now that the archive exists — which means moving the four
   aggregate consumers above off the whole-list payload first.
   → [`backlog/import-history-windowing.md`](backlog/import-history-windowing.md)
 - **Whether the document delta is worth building**, now that both its prerequisites exist. The ledger

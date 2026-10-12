@@ -20,6 +20,8 @@ import { describeDataSourceRow, partitionImportHistory, summarizeBatchAttention 
 import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
+import FeatureExplainer from '../../help/FeatureExplainer.jsx'
+import { useTipCallout } from '../../help/useTipCallout.js'
 import {
   summarizeImportedCategorySettings,
   extractImportedCategorySettings,
@@ -64,6 +66,17 @@ export function ImportHistorySection({
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
 }) {
+  // The two situations this list can raise a tip for. Each is a callout on its own row until dismissed;
+  // after that its `?` moves up beside the heading, because a row holding nothing but a `?` reads as
+  // orphaned. Two bare `?`s side by side would not say which is which, so a pair is captioned.
+  const sourceTipActive = dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown')
+  const reviewTipActive = dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0))
+  const sourceTip = useTipCallout('unknown-data-source')
+  const reviewTip = useTipCallout('reviewing-transactions')
+  const tipLaunchers = [
+    sourceTipActive && !sourceTip.showing ? { topic: 'unknown-data-source', caption: 'Saved sources' } : null,
+    reviewTipActive && !reviewTip.showing ? { topic: 'reviewing-transactions', caption: 'Needs review' } : null,
+  ].filter(Boolean)
   return (
         <>
           <div style={{ marginTop: 28, marginBottom: 6 }}>
@@ -94,6 +107,10 @@ export function ImportHistorySection({
                 >
                   Manage sources
                 </button>
+                {tipLaunchers.map(tip => (
+                  <FeatureExplainer key={tip.topic} topic={tip.topic} placement="bottom-left"
+                    caption={tipLaunchers.length > 1 ? tip.caption : ''} />
+                ))}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
@@ -125,14 +142,14 @@ export function ImportHistorySection({
               </div>
             </div>
           </div>
-          {dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown') ? (
+          {sourceTipActive && sourceTip.showing ? (
             <div style={{ marginBottom: 12 }}>
-              <ContextualExplainer topic="unknown-data-source" active />
+              <ContextualExplainer topic="unknown-data-source" active persistentButton={false} />
             </div>
           ) : null}
-          {dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0)) ? (
+          {reviewTipActive && reviewTip.showing ? (
             <div style={{ marginBottom: 12 }}>
-              <ContextualExplainer topic="reviewing-transactions" active />
+              <ContextualExplainer topic="reviewing-transactions" active persistentButton={false} />
             </div>
           ) : null}
           <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>

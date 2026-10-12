@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
-const { WaitingForAccess } = await import('../Accounts.jsx')
+const { WaitingForAccess } = await import('../ConnectionsTab.jsx')
 
 afterEach(cleanup)
 

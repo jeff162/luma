@@ -249,7 +249,7 @@ the strength of that guess.
 
 Where a cause is unrecoverable, leave the recurrence diagnosable: record an advisory on the path that
 fired, into `connection_sync_log.advisories` — a table with a reader behind it (the **Sync log**
-on the Import page or Accounts → Connections), not a console line nobody opens. Pick the surface by who can act on it:
+on the Import page's Connections tab), not a console line nobody opens. Pick the surface by who can act on it:
 `advisories` is the developer's, while `last_sync_warnings` shows on the connection card and is reserved
 for what the *user* can act on.
 

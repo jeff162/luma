@@ -31,7 +31,7 @@ import { formatTimestamp } from '../lib/utils.js'
 import { AppNoticeDialog } from './ui.jsx'
 
 // What the tooltip says about each provider under the headline, so a stale overall figure can be traced
-// to the connection responsible for it without opening the Accounts page.
+// to the connection responsible for it without opening the Connections tab.
 function providerLines(byProvider) {
   return byProvider.map(p => {
     const name = providerLabel(p.provider)

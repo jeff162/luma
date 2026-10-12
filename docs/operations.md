@@ -324,7 +324,7 @@ What exists today, and what each actually tells you:
 | Administration → Startup configuration | every effective setting and the layer it came from |
 | The data-location line in the navigation pane | which databases *this* copy is open on |
 | Settings → About | the version, and for a packaged build the commit it was built from |
-| The connection sync log (**Sync log** on Import → Data connections, or on a provider's card in Accounts → Connections) | what a data source did, and why a sync, connect or disconnect failed |
+| The connection sync log (**Sync log** on Import → Connections, for everything or on one provider's card) | what a data source did, and why a sync, connect or disconnect failed |
 | `luma-desktop.log` | startup output where there is no terminal |
 | `luma.log`, read by Administration → **Error log** | what went wrong in a running server, with tracebacks, in any topology |
 

@@ -129,7 +129,7 @@ def _vault_access_task(request: Request | None) -> dict | None:
                        + ("" if crypto_service.is_unlocked(user["id"])
                           else " Unlock the vault first — approving shares the key, so it has to be in hand."),
         "count":       len(waiting),
-        "link":        "/accounts?tab=connections",
+        "link":        "/import-export?tab=connections",
         "link_label":  "Review vault access",
         "severity":    SEVERITY_INFO,
     }
@@ -186,11 +186,9 @@ def _update_available_task(request: Request | None) -> dict | None:
 def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
-    These exist because the connections UI is now deliberately split in two: what a connection *is* is
-    configured on the Accounts page, and what it has been *doing* lives with the imports on Import /
-    Export. Both surfaces show these states, but a user only sees them by visiting one — and the whole
-    point of these three is that they are discovered by a sync and cost the user data until acted on. The
-    nav badge is the surface that finds the user instead, which is what the Tasks page is for.
+    The Import page's Connections tab shows these states, but a user only sees them by visiting it — and
+    the whole point of these three is that they are discovered by a sync and cost the user data until
+    acted on. The nav badge is the surface that finds the user instead, which is what the Tasks page is for.
 
     Three separate tasks rather than one "connections need attention", because the remedies are different
     pages' worth of different work and a merged count could not link anywhere useful.
@@ -215,7 +213,7 @@ def _connection_tasks(conn) -> list[dict]:
                            "no new transactions are arriving. Reconnecting restores it in place, keeping "
                            "the accounts, their mapping and the history already fetched.",
             "count":       len(reauth),
-            "link":        "/accounts?tab=connections",
+            "link":        "/import-export?tab=connections",
             "link_label":  "Reconnect",
             "severity":    SEVERITY_WARNING,
         })
@@ -252,7 +250,7 @@ def _connection_tasks(conn) -> list[dict]:
                            f"skips {'it' if unmapped == 1 else 'them'} — silently, since a skipped "
                            "account appears nowhere else in the app.",
             "count":       unmapped,
-            "link":        "/accounts?tab=connections",
+            "link":        "/import-export?tab=connections",
             "link_label":  "Choose destinations",
             "severity":    SEVERITY_WARNING,
         })
