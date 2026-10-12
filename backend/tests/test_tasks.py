@@ -455,17 +455,18 @@ class ConnectionTaskTests(TasksFixtureTestCase):
     concrete remedy, which is why they link to different pages.
     """
 
-    def _insert_connection(self, *, institution, reauth=0, failures=0) -> str:
+    def _insert_connection(self, *, institution, reauth=0, failures=0, credential="") -> str:
         connection_id = str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
                     """
                     INSERT INTO connection
-                      (id, provider, external_id, institution, reauth_required, consecutive_sync_failures)
-                    VALUES (?, 'fixture', ?, ?, ?, ?)
+                      (id, provider, external_id, institution, reauth_required, consecutive_sync_failures,
+                       credential)
+                    VALUES (?, 'fixture', ?, ?, ?, ?, ?)
                     """,
-                    (connection_id, f"ext_{connection_id}", institution, reauth, failures),
+                    (connection_id, f"ext_{connection_id}", institution, reauth, failures, credential),
                 )
         return connection_id
 
@@ -522,11 +523,26 @@ class ConnectionTaskTests(TasksFixtureTestCase):
         self.assertIsNotNone(task)
         self.assertEqual(task["count"], 2)
 
+    def test_a_credential_with_no_account_list_asks_for_a_refresh(self):
+        # What a restore leaves when the credential came back and the account list did not. Only the
+        # connection a refresh can actually help is named: one with no credential has nothing to fetch
+        # with, and one with accounts needs nothing.
+        self._insert_connection(institution="Harborline Savings", credential="tok")
+        self._insert_connection(institution="Riverstone Credit Union")
+        with_accounts = self._insert_connection(institution="Northgate Bank", credential="tok")
+        self._insert_provider_account(with_accounts, mapping_mode="skip")
+        task = self._task("connections_without_accounts")
+        self.assertIsNotNone(task)
+        self.assertEqual(task["count"], 1)
+        self.assertIn("Harborline Savings", task["description"])
+        self.assertEqual(task["link"], "/import-export?tab=connections")
+
     def test_a_healthy_connection_raises_nothing(self):
         # A fresh install with a working connection must not be greeted with warnings.
-        connection = self._insert_connection(institution="Northgate Bank")
+        connection = self._insert_connection(institution="Northgate Bank", credential="tok")
         self._insert_provider_account(connection, mapping_mode="skip")
-        for task_id in ("connections_need_reauth", "connections_failing", "connection_accounts_unmapped"):
+        for task_id in ("connections_need_reauth", "connections_failing", "connection_accounts_unmapped",
+                        "connections_without_accounts"):
             self.assertIsNone(self._task(task_id), task_id)
 
     def test_a_dismissed_reminder_returns_when_another_connection_breaks(self):

@@ -2588,7 +2588,10 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>Refresh accounts</strong> &mdash; rebuilds the connection's account list from its
-            stored credential. Needed after restoring a backup.
+            stored credential. Needed when a restore brings back a connection's credential without
+            its accounts, which is reported on the <strong>Tasks</strong> page (see{' '}
+            <HelpLink to="/help/data-and-backups#restoring-both">restoring data and
+              credentials</HelpLink>).
           </li>
           <li>
             <strong>Remove synced transactions</strong> &mdash; deletes everything the connection has
@@ -4061,7 +4064,9 @@ export const HELP_TOPICS = [
           </li>
           <li>
             A connection on the installation that the data backup does not mention keeps its
-            credential, and its next sync reads its history again.
+            credential and loses its account list. <strong>Refresh accounts</strong> in the
+            connection&apos;s menu fetches the list again, and the next sync then reads its history
+            again. The same applies to a credentials backup restored with no data backup.
           </li>
           <li>
             A credentials restore replaces the credentials stored on the installation and leaves

@@ -187,10 +187,10 @@ def _connection_tasks(conn) -> list[dict]:
     """A data connection that has stopped working, or is silently skipping an account.
 
     The Import page's Connections tab shows these states, but a user only sees them by visiting it — and
-    the whole point of these three is that they are discovered by a sync and cost the user data until
+    the whole point of these is that they are discovered by a sync and cost the user data until
     acted on. The nav badge is the surface that finds the user instead, which is what the Tasks page is for.
 
-    Three separate tasks rather than one "connections need attention", because the remedies are different
+    Separate tasks rather than one "connections need attention", because the remedies are different
     pages' worth of different work and a merged count could not link anywhere useful.
 
     Dismissible like every task (see the module docstring): the connection card keeps showing the broken
@@ -199,7 +199,11 @@ def _connection_tasks(conn) -> list[dict]:
     """
     tasks = []
     rows = conn.execute(
-        "SELECT provider, institution, reauth_required, consecutive_sync_failures FROM connection"
+        """
+        SELECT provider, institution, reauth_required, consecutive_sync_failures, credential, credential_enc,
+               (SELECT COUNT(*) FROM connection_account ca WHERE ca.connection_id = connection.id) AS account_count
+        FROM connection
+        """
     ).fetchall()
 
     reauth = [r for r in rows if r["reauth_required"]]
@@ -252,6 +256,28 @@ def _connection_tasks(conn) -> list[dict]:
             "count":       unmapped,
             "link":        "/import-export?tab=connections",
             "link_label":  "Choose destinations",
+            "severity":    SEVERITY_WARNING,
+        })
+
+    # A working credential with no account list under it: what a credentials restore leaves when no data
+    # backup named the connection, and what a data restore leaves a connection its backup did not name.
+    # Asked of the state rather than of a restore having happened, so any other route to it is covered.
+    # One needing reconnection is left to that task, since a refresh cannot run on a refused credential.
+    accountless = [r for r in rows
+                   if not r["account_count"] and not r["reauth_required"]
+                   and crypto_service.connection_has_credential(r["credential"], r["credential_enc"])]
+    if accountless:
+        names = ", ".join(r["institution"] or r["provider"] for r in accountless)
+        tasks.append({
+            "id":          "connections_without_accounts",
+            "title":       "A data connection has no accounts"
+                           if len(accountless) == 1 else "Data connections have no accounts",
+            "description": f"{names} has a stored credential and no account list, which is how a restored "
+                           "backup can leave a connection. A sync has nowhere to import into until "
+                           "Refresh accounts, in the connection's menu, fetches the list.",
+            "count":       len(accountless),
+            "link":        "/import-export?tab=connections",
+            "link_label":  "Refresh accounts",
             "severity":    SEVERITY_WARNING,
         })
     return tasks
