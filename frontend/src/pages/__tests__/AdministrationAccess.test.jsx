@@ -11,6 +11,7 @@ import { AppSessionProvider } from '../../lib/AppSessionContext.jsx'
 
 const section = name => ({ default: () => <div>{`${name} body`}</div> })
 vi.mock('../../components/administration/ConfigurationSection.jsx', () => section('configuration'))
+vi.mock('../../components/administration/BackupRestoreSection.jsx', () => section('backup'))
 vi.mock('../../components/administration/ErrorLogSection.jsx', () => section('error log'))
 vi.mock('../../components/administration/IntendedUsageSection.jsx', () => section('intended usage'))
 vi.mock('../../components/administration/UserAdminSection.jsx', () => section('user management'))
@@ -48,14 +49,14 @@ describe('the Administration page', () => {
   it('opens the section the URL names, and only that one', () => {
     mountAt('/administration?section=userManagement', { authEnabled: true, canAdminister: true })
     expect(screen.getByText('user management body')).toBeTruthy()
-    expect(screen.queryByText('configuration body')).toBeNull()
+    expect(screen.queryByText('backup body')).toBeNull()
     expect(screen.getByRole('button', { name: 'User management' }).getAttribute('aria-current')).toBe('page')
   })
 
   it('falls back to the first section for one this install does not list', () => {
     // User management exists only while sign-in protection is on.
     mountAt('/administration?section=userManagement', { authEnabled: false, canAdminister: true })
-    expect(screen.getByText('configuration body')).toBeTruthy()
+    expect(screen.getByText('backup body')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'User management' })).toBeNull()
   })
 })

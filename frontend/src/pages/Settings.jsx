@@ -47,25 +47,22 @@ export default function Settings() {
 
   const sections = [
     {
-      key: 'appearance',
-      title: 'Appearance',
-      description: 'Select the color theme.',
-      content: <ThemeSection />,
-    },
-    {
-      key: 'currency',
-      title: 'Currency',
-      description: 'Define the currency used by the ledger.',
-      help: <FeatureExplainer topic="single-currency" placement="bottom-left" />,
-      content: <CurrencySection />,
-    },
-    // With sign-in protection off there is no sign-in for a passkey or a second factor to belong to.
-    authEnabled && {
-      key: 'signInMethods',
-      title: 'Sign-in methods',
-      description: 'The password, passkeys and two-factor sign-in for this account.',
-      help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
-      content: <SignInFactorsSection passwordPolicy={passwordPolicy} />,
+      key: 'trash',
+      title: 'Trash',
+      note: trashTotal ? trashTotal.toLocaleString() : '',
+      content: (
+        <div style={{ display: 'grid', gap: 18 }}>
+          <Subsection title={counted('Transactions', trash?.transactions)}>
+            <TransactionsTrashSection count={trash?.transactions} onChanged={loadStorage} />
+          </Subsection>
+          <Subsection title={counted('Duplicate transactions', trash?.duplicates)}>
+            <DuplicateTransactionsTrashSection count={trash?.duplicates} onChanged={loadStorage} />
+          </Subsection>
+          <Subsection title={counted('Rules', trash?.rules)}>
+            <RulesTrashSection onChanged={loadStorage} />
+          </Subsection>
+        </div>
+      ),
     },
     {
       key: 'duplicateExceptions',
@@ -86,22 +83,25 @@ export default function Settings() {
       content: <ImportStorageSection storage={storage} onChanged={loadStorage} />,
     },
     {
-      key: 'trash',
-      title: 'Trash',
-      note: trashTotal ? trashTotal.toLocaleString() : '',
-      content: (
-        <div style={{ display: 'grid', gap: 18 }}>
-          <Subsection title={counted('Transactions', trash?.transactions)}>
-            <TransactionsTrashSection count={trash?.transactions} onChanged={loadStorage} />
-          </Subsection>
-          <Subsection title={counted('Duplicate transactions', trash?.duplicates)}>
-            <DuplicateTransactionsTrashSection count={trash?.duplicates} onChanged={loadStorage} />
-          </Subsection>
-          <Subsection title={counted('Rules', trash?.rules)}>
-            <RulesTrashSection onChanged={loadStorage} />
-          </Subsection>
-        </div>
-      ),
+      key: 'appearance',
+      title: 'Appearance',
+      description: 'Select the color theme.',
+      content: <ThemeSection />,
+    },
+    // With sign-in protection off there is no sign-in for a passkey or a second factor to belong to.
+    authEnabled && {
+      key: 'signInMethods',
+      title: 'Sign-in methods',
+      description: 'The password, passkeys and two-factor sign-in for this account.',
+      help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
+      content: <SignInFactorsSection passwordPolicy={passwordPolicy} />,
+    },
+    {
+      key: 'currency',
+      title: 'Currency',
+      description: 'Define the currency used by the ledger.',
+      help: <FeatureExplainer topic="single-currency" placement="bottom-left" />,
+      content: <CurrencySection />,
     },
     {
       key: 'about',

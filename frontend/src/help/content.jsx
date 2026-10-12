@@ -74,26 +74,6 @@ export const HELP_SECTIONS = [
     blurb: 'Working the ledger: finding a transaction, reviewing new ones, and recording what a row does not say on its own.',
   },
   {
-    key: 'categories',
-    label: 'Categories & tags',
-    blurb: 'Two ways to organize transactions for reports: a category tree and cross-cutting tags.',
-  },
-  {
-    key: 'rules',
-    label: 'Rules',
-    blurb: 'How categorization is kept up automatically, and what happens when two rules want the same transaction.',
-  },
-  {
-    key: 'accounts',
-    label: 'Accounts',
-    blurb: 'Where transactions come from, connecting data providers, and pairing up accounts that turn out to be the same one.',
-  },
-  {
-    key: 'recurring',
-    label: 'Recurring transactions',
-    blurb: 'Transactions that repeat on a schedule: what the scan finds on its own, and how to declare one it cannot see.',
-  },
-  {
     key: 'importing',
     label: 'Importing data',
     blurb: 'Mapping files, saving reusable sources, and bringing in marketplace order detail.',
@@ -104,9 +84,29 @@ export const HELP_SECTIONS = [
     blurb: 'When the same activity arrives from more than one source: what the engine settles on its own, and how to resolve what it cannot.',
   },
   {
+    key: 'rules',
+    label: 'Rules',
+    blurb: 'How categorization is kept up automatically, and what happens when two rules want the same transaction.',
+  },
+  {
+    key: 'categories',
+    label: 'Categories & tags',
+    blurb: 'Two ways to organize transactions for reports: a category tree and cross-cutting tags.',
+  },
+  {
+    key: 'recurring',
+    label: 'Recurring transactions',
+    blurb: 'Transactions that repeat on a schedule: what the scan finds on its own, and how to declare one it cannot see.',
+  },
+  {
     key: 'tasks',
     label: 'Tasks',
     blurb: 'The nag list: what gets raised there, and what dismissing one means.',
+  },
+  {
+    key: 'accounts',
+    label: 'Accounts',
+    blurb: 'Where transactions come from, connecting data providers, and pairing up accounts that turn out to be the same one.',
   },
   {
     key: 'settings',
@@ -3404,23 +3404,12 @@ export const HELP_TOPICS = [
           and various utility type functions. Everything here is open to every user; what only an
           administrator may change is on the{' '}
           <HelpLink to="/help/page-administration">Administration</HelpLink> page.</p>
-        <p>The configuration related settings are:</p>
-        <ul>
-          <li>
-            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
-          </li>
-          <li>
-            <strong>Currency</strong> defines the meaning of the values in the
-            ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
-          </li>
-          <li>
-            <strong>Sign-in methods</strong> holds the password, passkeys and two-factor sign-in for
-            the account that is signed in. It is listed only while sign-in protection is on.
-            See <HelpLink to="/help/account-security">account security</HelpLink>.
-          </li>
-        </ul>
         <p>The following fall under utility type settings:</p>
         <ul>
+          <li>
+            <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
+            sections that empty separately.
+          </li>
           <li>
             <strong>Duplicate detection exceptions</strong> holds two lists.{' '}
             <em>Dismissed duplicate pairs</em> lists the pairs of transactions that have
@@ -3442,9 +3431,20 @@ export const HELP_TOPICS = [
             longer appear in the duplicates view and cannot be imported anyway. Imported
             transactions are not affected.
           </li>
+        </ul>
+        <p>The configuration related settings are:</p>
+        <ul>
           <li>
-            <strong>Trash</strong> holds deleted transactions and rules until it is emptied, in
-            sections that empty separately.
+            <strong>Appearance</strong> sets the theme: Light, Dark, System, etc.
+          </li>
+          <li>
+            <strong>Sign-in methods</strong> holds the password, passkeys and two-factor sign-in for
+            the account that is signed in. It is listed only while sign-in protection is on.
+            See <HelpLink to="/help/account-security">account security</HelpLink>.
+          </li>
+          <li>
+            <strong>Currency</strong> defines the meaning of the values in the
+            ledger. <HelpLink to="/help/single-currency">single-currency support</HelpLink> has details.
           </li>
           <li>
             <strong>About</strong> lists the current version, license,
@@ -3475,10 +3475,9 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Startup configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
-            it shows how various settings are derived and when a default value has been
-            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
-            <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
+            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
+            encrypted to a backup key, and is where the backup encryption keys are kept.
+            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
           </li>
           <li>
             <strong>Error log</strong> lists the errors recorded in the "console log" file.
@@ -3486,22 +3485,23 @@ export const HELP_TOPICS = [
             opened.
           </li>
           <li>
-            <strong>Intended usage</strong> covers where the data lives and what protects it.
-            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+            <strong>User management</strong> adds and removes the users who can sign in, sets
+            whether each is an administrator, and resets a password. It is listed only while sign-in
+            protection is on.
           </li>
           <li>
             <strong>Sign-in protection</strong> turns sign-in protection on and off and sets the
             password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
           <li>
-            <strong>User management</strong> adds and removes the users who can sign in, sets
-            whether each is an administrator, and resets a password. It is listed only while sign-in
-            protection is on.
+            <strong>Intended usage</strong> covers where the data lives and what protects it.
+            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
           </li>
           <li>
-            <strong>Backup / Restore</strong> makes and restores whole-database backups, optionally
-            encrypted to a backup key, and is where the backup encryption keys are kept.
-            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+            <strong>Startup configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
+            it shows how various settings are derived and when a default value has been
+            overridden. Most of the settings here come from the optional <code>.env</code> file.{' '}
+            <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
           </li>
         </ul>
       </>

@@ -49,10 +49,10 @@ export default function Administration() {
 
   const sections = [
     {
-      key: 'configuration',
-      title: 'Startup configuration',
-      help: <FeatureExplainer topic="configuration" placement="bottom-left" />,
-      content: <ConfigurationSection authEnabled={authEnabled} currentUser={currentUser} />,
+      key: 'backup',
+      title: 'Backup / Restore',
+      help: <FeatureExplainer topic="data-and-backups" placement="bottom-left" />,
+      content: <BackupRestoreSection />,
     },
     {
       key: ERROR_LOG_SECTION,
@@ -60,6 +60,27 @@ export default function Administration() {
       description: 'Errors the server recorded, newest first, for when something did not work and the screen did not say why.',
       refresh: <RefreshButton onRefresh={errorLog.load} loading={errorLog.loading} />,
       content: <ErrorLogSection log={errorLog.log} error={errorLog.error} />,
+    },
+    // With sign-in protection off there are no accounts to manage, only the local profiles.
+    authEnabled && {
+      key: 'userManagement',
+      title: 'User management',
+      description: 'Manage who can sign in.',
+      content: <UserAdminSection passwordPolicy={passwordPolicy} />,
+    },
+    {
+      key: 'signInProtection',
+      title: 'Sign-in protection',
+      description: 'Whether opening this installation requires signing in, and the password requirements.',
+      help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
+      content: (
+        <AccountSecuritySection
+          authEnabled={authEnabled}
+          activeLocalProfile={activeLocalProfile}
+          passwordPolicy={passwordPolicy}
+          onPasswordPolicyChange={setPasswordPolicy}
+        />
+      ),
     },
     {
       key: 'intendedUsage',
@@ -78,31 +99,10 @@ export default function Administration() {
       ),
     },
     {
-      key: 'signInProtection',
-      title: 'Sign-in protection',
-      description: 'Whether opening this installation requires signing in, and the password requirements.',
-      help: <FeatureExplainer topic="account-security" placement="bottom-left" />,
-      content: (
-        <AccountSecuritySection
-          authEnabled={authEnabled}
-          activeLocalProfile={activeLocalProfile}
-          passwordPolicy={passwordPolicy}
-          onPasswordPolicyChange={setPasswordPolicy}
-        />
-      ),
-    },
-    // With sign-in protection off there are no accounts to manage, only the local profiles.
-    authEnabled && {
-      key: 'userManagement',
-      title: 'User management',
-      description: 'Manage who can sign in.',
-      content: <UserAdminSection passwordPolicy={passwordPolicy} />,
-    },
-    {
-      key: 'backup',
-      title: 'Backup / Restore',
-      help: <FeatureExplainer topic="data-and-backups" placement="bottom-left" />,
-      content: <BackupRestoreSection />,
+      key: 'configuration',
+      title: 'Startup configuration',
+      help: <FeatureExplainer topic="configuration" placement="bottom-left" />,
+      content: <ConfigurationSection authEnabled={authEnabled} currentUser={currentUser} />,
     },
     developerOptionsEnabled && {
       key: 'developerOptions',
