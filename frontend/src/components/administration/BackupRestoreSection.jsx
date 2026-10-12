@@ -316,7 +316,7 @@ export default function BackupRestoreSection() {
               // other, so in a shared workspace it is not interchangeable with a colleague's. Neither
               // applies to restoring here — this install's key opens its own backups whatever the
               // passphrase has since become — so the caveat is scoped to somewhere else.
-              ? 'Restoring this requires this user\'s current vault passphrase\u2019s. Retain passphrases after a change to allow restoring older backups.'
+              ? 'Restoring this on another system, or here after the vault key is replaced, requires this user\'s current vault passphrase. Retain passphrases after a change to allow restoring older backups.'
               : 'No stored data provider credentials exist to back up.'}
           </div>
         </div>

@@ -770,6 +770,7 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
   which is the ladder's first real rung and the only one nothing exercises end to end.
   → `backlog/test-coverage-gaps.md`
-- **In-app Help topics** (`data-and-backups`, `account-security`) predate the current custody framing —
-  every credential treated as though it carried full account and identity access — and may still describe
-  provider access as read-only. Reconcile them next time they are touched.
+- **The in-app Help topic `account-security`** predates the current custody framing — every credential
+  treated as though it carried full account and identity access — and may still describe provider access
+  as read-only. Reconcile it next time it is touched. (`data-and-backups` was reconciled when its backup
+  sections were rewritten.)

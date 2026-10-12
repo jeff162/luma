@@ -2764,8 +2764,8 @@ export const HELP_TOPICS = [
             credentials&hellip;</strong> has each provider issue a new credential where the provider
           supports that, so the copied ones stop working and the connections keep syncing. The rest are
           listed with what to do at the provider. A credentials backup made earlier holds the replaced
-          credentials, so a new <HelpLink to="/help/data-and-backups">backup</HelpLink> is needed
-          afterwards.
+          credentials, so a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink> is
+          needed afterwards.
         </p>
 
         <HelpHeading anchor="which-to-use">Which to use</HelpHeading>
@@ -3990,14 +3990,95 @@ export const HELP_TOPICS = [
           OS login, who can physically reach the machine, who has access to the network), not from {APP_NAME}.
           A sign-in password is available to restrict <em>network</em> access to the app.
         </p>
+        <HelpHeading anchor="backups">Backups</HelpHeading>
         <p>
           Backups are made and restored by an administrator, under <strong>Backup / Restore</strong> on
-          the <HelpLink to="/help/page-administration">Administration</HelpLink> page.
-          If the transaction data is considered sensitive, {APP_NAME} can generate key pairs to build
-          strongly encrypted backup files. The credentials backup does not require encrypting
-          as the data inside is already encrypted. Restoring a credential backup does require
-          the vault passphrase of the user who created the backup.
+          the <HelpLink to="/help/page-administration">Administration</HelpLink> page. There are two,
+          and each holds what the other does not.
         </p>
+        <ul>
+          <li>
+            The <strong>data backup</strong> holds the ledger: categories, rules, owners, accounts and
+            transactions. For each data connection it holds everything except the credential: that the
+            connection exists, its account mapping and how far it had synced. If the transaction data
+            is considered sensitive, {APP_NAME} can generate key pairs to build strongly encrypted
+            backup files.
+          </li>
+          <li>
+            The <strong>credentials backup</strong> holds the stored credential for each connection and
+            the provider secrets entered with <strong>Configure</strong>, encrypted as they are in
+            the <HelpLink to="/help/credential-vault">vault</HelpLink>. It needs no further encryption.
+            To open them elsewhere it also carries one unlock method: the vault passphrase of the user
+            who generated the file. Passkeys, the recovery code and other users&apos; passphrases are
+            not in it.
+          </li>
+        </ul>
+
+        <HelpHeading anchor="credentials-restore-passphrase">The passphrase a credentials restore needs</HelpHeading>
+        <div className="help-table-scroll">
+          <table>
+            <thead>
+              <tr><th>Restoring to</th><th>Passphrase asked for</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>The installation that made the backup</td>
+                <td>None, with the vault unlocked. The backup of any user restores, and a passphrase
+                  changed since the backup makes no difference.</td>
+              </tr>
+              <tr>
+                <td>The same installation, after <strong>Replace vault key</strong></td>
+                <td>The passphrase the user who generated the file had at the time.</td>
+              </tr>
+              <tr>
+                <td>A different installation</td>
+                <td>The same: the generating user&apos;s passphrase at the time. No other user&apos;s
+                  passphrase opens the file. The vault on the new installation has to exist and be
+                  unlocked, under whatever passphrase was set there.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          A passphrase that has been changed is therefore worth keeping for as long as a backup made
+          under it might be restored somewhere else.
+        </p>
+
+        <HelpHeading anchor="restoring-both">Restoring data and credentials</HelpHeading>
+        <p>
+          The two files restore separately, in either order, and neither undoes the other.
+        </p>
+        <ul>
+          <li>
+            A data restore replaces the ledger and never removes a credential. A connection that is
+            both in the backup and on the installation keeps its credential and goes back to the sync
+            position it had when the backup was made, so the next sync fetches what has arrived since.
+          </li>
+          <li>
+            A connection in the data backup that the installation does not have is created without a
+            credential, waiting to be reconnected. Its accounts and mapping are kept, and a
+            credentials restore afterwards fills the credential in.
+          </li>
+          <li>
+            A connection on the installation that the data backup does not mention keeps its
+            credential, and its next sync reads its history again.
+          </li>
+          <li>
+            A credentials restore replaces the credentials stored on the installation and leaves
+            accounts and transactions alone.
+          </li>
+        </ul>
+        <p>
+          To move to a new machine: restore the data backup, set a vault passphrase on the Connections
+          tab, then restore the credentials backup.
+        </p>
+        <p>
+          A credentials backup made before <strong>Respond to an exposure</strong> was used
+          in <HelpLink to="/help/vault-settings#exposure">Vault settings</HelpLink> holds credentials
+          the providers no longer accept.
+        </p>
+
+        <HelpHeading anchor="exposed-files">If the database files are exposed</HelpHeading>
         <p>
           If the database files are exposed and there are data connections, even though the credentials
           are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
