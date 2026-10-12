@@ -81,12 +81,16 @@ test('@a11y every settings and administration section exposes labels and stable 
     await page.goto(new URL(path, baseURL).toString())
     const sectionList = page.getByRole('navigation', { name: listLabel })
     await expect(sectionList.getByRole('button').first()).toBeVisible()
-    const titles = await sectionList.getByRole('button').allTextContents()
+    // By position, not by name: a section's button can carry a note beside its title that arrives after
+    // the list does, so its name is not fixed.
+    const sectionCount = await sectionList.getByRole('button').count()
 
-    for (const title of titles) {
-      await sectionList.getByRole('button', { name: title, exact: true }).click()
-      await expect(page.getByRole('heading', { level: 2, name: title, exact: true })).toBeVisible()
+    for (let index = 0; index < sectionCount; index += 1) {
+      const sectionButton = sectionList.getByRole('button').nth(index)
+      await sectionButton.click()
+      await expect(sectionButton).toHaveAttribute('aria-current', 'page')
       await page.waitForLoadState('networkidle')
+      const title = await page.getByRole('heading', { level: 2 }).first().textContent()
       for (const finding of await unlabeledControls(page)) findings.push({ section: `${path} / ${title}`, ...finding })
     }
   }
