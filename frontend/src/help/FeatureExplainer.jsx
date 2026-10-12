@@ -38,11 +38,8 @@ const HELP_POPOVER_Z_INDEX = 1400
  * is portaled and placed in viewport coordinates, slid back inside the window and flipped above the
  * button when it would overhang, the same way `Tooltip` places itself. Positioned inside the button's
  * own box it could not see the window edge, so a `?` near the right of a toolbar opened off screen.
- *
- * `caption` adds a short visible name beside the `?`, for the rare spot where two launchers sit together
- * and a bare pair would not say which is which.
  */
-export default function FeatureExplainer({ topic, label = 'About this feature', placement = 'bottom-right', caption = '' }) {
+export default function FeatureExplainer({ topic, label = 'About this feature', placement = 'bottom-right' }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null)
   const popoverRef = useRef(null)
@@ -84,18 +81,6 @@ export default function FeatureExplainer({ topic, label = 'About this feature', 
 
   if (!entry) return null
 
-  const circleStyle = {
-    width: 18, height: 18,
-    borderRadius: '50%',
-    background: open ? 'var(--accent2)' : 'var(--surface2)',
-    color: open ? '#fff' : 'var(--muted)',
-    border: '1px solid color-mix(in srgb, var(--accent2) 20%, var(--border))',
-    cursor: 'pointer',
-    fontSize: 11, fontWeight: 700,
-    lineHeight: 1, padding: 0,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  }
-
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center' }}>
       <button
@@ -103,15 +88,19 @@ export default function FeatureExplainer({ topic, label = 'About this feature', 
         type="button"
         onClick={() => setOpen(value => !value)}
         title={label}
-        aria-label={caption ? `${label}: ${caption}` : label}
-        style={caption ? {
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-          font: 'inherit', fontSize: 11, color: 'var(--muted)',
-        } : circleStyle}
-      >
-        {caption ? <><span style={circleStyle}>?</span><span>{caption}</span></> : '?'}
-      </button>
+        aria-label={label}
+        style={{
+          width: 18, height: 18,
+          borderRadius: '50%',
+          background: open ? 'var(--accent2)' : 'var(--surface2)',
+          color: open ? '#fff' : 'var(--muted)',
+          border: '1px solid color-mix(in srgb, var(--accent2) 20%, var(--border))',
+          cursor: 'pointer',
+          fontSize: 11, fontWeight: 700,
+          lineHeight: 1, padding: 0,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >?</button>
       {open && createPortal(
         <HelpPopoverPanel
           topic={topic}

@@ -21,7 +21,6 @@ import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
-import { useTipCallout } from '../../help/useTipCallout.js'
 import {
   summarizeImportedCategorySettings,
   extractImportedCategorySettings,
@@ -66,22 +65,12 @@ export function ImportHistorySection({
   openUnifiedDuplicatesViewer,
   openReconciliationViewer,
 }) {
-  // The two situations this list can raise a tip for. Each is a callout on its own row until dismissed;
-  // after that its `?` moves up beside the heading, because a row holding nothing but a `?` reads as
-  // orphaned. Two bare `?`s side by side would not say which is which, so a pair is captioned.
-  const sourceTipActive = dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown')
-  const reviewTipActive = dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0))
-  const sourceTip = useTipCallout('unknown-data-source')
-  const reviewTip = useTipCallout('reviewing-transactions')
-  const tipLaunchers = [
-    sourceTipActive && !sourceTip.showing ? { topic: 'unknown-data-source', caption: 'Saved sources' } : null,
-    reviewTipActive && !reviewTip.showing ? { topic: 'reviewing-transactions', caption: 'Needs review' } : null,
-  ].filter(Boolean)
   return (
         <>
           <div style={{ marginTop: 28, marginBottom: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <FeatureExplainer topic="unknown-data-source" placement="bottom-left" />
                 <div style={{ fontSize: 16, fontWeight: 600 }}>Data sources</div>
                 <button
                   type="button"
@@ -107,10 +96,6 @@ export function ImportHistorySection({
                 >
                   Manage sources
                 </button>
-                {tipLaunchers.map(tip => (
-                  <FeatureExplainer key={tip.topic} topic={tip.topic} placement="bottom-left"
-                    caption={tipLaunchers.length > 1 ? tip.caption : ''} />
-                ))}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <Tooltip content={totalSystemCategoryWorkspaceCount === 0 ? 'No imported categories are waiting to be grouped' : ''}>
@@ -142,16 +127,13 @@ export function ImportHistorySection({
               </div>
             </div>
           </div>
-          {sourceTipActive && sourceTip.showing ? (
-            <div style={{ marginBottom: 12 }}>
-              <ContextualExplainer topic="unknown-data-source" active persistentButton={false} />
-            </div>
-          ) : null}
-          {reviewTipActive && reviewTip.showing ? (
-            <div style={{ marginBottom: 12 }}>
-              <ContextualExplainer topic="reviewing-transactions" active persistentButton={false} />
-            </div>
-          ) : null}
+          {/* Callouts only. Once dismissed, the saved-sources guidance is the heading's own `?` above, and
+              the needs-review one is reached from the page's help — it explains the pills on the cards,
+              so a `?` up here had nothing to sit beside. */}
+          <ContextualExplainer topic="unknown-data-source" persistentButton={false} style={{ marginBottom: 12 }}
+            active={dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown')} />
+          <ContextualExplainer topic="reviewing-transactions" persistentButton={false} style={{ marginBottom: 12 }}
+            active={dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0))} />
           <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
             {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
               <>

@@ -12,7 +12,6 @@ import { ImportHistorySection } from '../ImportHistorySection.jsx'
 import { MarketplaceImportHistory } from '../MarketplaceImportHistory.jsx'
 
 vi.mock('../../../help/ContextualExplainer.jsx', () => ({ default: () => null }))
-vi.mock('../../../help/useTipCallout.js', () => ({ useTipCallout: () => ({ showing: true, dismiss: () => {} }) }))
 vi.mock('../../../contexts/ReconciliationViewerContext.jsx', () => ({ useReconciliationViewer: () => ({ open: vi.fn() }) }))
 vi.mock('../../../contexts/AmazonImportDetailViewerContext.jsx', () => ({ useAmazonImportDetailViewer: () => ({ open: vi.fn() }) }))
 
