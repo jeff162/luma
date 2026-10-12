@@ -2568,11 +2568,9 @@ export const HELP_TOPICS = [
           as the transactions all map to the same account from both sources.
         </p>
         <p>
-          An account added to a data connection after the initial mapping
-          shows up on the connection's card as <strong>to
-            map</strong> and on the <strong>Tasks</strong> page. Its transactions are skipped until it is mapped.
           The mapping, and the set of extra details to capture can be changed
-          from <strong>Connection settings&hellip;</strong> in the card's menu.
+          from <strong>Connection settings&hellip;</strong> in the card's menu. An account added at the
+          provider later has to be mapped as well (see <em>When a connection needs attention</em> below).
         </p>
 
         <h4>Syncing</h4>
@@ -2628,6 +2626,21 @@ export const HELP_TOPICS = [
           <li>
             A <strong>provider notice</strong> is a problem the provider reported that did not stop the
             sync, such as one bank on a multi-bank connection needing attention.
+          </li>
+          <li>
+            <strong>To map</strong> means an account was added at the provider after the initial
+            mapping. Its transactions are skipped until it is mapped
+            from <strong>Connection settings&hellip;</strong> in the card's menu.
+          </li>
+          <li>
+            A sync that did not complete is reported with what the provider said in
+            the <strong>Sync log</strong>, which separates a bank being briefly unavailable from
+            something that needs fixing.
+          </li>
+          <li>
+            A connection with no accounts has its credential and nothing to import into, which is how
+            a restored backup can leave it. <strong>Refresh accounts</strong> in the card's menu fetches
+            the list.
           </li>
         </ul>
 

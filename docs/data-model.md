@@ -1967,10 +1967,14 @@ held. It is an opaque position in the provider's feed and opens nothing without 
   sync cards survive instead of being dropped for want of a parent (a sync card naming a missing connection
   failed the whole restore on its foreign key). A credentials restore later fills the credential in on that
   same row.
-- **One this install has and the backup does not name** loses only its resume point: its synced rows went
-  with the rest of the ledger, and a cursor past them would leave every one behind it for good (the same
-  reset `Remove synced transactions` performs after deleting rows). A backup written before the section
-  existed names no connections, so every connection takes this path.
+- **One this install has and the backup does not name** keeps its credential and loses its resume point:
+  its synced rows went with the rest of the ledger, and a cursor past them would leave every one behind it
+  for good (the same reset `Remove synced transactions` performs after deleting rows). It also loses its
+  account list, because `connection_account` is wiped with the ledger and only the backup's rows go back —
+  so it is left with a credential and nothing to import into until **Refresh accounts** rebuilds the list.
+  The Tasks page reports that state (`connections_without_accounts` in `routers/tasks.py`), which a
+  credentials restore with no data backup produces too. A backup written before the section existed names
+  no connections, so every connection takes this path.
 
 The backup's resume point is not handed back in two cases, which reset it instead: a backup older than
 `RESTORED_CURSOR_MAX_AGE_DAYS` (Plaid documents a cursor as valid for at least a year) or with no export
