@@ -20,6 +20,58 @@ generic on purpose so they can be reused as help copy.
   judgment calls** in the per-file duplicate-detection report (the `↗` / report on each file). The
   tools below are mostly about resolving those surfaced cases.
 
+## Choosing how to bring data in
+
+Transactions arrive one of two ways, and most ledgers end up using both.
+
+- **A data provider** fetches transactions from the bank directly, so there is no file to export. It
+  needs an account with the provider (a subscription, or developer credentials) and a vault passphrase
+  to protect the stored credential. A sync is started by hand, and history reaches back only as far as
+  the bank and the provider allow.
+- **Files** cost nothing and reach back as far as the bank's own export does. The price is the repeated
+  download. A saved data source takes the mapping out of every later file, and a watched folder takes
+  out the trip to the Import page as well.
+
+**Using both.** A common shape is files once for the older history and a connection from then on. The
+overlap is safe, because every import is compared against the ledger — provided the same bank account
+maps to the same account here from both.
+
+**Sources worth adding either way.** A card or bank account records where money went, not always what
+it bought:
+
+- An Amazon purchase reads as some form of AMAZON.COM and an amount, however the charge arrived. The
+  order export adds the orders and, optionally, their items, which is what lets one order be split
+  across categories.
+- A purchase paid through PayPal reads as a "PAYPAL…" line. PayPal's own history names the purchase.
+  The monthly statement PDFs are the easy way to get that history; the activity CSV adds each
+  purchase's item title.
+
+Neither has to wait for the account that paid: orders and PayPal transactions are matched with their
+card or bank transactions whichever side arrives first.
+
+**Arriving with categorized data.** An export from another tool often carries a category on every row.
+Noting that the categories are present in the data, during the import or afterwards on the file's
+card, lets **Group imported categories** bring them in and **Generate rules** propose rules that file
+future imports the same way. That is a quicker start than the starter categories or categorizing from nothing.
+
+## Keeping the ledger up to date
+
+Once the accounts are in, the same handful of steps repeats, at whatever interval suits — monthly is
+typical:
+
+1. **Bring in what is new.** **Sync now** for connections; for files, download the export and drop it on
+   the Data Import tab, or leave it in the source's watched folder. Check **Watched folders** for
+   anything left for review.
+2. **Refresh the detail sources.** Re-export the recent Amazon orders and the latest PayPal statement.
+   An export that overlaps the last one is fine.
+3. **Settle what the import could not.** A card in the import history says when something on it needs
+   a decision: a duplicate, an Amazon order or a PayPal transaction with no clear match.
+4. **Look over what arrived.** The needs-review count on each card opens just those transactions.
+   Correct the ones a rule filed wrongly, categorize the ones no rule caught — accepting the offered
+   rule means the same payee is filed next time — and mark the rest reviewed.
+5. **Check Tasks** for anything else: a connection needing attention, a new recurring series, a bill
+   whose amount changed.
+
 ## Situations → what to use
 
 ### The same transaction was imported from two sources (cross-account duplicate)

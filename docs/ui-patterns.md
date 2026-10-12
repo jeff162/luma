@@ -1093,9 +1093,12 @@ Feature guidance is authored once in a single content registry (`frontend/src/he
 and the in-context tip can never drift in copy. Each topic is `{ id, title, surfaces, summary, body }`:
 a one-line `summary` sized for a popover and a longer `body` for the `/help` page.
 
-Getting started is three beats: `how-luma-works` (what the app is for, and the facts that hold
-everywhere), `parts-of-luma` (which part owns which job), `design-principles` (how it is meant to be
-worked). The middle one is the only topic organized around the app rather than a subject, and it is a
+Getting started is three beats of orientation: `how-luma-works` (what the app is for, and the facts
+that hold everywhere), `parts-of-luma` (which part owns which job), `design-principles` (how it is meant
+to be worked). Two workflow topics follow them, filed here because they span pages and no hub owns
+either: `import-strategy` (provider, files or both, and the detail sources worth adding) and
+`keeping-up-to-date` (the routine once the accounts are in). The middle orientation topic is the only
+one organized around the app rather than a subject, and it is a
 **table** — one row per nav surface in the order data moves through them, the name linking to that page's
 `page-*` hub, the second column saying what the part is *for*. That second column is the whole
 justification for the topic: the Help index already lists every title and summary, so a row that only

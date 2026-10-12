@@ -174,14 +174,13 @@ export const HELP_TOPICS = [
         </p>
         <ol>
           <li>
-            Load transactions - Use the Import page or connect
-            a <HelpLink to="/help/data-providers">data provider</HelpLink>. If there are
-            several files to be imported, import them all at once before moving on. If files come from
-            different sources, accounts can be mapped so they match. If this
-            is not done during the import process, it can be done later on the Accounts page. If files do
-            come from different data sources consider creating saved profiles for them so the import settings
-            get applied automatically on subsequent files from the same source. Loading transactions creates the
-            accounts which they are mapped to.
+            Load transactions - Import files on the Import page, connect
+            a <HelpLink to="/help/data-providers">data provider</HelpLink>, or both;{' '}
+            <HelpLink to="/help/import-strategy">choosing how to bring data in</HelpLink> covers
+            which suits what. If there are several files to be imported, import them all before moving
+            on. Loading transactions creates the accounts which they are mapped to, and accounts which
+            arrive under different names from different sources can be mapped to match during the
+            import or later on the Accounts page.
           </li>
           <li>
             Account Owners - Create the account owner(s) and assign them to accounts. If more than one owner is
@@ -231,6 +230,10 @@ export const HELP_TOPICS = [
             Use the <strong>Dashboard</strong> page to dig into categories to see if things look right.
           </li>
         </ol>
+        <p>
+          After that, <HelpLink to="/help/keeping-up-to-date">keeping the ledger up to date</HelpLink> is
+          a short routine.
+        </p>
       </>
     ),
   },
@@ -371,6 +374,128 @@ export const HELP_TOPICS = [
             manual choice overrides what a rule would otherwise do.
           </li>
         </ul>
+      </>
+    ),
+  },
+  {
+    id: 'import-strategy',
+    section: 'getting-started',
+    title: 'Choosing how to bring data in',
+    surfaces: ['Getting started'],
+    summary: 'Transactions arrive from a data provider, from files, or from both. A provider saves the exporting; files cost nothing and reach further back. Amazon and PayPal exports add the purchase detail neither one carries.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          Transactions arrive one of two ways, and most ledgers end up using both.
+        </p>
+        <ul>
+          <li>
+            A <HelpLink to="/help/data-providers">data provider</HelpLink> fetches transactions from
+            the bank directly, so there is no file to export. It needs an account with the provider
+            (a subscription, or developer credentials) and a vault passphrase to protect the stored
+            credential. A sync is started by hand, and history reaches back only as far as the bank
+            and the provider allow.
+          </li>
+          <li>
+            <strong>Files</strong> cost nothing and reach back as far as the bank&apos;s own export
+            does. The price is the repeated download. A{' '}
+            <HelpLink to="/help/unknown-data-source">saved data source</HelpLink> takes the mapping
+            out of every later file, and a{' '}
+            <HelpLink to="/help/watched-folders">watched folder</HelpLink> takes out the trip to the
+            Import page as well.
+          </li>
+        </ul>
+        <p>
+          Which accounts are worth bringing in at all is covered
+          under <HelpLink to="/help/page-accounts">the Accounts page</HelpLink>.
+        </p>
+        <h4>Using both</h4>
+        <p>
+          A common shape is files once for the older history and a connection from then on. The
+          overlap is safe, because every import is compared against the ledger &mdash; provided the
+          same bank account maps to the same account in {APP_NAME} from both.
+        </p>
+        <h4>Sources worth adding either way</h4>
+        <p>
+          A card or bank account records where money went, not always what it bought.
+        </p>
+        <ul>
+          <li>
+            An Amazon purchase reads as some form of <strong>AMAZON.COM</strong> and an amount,
+            however the charge arrived. The{' '}
+            <HelpLink to="/help/amazon-import">Amazon order export</HelpLink> adds the orders and,
+            optionally, their items, which is what lets one order be split across categories.
+          </li>
+          <li>
+            A purchase paid through PayPal reads as a &ldquo;PAYPAL&hellip;&rdquo; line. PayPal&apos;s
+            own history names the purchase. The{' '}
+            <HelpLink to="/help/paypal-statements">monthly statement PDFs</HelpLink> are the easy way
+            to get that history; the activity CSV adds each purchase&apos;s item title.
+          </li>
+        </ul>
+        <p>
+          Neither has to wait for the account that paid: orders and PayPal transactions are matched
+          with their card or bank transactions whichever side arrives first.
+        </p>
+        <h4>Arriving with categorized data</h4>
+        <p>
+          An export from another tool often carries a category on every row. Noting that the
+          categories are present in the data, during the import or afterwards on the file&apos;s card,
+          lets <HelpLink to="/help/imported-category-cleanup">Group imported categories</HelpLink> bring
+          them in and <HelpLink to="/help/generate-rules">Generate rules</HelpLink> propose rules that
+          file future imports the same way. That is a quicker start than the starter categories or
+          categorizing from nothing.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'keeping-up-to-date',
+    section: 'getting-started',
+    title: 'Keeping the ledger up to date',
+    surfaces: ['Getting started'],
+    summary: 'The routine once the accounts are in: bring in what is new, refresh the Amazon and PayPal detail, settle what the import could not, look over what arrived, and check Tasks.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          Once the accounts are in, the same handful of steps repeats, at whatever interval suits
+          &mdash; monthly is typical.
+        </p>
+        <ol>
+          <li>
+            <strong>Bring in what is new.</strong> <strong>Sync now</strong> for{' '}
+            <HelpLink to="/help/data-providers">connections</HelpLink>; for files, download the export
+            and drop it on the <strong>Data Import</strong> tab, or leave it in the data source&apos;s{' '}
+            <HelpLink to="/help/watched-folders">watched folder</HelpLink>.
+            Check <strong>Watched folders</strong> on the Import page for anything left for review.
+          </li>
+          <li>
+            <strong>Refresh the detail sources.</strong> Re-export the
+            recent <HelpLink to="/help/amazon-import">Amazon orders</HelpLink> and the
+            latest <HelpLink to="/help/paypal-statements">PayPal statement</HelpLink>. An export that
+            overlaps the last one is fine.
+          </li>
+          <li>
+            <strong>Settle what the import could not.</strong> A card in the import history says
+            when something on it needs a decision &mdash; see <HelpLink to="/help/duplicate-report">the duplicate-detection
+              report</HelpLink>, <HelpLink to="/help/amazon-reconciliation">Amazon
+              reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
+              reconciliation</HelpLink>.
+          </li>
+          <li>
+            <strong>Look over what arrived.</strong> The needs-review count on each card opens just
+            those transactions. Correct the ones a rule filed wrongly, categorize the ones no rule
+            caught &mdash; accepting the offered rule means the same payee is filed next time &mdash;
+            and mark the rest reviewed. See <HelpLink to="/help/reviewing-transactions">needs
+              review</HelpLink>.
+          </li>
+          <li>
+            <strong>Check <HelpLink to="/help/page-tasks">Tasks</HelpLink></strong> for anything else:
+            a connection needing attention, a new recurring series, a bill whose amount changed.
+          </li>
+        </ol>
       </>
     ),
   },
@@ -2224,6 +2349,13 @@ export const HELP_TOPICS = [
                   and <strong>Connections</strong> lists each one with when it last synced and anything
                   waiting on it. Connecting and mapping are on the Connections tab.</td>
               </tr>
+              <tr>
+                <td><strong>Watched folders</strong></td>
+                <td>Shown once a data source watches a folder. Lists the files a{' '}
+                  <HelpLink to="/help/watched-folders">watched folder</HelpLink> could not import on
+                  its own, each with the reason, and <strong>Check now</strong> looks for new files
+                  immediately.</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -2341,8 +2473,9 @@ export const HELP_TOPICS = [
           The <HelpLink to="/help/unknown-data-source">saved data sources</HelpLink>, each
           with its rename, <strong>Folder</strong>, <strong>Edit</strong> and delete controls.
           Saving a file&apos;s mapping as a data source means the next file from the same place
-          needs none of the mapping again. Amazon is listed here as well; it has no mapping to
-          edit.
+          needs none of the mapping again, and <strong>Folder</strong> has the data source import
+          from a <HelpLink to="/help/watched-folders">watched folder</HelpLink> on its own. Amazon is
+          listed here as well; it has no mapping to edit.
         </p>
 
         <HelpHeading anchor="connections-tab">Connections</HelpHeading>
@@ -2562,6 +2695,11 @@ export const HELP_TOPICS = [
           and can also be used to create new data sources. Deleting a data source does not remove any
           files, just the mapping template.
         </p>
+        <p>
+          A data source can also watch a folder, so a file saved there is imported without a visit to
+          the drop area. <strong>Folder</strong> on the data source&apos;s row sets it up &mdash;
+          see <HelpLink to="/help/watched-folders">importing from a watched folder</HelpLink>.
+        </p>
         <h4>Transaction IDs</h4>
         <p>*needs review*</p>
         <p>
@@ -2641,8 +2779,8 @@ export const HELP_TOPICS = [
             from somewhere else landed in the folder</li>
         </ul>
         <p>
-          The fix is made wherever it belongs &mdash; mapping the missing account under <strong>Manage
-            data sources</strong>, for instance. The next check picks the file up on its own and the task
+          The fix is made wherever it belongs &mdash; mapping the missing account from the data
+          source&apos;s row on the <strong>File Sources</strong> tab, for instance. The next check picks the file up on its own and the task
           clears itself; the file does not need touching.
         </p>
         <h4>What happens to the files</h4>
