@@ -62,8 +62,9 @@ typical:
 1. **Bring in what is new.** **Sync now** for connections; for files, download the export and drop it on
    the Data Import tab, or leave it in the source's watched folder. Check **Watched folders** for
    anything left for review.
-2. **Refresh the detail sources.** Re-export the recent Amazon orders and the latest PayPal statement.
-   An export that overlaps the last one is fine.
+2. **Refresh the detail sources.** Re-export the recent Amazon orders and the latest PayPal statement
+   (see *Adding purchase detail from Amazon and PayPal* below). An export that overlaps the last one is
+   fine.
 3. **Settle what the import could not.** A card in the import history says when something on it needs
    a decision: a duplicate, an Amazon order or a PayPal transaction with no clear match.
 4. **Look over what arrived.** The needs-review count on each card opens just those transactions.
@@ -71,6 +72,32 @@ typical:
    rule means the same payee is filed next time — and mark the rest reviewed.
 5. **Check Tasks** for anything else: a connection needing attention, a new recurring series, a bill
    whose amount changed.
+
+## Adding purchase detail from Amazon and PayPal
+
+A card or bank line for a marketplace purchase says only AMAZON.COM or PAYPAL and an amount, whether a
+file or a data connection brought it in. The marketplace's own export says what was bought, and is worth
+importing alongside either.
+
+| Source | What to export | What it adds |
+| --- | --- | --- |
+| Amazon | The Orders file from the AZAD browser extension, and optionally the Items file for the same period | One transaction per order, in an Amazon account. With the Items file, each order's items, so the order can be split across categories |
+| PayPal | The monthly statement PDFs (or a zip of them), or the activity CSV | One transaction per PayPal payment, naming who was paid. The CSV adds the item title; the statements pair each refund with its payment |
+
+The steps are the same for both:
+
+1. **Export** the period wanted. The first time that is the whole history worth having; afterwards the
+   recent months.
+2. **Drop the files** on the Data Import tab. They are recognized by their contents. The first import
+   asks which account the purchases go into and, for Amazon, which account each payment card is.
+3. **Check the reconciliation.** Each order or PayPal payment is matched with the card or bank
+   transaction that paid for it, and that transaction is moved out of the totals so the purchase counts
+   once. The import's card says when a match needs a decision.
+4. **Use the detail.** The order or PayPal transaction is the one to categorize. An Amazon order with
+   item detail opens in the split editor with one line per item already filled in.
+
+Overlapping exports are safe, and so is importing before the card or bank account that paid: matching
+runs again when that side arrives.
 
 ## Situations → what to use
 

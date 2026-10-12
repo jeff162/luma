@@ -441,7 +441,9 @@ export const HELP_TOPICS = [
         </ul>
         <p>
           Neither has to wait for the account that paid: orders and PayPal transactions are matched
-          with their card or bank transactions whichever side arrives first.
+          with their card or bank transactions whichever side arrives first. The steps are
+          in <HelpLink to="/help/purchase-detail">adding purchase detail from Amazon and
+            PayPal</HelpLink>.
         </p>
         <h4>Arriving with categorized data</h4>
         <p>
@@ -477,10 +479,10 @@ export const HELP_TOPICS = [
             Check <strong>Watched folders</strong> on the Import page for anything left for review.
           </li>
           <li>
-            <strong>Refresh the detail sources.</strong> Re-export the
-            recent <HelpLink to="/help/amazon-import">Amazon orders</HelpLink> and the
-            latest <HelpLink to="/help/paypal-statements">PayPal statement</HelpLink>. An export that
-            overlaps the last one is fine.
+            <strong>Refresh the detail sources.</strong> Re-export the recent Amazon orders and the
+            latest PayPal statement, as described in{' '}
+            <HelpLink to="/help/purchase-detail">adding purchase detail from Amazon and
+              PayPal</HelpLink>. An export that overlaps the last one is fine.
           </li>
           <li>
             <strong>Settle what the import could not.</strong> A card in the import history says
@@ -950,10 +952,13 @@ export const HELP_TOPICS = [
           exactly the detail a split exists to keep -- two records at two prices are two purchases.
         </p>
 
-        <h4>Splitting an imported order</h4>
+        <HelpHeading anchor="imported-order">Splitting an imported order</HelpHeading>
         <p>
-          Where the transaction came from a marketplace order whose per-item detail was imported, the
-          editor opens with one line per item already filled in.
+          Where the transaction came from a marketplace order whose per-item detail was imported
+          (an Amazon order with its <HelpLink to="/help/amazon-import">Items file</HelpLink>), the
+          editor opens with one line per item already filled in. It is opened on the order&apos;s own
+          transaction, the one in the Amazon account, with <strong>Split&hellip;</strong> like any
+          other.
           Each item's list price differs from the item's share of the transaction, because a
           list price excludes tax, shipping and discounts. Those extra charges are
           <em>proportioned</em> across the items. <strong>Use items</strong> applies the proposal.
@@ -3009,6 +3014,71 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'purchase-detail',
+    section: 'importing',
+    title: 'Adding purchase detail from Amazon and PayPal',
+    surfaces: ['Import (Data Import)'],
+    summary: 'A card or bank line for a marketplace purchase names the marketplace and an amount. The marketplace\'s own export says what was bought, and is worth importing whether the card arrives by file or by data connection.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A card or bank line for a marketplace purchase says only <strong>AMAZON.COM</strong> or
+          PAYPAL and an amount, whether a file or a{' '}
+          <HelpLink to="/help/data-providers">data connection</HelpLink> brought it in. The
+          marketplace&apos;s own export says what was bought, and is worth importing alongside either.
+        </p>
+        <ul>
+          <li>
+            <strong>Amazon</strong> &mdash; the Orders file from the AZAD browser extension, and
+            optionally the Items file for the same period
+            (see <HelpLink to="/help/amazon-import">importing Amazon order detail</HelpLink>). It adds
+            one transaction per order, in an Amazon account. With the Items file it also adds each
+            order&apos;s items, so the order can be split across categories.
+          </li>
+          <li>
+            <strong>PayPal</strong> &mdash; the monthly statement PDFs (or a zip of them), or the
+            activity CSV (see <HelpLink to="/help/paypal-statements">PayPal statements</HelpLink>).
+            Either adds one transaction per PayPal payment, naming who was paid. The CSV adds the item
+            title; the statements pair each refund with its payment.
+          </li>
+        </ul>
+        <p>The steps are the same for both:</p>
+        <ol>
+          <li>
+            <strong>Export</strong> the period wanted. The first time that is the whole history worth
+            having; afterwards the recent months.
+          </li>
+          <li>
+            <strong>Drop the files</strong> on the <strong>Data Import</strong> tab. They are recognized
+            by their contents. The first import asks which account the purchases go into and, for
+            Amazon, which account each payment card is
+            (see <HelpLink to="/help/amazon-funding-sources">the Amazon import form</HelpLink>).
+          </li>
+          <li>
+            <strong>Check the reconciliation.</strong> Each order or PayPal payment is matched with the
+            card or bank transaction that paid for it, and that transaction is moved out of the totals
+            so the purchase counts once. The import&apos;s card says when a match needs a decision
+            &mdash; see <HelpLink to="/help/amazon-reconciliation">Amazon
+              reconciliation</HelpLink> and <HelpLink to="/help/paypal-reconciliation">PayPal
+              reconciliation</HelpLink>.
+          </li>
+          <li>
+            <strong>Use the detail.</strong> The order or PayPal transaction is the one to categorize.
+            An Amazon order with item detail opens in the split editor with one line per item already
+            filled in &mdash; see{' '}
+            <HelpLink to="/help/transaction-splits#imported-order">splitting an imported
+              order</HelpLink>.
+          </li>
+        </ol>
+        <p>
+          Overlapping exports are safe, and so is importing before the card or bank account that paid:
+          matching runs again when that side arrives.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'amazon-import',
     section: 'importing',
     title: 'Importing Amazon order detail (AZAD Chrome extension)',
@@ -3025,7 +3095,9 @@ export const HELP_TOPICS = [
           it to the matching Amazon charge in the transaction ledger, and excludes the payment from
           totals so it is not counted twice.
           The <strong>AZAD</strong> tool can also generate a CSV containing item detail about the orders.
-          If this file is imported the item detail is available to split an order up into its individual items.
+          If this file is imported, an order holding items of different kinds can be split across
+          categories with the items already listed &mdash; see{' '}
+          <HelpLink to="/help/transaction-splits#imported-order">splitting an imported order</HelpLink>.
         </p>
         <p><strong>Installation:</strong></p>
         <ul>
@@ -3064,7 +3136,7 @@ export const HELP_TOPICS = [
               The Items file adds the list price and quantity of each item. This detail is then
               available when splitting the order across categories, so the individual items can be
               categorized rather than the whole order carrying a single category. When item detail is
-              present the <HelpLink to="/help/transaction-splits">split editor</HelpLink> opens with
+              present the <HelpLink to="/help/transaction-splits#imported-order">split editor</HelpLink> opens with
               one line per item and the amounts filled in from the items file.
             </p>
           </li>
