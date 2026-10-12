@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-// What the dialog is opened with is a starting filter, not a binding one. Accounts → Connections opens it
-// with arrays built inline — one provider, or a single connection — so the page behind the dialog
+// What the dialog is opened with is a starting filter, not a binding one. The Import page's Connections
+// tab opens it with arrays built inline — one provider, or a single connection — so the page behind the dialog
 // re-rendering must not snap the user's own pill choices back to that starting set, while opening it on a
 // genuinely different set must.
 
