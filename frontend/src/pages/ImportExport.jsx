@@ -4,6 +4,7 @@
 import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatTimestamp } from '../lib/utils.js'
 import { useBusyIndicator } from '../lib/useBusyIndicator.js'
 import { sniffAmazonExportKind } from '../lib/amazonDetect.js'
@@ -44,6 +45,7 @@ import WatchedFoldersPanel from '../components/importExport/WatchedFoldersPanel.
 import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
 import { MoneyMovementTypeReportPanel } from '../components/importExport/MoneyMovementTypeReportPanel.jsx'
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
+import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
 import ConnectionsTab from '../components/connections/ConnectionsTab.jsx'
@@ -329,6 +331,7 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
   const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
   const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
+  const [reviewUndo, setReviewUndo] = useState(null)
   // Per-batch "+ New data source from this file" inline name entry (unknown-source cards).
   const [assignNewSourceBatchId, setAssignNewSourceBatchId] = useState('')
   const [assignNewSourceName, setAssignNewSourceName] = useState('')
@@ -2774,7 +2777,9 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       batch.id === batchId ? { ...batch, needs_review_count: 0 } : batch
     )))
     try {
-      await api.markBatchReviewed(batchId)
+      const result = await api.markBatchReviewed(batchId)
+      const transactionIds = result?.transaction_ids || []
+      setReviewUndo(transactionIds.length ? { batchId, transactionIds } : null)
       setBatches(await api.listBatches())
     } catch (error) {
       setBatches(await api.listBatches())
@@ -2784,6 +2789,28 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
       })
     }
   }
+
+  // Flags exactly the rows the sweep cleared, so one reviewed by hand before it stays reviewed.
+  async function undoMarkBatchReviewed() {
+    const snap = reviewUndo
+    if (!snap) return
+    setReviewUndo(null)
+    try {
+      await txnMutations.bulkUpdate(
+        { mode: 'ids', ids: snap.transactionIds },
+        [{ type: 'set_review_status', needs_review: true }],
+      )
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not flag those transactions for review again',
+        description: error?.message || 'Please try again.',
+      })
+    }
+    setBatches(await api.listBatches())
+  }
+
+  // UndoToast keys its auto-dismiss timer on this callback, so it has to be stable.
+  const closeReviewUndo = useCallback(() => setReviewUndo(null), [])
 
   function buildBatchImportedCategoryChoices(batch) {
     const ownerChoices = new Map()
@@ -4274,6 +4301,16 @@ function ImportTab({ view, historyFocus, onShowHistory, onShowImport, onShowConn
 
       {undoNode}
       {panelsNode}
+      {reviewUndo ? (
+        // Keyed on the card so each sweep restarts the countdown rather than inheriting the last.
+        <UndoToast
+          key={reviewUndo.batchId}
+          title="Marked reviewed"
+          description={`${reviewUndo.transactionIds.length} transaction${reviewUndo.transactionIds.length === 1 ? '' : 's'} no longer need${reviewUndo.transactionIds.length === 1 ? 's' : ''} review.`}
+          onUndo={undoMarkBatchReviewed}
+          onDismiss={closeReviewUndo}
+        />
+      ) : null}
     </div>
   )
 }

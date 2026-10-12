@@ -4520,13 +4520,20 @@ def mark_batch_reviewed(batch_id: str):
     "I've looked these over (or don't need to)" for a whole import card — a file, or a data connection's
     initial or monthly sync card, since synced rows carry the card's `import_batch_id` too. The per-card
     counterpart to bulk Mark reviewed on the Transactions filter. It clears only the rows flagged now, so
-    a sync card's count returns when later rows land on it."""
+    a sync card's count returns when later rows land on it.
+
+    Answers with the ids it cleared, which is what the card's undo flags again: re-flagging the whole
+    card instead would also take back every row reviewed one at a time before the sweep."""
     with get_db() as conn:
-        cursor = conn.execute(
+        transaction_ids = [row["id"] for row in conn.execute(
+            "SELECT id FROM txn WHERE import_batch_id = ? AND needs_review = 1",
+            (batch_id,),
+        ).fetchall()]
+        conn.execute(
             "UPDATE txn SET needs_review = 0 WHERE import_batch_id = ? AND needs_review = 1",
             (batch_id,),
         )
-    return {"updated": cursor.rowcount or 0}
+    return {"updated": len(transaction_ids), "transaction_ids": transaction_ids}
 
 
 @router.post("/batches/{batch_id}/duplicates/import")

@@ -163,6 +163,28 @@ class NeedsReviewTests(unittest.TestCase):
         self.assertEqual(self._needs_review(b), 0)
         self.assertEqual(self._flagged_ids(), [])
 
+    def test_batch_mark_reviewed_names_only_the_rows_it_cleared(self):
+        # The card's undo flags these ids again, so a row reviewed before the sweep must not be among them.
+        already_reviewed = self._import_txn(date="2026-04-10")
+        swept = self._import_txn(date="2026-04-12")
+        with self._use_db_path():
+            bulk_update_transactions(
+                BulkUpdateRequest(
+                    selection=BulkSelection(mode="ids", ids=[already_reviewed]),
+                    actions=[BulkAction(type="mark_reviewed")],
+                )
+            )
+            result = mark_batch_reviewed(self.batch)
+            bulk_update_transactions(
+                BulkUpdateRequest(
+                    selection=BulkSelection(mode="ids", ids=result["transaction_ids"]),
+                    actions=[BulkAction(type="set_review_status", needs_review=True)],
+                )
+            )
+        self.assertEqual(result["transaction_ids"], [swept])
+        self.assertEqual(self._needs_review(already_reviewed), 0)
+        self.assertEqual(self._needs_review(swept), 1)
+
 
 class _Upload:
     def __init__(self, content: str):
