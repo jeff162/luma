@@ -35,6 +35,7 @@ from backend.routers.import_export import (
     undo_batch,
 )
 from backend.services.duplicate_detection import list_unified_batch_duplicates
+from backend.services.import_batch_totals import refresh_batch_totals
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "import_duplicates"
@@ -511,6 +512,16 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batch["deduped_count"], 0)
         self.assertEqual(batch["row_count"], 2, "every row the file accounted for is still counted")
         self.assertTrue(batch["file_content_hash"])
+        # And still counted after the recount the history listing runs on every load, which once summed
+        # only what the report holds and left the card reading "0 rows" for a file of two.
+        with self._use_db_path():
+            with get_db() as conn:
+                refresh_batch_totals(conn, [result["batch_id"]])
+                recounted = conn.execute(
+                    "SELECT row_count, config_snapshot FROM import_batch WHERE id = ?", (result["batch_id"],),
+                ).fetchone()
+        self.assertEqual(recounted["row_count"], 2)
+        self.assertEqual(json.loads(recounted["config_snapshot"])["import_summary"]["total_rows"], 2)
 
     async def test_a_second_sources_coverage_claim_still_writes_its_report(self):
         # Rule 2, not Rule 1: a different source label describing the same account. That is a

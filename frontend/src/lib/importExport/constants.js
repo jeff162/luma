@@ -61,3 +61,13 @@ export const IMPORTED_CATEGORY_SCOPE_ALL_LABEL = 'Include all categorized transa
 
 // Shown on every import control disabled while demo data is loaded (the backend refuses those imports).
 export const DEMO_IMPORT_DISABLED_MESSAGE = 'Demo Data Loaded: Imports are disabled'
+
+// How a card the Import History has landed on is marked, shared by both card surfaces. The scroll margin
+// is where a landing comes to rest: the history sets `--pinned-height` to the height of the block pinned
+// above its list when it scrolls a card into view.
+export const LANDING_SCROLL_MARGIN = 'calc(var(--pinned-height, 0px) + 8px)'
+export const FOCUSED_CARD_STYLE = {
+  boxShadow: 'inset 3px 0 0 var(--accent)',
+  background: 'color-mix(in srgb, var(--accent) 7%, transparent)',
+  scrollMarginTop: LANDING_SCROLL_MARGIN,
+}

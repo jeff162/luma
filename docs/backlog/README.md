@@ -79,7 +79,7 @@ scale — rather than by feature.
   it, instead of Amazon's order-row model (the export names no paying card, order number or tax). Covers
   the purchase-record store, the matching (tax band + unique assignment, measured on one real download),
   a marketplace review shell that Amazon moves onto in the same change, the enriched `eBay: <item>` name
-  with a rule pass for uncategorized charges, and the Amazon tab becoming *Marketplaces*. No product
+  with a rule pass for uncategorized charges, and eBay joining Amazon as a row in the data-source list. No product
   decisions owed.
 - [import-source-field-registry.md](import-source-field-registry.md) — **shipped; deferred remainder
   only.** The registry, the origin surfacing built on it, and opt-in source-text rule matching all landed

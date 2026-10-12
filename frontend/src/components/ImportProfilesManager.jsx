@@ -890,6 +890,7 @@ export default function ImportProfilesManager({
   onProfileCreated,
   hostData = null,
   onReviewMoneyMovement,
+  systemRows = null,
 } = {}) {
   // This manager keeps saved data-source administration inside Import:
   // the list stays embedded in the page, while add/edit happens in a floating
@@ -899,6 +900,9 @@ export default function ImportProfilesManager({
   // this manager shows. Given one, the manager follows it instead of loading at mount: the list is on
   // screen from the first render, and a write made outside the manager — an import, an undo — shows
   // here without a second fetch. The manager's own writes still publish through `onDataChange`.
+  //
+  // `systemRows` are rows for sources that are not saved mappings (a marketplace vendor), listed after
+  // the saved ones.
   const rootRef = useRef(null)
   const formPanelRef = useRef(null)
   const formPanelDragStartRef = useRef(null)
@@ -1357,6 +1361,7 @@ export default function ImportProfilesManager({
               </div>
             </div>
           ))}
+          {systemRows}
           {!showAdd ? (
             <button
               onClick={() => setShowAdd(true)}

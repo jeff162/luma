@@ -219,16 +219,16 @@ resolve the duplicate itself: which copy is wrong is a ledger question.
 
 ## Where it lives on the Import page
 
-This settles the open question in `ui-patterns.md` → *Marketplace accounts get their own import surface*:
-the **Amazon** tab becomes **Marketplaces**, with **one section per supported vendor**. Each section
-holds the vendor's file chooser, its "how to get the export" help and its import history. Sections
-rather than subtabs, because eBay needs no setup, so both vendors fit on one page and the list of
-supported vendors is what the page shows. That also means an eBay section would have no marketplace
+A vendor is a data source rather than a tab (`ui-patterns.md` → *Marketplace accounts get their own
+import form*): eBay gets a **row in the File Import tab's data-source list**, beside Amazon's, carrying its
+"how to get the export" help; its files are dropped on the ordinary drop zone; and its imports land on
+their cards in the Import History. eBay needs no setup, so it may need no form at all where Amazon has
+one, and the list of rows is the list of supported vendors. That also means an eBay row would have no marketplace
 account type — the account-type marker in `architecture.md`'s five-piece pattern is Amazon-model only,
 and the pattern's description needs saying so once a vendor exists without it.
 
 **Drop routing extends to HTML.** The main import page already sniffs an AZAD CSV header and hands the
-file to the Amazon tab. eBay files are recognized by the report title in the HTML (`Purchase History`,
+file to the Amazon import form. eBay files are recognized by the report title in the HTML (`Purchase History`,
 `Returns and Refunds`), and dropping the whole download folder picks out the reports the importer reads
 and ignores the rest.
 

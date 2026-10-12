@@ -4670,7 +4670,12 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
         summary["deduped_count"] = len(remaining_rows)
         summary["duplicate_count"] = len(remaining_rows)
         summary["imported_count"] = int(summary.get("imported_count") or 0) + imported_now
-        summary["total_rows"] = summary["imported_count"] + int(summary.get("skipped_count") or 0) + len(remaining_rows)
+        # Rows the file accounted for, as `refresh_batch_totals` sums them: the ones that added nothing
+        # to the ledger without being duplicates in the report are still rows of the file.
+        summary["total_rows"] = (
+            summary["imported_count"] + int(summary.get("skipped_count") or 0) + len(remaining_rows)
+            + int(summary.get("ignored_count") or 0) + int(summary.get("updated_count") or 0)
+        )
         snapshot[IMPORT_SUMMARY_KEY] = summary
         save_batch_snapshot(conn, batch_id, snapshot)
         conn.execute(

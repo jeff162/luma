@@ -2184,7 +2184,7 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'The Import page',
     surfaces: ['Import'],
-    summary: 'Where transactions come in. File Import, Amazon and Connections bring them in, and the Import History tab keeps a card per file or sync recording what it did.',
+    summary: 'Where transactions come in. File Import and Connections bring them in, and the Import History tab keeps a card per file or sync recording what it did.',
     body: () => (
       <>
         <p>*needs review*</p>
@@ -2192,7 +2192,7 @@ export const HELP_TOPICS = [
             what a reader wants here is which control leads to which one. Grouped by tab, since the tabs
             are how the page itself is divided. */}
         <p>
-          Where transactions come in. The page has four tabs, and the sections
+          Where transactions come in. The page has three tabs, and the sections
           below follow them: each row names something on the page, says what it is for, and links the
           topic that explains it.
         </p>
@@ -2222,7 +2222,8 @@ export const HELP_TOPICS = [
                 <td>The <HelpLink to="/help/unknown-data-source">saved data sources</HelpLink>, each
                   with its rename, <strong>Folder</strong>, <strong>Edit</strong> and delete controls.
                   Saving a file&apos;s mapping as a data source means the next file from the same place
-                  needs none of the mapping again.</td>
+                  needs none of the mapping again. Amazon is listed here as well; it has no mapping to
+                  edit.</td>
               </tr>
             </tbody>
           </table>
@@ -2299,7 +2300,8 @@ export const HELP_TOPICS = [
         <HelpHeading anchor="amazon-tab">Amazon</HelpHeading>
         <p>
           Marketplace orders arrive in their own shape and are matched against card charges already in
-          the ledger, so they have a tab of their own.
+          the ledger. The order and item files are dropped on the File Import tab like any other file;
+          they are recognized by their contents and open the Amazon import form.
         </p>
         <div className="help-table-scroll">
           <table>
@@ -2308,9 +2310,10 @@ export const HELP_TOPICS = [
             </thead>
             <tbody>
               <tr>
-                <td>The file drop area</td>
-                <td>Bringing in the order and item files exported from Amazon &mdash;
-                  see <HelpLink to="/help/amazon-import">importing Amazon order detail</HelpLink>.</td>
+                <td><strong>File(s) to import</strong></td>
+                <td>The order and item files exported from Amazon &mdash;
+                  see <HelpLink to="/help/amazon-import">importing Amazon order detail</HelpLink>.
+                  {' '}<strong>Add file(s)</strong> brings in the other file of a pair.</td>
               </tr>
               <tr>
                 <td><strong>Import into account</strong>, <strong>Payment cards in these files</strong> and
@@ -2690,7 +2693,7 @@ export const HELP_TOPICS = [
     id: 'amazon-import',
     section: 'importing',
     title: 'Importing Amazon order detail (AZAD Chrome extension)',
-    surfaces: ['Import — Amazon'],
+    surfaces: ['Import (Data sources → Amazon)'],
     summary: 'Capture Amazon order detail using a Chrome browser extension to export order history. Per-item detail can be captured as well, which is what allows an order to be split across categories. The corresponding Amazon charges are re-categorized as money movement to avoid double counting the charges.',
     body: () => (
       <>
@@ -2750,8 +2753,7 @@ export const HELP_TOPICS = [
         </ol>
         <p><strong>Loading the Orders and Items files:</strong></p>
         <p>
-          Load the files using either the CSV importer on the <strong>File Import</strong> tab
-          or on the <strong>Amazon</strong> tab.
+          Load the files using the file drop area on the <strong>File Import</strong> tab.
           The files are recognized by their contents and so
           upload order does not matter. The importer has a
           <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> that tracks
@@ -2774,13 +2776,14 @@ export const HELP_TOPICS = [
   {
     id: 'amazon-funding-sources',
     section: 'importing',
-    title: 'Amazon import page',
-    surfaces: ['Import — Amazon'],
+    title: 'Amazon import form',
+    surfaces: ['Import (Amazon import form)'],
     summary: `Configures which account holds the Amazon transactions, which category the excluded Amazon payment maps to, and mapping the payment sources in the CSV file to accounts in ${APP_NAME}.`,
     body: () => (
       <>
         <p>
-          These settings appear once Amazon CSV files have been chosen for import. Producing the files
+          These settings appear in the form that opens once Amazon CSV files have been dropped on the
+          File Import tab. Producing the files
           themselves is covered in <HelpLink to="/help/amazon-import">importing Amazon order
             detail</HelpLink>.
         </p>
@@ -2821,7 +2824,7 @@ export const HELP_TOPICS = [
     id: 'amazon-reconciliation',
     section: 'importing',
     title: 'Amazon reconciliation report',
-    surfaces: ['Import — Amazon', 'Import history (transactions ↗ pill)'],
+    surfaces: ['Import History (transactions ↗ pill)'],
     summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in the ledger, and includes tools to resolve ambiguous situations.',
     body: () => (
       <>

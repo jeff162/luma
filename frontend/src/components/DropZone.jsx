@@ -7,13 +7,15 @@ import { useRef, useState } from 'react'
  * The shared click-or-drop file target.
  *
  * Several surfaces have wanted "a dashed box you can click or drop files onto" — the CSV import upload
- * stage, the Amazon tab, and attaching a document to a transaction — and `ui-patterns.md` asks for drop
- * zones to look and behave alike. What is shared here is deliberately only the *target*: the hover and
+ * stage, the Amazon import, and attaching a document to a transaction — and `ui-patterns.md` asks for
+ * drop zones to look and behave alike. What is shared here is deliberately only the *target*: the hover and
  * drag-over affordance, click-to-browse, and handing the caller a `FileList`. Everything about what the
  * files then mean stays with the caller, which is why the CSV stage (entangled with data-source
  * detection and a chooser rendered inside its own zone) keeps its own and is not forced through this.
  * Documents left it too, for a paste box that also takes drops — a click there has to place the caret,
- * so the whole surface cannot be a browse button (`DocumentAttachTarget`).
+ * so the whole surface cannot be a browse button (`DocumentAttachTarget`). The Amazon import was its
+ * last user and now takes its files from the CSV stage's zone, so nothing mounts this at present; it
+ * stays as the target the next plain file drop should use.
  *
  * `children` is the label, so a caller can say what it wants dropped rather than being handed generic
  * copy — the one thing these zones genuinely disagree about.

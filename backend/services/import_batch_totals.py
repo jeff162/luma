@@ -38,10 +38,12 @@ def refresh_batch_totals(conn, batch_ids, *, drop_emptied_sync_cards: bool = Fal
     """Re-derive each card's totals from the rows it still holds.
 
     `imported` is the card's rows still in `txn` (trashed included — a trashed row is recoverable and still
-    came from this card); skipped and deduped are the columns, which record rows that never reached the
-    ledger and so cannot be recounted from it. `row_count` is their sum — rows received, on a sync card as
-    on a file card — and the summary's headline figures are rewritten from the same parts, all four
-    together. Rewriting only some of them is how a summary came to say 55 imported + 11 duplicates = 83.
+    came from this card); skipped, deduped, ignored and updated are the columns, which record rows that
+    added nothing to the ledger and so cannot be recounted from it. `row_count` is the sum of all five —
+    rows received, on a sync card as on a file card — and the summary's headline figures are rewritten
+    from the same parts, all four together. Rewriting only some of them is how a summary came to say
+    55 imported + 11 duplicates = 83; leaving the ignored and updated rows out of the sum is how a file
+    of thousands of rows the ledger already held came to read as a handful.
 
     Per-account entries whose account no longer exists are cleared here too: a mapped entry is removed, a
     skipped one keeps its count and loses only the destination it never used.
@@ -85,8 +87,8 @@ def refresh_batch_totals(conn, batch_ids, *, drop_emptied_sync_cards: bool = Fal
         )
 
         batch = conn.execute(
-            "SELECT row_count, skipped_count, deduped_count, source_kind, config_snapshot "
-            "FROM import_batch WHERE id = ?",
+            "SELECT row_count, skipped_count, deduped_count, ignored_count, updated_count, source_kind, "
+            "config_snapshot FROM import_batch WHERE id = ?",
             (batch_id,),
         ).fetchone()
         if not batch:
@@ -97,7 +99,8 @@ def refresh_batch_totals(conn, batch_ids, *, drop_emptied_sync_cards: bool = Fal
         ).fetchone()[0] or 0)
         skipped_count = int(batch["skipped_count"] or 0)
         deduped_count = int(batch["deduped_count"] or 0)
-        total_rows = imported_count + skipped_count + deduped_count
+        total_rows = (imported_count + skipped_count + deduped_count
+                      + int(batch["ignored_count"] or 0) + int(batch["updated_count"] or 0))
 
         if (drop_emptied_sync_cards and total_rows == 0 and batch["source_kind"] == SYNC_SOURCE_KIND
                 and not _batch_has_duplicates(conn, batch_id)):

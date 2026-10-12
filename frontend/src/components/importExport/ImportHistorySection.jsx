@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { Button, Card, EmptyState, Tooltip } from '../ui.jsx'
 import { ActionCountBadge, BatchCoverageCell, HistoryAttentionPill, ImportedCategoryUsageInline } from './importPresentational.jsx'
+import { FOCUSED_CARD_STYLE, LANDING_SCROLL_MARGIN } from '../../lib/importExport/constants.js'
 import { SourceAccountChip } from './SourceAccountChip.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
@@ -153,6 +154,7 @@ export function ImportHistorySection({
                           const nextState = prev && typeof prev === 'object' ? prev : {}
                           return { ...nextState, [row.key]: !nextState[row.key] }
                         })}
+                        focusedBatchIds={focusedBatchIds}
                         onOpenLedger={openBatchDetail}
                         onUndo={handleUndoClick}
                         onMarkReviewed={markBatchReviewed}
@@ -284,9 +286,9 @@ export function ImportHistorySection({
                                 : ''}
                             </div>
                           ) : null}
-                          {/* An amount this import corrected on a row it did not create. It survives on
-                              the card rather than only in the completion screen because nothing else
-                              records it: the row shows its revised figure and no longer says it moved. */}
+                          {/* An amount this import corrected on a row it did not create. It is stated on
+                              the card because nothing else records it: the row shows its revised figure
+                              and no longer says it moved. */}
                           {summary.updatedCount > 0 ? (
                             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)', fontStyle: 'italic' }}>
                               {summary.updatedCount} existing transaction{summary.updatedCount === 1 ? '' : 's'} updated to a revised amount
@@ -730,15 +732,6 @@ export function ImportHistorySection({
           </Card>
         </>
   )
-}
-
-// Where a landing comes to rest: `--pinned-height` is set on the list when it scrolls.
-const LANDING_SCROLL_MARGIN = 'calc(var(--pinned-height, 0px) + 8px)'
-
-const FOCUSED_CARD_STYLE = {
-  boxShadow: 'inset 3px 0 0 var(--accent)',
-  background: 'color-mix(in srgb, var(--accent) 7%, transparent)',
-  scrollMarginTop: LANDING_SCROLL_MARGIN,
 }
 
 // What a landing opens and marks. Cards are named outright (a finished import, the cards a sync wrote

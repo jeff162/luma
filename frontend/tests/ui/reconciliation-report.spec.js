@@ -28,8 +28,9 @@ test('an Amazon import opens its reconciliation report, which minimizes, restore
   const { batch_id: batchId } = await imported.json()
 
   try {
-    await page.goto('/import-export')
-    await page.getByRole('button', { name: 'Amazon', exact: true }).click()
+    // The link a finished import or sync uses: the history opens on the card, under its Amazon row.
+    await page.goto(`/import-export?tab=history&batch=${batchId}`)
+    await expect(page.locator('[data-focused-card="true"]')).toContainText('spec-orders.csv')
     await page.getByRole('button', { name: /1 transaction · 1 to resolve/ }).click()
 
     const report = page.getByText('Amazon reconciliation', { exact: true })
@@ -45,6 +46,36 @@ test('an Amazon import opens its reconciliation report, which minimizes, restore
     await expect(page.getByText('✓ Reviewed')).toBeVisible()
   } finally {
     await request.delete(`/api/import-export/batches/${batchId}?force=true`)
+    await request.delete(`/api/accounts/${account.id}?transactions=delete`)
+  }
+})
+
+// Amazon has no tab of its own: its files are recognized on the ordinary drop zone, which opens the
+// import form over the page, and the import lands on its card like any other.
+test('an Amazon export dropped on the importer opens its form and lands on its card', async ({ page, request }) => {
+  const account = await (await request.post('/api/accounts', { data: { name: 'Spec Amazon', type: 'amazon' } })).json()
+  try {
+    await page.goto('/import-export')
+    await page.locator('#csv-file-input').setInputFiles({
+      name: 'spec-dropped-orders.csv', mimeType: 'text/csv', buffer: Buffer.from(ORDERS_CSV, 'utf8'),
+    })
+    await expect(page.getByText('Import Amazon orders')).toBeVisible()
+
+    // Import waits for an account and for a decision about every card the file names.
+    const importButton = page.getByRole('button', { name: 'Import 1 file' })
+    await expect(importButton).toBeDisabled()
+    await page.locator('select').filter({ hasText: 'Spec Amazon' }).selectOption(account.id)
+    await page.getByLabel(/^Account for /).selectOption({ label: 'Untracked — not my account' })
+    await importButton.click()
+
+    await expect(page.getByText('Import Amazon orders')).toHaveCount(0)
+    await expect(page.getByText('1 order imported.')).toBeVisible()
+    await expect(page.locator('[data-focused-card="true"]')).toContainText('spec-dropped-orders.csv')
+  } finally {
+    const batches = await (await request.get('/api/import-export/batches')).json()
+    for (const batch of batches.filter(b => b.filename === 'spec-dropped-orders.csv')) {
+      await request.delete(`/api/import-export/batches/${batch.id}?force=true`)
+    }
     await request.delete(`/api/accounts/${account.id}?transactions=delete`)
   }
 })

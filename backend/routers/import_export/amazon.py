@@ -973,7 +973,7 @@ def run_amazon_import(
 def _persist_batch_snapshot(conn: sqlite3.Connection, res: dict, file_hashes: list[dict], *, append: bool = False) -> None:
     """Persist a card's investigable ``import_summary`` + the per-file content hashes it took, so the file
     card and the import-detail report can show the outcome on a later page load (the counts otherwise live
-    only in the endpoint's return value → the live completion screen). ``append`` merges extra hashes into an
+    only in the endpoint's return value → the notice shown as the import lands). ``append`` merges extra hashes into an
     already-written snapshot (for a file that fed no card's rows but still belongs to the drop)."""
     if append:
         row = conn.execute("SELECT config_snapshot FROM import_batch WHERE id = ?", (res["batch_id"],)).fetchone()
@@ -2625,7 +2625,7 @@ async def amazon_import_endpoint(
     if not orders and not items_by_order:
         if already_imported:
             # Every usable file was already imported — nothing to do, and deliberately *no new batch* (the
-            # files already have their cards). The completion screen reports it from this summary.
+            # files already have their cards). The import form's host reports it from this summary.
             return {"batch_id": None, "batches": [], "order_count": 0, "counts": {}, "instruments": [],
                     "already_imported_files": already_imported, "unrecognized_files": unrecognized}
         raise HTTPException(status_code=400, detail={
@@ -2725,7 +2725,7 @@ class FundingCategoryRequest(BaseModel):
 
 @router.get("/amazon/funding-category")
 async def get_funding_category_endpoint():
-    """The category the matched card charge is recategorized into (global setting; see the Amazon tab)."""
+    """The category the matched card charge is recategorized into (global setting; see the Amazon import form)."""
     with get_db() as conn:
         return _funding_category_info(conn)
 

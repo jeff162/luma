@@ -13,12 +13,10 @@ test('demo data is loaded and visible in the app', async ({ page }) => {
   await expect(page.getByText('Brokerage')).toBeVisible()
 })
 
-// The backend refuses imports while demo data is loaded, so every importer disables its browse control up
+// The backend refuses imports while demo data is loaded, so the importer disables its browse control up
 // front instead of refusing the import after the form is filled in.
-test('importers are disabled while demo data is loaded', async ({ page }) => {
+test('the importer is disabled while demo data is loaded', async ({ page }) => {
   const browseControl = page.getByRole('button', { name: DEMO_IMPORT_DISABLED_MESSAGE, exact: true })
   await page.goto('/import-export')
-  await expect(browseControl).toHaveAttribute('aria-disabled', 'true')
-  await page.getByRole('button', { name: 'Amazon', exact: true }).click()
   await expect(browseControl).toHaveAttribute('aria-disabled', 'true')
 })

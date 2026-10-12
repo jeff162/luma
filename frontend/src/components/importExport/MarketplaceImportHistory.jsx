@@ -6,15 +6,15 @@ import { useReconciliationViewer } from '../../contexts/ReconciliationViewerCont
 import { useAmazonImportDetailViewer } from '../../contexts/AmazonImportDetailViewerContext.jsx'
 import { ImportHistoryArchive } from './ImportHistoryArchive.jsx'
 import { BatchCoverageCell } from './importPresentational.jsx'
+import { FOCUSED_CARD_STYLE } from '../../lib/importExport/constants.js'
 import { partitionImportHistory } from '../../lib/importExport/importHistoryWindow.js'
 
 // The shared import-history card for one marketplace vendor (Amazon, and any future AliExpress/Temu-style
-// vendor), rendered both in the generic Import tab's data-sources section and on the vendor's own import
-// tab. It shows the vendor's imported files (the `↗` file ledger, Undo, the "to review" pills) plus any
-// vendor-specific row action from the registry below. Marketplace batches skip the CSV-source machinery
-// (category opt-in, account mapping, data-source assignment), so this is deliberately the lean subset the
-// generic `ImportHistorySection` toggled off for them — extracted so the two surfaces share one control.
-// Undo and the file ledger come in as handlers (the hosts own those flows via `useBatchUndo` /
+// vendor), rendered in the Import History among the other sources' rows. It shows the vendor's imported
+// files (the `↗` file ledger, Undo, the "to review" pills) plus any vendor-specific row action from the
+// registry below. Marketplace batches skip the CSV-source machinery (category opt-in, account mapping,
+// data-source assignment), so this is deliberately the lean subset of the generic `ImportHistorySection`
+// row. Undo and the file ledger come in as handlers (the host owns those flows via `useBatchUndo` /
 // `useBatchDetailPanels`); this component owns only the vendor's row layout + its vendor-specific action.
 
 // A vendor's extra per-file action, rendered as a count pill inside the per-file pills box — mirroring the
@@ -134,7 +134,8 @@ function hasImportDetailPills(vendor, summary) {
     .some(k => Number(summary[k] || 0) > 0)
 }
 
-export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpenLedger, onUndo, onMarkReviewed }) {
+// `focusedBatchIds` are the cards the history is landing on, marked the way the generic row marks its own.
+export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpenLedger, onUndo, onMarkReviewed, focusedBatchIds }) {
   const { label, batches, latestBatch } = row
   const RowAction = VENDOR_ROW_ACTION[row.vendor] || null
   const canExpand = batches.length > 0
@@ -159,8 +160,9 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
       : Number(b.unmatched_item_count)) > 0
     const showBox = showVendorAction || showDetailPills || needsReview > 0
     const boxWarn = attention > 0 || detailWarn || needsReview > 0
+    const focused = !!focusedBatchIds?.has(b.id)
     return (
-      <div key={b.id}>
+      <div key={b.id} data-focused-card={focused ? 'true' : undefined} style={focused ? FOCUSED_CARD_STYLE : undefined}>
         <div style={{ padding: '10px 16px 10px 46px', fontSize: 13, borderBottom: showBox ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 160px 90px', gap: 12, alignItems: 'start' }}>
             <div style={{ minWidth: 0 }}>
@@ -276,7 +278,7 @@ export function MarketplaceImportHistory({ row, expanded, onToggleExpand, onOpen
       {canExpand && expanded ? (
         <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
           {recentBatches.map(renderBatchCard)}
-          <ImportHistoryArchive archive={archivedBatches} renderBatch={renderBatchCard} />
+          <ImportHistoryArchive archive={archivedBatches} revealIds={focusedBatchIds} renderBatch={renderBatchCard} />
         </div>
       ) : null}
     </div>

@@ -1,6 +1,6 @@
 // summarizeImportOutcome reconciles the three different shapes the backend hands an import outcome
 // (live importResult, a saved batch record, a re-fetched batch) into one stable count set that the
-// history cards, completion screen, and undo dialog all read. The precedence + fallback arithmetic is
+// history cards, the landing notice, and the undo dialog all read. The precedence + fallback arithmetic is
 // exactly the kind of thing a backend field rename would silently break, so these pin it.
 
 import { describe, it, expect } from 'vitest'
