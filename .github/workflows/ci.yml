@@ -5,9 +5,10 @@
 # release gated on a *copy* of the checks drifts from them silently, and the copy that decides whether
 # a build ships is the worst one to let drift.
 #
-# **Two jobs, in parallel.** The unit lane needs no browser; the browser lane spends most of its wall
-# clock installing Chromium and booting two servers. Splitting them pays the setup twice and gets the
-# slower half started at minute zero rather than after the faster half finishes.
+# **Two main jobs, in parallel.** The unit lane needs no browser; the browser lane spends most of its
+# wall clock installing Chromium and booting two servers. Splitting them pays the setup twice and gets
+# the slower half started at minute zero rather than after the faster half finishes. A third, small job
+# runs the backend suite alone on the newest Python a source checkout is said to work on.
 #
 # **Why the browser lane is here at all.** It covers what nothing else does: the specs drive the app as
 # a user meets it — the dev server, a real backend against a throwaway database, a real DOM — so a
@@ -92,6 +93,27 @@ jobs:
       - name: Lint
         working-directory: frontend
         run: npm run lint
+
+  # Everything else here runs on 3.12, which is what the packaged downloads carry. A source checkout
+  # runs on whatever Python its machine has, and a distribution whose only Python is newer is exactly
+  # where a pin without wheels for it fails — at install, before a single test. Backend only: nothing in
+  # the frontend lanes depends on the interpreter.
+  backend-newest-python:
+    name: Backend on Python 3.14
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
+
+      - name: Backend tests
+        run: python -m pytest backend/tests -n auto
 
   browser:
     name: Browser suite

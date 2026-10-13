@@ -582,11 +582,11 @@ a destructive restore. See *Open*.
   the one launcher all three platforms share. The wrapper confines every macOS-specific concern to the
   macOS artifact.
 - **The containers on a network of their own, with the proxy's port published.** It would run under
-  Docker Desktop as well, and costs most of what the shape is for. The proxy is then not a loopback
-  peer, so the server would have to be told which address to believe forwarded headers from; a browser
-  on the host arrives from the bridge's gateway, and under Docker Desktop so does every other device,
-  so nothing can be read as this machine; and the name cannot be advertised from inside. The host's
-  network makes all three the LAN server's own answers.
+  Docker Desktop as well, and the proxy can still be a loopback peer there, by giving the application
+  the proxy's network namespace. What it cannot do is the name: an advertisement made inside does not
+  reach the network, so the name would have to be one the host already answers for. And a browser on
+  the host does not arrive as a loopback client, so nothing reads as this machine. Not pursued; the host's network makes both the LAN server's own
+  answers, for a Linux host.
 - **A separate nginx container serving the interface.** It was the first container shape, from before
   the backend served the interface itself. It forwarded neither the scheme nor the client address and
   added no TLS, so every request read as cleartext from the network.
@@ -595,6 +595,11 @@ a destructive restore. See *Open*.
 - **A second, windowless Windows executable** beside the console one. It avoids the console window that
   appears and closes when `--tray` hands over, at the cost of a second copy of the whole program in the
   kit.
+- **Starting again inside the same process**, when *Start* is chosen on the Windows icon. It would be
+  quick, since nothing unpacks, and whatever the process holds in memory — an unlocked vault above all —
+  would then survive a stop.
+- **A Windows kit that is a folder, not a single file**, so that no launch has to unpack. Every start
+  would be faster, and the download would be a folder of many files with the program among them.
 - **The server terminating TLS itself**, to need no proxy at all. The backend speaks plain HTTP and TLS
   belongs to the edge (`security-model.md` → *Transport security*); that is not up for trade against
   setup steps.
@@ -641,10 +646,6 @@ a destructive restore. See *Open*.
   and nothing to quit; declaring it a regular app makes LaunchServices wait for a window-server check-in
   that never comes, so the icon bounces for the length of the launch timeout and then offers only Force
   Quit. There is no setting between the two — hence the native wrapper.
-- **The build environment is pinned below Python 3.14** because one pinned native dependency publishes
-  no wheels for it, and the fallback is a source build that fails somewhere saying nothing about the
-  real cause. Lifting the ceiling is a dependency-bump project that moves several pins at once, which
-  changes the runtime under a live install. It is not a packaging change.
 - **Gatekeeper cannot be exercised in CI.** A locally built bundle is never quarantined, so the refusal
   and the "Open Anyway" path do not occur at all. Only a browser-downloaded artifact carries the flag —
   and the quarantine survives unarchiving through Finder but **not** through `unzip`, so testing with

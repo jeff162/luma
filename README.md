@@ -201,7 +201,7 @@ every effective setting and which layer supplied it.
 
 ## Running from source
 
-Running from a checkout needs Python 3.12 or 3.13 and Node.js 22.12+, and is the arrangement for working *on*
+Running from a checkout needs Python 3.12 or newer and Node.js 22.12+, and is the arrangement for working *on*
 Luma rather than with it. `CONTRIBUTING.md` has the setup, the useful checks and the project
 conventions.
 
@@ -222,10 +222,8 @@ which covers Raspberry Pi OS bookworm and everything after it; the x86-64 one is
 distribution. The ARM64 download is also **64-bit only** — a 32-bit Raspberry Pi OS is a different
 architecture and has no build. Running from source has none of these restrictions.
 
-Python 3.12 is what Luma is built and tested on, and 3.13 is expected to work. **3.14 is not
-supported:** the pinned `pydantic-core` publishes no wheels for it, so installing the dependencies
-would fall back to compiling from source. (This applies to running from source; the downloads carry
-their own runtime.)
+Python 3.12 is what Luma is built on, and the test suite also runs on 3.14. (This applies to running
+from source; the downloads carry their own runtime.)
 
 ## Tech stack
 

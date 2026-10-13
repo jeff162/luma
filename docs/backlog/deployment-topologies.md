@@ -84,12 +84,9 @@ been seen working yet.
     this-computer-only reading has been seen rendered;
   - that a signed-out page load no longer leaves an `[auth] rejected /api/auth/preferences` line in the
     journal;
-  - the responder beside the operating system's own on Windows and macOS as the server;
+  - the responder beside the operating system's own on macOS as the server;
   - a server whose host name equals `MDNS_NAME`, which is meant to pass as the same machine rather than
-    be refused as a conflict;
-  - Windows as the server from a real build: the proxy beside the executable started and stopped by it,
-    the notification-area icon's *Open*, *Stop*, *Start* and *Exit*, the dialog when a start fails, and the entry
-    actually firing at sign-in. The proxy as a child has run on Linux only.
+    be refused as a conflict.
 
 ## Shape B — desktop: step 3's remainder
 

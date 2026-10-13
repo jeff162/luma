@@ -71,20 +71,20 @@ venv_package_hint() {
 }
 
 # The interpreter that *builds* the venv is chosen by version, not by taking whatever `python3` points
-# at. The pinned dependencies publish no wheels for 3.14 — `pydantic-core` above all — so a venv built
-# from a newer default Python installs nothing and fails partway through a source build with an error
-# that says nothing about the real cause. Explicitly-named versions are tried first so a machine whose
-# default has moved on still gets a working environment instead of a diagnosis.
+# at. The pinned dependencies need 3.12 or newer, and a venv built from an older default Python fails
+# partway through installing them with an error that says nothing about the real cause. Explicitly-named
+# versions are tried first so a machine whose default is older, with a newer Python installed beside it,
+# still gets a working environment instead of a diagnosis.
 #
 # Only venv creation is pinned. `SYSTEM_PYTHON` above just opens a socket to test a port, and any
 # interpreter does that.
 python_is_supported() {
-  "$1" -c 'import sys; raise SystemExit(0 if (3, 12) <= sys.version_info < (3, 14) else 1)' >/dev/null 2>&1
+  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1
 }
 
 select_venv_python() {
   local candidate
-  for candidate in python3.12 python3.13 python3 python; do
+  for candidate in python3.12 python3.13 python3.14 python3 python; do
     if command -v "$candidate" >/dev/null 2>&1 && python_is_supported "$candidate"; then
       echo "$candidate"
       return 0
@@ -103,9 +103,8 @@ if ! venv_is_healthy; then
   cd "$BACKEND_DIR"
   if ! VENV_CREATOR="$(select_venv_python)"; then
     echo
-    echo "No supported Python was found. Luma needs Python 3.12 (3.13 also works); 3.14 is not"
-    echo "supported, because the pinned dependencies publish no wheels for it."
-    echo "Tried: python3.12, python3.13, python3, python."
+    echo "No supported Python was found. Luma needs Python 3.12 or newer."
+    echo "Tried: python3.12, python3.13, python3.14, python3, python."
     exit 1
   fi
   echo "Using $VENV_CREATOR ($("$VENV_CREATOR" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'))"

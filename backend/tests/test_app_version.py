@@ -96,7 +96,9 @@ def test_a_bump_leaves_dependency_pins_alone(sandboxed_declarations):
     version_sources.set_version("9.8.7")
     after = sandboxed_declarations["PYPROJECT"].read_text()
 
-    assert "fastapi==0.115.0" in after
+    pins = [line for line in before.splitlines() if "==" in line]
+    assert pins
+    assert [line for line in after.splitlines() if "==" in line] == pins
     assert after.count("9.8.7") == 1
     assert before.count("\n") == after.count("\n")
 

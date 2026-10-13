@@ -1,22 +1,22 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
 plaid-python==38.4.0
-pydantic==2.8.2
-python-dotenv==1.0.1
-python-multipart==0.0.9
+pydantic==2.14.1
+python-dotenv==1.2.4
+python-multipart==0.0.32
 itsdangerous==2.2.0
 # The vault's primitives (X25519, AES-GCM, HKDF, scrypt) and the encrypted backup format both sit on
 # this. Its wheels vendor OpenSSL, so the pin decides which OpenSSL every packaged kit ships with —
 # which makes it the one dependency where being current is a property of the shipped artifact rather
 # than of the build environment.
-cryptography==50.0.1
+cryptography==50.0.2
 # WebAuthn verification for passkey sign-in (`services/app_passkey.py`). Only the login perimeter uses
 # it: the vault's passkeys verify no assertion by design, so nothing in `crypto_service` imports this.
-webauthn==3.0.0
+webauthn==3.0.1
 # Verifies TLS against the operating system's own certificate store instead of a CA bundle pinned here.
 # A runtime dependency rather than a packaging one: a frozen macOS build has no CA file on disk at all,
 # because the OpenSSL it carries looks where the *build* machine kept one.
-truststore==0.10.4
+truststore==0.10.5
 segno==1.6.6
 # Downscales attached receipt photographs once, at ingest (services/documents.py). Bundles cleanly
 # into the PyInstaller kits, so the standalone builds are unaffected.
@@ -24,7 +24,7 @@ Pillow==12.3.0
 # Reads the text layer a digital PDF already carries, so an attached invoice is searchable without
 # OCR (tier 1 in docs/backlog/transaction-attachments.md). Pure Python with no dependencies of its
 # own, which is why it is preferred over the layout-aware alternatives.
-pypdf==6.7.0
+pypdf==6.20.1
 # Answers for the server's name on the local network in server mode (backend/mdns.py). The operating
 # system's own responder only publishes the machine's host name, and this is what makes a second name
 # work the same way on Windows, macOS and Linux. Imported only when a server starts.
