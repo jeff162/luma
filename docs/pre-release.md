@@ -86,8 +86,7 @@ green test suite:
   cell per line, with each amount under the item it prices. The `text/html` flavour is taken instead when
   the box is left unedited. A saved `.eml` is accepted too and converted at ingest.
 - **Document text reaches the plain search box**, not only `doc:`, with matched rows flagged so the
-  ledger can show *why* they came back. The prefix-only rule was reversed on first use — see the backlog
-  file, which records it as a don't-re-impose.
+  ledger can show *why* they came back.
 - **The ledger's document marker opens documents**, rather than only counting them.
 
 The **Help topic** (`transaction-documents`) is written — filed under a new *Transaction detail* index

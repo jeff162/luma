@@ -103,6 +103,11 @@ _BUSY_TIMEOUT_SECONDS = 15
 def get_db(db_path: str | None = None, *, handed_between_threads: bool = False):
     """Open a connection for the length of the block, committing on the way out.
 
+    Nothing written inside the block is visible to another request until it exits. A value another request
+    has to see while a long operation is still running — a progress marker, a lock, a heartbeat — is
+    therefore written through its own short `get_db()` before the long block opens, and cleared in a
+    `finally` after it.
+
     `handed_between_threads` is for a connection held open across the steps of a streamed response body.
     Each step of a sync generator runs on whichever worker thread is free, so the thread that opens the
     connection is not reliably the one that reads the next row or closes it, and sqlite3 refuses a

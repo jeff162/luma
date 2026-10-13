@@ -13,7 +13,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Investigation Strategy](agent-profile.md#investigation-strategy)
 - [Implementation Bias](agent-profile.md#implementation-bias)
 - [Verification And Tests](agent-profile.md#verification-and-tests)
-- [Where Durable Project State Belongs](agent-profile.md#where-durable-project-state-belongs)
+- [What Belongs Here](agent-profile.md#what-belongs-here)
 
 ## [Architecture](architecture.md)
 
