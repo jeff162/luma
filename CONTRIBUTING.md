@@ -96,7 +96,7 @@ A reasonable opening instruction:
 that arrives as ambient background gets treated as background. Naming the files in the prompt is what
 turns them from context into a step.
 
-- **[CLAUDE.md](CLAUDE.md)** is the one Claude Code picks up automatically. It carries the hard rules
+- **[CLAUDE.md](CLAUDE.md)** is the one Claude Code picks up automatically. It carries the hard rule
   and a routing index into `docs/`.
 - **[AGENTS.md](AGENTS.md)** is the same guidance in the tool-agnostic open-standard file, for
   assistants that read it. Claude Code does **not** load it automatically, so name whichever your
@@ -314,17 +314,10 @@ side is opt-in, because a lane that has to be remembered separately stops being 
 being maintained; the smoke lane is the deliberate exception, for the reason given under *The smoke
 lane* below.
 
-**The line that matters is headless versus headed**, not unit versus browser. A headless Playwright
-run is a test runner: it boots its own stack on its own ports, touches no real data, and reports a
-structured result. A *headed* session is a person watching a screen, and it is where this has gone
-wrong before — long interactive sessions, dev servers left running, a conclusion drawn confidently
-from one screenshot.
-
-That line is load-bearing for **agent contributors**, whose hard rule (`AGENTS.md` / `CLAUDE.md`)
-sits exactly on it: run the headless suites freely, including to check your own work, and ask before
-anything headed — while saying what the headed session would settle. The corollary is the half that
-gets forgotten: **the unit lanes are expected too**, and skipping vitest after a frontend change
-ships it behind nothing but lint and a build.
+**A headless Playwright run is a test runner**, not a browser session: it boots its own stack on its
+own ports, touches no real data, and reports a structured result. **The unit lanes are expected too** —
+skipping vitest after a frontend change ships it behind nothing but lint and a build. Where no lane can
+judge a result, such as how a screen looks, a person checking it once is a valid test.
 
 ### The smoke lane, and the gap it closes
 

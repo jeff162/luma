@@ -27,6 +27,11 @@ instruction and fix the drift.
 - Check a fact before writing it down, because a confident sentence in a doc or comment stops the next
   reader from checking: grep for an invariant or a rendered behaviour, and measure a quantity.
 
+- When something will not work after a couple of attempts, stop and tell the user what was tried and
+  what happened, so they can decide whether to fix something themselves, take the task over, or have the
+  agent keep trying. Repeated failed attempts cost time and credits, and the user can often clear the
+  block quickly.
+
 - If a question implies an audit, do the whole audit before answering, because findings surfaced one per
   turn each cost the user a round trip.
 
@@ -50,6 +55,11 @@ instruction and fix the drift.
 
 - The user works in the app while a session is open, so figures from the live ledger are comparable
   only within a single run.
+
+- To track down a bug, browser tools are there to be used. Start with the cheapest thing that can
+  reproduce it (a service call, then a headless spec, then a step-by-step browser session), because each
+  step of a driven session costs a call and a large result. Close any browser or dev server the session
+  opened.
 
 - Playwright's WebKit build is installed, so a bug reported in a browser you lack can be reproduced
   here; propose that in the first round and reproduce the exact click sequence before theorizing.
@@ -115,6 +125,11 @@ A small, local fix gets no new test by default: run the existing suite and lint.
 writing a test apply once one has earned its place (`collaboration-notes.md` → *Testing*).
 
 ### Running
+
+- To verify a change, run the tests that cover it; `scripts/check_backend_and_frontend.sh` is the whole
+  gate (backend, lint, vitest, headless browser suite). Where no test can judge the result, such as how
+  a screen looks, hand it to the user and say what to click and what correct looks like: a one-time
+  check by the user is a valid test and costs less than a driven browser session.
 
 - Investigate a red run before re-running it, because a green re-run destroys the state that explained
   it. The gate writes every run to `data/check-logs/` and prints the path; check the failure against

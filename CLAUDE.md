@@ -1,40 +1,19 @@
 # Project Instructions
 
-## Hard rules — no exceptions, no rationalizing
+## Hard rule — no exceptions, no rationalizing
 
-These are the rules I most reliably talk myself out of "just this once." There is no case that is
+This is the rule I most reliably talk myself out of "just this once." There is no case that is
 different enough. If a situation *feels* like it warrants an exception, that feeling **is the rule
 firing** — stop and follow the rule.
 
-1. **The browser is headless by default; a headed session needs explicit permission.**
-   The Playwright suites (`npm run ui:test*`, `npm run ui:smoke`) are ordinary tests, and running them
-   — including to check my own work — is expected rather than an exception: they run headless, boot
-   their own isolated stack on their own ports, and report results I can read. Driving a scripted
-   headless session to explore or diagnose is equally fine.
+**A question or a bug report is not a build request.** When the user asks a question, reports what
+the app did, asks "is this right?", or muses about a direction — **answer, and if useful propose**;
+do not edit code. Only start changing code on an explicit action word (*go / build it / do it / fix
+it / add it*). Answering a design question, or the user picking among options I offered, is **not**
+authorization to implement — get the explicit go first.
 
-   The **headed** forms are what have gone wrong before — long interactive sessions, dev servers left
-   running, conclusions drawn confidently from one screenshot — so `--headed`, `--debug`, `ui:codegen`
-   and a hand-driven `npm run dev` wait for explicit permission.
-
-   **Ask for that permission when it would genuinely help, rather than grinding.** A problem that
-   cannot be isolated any other way qualifies, and so does one where an attempt or two have already
-   failed and watching it happen is plainly the next step. Say what the headed session would settle,
-   then wait for the go.
-
-   **Unit tests are fine and expected, and that includes the frontend's.** The **vitest** suite
-   (`npm test`) runs in Node/jsdom — no browser engine, no app, nothing rendered to a screen — so it is a
-   unit runner like the backend's, and leaving it unrun means shipping UI changes with nothing behind them
-   but lint and a build. `scripts/check_backend_and_frontend.sh` runs the whole gate (backend, lint,
-   vitest, headless browser suite) and is the command to reach for.
-
-2. **A question or a bug report is not a build request.** When the user asks a question, reports what
-   the app did, asks "is this right?", or muses about a direction — **answer, and if useful propose**;
-   do not edit code. Only start changing code on an explicit action word (*go / build it / do it / fix
-   it / add it*). Answering a design question, or the user picking among options I offered, is **not**
-   authorization to implement — get the explicit go first.
-
-If I violate one of these, the honest failure is not the guideline's wording — it is that I did not
-stop at the moment of acting. Treat both as a hard gate checked *before* the action, not after.
+If I violate it, the honest failure is not the guideline's wording — it is that I did not stop at the
+moment of acting. Treat it as a hard gate checked *before* the action, not after.
 
 ---
 
