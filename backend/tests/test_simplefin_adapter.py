@@ -484,8 +484,11 @@ class SimpleFinTransportTests(unittest.TestCase):
                 stamps.append(time.monotonic())
 
         gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        # Most of the interval rather than all of it: the pacing spaces the moments requests are *sent*,
+        # and these stamps are taken as each call returns, so a millisecond of difference in what follows
+        # a request reads as a short gap. Back-to-back requests are apart by none of it.
         for gap in gaps:
-            self.assertGreaterEqual(round(gap, 3), 0.05,
+            self.assertGreaterEqual(gap, 0.04,
                                     f"requests were {gap:.3f}s apart — the CDN limit is on rate, not count")
 
     def test_the_shipped_interval_is_a_real_wait(self):
