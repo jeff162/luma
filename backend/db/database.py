@@ -607,7 +607,10 @@ def _seed_rule_cleanup_data(conn):
     try:
         _backfill_rule_last_effect_date(conn)
     except Exception as exc:  # noqa: BLE001 — best-effort seed; the columns are what must land
-        log_info(f"[db] rule last_effect_date backfill skipped ({exc}); will populate on next categorization")
+        log_info(
+            f"[db] rule last_effect_date backfill skipped ({exc}); will populate on next categorization",
+            keep_in_file=True,
+        )
 
 
 def _backfill_rule_last_effect_date(conn):
@@ -2303,7 +2306,9 @@ def _remove_stored_source_restatements(conn):
     )]
     done = remove_batch_restatements(conn, batch_ids)
     if done["rows"]:
-        log_info(f"[db] removed {done['rows']} restated rows from {done['cards']} duplicate reports")
+        log_info(
+            f"[db] removed {done['rows']} restated rows from {done['cards']} duplicate reports", keep_in_file=True,
+        )
 
 
 @migration(72)
@@ -2412,10 +2417,10 @@ def run_migrations(conn):
         return
     for version in sorted(MIGRATIONS):
         if version > current:
-            log_info(f"[db] applying migration v{version}...")
+            log_info(f"[db] applying migration v{version}...", keep_in_file=True)
             MIGRATIONS[version](conn)
             set_db_version(conn, version)
-    log_info(f"[db] database is now at version {CURRENT_VERSION}")
+    log_info(f"[db] database is now at version {CURRENT_VERSION}", keep_in_file=True)
 
 
 def get_db_instance_id(conn) -> str:
@@ -3544,7 +3549,7 @@ def init_db(db_path: str | None = None):
         if is_fresh_db:
             _alphabetize_top_level_category_groups(conn)
             set_db_version(conn, CURRENT_VERSION)
-            log_info(f"[db] created new database at schema version {CURRENT_VERSION}")
+            log_info(f"[db] created new database at schema version {CURRENT_VERSION}", keep_in_file=True)
         else:
             # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT
             # EXISTS`, so structural changes belong in registered migrations, which run here.

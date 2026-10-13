@@ -14,6 +14,8 @@ import userEvent from '@testing-library/user-event'
 vi.mock('../../lib/api.js', () => ({
   api: {
     signInPasskeyParams: vi.fn(),
+    // The screen asks whether the server has a certificate to hand out; here it has none.
+    getProxyCertificate: () => Promise.resolve({ available: false }),
     login: vi.fn(),
     verifyTwoFactor: vi.fn(),
   },

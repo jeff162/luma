@@ -27,14 +27,13 @@ Two other boundaries, so nothing is stated twice:
 | **LAN server** | several devices | the backend, behind a TLS-terminating proxy or directly | loopback behind the proxy, or the network | on |
 | **Containers** | one machine or a LAN | an nginx container proxying `/api` | the published ports | either |
 
-They are the **same application**. What differs is only how uvicorn is launched, whether something
-wraps it, and which security profile is in force.
+They are the **same application**. What differs is only how uvicorn is launched and whether something
+wraps it.
 
 **Standalone versus networked is detected per request, not configured.** The same install answers as
 loopback from its own machine and as networked from another, so there is no stored mode to get wrong —
-and no mode to set correctly either. What *is* declared is the forward-looking question of whether a
-data source will be connected, because standing up HTTPS is not instantaneous and the requirement
-cannot first be discovered at connect time. See `security-model.md` → *Transport security*.
+and no mode to set correctly either. Administration → *Network access* states the reading for the
+browser in hand. See `security-model.md` → *Transport security*.
 
 ## Desktop
 
@@ -100,7 +99,8 @@ harness, which captures them precisely to explain a failed launch.
 of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather than a
 redirect, so the terminal, the systemd journal and `docker logs` keep everything they received before. It
 holds warnings and errors, a crashed request's traceback included, a line each time the server starts, a
-line before and after each database compaction, and
+line before and after each database compaction, the rare events that change what the installation is (a
+database created, a migration applied, the database location adopted after a move), and
 access lines only for requests that failed; successful requests stay out, or routine polling would soon
 rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
 uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
@@ -162,23 +162,84 @@ The second column is a real configuration, not a degraded one: it is the least s
 a ledger fed by imported files on a network its owner trusts it gives up little. What it gives up is
 enforced and explained by the app as it is met — `security-model.md` → *Transport security* has the
 rule and the reasoning — so nothing here has to be remembered at install time. Desktop is never on the
-network: outside server mode the address setting is not read.
+network: outside server mode the address setting is not read. A start that is given a widening
+address it will not use — `FRONTEND_HOST` outside server mode, or `BACKEND_HOST`, which belongs to a
+source checkout's scripts — says so on the console, since it would otherwise start normally and simply
+not answer on the network.
 
-**The proxy and the supervisor are not shipped.** No Caddyfile and no systemd unit are in the
-repository; the operator writes both. What they have to satisfy, the first three for the proxied form
-only:
+**Each device has to trust the proxy's certificate once, and the server hands it out.** Caddy issues
+the server's certificate from an authority of its own, which no device trusts until its root is
+installed there. The server fetches that root from Caddy's admin API on the same machine and offers it
+at `/api/app/proxy-certificate/download`, before sign-in, since a device needs it before a password can
+safely be typed. The fingerprint is for the first visit only — the one time the certificate arrives over
+a connection nothing vouches for — and the place to read it without going through that connection is
+the server's own console:
 
-- **A TLS-terminating reverse proxy on the same machine** (Caddy is the assumed one) that passes every
-  request to the port above. It serves no files: the process serves the interface as well as the API.
+```
+luma --certificate-fingerprint
+```
+
+It prints the SHA-256 fingerprint and the SHA-1 one, because the Windows certificate viewer shows only
+the latter, as *Thumbprint*. Administration → **Server certificate** also takes a fingerprint read off
+another device and says whether it is this certificate's; that check is offered there and not on the
+sign-in screen, since only a page reached over an already-trusted connection can be believed about it.
+
+The server remembers the first fingerprint it sees. Caddy mints a new authority if its data directory is
+lost, and a fingerprint that no longer matches is how that is told apart from an attack or a
+misconfiguration: every device needs the new certificate, and an administrator accepts the change — raised as a task
+that stands until they do. In the interface this is one panel in two places: a link on the sign-in
+screen, for a device that trusts nothing yet, and Administration → **Server certificate**, which also
+carries the acceptance. Neither appears on an installation with no proxy certificate to hand out.
+
+**Installing one on Linux.** The proxy's site file and the supervisor's unit are printed by the build
+itself, from its own configuration, because two things in them have to agree with it exactly: the proxy
+issues its certificate for the name in its site file, which has to be the name the server advertises,
+and the unit names an executable and a user. Run as the user the server should run as, from the folder
+the build was unpacked into:
+
+1. **Configure it**, in `.env` beside the executable: `SESSION_COOKIE_SECURE=true`, and `MDNS_NAME` or
+   `FRONTEND_PORT` if the defaults (`luma`, `8010`) are not wanted. The cookie setting is deliberately
+   not derived from anything — see `security-model.md` → *Considered and rejected*.
+2. **Install Caddy** from the distribution's packages, which also sets it to start at boot.
+3. **Give Caddy its site file** — this replaces the placeholder one the package installs:
+
+   ```
+   ./luma --caddyfile | sudo tee /etc/caddy/Caddyfile
+   sudo systemctl reload caddy
+   ```
+
+4. **Install the unit and start it:**
+
+   ```
+   ./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now luma
+   ```
+
+5. **Read the address** from `journalctl -u luma`, which carries the same line a terminal start prints,
+   and open it from another device. That device's first stop is the certificate link on the page.
+
+A firewall on the server has to admit TCP 443 for the proxy and UDP 5353 for the name. Changing
+`MDNS_NAME` or `FRONTEND_PORT` later means repeating step 3, and moving the folder means repeating step
+4. `--systemd-unit` refuses to run under `sudo`, since the unit would name root and the databases would
+be created as root's.
+
+What the two files rely on, for a proxy or supervisor other than these:
+
+- **The proxy terminates TLS and passes every request to the port.** It serves no files: the process
+  serves the interface as well as the API.
 - **The proxy states the scheme and the client address** (`X-Forwarded-Proto`, `X-Forwarded-For`), which
   Caddy does unasked. uvicorn honors them from a loopback peer only, which is where the proxy is;
   without them `request.url.scheme` reports the internal HTTP hop and every HTTPS-conditional behavior
   reads the deployment as cleartext.
-- **Set `SESSION_COOKIE_SECURE=true`** at the deployment edge. It is deliberately not derived from the
-  security profile — see `security-model.md` → *Considered and rejected*.
-- **A supervisor** (systemd) keeps the process alive across reboots, and stops it with SIGTERM, which is
-  a graceful stop (see *Stopping it*).
+- **The supervisor stops the process with SIGTERM**, which is a graceful stop (see *Stopping it*), and
+  restarts it on failure. A start that is refused — a busy port, a name another machine answers for —
+  exits nonzero with the reason in the journal, and is retried.
+- **The unit passes `--server`**, so the service is a server whatever `.env` says.
 - **SQLite is adequate at household concurrency.** No database change is needed for this shape.
+
+Windows and macOS can be the server as well — the mode, the name and Caddy are the same there — but
+starting at boot is left to the operator on both.
 
 **A source checkout can serve a network the same way, without the name.** The backend serves the built
 interface (`frontend/dist`) on `BACKEND_PORT` as well as the API, and listens to its own machine unless
@@ -287,6 +348,15 @@ keeps it beside the executable, installed uses the per-OS user-data directory. `
 which artifact is which; `architecture.md` → *Packaged builds* covers the mechanism. The consequence
 for an operator is only this: on a portable copy the folder *is* the installation, and moving it moves
 the data.
+
+**The control database records where the financial database is, and startup keeps that record true.**
+Requests are routed by the record while startup readies the configured database, so the two must not
+disagree — and they would after a portable folder is moved, renamed or copied, or a control database is
+carried to another installation. A packaged build therefore adopts its configured location at every
+start. A source checkout does the same when the recorded file is gone, but leaves a recorded path that
+still names a real file alone and logs a warning naming both, since switching would put an installation
+that has been running on the recorded database onto an empty one; `DB_PATH` is how to say which is
+meant.
 
 ## Restore is a destructive operation
 
@@ -490,9 +560,6 @@ a destructive restore. See *Open*.
 
 ## Open
 
-- **The LAN-server shape is half built.** Server mode, its network name and the transport rule exist;
-  the proxy configuration, the systemd unit, the install sequence and the certificate hand-out do not.
-  → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
 - **Containers cannot connect a data source.** The compose file publishes the backend port directly and
   its nginx forwards neither the scheme nor the client address, so no request there can be read as
   protected. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)

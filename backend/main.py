@@ -54,9 +54,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend import app_config, app_log_file, runtime_config, spa
+from backend import app_config, app_log_file, runtime_config, spa, transport
 from backend.app_logging import log_warning
-from backend.db.control_database import auth_required, get_user_by_id, init_control_db
+from backend.db.control_database import (
+    auth_required, get_user_by_id, init_control_db, reconcile_workspace_db_path,
+)
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.session_signing import ClockSkewTolerantSessionMiddleware, ClockSkewTolerantSigner
 from backend.services import crypto_service, sign_in_sessions
@@ -186,6 +188,7 @@ def _not_authenticated(reason: str, request: Request) -> JSONResponse:
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        transport.note_request(request)
         session = request.scope.get("session")
         # A valid signature is not enough: the session also has to still exist (`sign_in_sessions`). Checked
         # before anything reads the session — the public paths included, since `/api/auth/status` reports
@@ -227,6 +230,10 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             "/api/auth/passkey/params",
             "/api/auth/passkey/login/begin",
             "/api/auth/passkey/login/complete",
+            # What a device needs in order to trust the connection at all, so it cannot wait for a
+            # sign-in made over that connection. A root certificate is public by nature.
+            "/api/app/proxy-certificate",
+            "/api/app/proxy-certificate/download",
         }
         if request.url.path in public_paths or not request.url.path.startswith("/api/"):
             return await call_next(request)
@@ -273,6 +280,9 @@ async def lifespan(app: FastAPI):
     # Before `init_db`, so a start that fails there is kept and counted for the Tasks reminder — and left
     # attached when it does, since uvicorn reports the failure only after this function has raised.
     app_log_file.install()
+    # Before anything is routed by it: requests open the database the control DB records, and this is
+    # what keeps that the one being readied on the next line.
+    reconcile_workspace_db_path()
     # The control DB is already initialized (configuration was resolved from it below); this readies the
     # financial database so no request handling starts against partial state.
     init_db()

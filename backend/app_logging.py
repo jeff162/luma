@@ -13,7 +13,14 @@ that failed after the work around it succeeded is the usual case — and it reac
 the Tasks reminder for administrators (`app_log_file.py`). `log_warning` is something the server coped
 with, or that is already reported where a user will see it; it stays in the file. An info line stays out of
 the file unless it is logged with `keep_in_file` — for work the server undertakes on its own that a reader
-diagnosing a stall would need to line up against it, such as compacting the database.
+diagnosing a stall would need to line up against it, such as compacting the database, and for the rare
+events that change what the installation is: a migration, a database created, a location adopted.
+
+**Kept does not depend on what the console shows.** How much reaches the console is the launcher's
+choice — the packaged build runs uvicorn at warning level, the dev server at info — and an info line the
+console drops falls back to a plain `print`, which no handler sees. A line asked to be kept is therefore
+also sent to a logger of its own, enabled at info whatever the console's level, which reaches the file
+and nothing else.
 """
 
 import logging
@@ -22,6 +29,12 @@ import traceback
 
 # The record attribute `app_log_file` reads to keep a line below WARNING.
 KEEP_IN_FILE_ATTR = "keep_in_file"
+
+
+# Where a kept line goes when the console's logger would have dropped it. It has no handler of its own:
+# the record propagates to the root, where the file's handler sits once `app_log_file.install` has run.
+_KEPT_LOGGER = logging.getLogger("luma.kept")
+_KEPT_LOGGER.setLevel(logging.INFO)
 
 
 def _resolve_logger(level: int, logger_name: str | None = None) -> tuple[logging.Logger, bool]:
@@ -43,6 +56,8 @@ def log_message(level: int, message: str, logger_name: str | None = None,
         print(f"{logging.getLevelName(level)}: {message}")
         if exc_info is not None:
             traceback.print_exception(exc_info, file=sys.stdout)
+        if keep_in_file:
+            _KEPT_LOGGER.log(level, message, exc_info=exc_info, extra={KEEP_IN_FILE_ATTR: True})
         return
     logger.log(level, message, exc_info=exc_info, extra={KEEP_IN_FILE_ATTR: True} if keep_in_file else None)
 

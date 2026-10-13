@@ -10,6 +10,7 @@ import {
   PASSWORD_MISMATCH, passwordIssue, passwordMismatchShown, passwordPolicyHelpText, passwordShortfall,
 } from '../lib/passwordPolicy.js'
 import TransientTextInput from './TransientTextInput.jsx'
+import { ServerCertificateLink } from './ServerCertificate.jsx'
 import { FieldIssue, PasswordInput, PasswordManagerUsername, Tooltip } from './ui.jsx'
 
 const s = {
@@ -21,9 +22,16 @@ const s = {
     padding: 24,
     background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--bg)), var(--bg))',
   },
-  card: {
+  // The card and whatever sits under it, as one centred column. The page is a flex row, so a sibling of
+  // the card would otherwise land beside it.
+  column: {
     width: '100%',
     maxWidth: 420,
+    display: 'grid',
+    justifyItems: 'center',
+  },
+  card: {
+    width: '100%',
     background: 'var(--surface)',
     border: '1px solid var(--border)',
     borderRadius: 16,
@@ -218,6 +226,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
 
   return (
     <div style={s.page}>
+      <div style={s.column}>
       <form ref={formRef} onSubmit={formSubmit} style={s.card}>
         <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>{APP_NAME}</div>
         <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.5 }}>
@@ -369,6 +378,8 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
           </button>
         )}
       </form>
+      <ServerCertificateLink />
+      </div>
     </div>
   )
 }

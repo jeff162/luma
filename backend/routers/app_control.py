@@ -20,13 +20,13 @@ signed-in user to take the service away from everyone else.
 from typing import Callable
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from backend.authorization import require_admin_or_local
 from backend.db.database import get_db
 from backend.runtime_config import bundled_license_path, third_party_notices
-from backend.services import update_check
+from backend.services import proxy_certificate, update_check
 from backend.services.storage_summary import storage_summary
 
 router = APIRouter()
@@ -68,6 +68,42 @@ def shutdown_app():
         )
     _shutdown_handler()
     return {"stopping": True}
+
+
+@router.get("/proxy-certificate")
+def read_proxy_certificate():
+    """Whether a TLS proxy on this machine has a root certificate to hand out, its fingerprint, and
+    whether it is the one this installation has on record.
+
+    Public, with the download below: a device needs the certificate before its connection is trusted,
+    which is before a password can safely be typed on it. Nothing here is secret — a root certificate is
+    what a server shows every client. See `services/proxy_certificate.py`."""
+    return proxy_certificate.describe()
+
+
+@router.get("/proxy-certificate/download")
+def download_proxy_certificate():
+    try:
+        certificate = proxy_certificate.fetch()
+    except proxy_certificate.ProxyCertificateUnavailable:
+        raise HTTPException(status_code=404, detail="No reverse proxy on this server has a certificate to offer.")
+    # The type is what lets a device offer to install the file rather than display it.
+    return Response(
+        certificate.pem,
+        media_type="application/x-x509-ca-cert",
+        headers={"Content-Disposition": 'attachment; filename="root-certificate.crt"'},
+    )
+
+
+@router.post("/proxy-certificate/accept", dependencies=[Depends(require_admin_or_local)])
+def accept_proxy_certificate():
+    """Take the proxy's current root certificate as the expected one, after it changed. An
+    administrator's statement that the change was theirs — and that each device is getting the new one."""
+    try:
+        proxy_certificate.accept(proxy_certificate.fetch())
+    except proxy_certificate.ProxyCertificateUnavailable:
+        raise HTTPException(status_code=404, detail="No reverse proxy on this server has a certificate to offer.")
+    return proxy_certificate.describe()
 
 
 def bundled_license_available() -> bool:

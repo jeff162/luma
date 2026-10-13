@@ -18,11 +18,13 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import SectionListPage, { useSectionParam } from '../components/SectionListPage.jsx'
 import ConfigurationSection from '../components/administration/ConfigurationSection.jsx'
 import ErrorLogSection from '../components/administration/ErrorLogSection.jsx'
-import IntendedUsageSection from '../components/administration/IntendedUsageSection.jsx'
+import NetworkAccessSection from '../components/administration/NetworkAccessSection.jsx'
 import { AccountSecuritySection } from '../components/administration/AccountSecuritySection.jsx'
 import UserAdminSection from '../components/administration/UserAdminSection.jsx'
 import BackupRestoreSection from '../components/administration/BackupRestoreSection.jsx'
 import DeveloperOptionsSection from '../components/administration/DeveloperOptionsSection.jsx'
+import { ServerCertificateSection } from '../components/ServerCertificate.jsx'
+import { useServerCertificate } from '../lib/serverCertificate.js'
 
 const ERROR_LOG_SECTION = 'errorLog'
 
@@ -32,18 +34,16 @@ export default function Administration() {
     canAdminister,
     currentUser,
     passwordPolicy,
-    securityProfile,
-    dataProviderIntended,
     developerOptionsEnabled,
     activeLocalProfile,
-    setSecurityProfile,
     setPasswordPolicy,
-    setDataProviderIntended,
   } = useAppSession()
   // Read here rather than inside the section so its refresh can sit on the section's title, where every
   // refresh control goes. It still reads only while the section is open.
   const requestedSection = useSectionParam()
   const errorLog = useErrorLog(canAdminister && requestedSection === ERROR_LOG_SECTION)
+
+  const [serverCertificate, setServerCertificate] = useServerCertificate()
 
   if (!canAdminister) return <Navigate to="/settings" replace />
 
@@ -83,20 +83,18 @@ export default function Administration() {
       ),
     },
     {
-      key: 'intendedUsage',
-      title: 'Intended usage',
-      description: `How ${APP_NAME} will be run and whether a bank or data provider will be connected which involves secrets that need protecting.`,
-      help: <FeatureExplainer topic="data-and-backups" placement="bottom-left" />,
-      content: (
-        <IntendedUsageSection
-          authEnabled={authEnabled}
-          securityProfile={securityProfile}
-          dataProviderIntended={dataProviderIntended}
-          passwordPolicy={passwordPolicy}
-          onProfileChange={value => setSecurityProfile?.(value)}
-          onDataProviderChange={value => setDataProviderIntended?.(value)}
-        />
-      ),
+      key: 'networkAccess',
+      title: 'Network access',
+      description: `How this browser reaches ${APP_NAME}, which devices can open this installation, and what sign-in protection keeps out.`,
+      help: <FeatureExplainer topic="running-a-server" placement="bottom-left" />,
+      content: <NetworkAccessSection authEnabled={authEnabled} />,
+    },
+    // Only where a reverse proxy on the server has a certificate to hand out.
+    serverCertificate && {
+      key: 'serverCertificate',
+      title: 'Server certificate',
+      description: 'The certificate each computer installs so its browser trusts this server.',
+      content: <ServerCertificateSection certificate={serverCertificate} onChange={setServerCertificate} />,
     },
     {
       key: 'configuration',

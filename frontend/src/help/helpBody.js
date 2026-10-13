@@ -18,6 +18,11 @@ export const HELP_BODY_CSS = `
      targets: nothing else styles anchors app-wide, so a routed <Link> would otherwise fall back to the
      browser's default blue-and-visited-purple while the same link in the viewer drew in the accent. */
   .help-body a { color: var(--accent2); }
+  /* Commands to be copied. Scrolled sideways rather than wrapped, since a wrapped command reads as two. */
+  .help-body pre {
+    margin: 8px 0 12px; padding: 10px 12px; overflow-x: auto; font-size: 12px; line-height: 1.5;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  }
   /* Index tables (the parts-of-the-app tour, the page hubs). The first column is the thing being named.
      It is capped and wraps, because a hub names whole phrases there and an unwrapped one squeezed the
      explanation against the right edge; the wrapper is what keeps a narrow window scrolling the table

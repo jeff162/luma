@@ -522,9 +522,20 @@ a passkey is a rule it applies to the origin it was given, so a browser on the s
 the machine's network name over HTTP is a loopback client and still cannot run a ceremony. Nothing is
 granted on that reading; it only lets a refusal the browser would make anyway be explained.
 
-The one genuine user choice is forward-looking — *will you connect a data provider?* — and it has to be asked ahead of time
-because standing up HTTPS is not instantaneous and the requirement cannot first be discovered at
-connect-time.
+**Nothing about the topology is asked of anyone, and nothing is recommended.** Administration →
+*Network access* states the reading that applies to the browser in hand — on the server's own machine,
+over the network with HTTPS, or over the network without — and what follows from it. Beside it sits
+the one fact that is about the installation and not the request: whether any other device can open it
+at all, which is what sign-in protection is described against — on an installation only its own machine
+can open it keeps out the other people who use that machine, and on one the network can open it keeps
+out the network. That fact has two witnesses (`transport.reachable_from_network`). The launcher states
+what it started, counting server mode as reachable even on a loopback bind, since a proxy is then what
+the network reaches; with no launcher it is read from the two address settings the start scripts pass
+on. Either is overridden by a request that has actually arrived from another device, which covers a
+proxy put in front by hand and a server started on an address no setting names. No intent to connect a data provider is
+declared ahead of time either: the server refuses the secret itself over an unprotected link, and the
+refusal names both ways forward at the moment the question is real, which a warning in advance could
+only approximate.
 
 **The permissible-HTTP rule.** Plain HTTP on a non-loopback bind is an acceptable operator choice **only
 when both** hold: no data provider is configured (no live credential on the wire), **and** the instance is
@@ -534,10 +545,10 @@ run a perimeter is distrust of who can reach the box, and that same distrust mak
 is a bearer token on every authenticated request. So HTTP is coherent only where there is no perimeter to
 defeat; enabling sign-in or connecting a source implies HTTPS.
 
-**Enforcement is split from preparation, deliberately.** The declaration drives *preparation* (setup
-guidance and a computed task); real HTTPS availability drives *enforcement* (the connect gate). Coupling
-them would either block a user who has not declared anything or wave through one who declared and never
-configured.
+**Recommendation is split from enforcement, deliberately.** Sign-in over a cleartext network link
+raises a *recommendation* — the *Set up HTTPS* task, dismissible, shown to whoever could act on it and
+gone the moment a request arrives over HTTPS. Only the provider secret is *enforced*, and by what the
+request actually is, never by anything declared.
 
 **What is enforced is the provider secret, and it is enforced by the server.** A request from another
 device over plain HTTP is refused — `transport.require_protected_link` — wherever it would carry a
@@ -589,10 +600,20 @@ Testing from another device stays available as one environment value (`FRONTEND_
 edit. The networked half of this model does not need a wide socket to be testable: it is a property of
 the request, and the test harness states where a request comes from.
 
+**Trusting the proxy's certificate is trusting the server machine, not one address.** The proxy issues
+the server's certificate from an authority of its own, and a device made to trust that authority's root
+accepts anything it signs — any site name, not only the server's. Whoever holds the authority's private
+key, which sits in the proxy's data on the server, could therefore impersonate any HTTPS site to every
+device that installed the root. That is the cost of a certificate nobody outside the network had to
+issue, and it is why the hand-out says so, offers the steps to remove the root again, and gives a
+fingerprint to check on a device's first visit: the one time the root arrives over a connection nothing
+vouches for (`services/proxy_certificate.py`). A publicly issued certificate for an owned domain avoids
+the trade and needs nothing different from the app.
+
 **Plain HTTP on a network is supported where someone configures it, and the app says what it costs.**
 The rule above is the whole policy; nothing refuses the configuration itself. What follows from it is
 reported where it is met rather than in a setup step: passkeys report themselves unavailable with the
-reason, the *Set up HTTPS* task appears once there is a perimeter or a provider, and the provider-secret
+reason, the *Set up HTTPS* task appears once there is a sign-in to protect, and the provider-secret
 operations are refused from other devices with the two ways to do them.
 
 ## Secrets in backup and export
@@ -727,9 +748,9 @@ Recorded so they are not re-proposed. Each names the reason, not just the verdic
   *credential* crypto does not touch.
 - **Client-side password hashing, and PAKE, as a rescue for plain HTTP.** A client-computed hash *is* a
   replayable password-equivalent, and even a real PAKE leaves the session cookie exposed.
-- **Deriving the cookie `Secure` flag from the security profile.** The profile is a recommendation, not a
-  transport guarantee; deriving from it locks out a network-profile install that runs plain HTTP.
-  Hardcoding it breaks the other topology. It stays an explicit environment value set at the deployment
+- **Deriving the cookie `Secure` flag from a declared topology.** A declaration is not a transport
+  guarantee; deriving from one locks out a networked install that runs plain HTTP. Hardcoding it breaks
+  the other topology. It stays an explicit environment value set at the deployment
   edge.
 - **Verifying the WebAuthn assertion for a vault ceremony.** The vault is not an authentication decision.
   A wrong PRF output fails at the AEAD tag exactly as a wrong passphrase does, so the slot is
@@ -800,10 +821,6 @@ Decisions owed. Each names the live backlog item that will feed this topic when 
   so there is no plaintext variant to permit and no encryption toggle. The wider artifact additionally
   carries password hashes, which have no such wrapping, so the same reasoning does not simply carry over.
   → `backlog/backup-restore-scope-and-secrets.md`
-- **The three-radio topology UI has not collapsed to the single forward-looking question**, though the
-  per-request detection it needs exists. Standalone-vs-client-server is a *detected* fact, so only the
-  data-source declaration is a real question to put to anyone, and only when networked. No backlog item —
-  this topic owns it.
 - **One owed test**: reset → set a new passphrase → restore a credentials backup taken under the old one,
   which is the ladder's first real rung and the only one nothing exercises end to end.
   → `backlog/test-coverage-gaps.md`

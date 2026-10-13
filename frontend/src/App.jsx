@@ -1044,8 +1044,6 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [authError, setAuthError] = useState(null)
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
-  const [securityProfile, setSecurityProfile] = useState('local_private')
-  const [dataProviderIntended, setDataProviderIntended] = useState(false)
   const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
   // Where this copy's databases are. Absent for a session the server will not tell (a non-admin under
   // sign-in protection), which is what keeps the nav line and `/auth/config` on one rule.
@@ -1105,8 +1103,6 @@ export default function App() {
     currentUser,
     canAdminister,
     passwordPolicy,
-    securityProfile,
-    dataProviderIntended,
     developerOptionsEnabled,
     dataLocation,
     dbInstanceId,
@@ -1117,17 +1113,13 @@ export default function App() {
     preferenceSubjectId,
     demoLoaded,
     setAuthEnabled,
-    setSecurityProfile,
     setPasswordPolicy,
-    setDataProviderIntended,
     setCurrentUser,
   }), [
     authEnabled,
     currentUser,
     canAdminister,
     passwordPolicy,
-    securityProfile,
-    dataProviderIntended,
     developerOptionsEnabled,
     dataLocation,
     dbInstanceId,
@@ -1200,8 +1192,6 @@ export default function App() {
         setAuthEnabled(!!status.auth_enabled)
         setNeedsBootstrap(!!status.needs_bootstrap)
         setPasswordPolicy(status.password_policy || 'min_8')
-        setSecurityProfile(status.security_profile || 'local_private')
-        setDataProviderIntended(!!status.data_provider_intended)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDataLocation(status.data_location || null)
         setShutdownAvailable(!!status.app_shutdown_available)
@@ -1254,7 +1244,13 @@ export default function App() {
         }
 
         setCurrentUser(status.user || null)
-        await hydrateStartupRoute('', { preferenceSubjectIdOverride: status?.user?.id || status?.user_id || '' })
+        if (status.user) {
+          await hydrateStartupRoute('', { preferenceSubjectIdOverride: status.user.id || status.user_id || '' })
+        } else {
+          // Nobody is signed in, so there are no preferences to ask for: the request would only be
+          // refused, and logged by the server as a rejection worth reading. Signing in hydrates.
+          setStartupRouteApplied(true)
+        }
         setAuthChecked(true)
       } catch (err) {
         if (cancelled) return

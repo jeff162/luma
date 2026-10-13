@@ -14,6 +14,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from backend import transport
 from backend.db import control_database as cdb
@@ -53,18 +54,56 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(transport.request_scheme(_req("x", "HTTPS")), "https")
 
 
+class ReachableFromNetworkTests(unittest.TestCase):
+    """Whether other devices can open the installation at all: what the launcher says it started, else
+    the addresses the start scripts are given, and in any case a device that has actually got through."""
+
+    def setUp(self):
+        for name, value in (("_declared_reachable", None), ("_seen_from_network", False)):
+            patcher = mock.patch.object(transport, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _configured(self, backend_host: str, frontend_host: str = "localhost"):
+        values = {"backend_host": backend_host, "frontend_host": frontend_host}
+        return mock.patch.object(transport.app_config, "value_of", side_effect=values.__getitem__)
+
+    def test_a_checkout_is_read_from_the_addresses_its_servers_are_started_on(self):
+        with self._configured("127.0.0.1"):
+            self.assertFalse(transport.reachable_from_network())
+        with self._configured("0.0.0.0"):
+            self.assertTrue(transport.reachable_from_network())
+        # The interface's own server forwards to this one, so widening it alone is enough.
+        with self._configured("127.0.0.1", frontend_host="0.0.0.0"):
+            self.assertTrue(transport.reachable_from_network())
+
+    def test_the_launcher_outranks_the_settings_it_does_not_read(self):
+        """A downloaded copy ignores `BACKEND_HOST`, so one left in its `.env` must not be believed."""
+        with self._configured("0.0.0.0"):
+            transport.declare_reachable_from_network(False)
+            self.assertFalse(transport.reachable_from_network())
+
+    def test_a_device_that_got_through_settles_it(self):
+        """A proxy put in front by hand leaves every setting saying this machine only."""
+        transport.declare_reachable_from_network(False)
+        transport.note_request(_req("127.0.0.1"))
+        self.assertFalse(transport.reachable_from_network())
+        transport.note_request(_req("192.168.1.10"))
+        self.assertTrue(transport.reachable_from_network())
+
+
 class PermissibleHttpTests(unittest.TestCase):
     def test_loopback_never_expects_https(self):
         r = _req("127.0.0.1", "http")
-        self.assertFalse(transport.https_expected(r, perimeter_on=True, provider_intended=True))
+        self.assertFalse(transport.https_expected(r, perimeter_on=True))
 
     def test_networked_http_with_no_perimeter_is_permitted(self):
         r = _req("192.168.1.10", "http")
-        self.assertFalse(transport.https_expected(r, perimeter_on=False, provider_intended=False))
+        self.assertFalse(transport.https_expected(r, perimeter_on=False))
 
     def test_networked_http_with_perimeter_expects_https(self):
         r = _req("192.168.1.10", "http")
-        self.assertTrue(transport.https_expected(r, perimeter_on=True, provider_intended=False))
+        self.assertTrue(transport.https_expected(r, perimeter_on=True))
 
     def test_only_a_cleartext_request_from_another_device_is_unprotected(self):
         self.assertFalse(transport.link_is_protected(_req("192.168.1.10", "http")))
@@ -107,7 +146,7 @@ class HttpsTaskTests(unittest.TestCase):
         self.assertIsNone(tasks._https_setup_task(_req("luma.local", "https")))
 
     def test_no_task_without_a_trigger(self):
-        # Networked HTTP but perimeter off and no provider: permitted, so no nag.
+        # Networked HTTP with sign-in off: no credential on the wire, so nothing to recommend.
         self.assertIsNone(tasks._https_setup_task(_req("192.168.1.10", "http")))
 
     def test_perimeter_task_is_recommended_and_dismissible(self):
@@ -123,17 +162,10 @@ class HttpsTaskTests(unittest.TestCase):
         cdb.set_https_warning_suppressed(True)
         self.assertIsNone(tasks._https_setup_task(_req("192.168.1.10", "http")))
 
-    def test_provider_task_is_required_and_not_dismissible(self):
-        cdb.set_data_provider_intended(True)
+    def test_the_task_leads_to_the_install_steps(self):
+        cdb.enable_auth_mode()
         task = tasks._https_setup_task(_req("192.168.1.10", "http"))
-        self.assertIsNotNone(task)
-        self.assertTrue(task["required"])
-        self.assertNotIn("dismiss_key", tasks._with_dismiss_keys([task])[0])
-
-    def test_provider_task_ignores_suppression(self):
-        cdb.set_data_provider_intended(True)
-        cdb.set_https_warning_suppressed(True)  # only the recommended case honors this
-        self.assertIsNotNone(tasks._https_setup_task(_req("192.168.1.10", "http")))
+        self.assertEqual(task["link"], "/help/running-a-server")
 
 
 if __name__ == "__main__":
@@ -189,3 +221,39 @@ class ProtectedLinkGateTests(unittest.TestCase):
             self.assertEqual(unlocked.status_code, 200, unlocked.text)
             saved = client.post("/api/providers/plaid/config", json={"client_id": "id", "env": "sandbox"})
             self.assertEqual(saved.status_code, 200, saved.text)
+
+
+class BehindTheProxyTests(unittest.TestCase):
+    """Loopback as the server's own proxy handling leaves it, rather than as a hand-built request: what
+    uvicorn does with a forwarded address is the thing detection rests on, and it has changed between
+    versions."""
+
+    def _reads_as_loopback(self, peer: str, forwarded_for: str | None) -> bool:
+        import asyncio
+
+        from starlette.requests import Request
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        seen = {}
+
+        async def app(scope, receive, send):
+            seen["loopback"] = transport.request_is_loopback(Request(scope))
+
+        headers = [(b"x-forwarded-for", forwarded_for.encode())] if forwarded_for else []
+        scope = {"type": "http", "client": (peer, 40000), "headers": headers, "scheme": "http",
+                 "method": "GET", "path": "/", "query_string": b"", "server": ("127.0.0.1", 8010)}
+        asyncio.run(ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")(scope, None, None))
+        return seen["loopback"]
+
+    def test_a_device_reaching_the_proxy_is_the_network(self):
+        self.assertFalse(self._reads_as_loopback("127.0.0.1", "192.168.1.50"))
+
+    def test_a_browser_on_the_server_reaching_the_proxy_is_local(self):
+        self.assertTrue(self._reads_as_loopback("127.0.0.1", "127.0.0.1"))
+
+    def test_a_device_cannot_forward_a_local_address_for_itself(self):
+        self.assertFalse(self._reads_as_loopback("192.168.1.50", "127.0.0.1"))
+
+    def test_no_proxy_at_all(self):
+        self.assertTrue(self._reads_as_loopback("127.0.0.1", None))
+        self.assertFalse(self._reads_as_loopback("192.168.1.50", None))

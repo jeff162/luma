@@ -473,7 +473,7 @@ preference, so it is intentionally not something the UI invites anyone to flip.
 **Bootstrap ordering.** The session secret and cookie name are constructor arguments to
 `SessionMiddleware`, not values a request can look up later, so `backend/main.py` initializes the control
 database and resolves configuration *before* the app object is built. That is why `init_control_db()` runs
-at import rather than in the lifespan hook. Settings a user actually changes — sign-in, security profile,
+at import rather than in the lifespan hook. Settings a user actually changes — sign-in,
 password policy, currency, data-source credentials — are not in this system at all: they have their own
 endpoints and their own storage (see the storage-layers section and the token vault).
 
@@ -485,7 +485,8 @@ provisioned into the single admin tenant and shares one data DB; there is no per
 and no hosted multi-tenant target. Per-request DB routing (`set_current_db_path`, driven by the tenant
 row's `db_path`) is retained as **dormant plumbing** — excising it would be risky and low-value, so it
 stays wired, resolving every identity to the one configured database. The per-tenant *directory* layout
-it once implied is gone: creating a tenant record points it at `DB_PATH`, so there is no second location
+it once implied is gone: creating a tenant record points it at `DB_PATH`, and startup brings a record
+that has since fallen out of step back to it (`reconcile_workspace_db_path`), so there is no second location
 for data to land in.
 
 **A 401 is answered by the shell, not by the caller.** `request()` in `lib/api.js` dispatches
@@ -539,11 +540,6 @@ and the bootstrap it triggers makes more calls that may 401 while it works.
   credential loss. A one-time `_unify_local_profiles_into_users()` at startup folds any legacy
   `local_preference_profile` rows from an older install into `user_account`s (preferences re-keyed) and
   drops the table.
-- **Security profile is a setup *preset*, not an enforcement mechanism.** Two deployment shapes:
-  **Standalone** (`local_private` — this one machine, loopback) and **Client-server** (`network_private`
-  — backend on a networked box, reached from other devices). They steer recommendations (whether sign-in
-  is recommended, and the HTTP/HTTPS transport guidance); they do not by themselves force auth on or off.
-  (The retired `multi_tenant` and `household_shared` profiles are gone.)
 
 **Passkey sign-in** is an additional credential on this perimeter, never a replacement for the password.
 The mechanism, end to end:

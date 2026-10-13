@@ -144,6 +144,19 @@ class AppLogFileTests(unittest.TestCase):
         self.assertNotIn("routine detail", written)
         self.assertIn("compacting the database", written)
 
+    def test_a_kept_line_reaches_the_file_when_the_console_is_quieter_than_info(self):
+        # The packaged build's case: the launcher runs uvicorn at warning level, so an info line is dropped
+        # by the console's logger and printed instead — where no handler would ever see it.
+        self._as_uvicorn_configures_it()
+        for name in _UVICORN_LOGGERS:
+            logging.getLogger(name).setLevel(logging.WARNING)
+        app_log_file.install()
+        log_info("routine detail")
+        log_info("applying migration v2...", keep_in_file=True)
+        lines = self._lines()
+        self.assertEqual(sum("applying migration v2" in line for line in lines), 1)
+        self.assertFalse(any("routine detail" in line for line in lines))
+
     def test_failures_anyone_can_cause_without_signing_in_stay_out(self):
         # On a networked install a flood of these would rotate genuine failures out of the file.
         self._as_uvicorn_configures_it()

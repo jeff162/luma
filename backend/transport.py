@@ -29,17 +29,66 @@ import ipaddress
 
 from fastapi import HTTPException, Request
 
+from backend import app_config
 from backend.runtime_config import app_name
 
+# Whether other devices can open this installation at all, as distinct from where one request came
+# from. It is what sign-in protection is described against: on an installation only this machine can
+# open it keeps out the other people who use the machine, and on one the network can open it keeps out
+# the network. Two witnesses, in `reachable_from_network`.
+_declared_reachable: bool | None = None
+_seen_from_network = False
 
-def request_is_loopback(request: Request) -> bool:
-    client = request.client
+
+def _is_loopback_address(host: str) -> bool:
     try:
-        address = ipaddress.ip_address(client.host if client else "")
+        address = ipaddress.ip_address(host or "")
     except ValueError:
         return False
     # A dual-stack listener reports an IPv4 peer in its IPv6-mapped form, which is the same machine.
     return (getattr(address, "ipv4_mapped", None) or address).is_loopback
+
+
+def declare_reachable_from_network(reachable: bool) -> None:
+    """The launcher's statement of what it started (`backend/desktop.py`): it chose the address, so it
+    knows. Server mode is reachable even on a loopback bind, because a proxy on this machine is what
+    the network then reaches and nothing here can see one."""
+    global _declared_reachable
+    _declared_reachable = reachable
+
+
+def note_request(request: Request) -> None:
+    """Remember that a device other than this machine got through. It settles the question whatever
+    the configuration says — a proxy somebody put in front by hand, a server started on an address the
+    settings do not name — and is forgotten at the next start, when it will be seen again if still true."""
+    global _seen_from_network
+    if not _seen_from_network and not request_is_loopback(request):
+        _seen_from_network = True
+
+
+def reachable_from_network() -> bool:
+    if _seen_from_network:
+        return True
+    if _declared_reachable is not None:
+        return _declared_reachable
+    # No launcher: a source checkout or a container, where the start script passes these two settings
+    # to the servers it starts. The interface's own server counts, since it forwards to this one.
+    return any(
+        host.strip().lower() != "localhost" and not _is_loopback_address(host.strip())
+        for host in (app_config.value_of("backend_host"), app_config.value_of("frontend_host"))
+    )
+
+
+def request_is_loopback(request: Request) -> bool:
+    client = request.client
+    host = client.host if client else ""
+    if client is not None and host is None:
+        # uvicorn's answer when every forwarded hop was one it trusts: it looks for the first address
+        # that is *not* a trusted proxy, finds none, and leaves the client blank. That is a browser on
+        # this machine reaching the server through the proxy, and the header — vouched for hop by hop —
+        # still names where the chain began.
+        host = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return _is_loopback_address(host or "")
 
 
 def request_scheme(request: Request) -> str:
@@ -95,10 +144,10 @@ def require_protected_link(request: Request) -> None:
     })
 
 
-def https_expected(request: Request, *, perimeter_on: bool, provider_intended: bool) -> bool:
-    """True when the permissible-HTTP rule says this deployment ought to be on HTTPS: a networked
-    link carrying either a login credential/session cookie (perimeter on) or a live bank/vault secret
-    (a provider is configured/intended). Loopback never needs it."""
+def https_expected(request: Request, *, perimeter_on: bool) -> bool:
+    """True when this request is the case HTTPS is recommended for: a network link carrying a sign-in
+    credential and its session cookie. Loopback never needs it. A provider secret is not part of this —
+    it is refused over such a link outright (`require_protected_link`), not advised about."""
     if request_is_loopback(request):
         return False
-    return bool(perimeter_on or provider_intended)
+    return bool(perimeter_on)

@@ -255,12 +255,6 @@ class IdentityModelTests(unittest.TestCase):
         self.assertTrue(acct["password_set"])
         self.assertTrue(acct["must_change_password"])
 
-    def test_retired_security_profiles_fall_back(self):
-        cdb.set_app_setting("security_profile", "multi_tenant")
-        self.assertEqual(cdb.get_security_profile(), cdb.SECURITY_PROFILE_LOCAL_PRIVATE)
-        cdb.set_app_setting("security_profile", "household_shared")
-        self.assertEqual(cdb.get_security_profile(), cdb.SECURITY_PROFILE_LOCAL_PRIVATE)
-
     def test_totp_setup_includes_qr_svg(self):
         cdb.enable_auth_mode()
         admin = cdb._create_user_with_tenant("Admin", "password123", role="admin")
@@ -268,12 +262,6 @@ class IdentityModelTests(unittest.TestCase):
         self.assertTrue(setup["otpauth_uri"].startswith("otpauth://totp/"))
         self.assertTrue(setup["qr_svg"].startswith("data:image/svg+xml"))
 
-    def test_data_provider_intent_roundtrip(self):
-        self.assertFalse(cdb.get_data_provider_intended())
-        cdb.set_data_provider_intended(True)
-        self.assertTrue(cdb.get_data_provider_intended())
-        cdb.set_data_provider_intended(False)
-        self.assertFalse(cdb.get_data_provider_intended())
 
 
 @contextmanager
@@ -445,15 +433,6 @@ class EnableDisableFlowTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 403, resp.text)
             self.assertTrue(client.get("/api/auth/status").json()["auth_enabled"])
 
-    def test_data_provider_intent_endpoint_and_status(self):
-        with _client_stack() as client:
-            # Config endpoints run as the current identity, so select one first (as the app always has).
-            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
-            client.post("/api/auth/select-identity", json={"user_id": mark["id"]})
-            self.assertFalse(client.get("/api/auth/status").json()["data_provider_intended"])
-            saved = client.post("/api/auth/data-provider-intent", json={"intended": True})
-            self.assertEqual(saved.status_code, 200, saved.text)
-            self.assertTrue(client.get("/api/auth/status").json()["data_provider_intended"])
 
 
 if __name__ == "__main__":

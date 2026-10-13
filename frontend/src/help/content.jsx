@@ -3935,8 +3935,17 @@ export const HELP_TOPICS = [
             password requirements. See <HelpLink to="/help/account-security">account security</HelpLink>.
           </li>
           <li>
-            <strong>Intended usage</strong> covers where the data lives and what protects it.
-            See <HelpLink to="/help/data-and-backups">data on disk, and backups</HelpLink>.
+            <strong>Network access</strong> states how the browser in use reaches {APP_NAME}: on the
+            same computer, over the network with HTTPS, or over the network without it, and what each
+            means for passwords, passkeys and data sources. It also states whether other devices can
+            open the installation, and so who sign-in protection keeps out.
+            See <HelpLink to="/help/running-a-server">running {APP_NAME} as a server</HelpLink>.
+          </li>
+          <li>
+            <strong>Server certificate</strong> appears only on a server that other computers reach over
+            HTTPS. It offers the certificate each computer installs once so its browser trusts the server,
+            with the steps for Windows, Mac, Linux and a tablet, and shows the certificate's fingerprint. The same
+            download is offered on the sign-in screen.
           </li>
           <li>
             <strong>Startup configuration</strong> does not allow for changing {APP_NAME}'s behavior, rather
@@ -3945,6 +3954,107 @@ export const HELP_TOPICS = [
             <HelpLink to="/help/configuration">Configuration settings</HelpLink> has details.
           </li>
         </ul>
+      </>
+    ),
+  },
+  {
+    id: 'running-a-server',
+    section: 'administration',
+    title: `Running ${APP_NAME} as a server`,
+    surfaces: ['Network access (Administration)', 'Set up HTTPS (Tasks)'],
+    summary: `One computer runs ${APP_NAME} and the other computers in the household open it in a browser. The same download does this when started in server mode; a reverse proxy in front of it adds HTTPS, which passkeys and connecting a data source from another device both need.`,
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A downloaded copy of {APP_NAME} normally serves only the computer it runs on. Started in{' '}
+          <strong>server mode</strong>, the same copy stays running in the background, opens no browser,
+          and answers to a name on the local network, <code>luma.local</code> unless changed, so every
+          other computer opens the same address without knowing which machine the server is.
+        </p>
+        <p>
+          Everyone connected sees the same data. Sign-in protection is what decides who can connect:
+          with it off, anyone on the network can open the installation
+          (see <HelpLink to="/help/account-security">account security</HelpLink>).
+        </p>
+
+        <HelpHeading anchor="with-https">With HTTPS</HelpHeading>
+        <p>
+          {APP_NAME} does not provide HTTPS itself; a small program
+          called a reverse proxy sits in front of it on the same computer and does. The steps below use
+          Caddy as the proxy and are for a Linux server. Run them as the user the server should run as,
+          from the folder the download was unpacked into.
+        </p>
+        <ol>
+          <li>
+            Create a file named <code>.env</code> beside the program containing the
+            line <code>SESSION_COOKIE_SECURE=true</code>. To answer to a name other
+            than <code>luma.local</code>, add <code>MDNS_NAME=</code> followed by the name, without
+            the <code>.local</code> ending.
+          </li>
+          <li>Install Caddy from the Linux distribution's packages.</li>
+          <li>
+            Give Caddy its configuration, which {APP_NAME} writes for the name and port in use:
+            <pre><code>{'./luma --caddyfile | sudo tee /etc/caddy/Caddyfile\nsudo systemctl reload caddy'}</code></pre>
+          </li>
+          <li>
+            Install {APP_NAME} as a service, so it starts whenever the computer does:
+            <pre><code>{'./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service\nsudo systemctl daemon-reload\nsudo systemctl enable --now luma'}</code></pre>
+          </li>
+          <li>
+            Open <code>https://luma.local</code> from another computer. <code>journalctl -u luma</code>{' '}
+            on the server shows the address if a different name was chosen.
+          </li>
+        </ol>
+        <p>
+          A firewall on the server has to allow TCP port 443 and UDP port 5353. A Windows or Mac
+          computer can be the server as well, with the same <code>.env</code> file and Caddy
+          configuration; starting {APP_NAME} at boot is then set up with that system's own tools.
+        </p>
+
+        <HelpHeading anchor="each-device">On each computer that connects</HelpHeading>
+        <p>
+          The first visit shows a browser warning, because the proxy issues its own certificate and no
+          computer trusts it yet. Continue past the warning once, choose{' '}
+          <strong>Browser warning about this server? Install its certificate</strong> on the sign-in
+          screen, and follow the steps shown for that kind of computer. After the browser is closed and reopened
+          the warning is gone for good. With sign-in protection off there is no sign-in screen, and the
+          same download and steps are under <strong>Administration &rarr; Server certificate</strong>.
+        </p>
+        <p>
+          To be sure a computer received the server's own certificate, compare the fingerprint that
+          computer shows for it against the one printed on the server
+          by <code>./luma --certificate-fingerprint</code>. <strong>Server certificate</strong> also
+          has a box that takes a fingerprint and reports whether it matches.
+        </p>
+
+        <HelpHeading anchor="without-https">Without HTTPS</HelpHeading>
+        <p>
+          A server can also be put on the network directly, with no proxy and no certificate to
+          install: set <code>FRONTEND_HOST=0.0.0.0</code> in <code>.env</code>, skip the Caddy steps,
+          and open <code>http://luma.local:8010</code>. This is the least setup. What it costs:
+        </p>
+        <ul>
+          <li>Everything, sign-in passwords included, crosses the network unencrypted.</li>
+          <li>Passkeys are unavailable.</li>
+          <li>
+            A data source can be connected, and a provider's secret saved or shown, only from a
+            browser on the server itself. Syncing and everything else works from any computer.
+          </li>
+        </ul>
+        <p>
+          <strong>Administration &rarr; Network access</strong> states which of these connections the
+          browser in use has, and whether other devices can open the installation at all, which is
+          what decides who sign-in protection keeps out.
+        </p>
+
+        <HelpHeading anchor="updating">Updating the server</HelpHeading>
+        <p>
+          Stop the service, unpack the new download in the same place as the last one, and start it
+          again. The <code>.env</code> file and the data are not part of the download and are left as
+          they were.
+        </p>
+        <pre><code>{'sudo systemctl stop luma\ntar -xzf luma-<version>-linux-x64.tar.gz\nsudo systemctl start luma'}</code></pre>
       </>
     ),
   },
@@ -4058,7 +4168,7 @@ export const HELP_TOPICS = [
     id: 'data-and-backups',
     section: 'general-concepts',
     title: 'Data on disk, and backups',
-    surfaces: ['Intended usage (Administration)', 'Backup / Restore (Administration)'],
+    surfaces: ['Backup / Restore (Administration)'],
     summary: `Transactions live in a plain-text database on a presumably private system. Handle the file carefully if the data is considered sensitive.`,
     body: () => (
       <>

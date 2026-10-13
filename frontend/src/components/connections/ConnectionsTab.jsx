@@ -596,8 +596,7 @@ export default function ConnectionsTab({ onShowHistory }) {
   }, [linkInProgress])
 
   const isAdmin = !authEnabled || currentUser?.role === 'admin'
-  // On a networked (non-loopback) bind, the app secret / bank tokens cross the wire, so connecting needs
-  // real HTTPS — decoupled from the forward-looking "intend to connect" declaration (see transport docs).
+  // From another device the app secret and bank tokens cross the network, so connecting needs HTTPS.
   const httpsBlocked = !!(transport && !transport.is_loopback && !transport.is_https)
 
   const refresh = useCallback(async () => {

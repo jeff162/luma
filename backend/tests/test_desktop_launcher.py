@@ -220,6 +220,15 @@ def test_only_a_server_answers_for_a_network_name_and_withdraws_it_on_the_way_ou
     assert advertise.return_value.close.called
 
 
+def test_the_launcher_states_whether_other_devices_can_open_what_it_started():
+    """A server behind a proxy listens on this machine only and is reached by the whole network, so the
+    bind cannot answer this; the mode does."""
+    with mock.patch.object(desktop.transport, "declare_reachable_from_network") as declare:
+        _launch([], env_server_mode=None)
+        _launch(["--server"], env_server_mode=None)
+    assert [call.args for call in declare.call_args_list] == [(False,), (True,)]
+
+
 def test_only_server_mode_can_be_put_on_the_network():
     """A wide bind is the whole application over plain HTTP to whoever can reach the machine, so it takes
     both halves of the configuration to get one: a desktop start ignores the address setting."""
@@ -232,6 +241,23 @@ def test_only_server_mode_can_be_put_on_the_network():
         assert _launch.bound_host == "0.0.0.0"
     # On the network directly, what is advertised is this process's own port rather than a proxy's.
     assert advertise.call_args.kwargs["plain_http_port"] == 8123
+
+
+def test_an_address_setting_that_will_not_take_effect_is_said_out_loud():
+    """`BACKEND_HOST` is a source checkout's setting and `FRONTEND_HOST` is server mode's. Left in the
+    `.env` of a start that reads neither, each would fail silently: the app starts, the configuration
+    report shows the value, and nothing on the network answers."""
+    def notices(server_mode, **hosts):
+        values = {"backend_host": "127.0.0.1", "frontend_host": "localhost", **hosts}
+        with mock.patch.object(desktop.app_config, "value_of", side_effect=values.__getitem__):
+            return desktop._unused_address_notices(server_mode)
+
+    assert notices(False) == [] and notices(True) == []
+    assert ["BACKEND_HOST" in n for n in notices(False, backend_host="0.0.0.0")] == [True]
+    assert ["BACKEND_HOST" in n for n in notices(True, backend_host="0.0.0.0")] == [True]
+    assert ["FRONTEND_HOST is set" in n for n in notices(False, frontend_host="0.0.0.0")] == [True]
+    # In server mode that one is honored, so there is nothing to say.
+    assert notices(True, frontend_host="0.0.0.0") == []
 
 
 def test_the_default_address_setting_is_a_loopback_bind():
@@ -597,3 +623,45 @@ def test_this_machines_own_answer_is_not_a_name_conflict():
     own = {"192.0.2.10", "127.0.0.1"}
     assert not desktop.mdns.answered_by_another_machine({"192.0.2.10"}, own)
     assert desktop.mdns.answered_by_another_machine({"192.0.2.10", "192.0.2.77"}, own)
+
+
+def test_the_proxy_file_is_written_for_the_name_the_server_answers_to(capsys):
+    """The proxy's certificate is issued for the name in this file and the server advertises `MDNS_NAME`;
+    a device shown a certificate for another name refuses the server."""
+    with mock.patch.dict(os.environ, {"MDNS_NAME": "Ledger.local", "FRONTEND_PORT": "8123"}), \
+         mock.patch.object(desktop, "_GracefulServer") as server_class:
+        assert desktop.main(["--caddyfile"]) == 0
+    assert capsys.readouterr().out == "ledger.local {\n\treverse_proxy 127.0.0.1:8123\n}\n"
+    assert server_class.call_count == 0
+
+
+def test_a_name_that_cannot_be_advertised_gets_no_proxy_file(capsys):
+    with mock.patch.dict(os.environ, {"MDNS_NAME": "two.labels"}):
+        assert desktop.main(["--caddyfile"]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == "" and "MDNS_NAME" in printed.err
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="systemd is Linux's")
+def test_the_unit_runs_this_installation_as_a_server_for_the_user_asking(capsys):
+    install = Path("/opt/my apps/luma")
+    with mock.patch.object(desktop.server_setup.runtime_config, "is_frozen", return_value=True), \
+         mock.patch.object(desktop.server_setup.runtime_config, "install_root", return_value=install), \
+         mock.patch.object(desktop.server_setup.sys, "executable", str(install / "luma")), \
+         mock.patch.object(desktop.server_setup.getpass, "getuser", return_value="ledger"), \
+         mock.patch.object(desktop.server_setup.os, "geteuid", return_value=1000):
+        assert desktop.main(["--systemd-unit"]) == 0
+    unit = capsys.readouterr().out
+    assert "User=ledger\n" in unit
+    # A path with a space is one word to systemd only when quoted.
+    assert 'ExecStart="/opt/my apps/luma/luma" --server\n' in unit
+    assert "WorkingDirectory=/opt/my apps/luma\n" in unit
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="systemd is Linux's")
+def test_the_unit_is_not_written_for_root(capsys):
+    """Under sudo the unit would name root, and the databases would be created as root's."""
+    with mock.patch.object(desktop.server_setup.os, "geteuid", return_value=0):
+        assert desktop.main(["--systemd-unit"]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == "" and "without sudo" in printed.err

@@ -26,7 +26,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import DB_PATH, get_db, init_db
-from backend.runtime_config import app_name, resolve_control_db_path
+from backend.app_logging import log_info, log_warning
+from backend.runtime_config import app_name, is_frozen, resolve_control_db_path
 
 
 CONTROL_DB_PATH = resolve_control_db_path()
@@ -40,16 +41,6 @@ PASSWORD_POLICY_VALUES = {
     PASSWORD_POLICY_NONE,
     PASSWORD_POLICY_MIN_8,
     PASSWORD_POLICY_STRONG,
-}
-# Two deployment shapes: standalone (this one machine, loopback) vs client-server (backend on a
-# networked box, reached from other devices' browsers). The profile is a setup preset that steers
-# recommendations (whether sign-in is recommended, and — later — the HTTP/HTTPS transport policy); it
-# does not by itself enforce auth. The old `household_shared` and `multi_tenant` profiles are retired.
-SECURITY_PROFILE_LOCAL_PRIVATE = "local_private"
-SECURITY_PROFILE_NETWORK_PRIVATE = "network_private"
-SECURITY_PROFILE_VALUES = {
-    SECURITY_PROFILE_LOCAL_PRIVATE,
-    SECURITY_PROFILE_NETWORK_PRIVATE,
 }
 
 
@@ -575,63 +566,14 @@ def set_password_policy(policy: str):
     set_app_setting("password_policy", normalized)
 
 
-def get_security_profile() -> str:
-    value = (get_app_setting("security_profile", SECURITY_PROFILE_LOCAL_PRIVATE) or SECURITY_PROFILE_LOCAL_PRIVATE).strip()
-    return value if value in SECURITY_PROFILE_VALUES else SECURITY_PROFILE_LOCAL_PRIVATE
-
-
-def set_security_profile(profile: str):
-    normalized = (profile or "").strip()
-    if normalized not in SECURITY_PROFILE_VALUES:
-        raise ValueError("Unsupported security profile")
-    set_app_setting("security_profile", normalized)
-
-
-# Declared intent to connect an aggregator/data provider, orthogonal to the deployment profile. It
-# only *steers* setup guidance (and, later, the HTTPS-readiness task) — it does not enforce anything;
-# the Connect-bank gate keys off actual HTTPS availability, not this flag.
-def get_data_provider_intended() -> bool:
-    return get_app_setting("data_provider_intended", "0") == "1"
-
-
-def set_data_provider_intended(value: bool):
-    set_app_setting("data_provider_intended", "1" if value else "0")
-
-
-# Persisted suppression of the "Set up HTTPS" nag for the *recommended* (plain client-server, no
-# provider) case only — HTTPS there protects the login cookie, which is the operator's call on their
-# own network. The *required* (provider configured) case is never suppressible; it self-clears only
-# when a request actually arrives over HTTPS.
+# A dismissal of the "Set up HTTPS" task recorded before tasks had a dismissal of their own. Still
+# honored, so an operator who answered once is not asked again.
 def get_https_warning_suppressed() -> bool:
     return get_app_setting("https_warning_suppressed", "0") == "1"
 
 
 def set_https_warning_suppressed(value: bool):
     set_app_setting("https_warning_suppressed", "1" if value else "0")
-
-
-def security_profile_label(profile: str | None = None) -> str:
-    normalized = profile or get_security_profile()
-    if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
-        return "Client-server"
-    return "Standalone"
-
-
-# `suggested_password_policy` is retained in the payload for the API contract but is no longer
-# surfaced as a recommendation in the UI (we don't presume why a user wants a password).
-def security_profile_guidance(profile: str | None = None) -> dict:
-    normalized = profile or get_security_profile()
-    if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
-        return {
-            "summary": f"The {app_name()} backend runs on a computer on your network, and you and anyone you allow reach it from a browser on another device.",
-            "recommended_auth": True,
-            "suggested_password_policy": PASSWORD_POLICY_MIN_8,
-        }
-    return {
-        "summary": f"{app_name()} runs on this one computer and you use it right here. Nothing else connects to it.",
-        "recommended_auth": False,
-        "suggested_password_policy": PASSWORD_POLICY_NONE,
-    }
 
 
 def password_policy_label(policy: str | None = None) -> str:
@@ -705,6 +647,47 @@ def _workspace_db_path() -> str:
     configured path rather than minting a file per identity. Enabling sign-in therefore adopts the
     existing data in place instead of stranding it in an unused file."""
     return str(Path(DB_PATH))
+
+
+def reconcile_workspace_db_path() -> None:
+    """Make the workspace's recorded database the one this installation is configured for.
+
+    The path is written once, when the first identity is created, and every request is routed by it —
+    while startup readies the *configured* database. The two are the same until the configuration moves
+    without the record: a portable folder that was moved, renamed or copied, a control database carried
+    to another installation, or a relative path met from a different working directory. Then startup
+    looks healthy and every request opens a file that is somewhere else or not there at all, which
+    SQLite answers by creating an empty one. Run at startup, before any request.
+
+    The configuration wins, with one exception. In a checkout, a recorded path that still names an
+    existing file is left alone and reported: adopting the configured path there would silently move an
+    installation that has been running on the recorded one onto an empty database, and nothing about a
+    checkout says its folder is the installation. A packaged build does say that — the folder, or the
+    user-data directory, is where its data lives — so there the configuration is adopted outright.
+
+    Only a single workspace is reconciled, which is all there has been since multi-tenant hosting was
+    dropped. More than one row is a database from before that, and is not this function's to rearrange.
+    """
+    configured = _workspace_db_path()
+    with get_control_db() as conn:
+        rows = conn.execute("SELECT id, db_path FROM tenant").fetchall()
+        if len(rows) != 1:
+            return
+        recorded = rows[0]["db_path"]
+        if Path(recorded).resolve() == Path(configured).resolve():
+            return
+        if Path(recorded).is_file() and not is_frozen():
+            log_warning(
+                f"[db] the control database records the financial database as {recorded}, but this "
+                f"installation is configured for {configured}. Requests are using the recorded one. "
+                "Set DB_PATH to the database that should be used."
+            )
+            return
+        conn.execute("UPDATE tenant SET db_path = ? WHERE id = ?", (configured, rows[0]["id"]))
+    log_info(
+        f"[db] the financial database is now {configured}; the control database recorded {recorded}",
+        keep_in_file=True,
+    )
 
 
 def _create_user_with_tenant(

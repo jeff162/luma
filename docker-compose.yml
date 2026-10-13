@@ -11,6 +11,8 @@ services:
         required: false
     environment:
       DATA_DIR: /data
+      # What the image's command binds, stated so the app can report it.
+      BACKEND_HOST: 0.0.0.0
     restart: unless-stopped
 
   frontend:

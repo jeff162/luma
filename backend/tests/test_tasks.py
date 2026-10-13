@@ -16,12 +16,14 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from fastapi import HTTPException
 
 from backend.db import control_database
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.tasks import dismiss_task, get_tasks, restore_task
+from backend.services import proxy_certificate
 
 
 class TasksFixtureTestCase(unittest.TestCase):
@@ -319,20 +321,15 @@ class TaskDismissalTests(TasksFixtureTestCase):
         self.assertEqual(result["dismissed"], [])
 
     def test_a_required_task_cannot_be_dismissed(self):
-        # HTTPS with a data provider configured is the one task that is not a reminder: it stays until
-        # fixed. A networked plain-HTTP request is what raises it.
-        control_database.set_data_provider_intended(True)
-        request = SimpleNamespace(
-            client=SimpleNamespace(host="192.168.1.10"),
-            url=SimpleNamespace(hostname="192.168.1.10", scheme="http"),
-            state=SimpleNamespace(user={"id": "test-user"}),
-        )
-        with self._use_db_path():
-            task = next(t for t in get_tasks(request)["tasks"] if t["id"] == "configure_https")
+        # A changed server certificate is the one task that is not a reminder: it stays until an
+        # administrator accepts the new one.
+        request = self._request()
+        with self._use_db_path(), mock.patch.object(proxy_certificate, "changed_from_record", return_value=True):
+            task = next(t for t in get_tasks(request)["tasks"] if t["id"] == "proxy_certificate_changed")
             self.assertTrue(task["required"])
             self.assertNotIn("dismiss_key", task)
             with self.assertRaises(HTTPException) as raised:
-                dismiss_task("configure_https", request)
+                dismiss_task("proxy_certificate_changed", request)
         self.assertEqual(raised.exception.status_code, 404)
 
     def test_the_recommended_https_reminder_can_be_dismissed(self):

@@ -178,10 +178,6 @@ export const api = {
   resetConfigValue: (key) => request(`/auth/config/${encodeURIComponent(key)}/reset`, { method: 'POST' }),
   savePasswordPolicy: (policy) =>
     request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
-  saveSecurityProfile: (profile) =>
-    request('/auth/security-profile', { method: 'POST', body: JSON.stringify({ profile }) }),
-  saveDataProviderIntent: (intended) =>
-    request('/auth/data-provider-intent', { method: 'POST', body: JSON.stringify({ intended }) }),
   // Vault (data-source credential custody). Set/change require the current user; set mints the workspace
   // DEK for the first user. All return { user: <session payload with vault_* flags> }.
   setVaultPassphrase: (passphrase) =>
@@ -317,6 +313,11 @@ export const api = {
   checkForUpdateNow: () => request('/app/update-check/run', { method: 'POST' }),
   autoCheckForUpdate: () => request('/app/update-check/auto', { method: 'POST' }),
   // Administration -> Error log: the most recent errors in the server's log file, newest first. Admin-only.
+  // The TLS proxy's root certificate, where a server installation has one: { available } and, when it
+  // does, the fingerprint and whether it is the certificate on record. Public — a device needs it before
+  // sign-in.
+  getProxyCertificate: () => request('/app/proxy-certificate'),
+  acceptProxyCertificate: () => request('/app/proxy-certificate/accept', { method: 'POST' }),
   getErrorLog: () => request('/diagnostics/log/errors'),
   // Marks the errors counted up to `through` as seen, for the whole install — which clears the Tasks reminder.
   acknowledgeErrorLog: (through) =>

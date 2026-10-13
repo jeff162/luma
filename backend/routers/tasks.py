@@ -39,11 +39,10 @@ from backend.authorization import is_admin_or_local
 from backend.db.database import get_db
 from backend.db.control_database import (
     auth_required,
-    get_data_provider_intended,
     get_https_warning_suppressed,
 )
 from backend import app_log_file, runtime_config, transport
-from backend.services import crypto_service, update_check
+from backend.services import crypto_service, proxy_certificate, update_check
 from backend.services.preferences import get_preferences, set_preference
 from backend.services.connection_mapping import unmapped_count
 from backend.services.recurring_signals import compute_signals
@@ -61,43 +60,33 @@ DISMISSED_PREF_KEY = "ui.tasks.dismissed"
 
 
 def _https_setup_task(request: Request | None) -> dict | None:
-    # Transport nag: on a networked (non-loopback) bind still served over plain HTTP, credentials and
-    # bank secrets would cross the wire in cleartext. Emit when either trigger is live — sign-in
-    # protection on (a login cookie to sniff) or a data provider intended (a live bank secret). The
-    # provider case is *required* (never dismissible); plain client-server is only *recommended*, so it is
-    # dismissible from Tasks like any other reminder (and still honors the older persisted suppression).
-    # Self-clears the moment a request arrives over HTTPS. Shown only to someone who could set it up:
-    # putting a proxy in front of the server is the host's business, and the guidance it links to is an
-    # Administration section.
-    if request is None or transport.request_is_loopback(request) or transport.request_is_https(request):
+    # Raised where a sign-in is made over the network in cleartext: the password, and the session cookie
+    # on every request after it, can be read by anything on that network. A recommendation and no more —
+    # plain HTTP on a network its owner trusts is a supported way to run (`docs/operations.md` -> "LAN
+    # server") — so it is dismissible like any other, and it clears itself the moment a request arrives
+    # over HTTPS. With sign-in off there is no credential on the wire and nothing is raised; the provider
+    # secret needs no task, since the server refuses it over such a link and says so where it is asked.
+    # Shown only to someone who could set it up: putting a proxy in front of the server is the host's
+    # business.
+    if request is None or not transport.https_expected(request, perimeter_on=auth_required()):
         return None
-    if not is_admin_or_local(request):
+    if transport.request_is_https(request) or not is_admin_or_local(request):
         return None
-    perimeter_on = auth_required()
-    provider_intended = get_data_provider_intended()
-    if not (perimeter_on or provider_intended):
-        return None
-    required = provider_intended
-    if not required and get_https_warning_suppressed():
+    if get_https_warning_suppressed():
         return None
     return {
         "id":          "configure_https",
         "title":       "Set up HTTPS",
         "description": (
-            "This server is reached over the network without HTTPS. "
-            + ("A data provider is configured, so bank credentials would cross the network in cleartext — "
-               "HTTPS is required before connecting."
-               if required else
-               "Sign-in credentials and the session cookie cross the network in cleartext — configuring "
-               "HTTPS is recommended.")
-            + " Passkeys, for unlocking the credential vault, also need HTTPS."
-            + " Put a TLS-terminating reverse proxy (Caddy) in front of the backend."
+            "This server is reached over the network without HTTPS, so sign-in passwords and the session "
+            "cross the network unencrypted. Passkeys are unavailable, and a data source can be connected "
+            "only from a browser on the server. HTTPS, from a reverse proxy on the server, changes all three."
         ),
         "count":       1,
-        "link":        "/administration?section=intendedUsage",
+        "link":        "/help/running-a-server",
         "link_label":  "How to set up HTTPS",
         "severity":    SEVERITY_WARNING,
-        "required":    required,
+        "required":    False,
     }
 
 
@@ -158,6 +147,31 @@ def _server_error_task(request: Request | None) -> dict | None:
         "link":        "/administration?section=errorLog",
         "link_label":  "Open the error log",
         "severity":    SEVERITY_WARNING,
+    }
+
+
+def _proxy_certificate_task(request: Request | None) -> dict | None:
+    """The TLS proxy is presenting a different root certificate than the one this installation's devices
+    were given (`services/proxy_certificate.py`).
+
+    Without this the only sign is every device refusing the server at once. Not dismissible: it stands
+    until an administrator accepts the new certificate, which is the statement that the change was
+    theirs, and each device still has to install it."""
+    if request is None or not is_admin_or_local(request):
+        return None
+    if not proxy_certificate.changed_from_record():
+        return None
+    return {
+        "id":          "proxy_certificate_changed",
+        "title":       "The server's certificate changed",
+        "description": "The reverse proxy in front of this server is using a different certificate than "
+                       "before, which happens when it is reinstalled or loses its data. Each computer has "
+                       "to install the new one before its browser trusts this server again.",
+        "count":       1,
+        "link":        "/administration?section=serverCertificate",
+        "link_label":  "Review the certificate",
+        "severity":    SEVERITY_WARNING,
+        "required":    True,
     }
 
 
@@ -298,6 +312,10 @@ def _build_tasks(request: Request | None) -> list[dict]:
     error_task = _server_error_task(request)
     if error_task:
         tasks.append(error_task)
+
+    certificate_task = _proxy_certificate_task(request)
+    if certificate_task:
+        tasks.append(certificate_task)
 
     update_task = _update_available_task(request)
     if update_task:

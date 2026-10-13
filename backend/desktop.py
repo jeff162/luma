@@ -75,9 +75,10 @@ import uvicorn
 
 # First, before anything that can reach the database modules (see the module). `app_config` below does.
 import backend.load_env_file  # noqa: F401
-from backend import account_recovery, app_config, app_log_file, mdns, runtime_config, spa
+from backend import account_recovery, app_config, app_log_file, mdns, runtime_config, server_setup, spa, transport
 from backend.main import app, spa_mounted
 from backend.routers import app_control
+from backend.services import proxy_certificate
 
 # Loopback is the bind; `localhost` is the name that keeps passkeys available (see module docstring).
 BIND_HOST = "127.0.0.1"
@@ -190,6 +191,20 @@ def _redirect_output_to_log() -> Path | None:
     return log
 
 
+def _write_lines_as_they_are_printed() -> None:
+    """Stop Python holding output back when it is not going to a terminal.
+
+    Into a pipe — a supervisor's journal, which is where a server's output goes — stdout is buffered by
+    the block, so the line saying the server is up and where arrives when the process *exits*. The
+    journal then shows a service that started and said nothing, and the address appears beside the
+    report that it has stopped."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 class _GracefulServer(uvicorn.Server):
     """uvicorn's server without its second-Ctrl+C force quit.
 
@@ -277,12 +292,44 @@ def _server_bind_host() -> str:
     Its default is the name `localhost`, which is spelled as the address here for the same reason the
     desktop bind is (see the module docstring)."""
     host = app_config.value_of("frontend_host").strip()
+    return BIND_HOST if _names_this_machine(host) else host
+
+
+def _names_this_machine(host: str) -> bool:
     if host.lower() == BROWSER_HOST:
-        return BIND_HOST
+        return True
     try:
-        return BIND_HOST if ipaddress.ip_address(host).is_loopback else host
+        return ipaddress.ip_address(host).is_loopback
     except ValueError:
-        return host
+        return False
+
+
+def _unused_address_notices(server_mode: bool) -> list[str]:
+    """What to say about an address setting that asks for the network and is not going to get it.
+
+    Two of them can: `BACKEND_HOST` belongs to the scripts that run a source checkout and is never read
+    here, and `FRONTEND_HOST` is read in server mode only. Either left in `.env` would otherwise fail in
+    the least visible way there is — the app starts normally, the configuration report lists the value
+    as set, and nothing on the network answers. Only a value that widens is mentioned: one that names
+    this machine asks for what happens anyway."""
+    notices = []
+    backend_host = app_config.value_of("backend_host").strip()
+    frontend_host = app_config.value_of("frontend_host").strip()
+    if not _names_this_machine(backend_host):
+        notices.append(
+            f"BACKEND_HOST is set to {backend_host} and is not used by this way of starting "
+            f"{runtime_config.app_name()}: it applies only when running from source with the start scripts. "
+            + ("FRONTEND_HOST is the setting that puts a server on the network."
+               if server_mode else
+               "To be reachable from other devices, start in server mode (SERVER_MODE=true) and set FRONTEND_HOST.")
+        )
+    if not server_mode and not _names_this_machine(frontend_host):
+        notices.append(
+            f"FRONTEND_HOST is set to {frontend_host} and is used only in server mode, so this start "
+            "listens to this computer only. Set SERVER_MODE=true, or start with --server, to be reachable "
+            "from other devices."
+        )
+    return notices
 
 
 def _port_is_free(port: int, host: str = BIND_HOST) -> bool:
@@ -405,6 +452,33 @@ def _open_browser_when_ready(server: uvicorn.Server, url: str) -> None:
         _open_browser(url)
 
 
+def _print_certificate_fingerprint() -> int:
+    """State the proxy's root-certificate fingerprint on the server's own console — the one route to it
+    that does not pass through the connection a new device is trying to decide whether to trust."""
+    try:
+        certificate = proxy_certificate.fetch()
+    except proxy_certificate.ProxyCertificateUnavailable:
+        print("No reverse proxy on this machine answered with a root certificate. Is Caddy running?", file=sys.stderr)
+        return 1
+    print(
+        f"{certificate.name}\n"
+        f"SHA-256 fingerprint: {certificate.fingerprint}\n"
+        f"SHA-1 fingerprint (Windows shows this one, as Thumbprint): {certificate.fingerprint_sha1}"
+    )
+    return 0
+
+
+def _print_setup_file(write) -> int:
+    """Print one of the files a server installation needs (`backend/server_setup.py`), and nothing else
+    on stdout: the output is piped straight into the file's place."""
+    try:
+        sys.stdout.write(write())
+    except server_setup.ServerSetupError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="luma",
@@ -423,6 +497,24 @@ def main(argv: list[str] | None = None) -> int:
              "is fixed. Overrides SERVER_MODE in either direction.",
     )
     parser.add_argument(
+        "--certificate-fingerprint",
+        action="store_true",
+        help="Print the fingerprint of the reverse proxy's root certificate, to compare against the one "
+             "shown where another computer downloads it, then exit without starting the server.",
+    )
+    parser.add_argument(
+        "--caddyfile",
+        action="store_true",
+        help="Print a Caddyfile for this installation's network name and port, then exit without "
+             "starting the server.",
+    )
+    parser.add_argument(
+        "--systemd-unit",
+        action="store_true",
+        help="Print a systemd unit that runs this installation as a server, as the current user, then "
+             "exit without starting the server.",
+    )
+    parser.add_argument(
         "--reset-password",
         nargs="?",
         const="",
@@ -437,9 +529,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.reset_password is not None:
         return account_recovery.run(args.reset_password or None)
 
+    if args.certificate_fingerprint:
+        return _print_certificate_fingerprint()
+    if args.caddyfile:
+        return _print_setup_file(server_setup.caddyfile)
+    if args.systemd_unit:
+        return _print_setup_file(server_setup.systemd_unit)
+
     # Before anything that can fail, so that what fails is written down somewhere.
     if not _has_console():
         _redirect_output_to_log()
+    else:
+        _write_lines_as_they_are_printed()
 
     if not spa_mounted:
         print(
@@ -484,6 +585,10 @@ def main(argv: list[str] | None = None) -> int:
             print(exc, file=sys.stderr)
             return 1
 
+    transport.declare_reachable_from_network(server_mode)
+    for notice in _unused_address_notices(server_mode):
+        print(notice)
+
     # The port is settled here and nowhere else — a busy configured one falls back to an ephemeral port —
     # so the launcher is the only place that can tell the log file which address this run is on. Declared
     # before the server runs, because the lifespan that writes the start marker is inside `server.run()`.
@@ -521,10 +626,12 @@ def main(argv: list[str] | None = None) -> int:
             if behind_proxy else
             f"http://{advertisement.hostname}:{port}, over plain HTTP"
         )
-    if _has_console():
+    # A server's output is usually a supervisor's journal, where the keystroke is as unusable as it is in
+    # a log file; the advice is kept for a server someone started by hand.
+    if _has_console() and (sys.stdout.isatty() or not server_mode):
         print(f"{running}. Press Ctrl+C to stop.")
     else:
-        print(running)
+        print(f"{running}.")
     try:
         # Blocking, and in the main thread on purpose: uvicorn installs the signal handlers that make
         # Ctrl+C a clean shutdown rather than an abandoned server thread. Nothing is caught: every stop

@@ -35,23 +35,17 @@ from backend.db.control_database import (
     disable_totp,
     delete_user,
     enable_totp,
-    get_data_provider_intended,
     get_https_warning_suppressed,
     get_login_account,
     get_password_policy,
     list_all_app_passkey_credentials,
-    get_security_profile,
     set_https_warning_suppressed,
     get_user_by_id,
     enable_auth_with_admin,
-    set_data_provider_intended,
     list_users,
     password_policy_label,
     recovery_code_count,
-    security_profile_guidance,
-    security_profile_label,
     replace_recovery_codes,
-    set_security_profile,
     set_password_policy,
     spend_password_check,
     update_user,
@@ -207,14 +201,6 @@ class PasswordPolicyRequest(BaseModel):
     policy: str
 
 
-class SecurityProfileRequest(BaseModel):
-    profile: str
-
-
-class DataProviderIntentRequest(BaseModel):
-    intended: bool
-
-
 class HttpsWarningSuppressRequest(BaseModel):
     suppressed: bool
 
@@ -352,8 +338,6 @@ def _auth_status_payload(request: Request | None = None) -> dict:
     # Identity is now uniform: whichever mode, the current user (if any) comes from the session.
     enabled = auth_required()
     password_policy = get_password_policy()
-    security_profile = get_security_profile()
-    security_guidance = security_profile_guidance(security_profile)
     with get_db() as conn:
         db_instance_id = get_db_instance_id(conn)
     developer_options_enabled = app_config.developer_options_enabled()
@@ -362,12 +346,6 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "needs_bootstrap": enabled and bootstrap_required(),
         "password_policy": password_policy,
         "password_policy_label": password_policy_label(password_policy),
-        "security_profile": security_profile,
-        "data_provider_intended": get_data_provider_intended(),
-        "security_profile_label": security_profile_label(security_profile),
-        "security_profile_summary": security_guidance["summary"],
-        "security_profile_recommended_auth": security_guidance["recommended_auth"],
-        "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
         "developer_options_enabled": developer_options_enabled,
         # Whether this process can stop itself, which only the desktop launcher arranges. Reported here
         # rather than probed separately because the UI has to decide whether to offer the control at all,
@@ -401,14 +379,12 @@ def _auth_status_payload(request: Request | None = None) -> dict:
             payload["data_location"] = app_config.data_location()
         # Detected transport facts (topology + HTTPS) are per-request, not stored presets. The frontend
         # uses these to steer HTTPS guidance and gate connect-time actions on real HTTPS availability.
-        provider_intended = payload["data_provider_intended"]
         payload["transport"] = {
             "is_loopback": transport.request_is_loopback(request),
+            "reachable_from_network": transport.reachable_from_network(),
             "scheme": transport.request_scheme(request),
             "is_https": transport.request_is_https(request),
-            "https_expected": transport.https_expected(
-                request, perimeter_on=enabled, provider_intended=provider_intended
-            ),
+            "https_expected": transport.https_expected(request, perimeter_on=enabled),
             "https_warning_suppressed": get_https_warning_suppressed(),
         }
     return payload
@@ -615,35 +591,8 @@ def save_password_policy(body: PasswordPolicyRequest, request: Request):
     }
 
 
-@router.post("/security-profile")
-def save_security_profile(body: SecurityProfileRequest, request: Request):
-    require_admin_or_local(request)
-    try:
-        set_security_profile(body.profile)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    profile = get_security_profile()
-    guidance = security_profile_guidance(profile)
-    return {
-        "security_profile": profile,
-        "security_profile_label": security_profile_label(profile),
-        "security_profile_summary": guidance["summary"],
-        "security_profile_recommended_auth": guidance["recommended_auth"],
-        "security_profile_suggested_password_policy": guidance["suggested_password_policy"],
-    }
-
-
-@router.post("/data-provider-intent")
-def save_data_provider_intent(body: DataProviderIntentRequest, request: Request):
-    require_admin_or_local(request)
-    set_data_provider_intended(bool(body.intended))
-    return {"data_provider_intended": get_data_provider_intended()}
-
-
 @router.post("/https-warning-suppress")
 def suppress_https_warning(body: HttpsWarningSuppressRequest, request: Request):
-    # Only the *recommended* (plain client-server, no provider) HTTPS nag is suppressible — the
-    # required (provider configured) case ignores this and self-clears only over real HTTPS.
     require_admin_or_local(request)
     set_https_warning_suppressed(bool(body.suppressed))
     return {"https_warning_suppressed": get_https_warning_suppressed()}

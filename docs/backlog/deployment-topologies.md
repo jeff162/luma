@@ -49,10 +49,13 @@ they move there.
 - **Luma hands out Caddy's root certificate.** Caddy serves it on its loopback admin API, so Luma can
   fetch it on request with no file path or permission to configure. The download needs no sign-in — the
   certificate is public, and a device has to hold it before a password can safely be typed — and sits
-  beside per-device install steps, reached from the sign-in screen and from the *Set up HTTPS* task. The page
-  shows the certificate's fingerprint and the server prints the same one at startup, so a certificate
-  swapped on a device's first visit — the one moment it is fetched over a connection nothing vouches
-  for — can be caught by comparing the two.
+  beside per-device install steps, reached from the sign-in screen and from Administration. The page
+  shows the certificate's fingerprint, and the server states the same one from a command on its own
+  console and in Administration, so a certificate swapped on a device's first visit — the one moment it
+  is fetched over a connection nothing vouches for — can be caught by comparing the two. That is once
+  per device and optional; nothing is checked at startup. The server keeps the first fingerprint it
+  sees, and a different one later is put to an administrator as a task, because every device then needs
+  the new certificate.
 - **Sign-in protection is steered, not required.** An operator who trusts their network may leave it
   off; the existing recommendation and task do the steering.
 - **Windows and macOS can be the server.** The mode, the responder and Caddy are all cross-platform.
@@ -60,23 +63,36 @@ they move there.
 
 ### To build
 
-1. **The root-certificate download** and its install steps.
-2. **A Caddyfile, a systemd unit and an install sequence**, with the Caddyfile generated for the
-   configured name so the certificate and the advertised name cannot disagree.
-3. **The topology UI**, collapsed from three radios to the one forward-looking question
-   (`security-model.md` → *Open*), and the *Set up HTTPS* task pointed at instructions that exist.
-4. **Containers** — the compose file publishes the backend port directly and its nginx forwards neither
+1. **Containers** — the compose file publishes the backend port directly and its nginx forwards neither
    the scheme nor the client address, so every request there reads as cleartext from the network and
    the provider-secret operations are refused, from the same machine included. Accepted until this
-   lands; separate from the rest.
+   lands; separate from the rest. The compose file states `BACKEND_HOST=0.0.0.0`, which is what the image
+   binds, so the installation already reports itself as reachable from the network.
 
 ### Open
 
-- **Three things to verify on a real network**, none of which a development machine can show: that a
-  `.local` name is accepted as a WebAuthn RP id (it should be, since the RP id is set *equal* to the
-  host), that the client devices in use resolve `.local` at all, and that the responder coexists with
-  the operating system's own on each platform — including a server whose host name equals `MDNS_NAME`,
-  which is meant to pass as the same machine rather than be refused as a conflict.
+- **The per-device install steps are checked for Windows only.** Those were followed on a real machine
+  and corrected from it. The Mac, Linux, iPad and Android steps were written from how each platform is
+  known to work, not from a run.
+- **Verified on a real network, 2026-10-12**, with the server on Ubuntu behind Caddy and a Chromium-based
+  browser on Windows: the advertised `.local` name resolves, the certificate installs and is trusted,
+  and a `.local` name is accepted as a WebAuthn RP id — a vault passkey registered and unlocked there.
+  The service comes back by itself after a reboot, and the files `--caddyfile` and `--systemd-unit`
+  print match the ones written by hand for that machine.
+- **Still to verify on a real server**:
+  - the install sequence followed from the printed files on a machine that has neither yet;
+  - a sign-in passkey on a `.local` name;
+  - a tablet, for both resolving `.local` and the install steps (the pages are not built for a phone,
+    so a tablet is the small end of what connects);
+  - Administration → *Server certificate*, including the fingerprint check against a thumbprint read
+    off a Windows machine, and the dialog the sign-in screen's link opens;
+  - Administration → *Network access* over HTTPS and from the server's own browser — only the
+    this-computer-only reading has been seen rendered;
+  - that a signed-out page load no longer leaves an `[auth] rejected /api/auth/preferences` line in the
+    journal;
+  - the responder beside the operating system's own on Windows and macOS as the server;
+  - a server whose host name equals `MDNS_NAME`, which is meant to pass as the same machine rather than
+    be refused as a conflict.
 
 ## Shape B — desktop: step 3's remainder
 
