@@ -5,10 +5,11 @@
 only what is genuinely unbuilt:
 
 - [`../operations.md`](../operations.md) — the shapes, what each binds to, the data directory, restore
-  as a destructive operation, and every rejected alternative (the native-window options, universal2,
-  onefile in a `.app`, pyobjc, `%APPDATA%`).
+  as a destructive operation, and the rejected ways of running it (the native-window options, the other
+  container shapes).
 - [`../releasing.md`](../releasing.md) — building the artifacts, the two distribution forms, macOS
-  signing and the icon pipeline, CI and the release checklist.
+  signing and the icon pipeline, CI and the release checklist, and the rejected packaging options
+  (universal2, onefile in a `.app`, pyobjc, `%APPDATA%`).
 - [`../architecture.md`](../architecture.md) → *Packaged builds* — bundle/install roots, the launcher,
   the shutdown signals, the macOS wrapper and the liveness watch.
 - [`../security-model.md`](../security-model.md) — why the host name is load-bearing, and the transport

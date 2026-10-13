@@ -7,47 +7,27 @@ This document defines UI behavior and interaction patterns. For underlying data 
 ## Contents
 
 - [Product intent](#product-intent)
-
 - [General principles](#general-principles)
-
 - [Page structure](#page-structure)
-
 - [Tree views](#tree-views)
-
 - [Section lists and collapsible cards](#section-lists-and-collapsible-cards)
-
 - [Row editing](#row-editing)
-
 - [Transaction rows](#transaction-rows)
-
 - [Pills and expanding selectors](#pills-and-expanding-selectors)
-
 - [Empty states](#empty-states)
-
 - [Drop zones and file inputs](#drop-zones-and-file-inputs)
-
 - [Enter in a small explicit-submit form](#enter-in-a-small-explicit-submit-form)
-
+- [Secret fields](#secret-fields)
 - [Confirmation and completion flows](#confirmation-and-completion-flows)
-
 - [First-run onboarding](#first-run-onboarding)
-
 - [Help and contextual explainers](#help-and-contextual-explainers)
-
 - [Dismissing what the app is nagging about](#dismissing-what-the-app-is-nagging-about)
-
 - [Import-specific patterns](#import-specific-patterns)
-
 - [Ownership and tag-driven reporting](#ownership-and-tag-driven-reporting)
-
 - [Floating detail panels](#floating-detail-panels)
-
 - [Theming](#theming)
-
 - [Charts and overlays](#charts-and-overlays)
-
 - [When to document a new pattern](#when-to-document-a-new-pattern)
-
 - [Open](#open)
 
 ## Product intent

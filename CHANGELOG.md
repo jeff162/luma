@@ -36,7 +36,7 @@ anyone could be upgrading from, so the entry below describes what exists rather 
 - **Backup and restore**, optionally encrypted, covering the ledger and its attached documents.
 - **Multiple owners and multiple users**, with owner as a reporting axis rather than a separate ledger.
 - **Local or networked operation** — a desktop install on loopback, or a machine on the LAN reached by
-  other devices behind a sign-in perimeter.
+  other devices behind a sign-in perimeter, from the same download or from a published container image.
 - **An optional check for a new version**, off unless switched on, which adds a task when a newer
   release exists. Nothing is downloaded or installed.
 

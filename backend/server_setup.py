@@ -14,7 +14,8 @@ nothing on screen to say why. The unit names an executable and a user, and a wro
 fails at boot, read about later in a journal.
 
 Neither file is installed from here. Both destinations belong to root, and the launcher is run as the
-user who owns the data (`docs/operations.md` -> "LAN server" has the sequence). The sign-in entry is the
+user who owns the data (the Help topic *Running Luma as a server* has the sequence, and
+`docs/operations.md` -> "LAN server" what it depends on). The sign-in entry is the
 exception: it belongs to that same user, so it is written directly.
 """
 

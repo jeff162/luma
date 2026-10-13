@@ -6,7 +6,8 @@
 # Where .env should be stored:
 #   Portable download (Windows, Linux)   the folder holding the luma program
 #   macOS app                            ~/Library/Application Support/Luma
-#   Source checkout, Docker              the top folder of the checkout
+#   Source checkout                      the top folder of the checkout
+#   Docker                               the folder holding docker-compose.yml
 #
 # Settings -> Configuration shows the exact path (whether or not the file exists yet), every effective
 # value, and where each value came from.

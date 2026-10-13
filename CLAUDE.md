@@ -79,7 +79,7 @@ branch state from the injected snapshot.
 - `docs/security-model.md` — what is defended and what deliberately is not; the revocation
   conditioning a new provider can break, secret custody, transport per topology, recovery &
   compromise response (the *mechanism* stays in `architecture.md`)
-- `docs/operations.md` — running an instance: the three topologies and what each binds to, where the
+- `docs/operations.md` — running an instance: the topologies and what each binds to, where the
   data lives & the env core, restore as a destructive operation, diagnosing (building is
   `docs/releasing.md`)
 - `docs/scale-and-limits.md` — what breaks at volume: the caps that exist on purpose & what each

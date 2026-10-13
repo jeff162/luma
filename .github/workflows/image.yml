@@ -1,0 +1,87 @@
+# Publishes the container image for a release to the GitHub container registry.
+#
+# It runs when a GitHub Release is **published**, not when a tag is pushed. `release.yml` builds on a
+# tag and deliberately publishes nothing: a person decides what a release is and writes it. This
+# workflow reacts to that same decision, so an image exists exactly when the release it belongs to does,
+# and a tag that never became a release leaves nothing in the registry.
+#
+# No tests run here. The tag being released already passed `release.yml`, which is gated on `ci.yml`.
+#
+# Each architecture is built on a runner of that architecture and the two are then joined under one
+# name, so `docker pull` on a Raspberry Pi and on an x86-64 machine each receive their own. Building
+# both on one runner would mean emulating the other, which is slow and needs a helper image or an action
+# from outside GitHub; this way the workflow uses nothing but `actions/checkout` and the Docker that the
+# runners already carry.
+#
+# The image is named for the repository that ran the workflow, so a fork publishes under its own name
+# and never under this one's.
+
+name: Container image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - {os: ubuntu-24.04, arch: amd64}
+          - {os: ubuntu-24.04-arm, arch: arm64}
+
+    steps:
+      # A release event's ref is the release's tag, so this is the tagged tree.
+      - uses: actions/checkout@v7
+
+      - name: Build and push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # The registry accepts only lowercase names, and an owner's name may not be.
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${TAG#v}"
+          echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # The source label is what ties the package to this repository on GitHub. Provenance is off
+          # so each tag is a plain image, which is what the join below expects to be handed.
+          docker build \
+            --provenance=false \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$version" \
+            --tag "$image:$version-$ARCH" \
+            .
+          docker push "$image:$version-$ARCH"
+
+  manifest:
+    name: Join the architectures
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+
+    steps:
+      - name: Tag the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${TAG#v}"
+          echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          tags=(--tag "$image:$version")
+          # `latest` is what `docker-compose.yml` names, so a pre-release must not move it.
+          if [ "$PRERELEASE" != "true" ]; then
+            tags+=(--tag "$image:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" "$image:$version-amd64" "$image:$version-arm64"

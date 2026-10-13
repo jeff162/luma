@@ -24,10 +24,15 @@ import { formatDate } from '../lib/utils.js'
 import { connectionProviderLabel } from '../lib/connectionSummary.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
-function Section({ title, description, children, style }) {
+function Section({ title, description, help, children, style }) {
   return (
     <div style={{ display: 'grid', gap: 8, ...style }}>
-      <SectionEyebrow>{title}</SectionEyebrow>
+      {help ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <SectionEyebrow>{title}</SectionEyebrow>
+          {help}
+        </div>
+      ) : <SectionEyebrow>{title}</SectionEyebrow>}
       {description ? (
         <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>{description}</p>
       ) : null}
@@ -432,6 +437,7 @@ export function VaultSettingsDialog({ currentUserId, isAdmin, onChangePassphrase
         <Section
           title="Respond to an exposure"
           description="If the database or a backup may have been copied, replace each connection's credential at its provider so the copied ones stop working. Connections keep syncing where the provider supports this; the rest are listed with what to do at the provider."
+          help={<FeatureExplainer topic="copied-database" label="About responding to an exposure" placement="bottom-left" />}
         >
           <div>
             <Button variant="ghost" small disabled={busy === 'reissue'} onClick={() => setConfirmingReissue(true)}>

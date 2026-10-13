@@ -38,6 +38,9 @@
  * pill, field label or heading -- and for the term a passage or list item is defining. `<em>` is for
  * stress on a word, example values, and the names of data rather than controls: categories, groups and
  * tags, the built-in ones included (<em>Money movement</em>, <em>Skip</em>).
+ *
+ * `<div className="help-box">` draws a box round a heading and what follows it, for a part of a topic
+ * that should read as separate from the field-by-field text around it.
  */
 
 import HelpLink from './HelpLink.jsx'
@@ -356,13 +359,14 @@ export const HELP_TOPICS = [
             in up front.
           </li>
           <li>
-            <strong>Changes are reversible, and rarely destructive.</strong> Most actions can be
+            <strong>Most changes are reversible.</strong> Most actions can be
             undone, redone, or adjusted later, and several that look like deletions are really
             reporting switches: a group{' '}
             <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> still keeps its
             transactions, and a{' '}
             <HelpLink to="/help/removed-as-duplicates">removed duplicate</HelpLink> stays on its
-            file's duplicate report, ready to restore. Little is permanent, so experimenting is safe.
+            file's duplicate report, ready to restore. The few removals that are permanent say so
+            before they happen.
           </li>
           <li>
             <strong>Overlapping sources are safe to import.</strong> Strong duplicate detection is
@@ -2772,6 +2776,45 @@ export const HELP_TOPICS = [
           administrator.
         </p>
 
+        <div className="help-box">
+          <HelpHeading anchor="resolving-problems">Resolving problems</HelpHeading>
+          <div className="help-table-scroll">
+            <table>
+              <thead>
+                <tr><th>Situation</th><th>What to do</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>The passphrase or a passkey may have been seen or copied</td>
+                  <td>
+                    <ol style={{ marginBottom: 0 }}>
+                      <li>Change or remove it under <strong>Unlock methods</strong>, which retires the
+                        unlock method.</li>
+                      <li><strong>Replace vault key&hellip;</strong>, which retires the key it could
+                        reach.</li>
+                    </ol>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Someone should no longer be able to open the vault</td>
+                  <td>
+                    <ol style={{ marginBottom: 0 }}>
+                      <li><strong>Remove access</strong>.</li>
+                      <li><strong>Replace vault key&hellip;</strong>.</li>
+                    </ol>
+                  </td>
+                </tr>
+                <tr>
+                  <td>The database or a backup may have been copied</td>
+                  <td>Follow the steps
+                    in <HelpLink to="/help/copied-database">if the database or a backup is
+                      copied</HelpLink>, which start at <strong>Respond to an exposure</strong>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <HelpHeading anchor="replace-key">Replace the vault key</HelpHeading>
         <p>
           Generates a new key and re-encrypts every stored credential under it, so a copy of the old
@@ -2784,42 +2827,9 @@ export const HELP_TOPICS = [
           For when the database or a backup may have been copied. <strong>Replace connection
             credentials&hellip;</strong> has each provider issue a new credential where the provider
           supports that, so the copied ones stop working and the connections keep syncing. The rest are
-          listed with what to do at the provider. A credentials backup made earlier holds the replaced
-          credentials, so a new <HelpLink to="/help/data-and-backups#backups">backup</HelpLink> is
-          needed afterwards.
+          listed with what to do at the provider. It is the first step
+          of <HelpLink to="/help/copied-database">responding to a copied database</HelpLink>.
         </p>
-
-        <HelpHeading anchor="which-to-use">Which to use</HelpHeading>
-        <div className="help-table-scroll">
-          <table>
-            <thead>
-              <tr><th>Situation</th><th>What to do</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>The passphrase is forgotten</td>
-                <td><strong>Can&apos;t open it?</strong> on the vault strip, which is shown while the
-                  vault is locked.</td>
-              </tr>
-              <tr>
-                <td>The passphrase or a passkey may have been seen or copied</td>
-                <td>Change or remove it under <strong>Unlock methods</strong>,
-                  then <strong>Replace vault key&hellip;</strong>. The first retires the unlock method
-                  and the second retires the key it could reach.</td>
-              </tr>
-              <tr>
-                <td>Someone should no longer be able to open the vault</td>
-                <td><strong>Remove access</strong>, then <strong>Replace vault key&hellip;</strong>, in
-                  that order.</td>
-              </tr>
-              <tr>
-                <td>The database or a backup may have been copied</td>
-                <td><strong>Replace connection credentials&hellip;</strong>, then change the passphrase,
-                  then <strong>Replace vault key&hellip;</strong>.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </>
     ),
   },
@@ -4050,6 +4060,28 @@ export const HELP_TOPICS = [
           The server runs while that user is signed in. If it does not start, a message names the log
           file holding the reason.
         </p>
+        <p>
+          To have the server start with the computer instead, with nobody signed in, use a Windows
+          scheduled task in place of step 3:
+        </p>
+        <ol>
+          <li>
+            In <strong>Task Scheduler</strong>, choose <strong>Create Task</strong> and
+            select <strong>Run whether user is logged on or not</strong>.
+          </li>
+          <li>
+            Add a trigger of <strong>At startup</strong>, and an action that starts{' '}
+            <code>luma.exe --server</code> from its folder.
+          </li>
+          <li>
+            Clear <strong>Stop the task if it runs longer than 3 days</strong> and, on a
+            laptop, <strong>Start the task only if the computer is on AC power</strong>.
+          </li>
+        </ol>
+        <p>
+          A server started this way has no icon in the notification area. Its address is on the
+          start line of <code>luma.log</code>, beside the data.
+        </p>
 
         <HelpHeading anchor="each-device">On each computer that connects</HelpHeading>
         <p>
@@ -4071,10 +4103,16 @@ export const HELP_TOPICS = [
         <p>
           A server can also be put on the network directly, with no proxy and no certificate to
           install: set <code>FRONTEND_HOST=0.0.0.0</code> in <code>.env</code>, skip the Caddy steps,
-          and open <code>http://luma.local:8010</code>. This is the least setup. What it costs:
+          and open <code>http://luma.local:8010</code>. HTTPS takes only the steps above and is how a
+          server is meant to be run; going without it is the choice of whoever runs the server. What
+          it costs:
         </p>
         <ul>
-          <li>Everything, sign-in passwords included, crosses the network unencrypted.</li>
+          <li>
+            Everything crosses the network unencrypted, sign-in passwords and the vault passphrase
+            included. A vault passphrase read off the network opens the data provider credentials in
+            any copy of the database or of a credentials backup.
+          </li>
           <li>Passkeys are unavailable.</li>
           <li>
             A data source can be connected, and a provider's secret saved or shown, only from a
@@ -4318,19 +4356,73 @@ export const HELP_TOPICS = [
 
         <HelpHeading anchor="exposed-files">If the database files are exposed</HelpHeading>
         <p>
-          If the database files are exposed and there are data connections, even though the credentials
-          are protected by a strong passphrase, the mitigation step is to revoke the existing credentials
-          and issue new ones. Disconnecting the accounts from within {APP_NAME} revokes the per-account (per-connection)
-          credentials for certain providers but for all providers it is necessary to revoke or
-          rotate the secret on the provider webpage. A rotated secret can keep working until the
-          old one is deleted there, so delete it once the new one is entered.
-          <strong> Respond to an exposure</strong> in Vault settings replaces the per-connection credentials
-          for providers that support it, so those connections keep working without reconnecting, and lists
-          the remaining steps.
+          The transactions in the copy are exposed, and where there are data connections the
+          credentials in it are retired at their providers, even though they are encrypted.{' '}
+          <HelpLink to="/help/copied-database">If the database or a backup is copied</HelpLink> has the
+          steps.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'copied-database',
+    section: 'general-concepts',
+    title: 'If the database or a backup is copied',
+    surfaces: ['Vault settings (Respond to an exposure)'],
+    summary: 'The transactions in a copied database or unencrypted backup are exposed for good. The provider credentials in it are encrypted, and are replaced or revoked at each provider so the copy cannot use them.',
+    body: () => (
+      <>
+        <p>*needs review*</p>
+        <p>
+          A copy of the database files, or of a data backup that was not encrypted, holds the
+          transactions in plain text. Nothing done afterwards changes what is in a file someone
+          already has.
         </p>
         <p>
-          If the provider stops accepting the stored credential, the connection card
-          reports <strong>reconnect needed</strong>.
+          The data provider credentials in the copy are encrypted, and what protects them is how well
+          the vault passphrase stands up to guessing, which can go on against a copy without limit. So
+          they are treated as reachable, and retired at each provider. That is the one step that
+          reaches a credential already in the copy.
+        </p>
+
+        <HelpHeading anchor="steps">The steps, in order</HelpHeading>
+        <ol>
+          <li>
+            Open <HelpLink to="/help/vault-settings">Vault settings</HelpLink> from the strip at the
+            top of the Connections tab, and under <strong>Respond to an exposure</strong>{' '}
+            choose <strong>Replace connection credentials&hellip;</strong>. Each provider that supports
+            it issues a new credential, so the copied one stops working and the connection keeps
+            syncing.
+          </li>
+          <li>
+            Work through what is listed afterwards. A connection whose provider could not replace its
+            credential is revoked at the provider and then reconnected. A provider secret entered
+            with <strong>Configure</strong> is rotated at the provider, the new one is entered
+            with <strong>Configure</strong>, and the old one is then deleted at the provider, since it
+            can keep working until it is.
+          </li>
+          <li>
+            Change the vault passphrase, under <strong>Unlock methods</strong>.
+          </li>
+          <li>
+            Choose <strong>Replace vault key&hellip;</strong>.
+          </li>
+          <li>
+            Make a new credentials <HelpLink to="/help/data-and-backups#backups">backup</HelpLink>. One
+            made earlier holds the replaced credentials, which the providers no longer accept.
+          </li>
+        </ol>
+        <p>
+          Steps 3 and 4 protect what is encrypted from then on, the new credentials included. A
+          passphrase worked out from the copy would otherwise still open the vault, and the key it
+          reaches would still decrypt what the vault holds. Each step retires one of the two, so both
+          are needed. This is done once for an exposure and is not a routine to repeat.
+        </p>
+        <p>
+          Any other copy of the database, such as a second installation or one restored from a backup,
+          stops syncing the connections whose credentials were replaced. A connection card
+          reports <strong>reconnect needed</strong> when its provider no longer accepts the stored
+          credential.
         </p>
       </>
     ),

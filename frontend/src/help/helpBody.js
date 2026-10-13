@@ -36,4 +36,12 @@ export const HELP_BODY_CSS = `
   .help-body td { padding: 9px 14px 9px 0; vertical-align: top; border-bottom: 1px solid var(--border); }
   .help-body td:first-child { width: 32%; font-weight: 600; }
   .help-body tr:last-child td { border-bottom: 0; padding-bottom: 0; }
+  /* A part of a topic set apart from the reference text around it, such as a "which of these do I
+     want" table whose last row would otherwise run into the next heading. */
+  .help-body .help-box {
+    margin: 18px 0; padding: 12px 14px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .help-body .help-box > :first-child { margin-top: 0; }
+  .help-body .help-box > :last-child { margin-bottom: 0; }
 ${HELP_ANCHOR_CSS}`

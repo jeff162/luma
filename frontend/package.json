@@ -20,13 +20,14 @@
     "ui:test:debug": "playwright test --config=playwright.config.js --debug",
     "ui:test:file": "playwright test --config=playwright.config.js",
     "ui:codegen": "node scripts/runPlaywrightCodegen.js",
-    "lint": "npm run lint:frontend && npm run lint:backend && npm run lint:ruff && npm run lint:timestamps && npm run lint:personal-data && npm run lint:shipped-ascii",
+    "lint": "npm run lint:frontend && npm run lint:backend && npm run lint:ruff && npm run lint:timestamps && npm run lint:personal-data && npm run lint:shipped-ascii && npm run lint:doc-contents",
     "lint:frontend": "eslint . && node scripts/check-comments.js",
     "lint:backend": "node ../scripts/run_backend_comment_check.js",
     "lint:ruff": "node ../scripts/run_ruff.js",
     "lint:timestamps": "node ../scripts/check-backend-timestamps.js",
     "lint:personal-data": "node ../scripts/check-personal-data.js",
     "lint:shipped-ascii": "node ../scripts/run_shipped_ascii_check.js",
+    "lint:doc-contents": "node ../scripts/check-doc-contents.js",
     "postinstall": "bash ../scripts/install-hooks.sh || sh ../scripts/install-hooks.sh"
   },
   "dependencies": {

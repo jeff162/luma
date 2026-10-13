@@ -1,31 +1,54 @@
 # Running and operating Luma
 
-How a copy of Luma is deployed, what it binds to, where it keeps its data, and what to do when
-something is wrong. The audience is whoever is running an instance — which on a desktop install is the
-same person using it, and on a networked one is not.
+How a copy of Luma is deployed, what it binds to, where it keeps its data, and what a running instance
+offers for finding out what is wrong. **This is the maintainer's record**: what each way of running
+relies on and why it is shaped that way, for whoever changes the launcher, the server setup, restore or
+the logs.
 
-**This is the running half. Building is the other half and lives in [`releasing.md`](releasing.md)** —
-producing the artifacts, the two distribution forms, macOS signing, CI, and the release checklist.
-Nothing here needs a build; nothing there is needed to run one.
+**Setting a copy up is described elsewhere, for the person doing it.**
 
-Two other boundaries, so nothing is stated twice:
+| Surface | Audience | What it holds |
+| --- | --- | --- |
+| `README.md` → *Installing Luma*, *Running Luma as a server*, *Locked out* | someone installing or running a copy | the downloads, the Docker sequence, the password reset command |
+| Help → *Running Luma as a server*, *Configuration settings*, *Data on disk, and backups* | the same person, with the app open | the Linux and Windows server sequences, each setting, backup and restore |
+| [`architecture.md`](architecture.md) → *Cross-platform approach* | someone changing the code | the launcher as built: the bind and the URL, the lockfile, opening a browser, stop signals, liveness, packaged-build roots |
+| [`security-model.md`](security-model.md) → *Transport security* | someone changing the design | whether a topology may run over plain HTTP, and why the host name is load-bearing |
+| [`releasing.md`](releasing.md) | whoever cuts a release | building the artifacts, and the packaging decisions |
 
-- **[`security-model.md`](security-model.md)** owns *whether a topology may run over plain HTTP*, the
-  permissible-HTTP rule, and why the host name is load-bearing. This document says what to configure;
-  that one says what the configuration has to satisfy and why.
-- **[`architecture.md`](architecture.md)** owns the mechanism — the launcher, packaged-build roots,
-  shutdown signals, liveness detection, the configuration resolver. This document is the operator's
-  view of the same code.
+Where one of the first two holds a step-by-step sequence, this document does not repeat it. It records
+what the sequence depends on.
+
+## Contents
+
+- [The ways Luma is run](#the-ways-luma-is-run)
+- [Desktop](#desktop)
+- [Source checkout](#source-checkout)
+- [Logs](#logs)
+- [LAN server](#lan-server)
+  - [Behind a proxy, or directly](#behind-a-proxy-or-directly)
+  - [The proxy's certificate](#the-proxys-certificate)
+  - [The proxy and the service](#the-proxy-and-the-service)
+  - [On Windows](#on-windows)
+  - [macOS](#macos)
+- [Containers](#containers)
+- [Where the data lives, and how the app decides](#where-the-data-lives-and-how-the-app-decides)
+- [Restore is a destructive operation](#restore-is-a-destructive-operation)
+- [Locked out](#locked-out)
+- [Diagnosing a running instance](#diagnosing-a-running-instance)
+- [Considered and rejected](#considered-and-rejected)
+- [Obstacles](#obstacles)
+- [Open](#open)
 
 ---
 
-## The three ways Luma is run
+## The ways Luma is run
 
 | | Reached by | Serves the interface | Binds | Perimeter |
 | --- | --- | --- | --- | --- |
 | **Desktop** | one machine | the backend itself | loopback | usually off |
 | **LAN server** | several devices | the backend, behind a TLS-terminating proxy or directly | loopback behind the proxy, or the network | on |
 | **Containers** | several devices, on a Linux host | the backend, behind a proxy container | loopback on the host, behind the proxy | on |
+| **Source checkout** | one machine, for working on Luma | a development server, with the backend behind it | loopback | usually off |
 
 They are the **same application**. What differs is only how uvicorn is launched and whether something
 wraps it.
@@ -38,85 +61,112 @@ browser in hand. See `security-model.md` → *Transport security*.
 ## Desktop
 
 One process. `python -m backend.desktop` (or the packaged executable) serves the interface and the API
-together and opens a browser at it — no second process, no proxy.
+together and opens a browser at it — no second process, no proxy. `architecture.md` → *Cross-platform
+approach* has the mechanism; what someone running it meets is this:
 
-**It binds `127.0.0.1` but hands out `http://localhost:<port>`, and the difference matters.** A
-WebAuthn Relying Party id must be a domain, so opening the address form silently disables every passkey
-vault slot with nothing on screen to explain why. Use the printed URL.
-
-**The port is `FRONTEND_PORT`, and it is preferred, not guaranteed.** The browser's port has that one
-name in every topology; here the single process *is* the frontend, so `BACKEND_PORT` — the internal hop
-behind Vite when running from source — is not read. A busy configured port falls back to an ephemeral one, and
-says so rather than doing it silently — a separately started `uvicorn` on the same databases is usually
-what that means. Nothing durable is keyed to the port: cookies are not port-scoped and an RP id is the
-host alone, so a passkey registered on one port still works on the next.
-
-**A second launch opens a tab, it does not start a second instance.** `luma-desktop.lock` in the data
-directory records the port. It records a port and not a claim of liveness — it survives a crash — so
-`/api/health` is what settles whether the recorded instance is actually there.
-
-**Opening the browser is a convenience; the printed URL is the contract.** No opener on any platform
-reports success usefully, so the outcome is never claimed. `--no-browser` skips the attempt.
-
-**The launcher starts the opener itself on Linux, rather than through Python's `webbrowser`.** That
-console is the whole interface at startup — it carries the address and the way to stop — so anything a
-child process writes to it is read as Luma's, by someone who has just run an unsigned binary for the
-first time. `webbrowser` starts the generic openers without redirecting their streams, which puts the
-browser's own startup chatter directly under Luma's startup line; starting `xdg-open` directly discards
-it, and gives the child a session of its own so the Ctrl+C that stops the server does not also close the
-window being read. Under WSL the path is different again, because `xdg-open` there prints a failure for
-each Linux browser the distribution does not have and that wall of errors reads as a crash while the
-server runs normally. An explicit `BROWSER` in the environment defers to `webbrowser`, which is what
-honors it, and every non-Linux platform does too — their openers already redirect what they start.
+- **It binds `127.0.0.1` but hands out `http://localhost:<port>`, and the difference matters.** A
+  WebAuthn Relying Party id must be a domain, so opening the address form silently disables every passkey
+  vault slot with nothing on screen to explain why. Use the printed URL.
+- **The port is `FRONTEND_PORT`, and it is preferred, not guaranteed.** The browser's port has that one
+  name in every topology; here the single process *is* the frontend, so `BACKEND_PORT` — the internal hop
+  behind Vite when running from source — is not read. A busy configured port falls back to an ephemeral one, and
+  says so rather than doing it silently — a separately started `uvicorn` on the same databases is usually
+  what that means. Nothing durable is keyed to the port: cookies are not port-scoped and an RP id is the
+  host alone, so a passkey registered on one port still works on the next.
+- **A second launch opens a tab, it does not start a second instance.** `luma-desktop.lock` in the data
+  directory records the port. It records a port and not a claim of liveness — it survives a crash — so
+  `/api/health` is what settles whether the recorded instance is actually there.
+- **Opening the browser is a convenience; the printed URL is the contract.** No opener on any platform
+  reports success usefully, so the outcome is never claimed. `--no-browser` skips the attempt.
 
 **Stopping it.** *Shut down Luma* in the navigation panel, the Dock's Quit or Command-Q on macOS,
 Ctrl+C, **closing the terminal a portable build was started from**, and a system shutdown all converge on
-uvicorn's graceful path, so in-flight requests finish and the lockfile is released. The last two are not
-special-cased: a system shutdown reaches the process as an ordinary SIGTERM, and a closing terminal as
-SIGHUP. Neither is graceful by default — SIGTERM would be delivered a second time to `SIG_DFL` after
-uvicorn's own handler stands down, and SIGHUP is not in uvicorn's handled set at all — so the launcher
-installs handlers for both (`_install_stop_signal_handlers`), and for SIGINT. **Windows is the exception**:
-it has no SIGHUP, so closing a console window there is not a graceful stop. A second Ctrl+C does not
-force a quit — one keypress can reach a packaged build twice — so a stop waits at most five seconds for
-in-flight requests and then closes them.
+uvicorn's graceful path, so in-flight requests finish and the lockfile is released. **Windows is the
+exception**: it has no SIGHUP, so closing a console window there is not a graceful stop. A second Ctrl+C
+does not force a quit; a stop waits a bounded time for in-flight requests (`GRACEFUL_SHUTDOWN_SECONDS`)
+and then closes them.
 
-The grace is bounded from outside and unbounded from inside: the server waits on in-flight requests
-indefinitely, while the macOS wrapper allows 20 seconds after SIGTERM before SIGKILL, and a supervisor
-elsewhere allows whatever its unit specifies. A stop during a long operation can therefore be cut short —
-which costs the in-flight transaction (rolled back) and leaves the lockfile behind, both of which the
-next launch already handles. The in-app control is **registered by the launcher, and only as a desktop
+A stop during a long operation can therefore be cut short — by that bound, by the macOS wrapper, which
+allows 20 seconds after SIGTERM before SIGKILL, or by whatever a supervisor's unit specifies. That costs
+the in-flight transaction (rolled back) and can leave the lockfile behind, both of which the next launch
+already handles. The in-app control is **registered by the launcher, and only as a desktop
 application**, so neither server mode nor an instance started with plain uvicorn offers it: on a
 supervised box, stopping the process from a browser is either futile or a way for one signed-in user to
 take the service from everyone else.
 
-**Where the output goes.** An application started from Finder on MacOS has no terminal, so both streams are
-redirected to `luma-desktop.log` beside the data. That is detected from the environment LaunchServices
-sets rather than by asking whether stdout is a terminal — that question also answers "no" for a pipe,
-and diverting output whenever something captures it would take the diagnostics away from the smoke
-harness, which captures them precisely to explain a failed launch. A Windows start with `--tray` has
-none either, by its own doing, and writes to the same file (see *Installing one on Windows*).
+## Source checkout
 
-**The server also keeps its own log, in every topology.** `luma.log` beside the data database is a *copy*
-of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather than a
-redirect, so the terminal, the systemd journal and `docker logs` keep everything they received before. It
-holds warnings and errors, a crashed request's traceback included, a line each time the server starts, a
-line before and after each database compaction, the rare events that change what the installation is (a
-database created, a migration applied, the database location adopted after a move), and
-access lines only for requests that failed; successful requests stay out, or routine polling would soon
-rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
-uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
-genuine failures out the same way. **The start line names the version**, and wherever the launcher
-started the server the address that launch settled on — a busy configured port falls back to an ephemeral
-one, and nothing else records which one a given run ended up on. Running from source omits the address
-rather than guess at it: the browser is on the frontend's port with this server as an internal hop behind it. It rotates at 1 MB and keeps one
-previous file (`luma.log.1`).
-What it cannot hold is anything before the application starts, such as a missing dependency or a crash
-during import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
-in the application's own startup (a migration raising), is held — the log is set up before the data
-database is readied. Administration → **Error log** reads the errors back out of it, for administrators only,
-since a traceback can carry transaction details and paths; each message and traceback it shows is cut at a fixed length, and the file keeps the rest.
-`LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals'
-output beside the scripts.
+The arrangement for working on Luma, and the only one with two processes: a Vite development server on
+`FRONTEND_PORT`, which is what the browser opens, and the backend on `BACKEND_PORT` behind it.
+`CONTRIBUTING.md` → *Local development* has the setup and the start scripts. A checkout can also be run
+as the single process *Desktop* describes (`python -m backend.desktop`, once the interface is built),
+and then behaves as that section says.
+
+Where a checkout started with the scripts differs from a downloaded build:
+
+- **Ports.** `BACKEND_PORT` and `BACKEND_HOST` are read only here. The start scripts refuse a busy
+  port, naming it, where a downloaded build moves to a free one.
+- **Configuration.** `.env` is read from the top of the checkout. The start scripts and
+  `vite.config.js` read it directly for their ports, so `LUMA_ENV_FILE` redirects the backend only.
+- **Data.** The data directory defaults to the folder the backend is started from. A recorded database
+  path that still names a real file is left alone, with a warning, where a packaged build adopts its
+  configured location at every start (see *Where the data lives, and how the app decides*).
+- **Logs.** The start line in `luma.log` omits the address, and `LUMA_USE_LOG_FILES` makes the start
+  scripts save their terminals' output beside the scripts (see *Logs*).
+- **Identifying it.** There is no build stamp, since the commit is a `git` command away, and the
+  data-location line in the navigation pane is on by default (see *Diagnosing a running instance*).
+- **Stopping it.** The in-app *Shut down Luma* is not offered, because the launcher is what registers
+  it.
+- **The built interface.** `frontend/dist` is a copy, made by `npm run build` in `frontend/`, and
+  nothing refreshes it. It is what the single-process launcher serves (which refuses to start without
+  one), what the backend serves when it is reached directly on `BACKEND_PORT`, and what a packaging run
+  with `--skip-frontend` puts in the artifact. The development server does not read it: it serves the
+  source as it is edited. So after a frontend change those three go on serving the old interface, with
+  nothing to say so, until it is built again.
+- **Containers.** `docker compose up -d --build` builds the image from the checkout (see *Containers*).
+  The image builds its own interface from the source and never reads the checkout's `frontend/dist`,
+  so a stale copy does not reach it.
+
+**A checkout can serve a network, without the name.** The backend serves the built interface
+(`frontend/dist`) on `BACKEND_PORT` as well as the API, and listens to its own machine unless
+`BACKEND_HOST` widens it. Widened, it is the direct form described under *LAN server*, run from a
+checkout: plain HTTP, the same refusals, and no advertised name, since that belongs to the launcher.
+What it serves is the last *build* — it does not follow edits to the source the way the development
+server does.
+
+## Logs
+
+**Where startup output goes.** An application started from Finder on macOS has no terminal, so both
+streams are redirected to `luma-desktop.log` beside the data (`architecture.md` has how that is
+detected). A Windows start with `--tray` has none either, by its own doing, and writes to the same file
+(see *On Windows* under *LAN server*).
+
+**The server also keeps its own log, in every topology.** `luma.log` beside the data database is a
+*copy* of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather
+than a redirect, so the terminal, the systemd journal and `docker logs` keep everything they received
+before. It rotates at 1 MB and keeps one previous file (`luma.log.1`).
+
+- **What it holds:** warnings and errors, a crashed request's traceback included; a line each time the
+  server starts; a line before and after each database compaction; the rare events that change what the
+  installation is (a database created, a migration applied, the database location adopted after a
+  move); and access lines for requests that failed.
+- **What it leaves out:** successful requests, or routine polling would soon rotate a failure out of the
+  file; and what a client can cause without signing in (a 401, a 404, uvicorn's warnings about malformed
+  traffic), since on a networked install a flood of those would push genuine failures out the same way.
+- **The start line names the version**, and wherever the launcher started the server, the address that
+  launch settled on — a busy configured port falls back to an ephemeral one, and nothing else records
+  which one a given run ended up on. Running from source omits the address rather than guess at it: the
+  browser is on the frontend's port with this server as an internal hop behind it.
+- **What it cannot hold** is anything before the application starts, such as a missing dependency or a
+  crash during import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start
+  that fails later, in the application's own startup (a migration raising), is held — the log is set up
+  before the data database is readied.
+- **Administration → Error log reads the errors back out of it**, for administrators only, since a
+  traceback can carry transaction details and paths. Each message and traceback it shows is cut at a
+  fixed length, and the file keeps the rest.
+
+`LUMA_USE_LOG_FILES` is a different thing: it makes the start scripts save their terminals' output
+beside the scripts.
 
 **Errors raise a task for administrators.** Each error the file keeps is also counted into the control
 database as it is logged, and the Tasks page shows how many no administrator has seen yet, to exactly the
@@ -147,6 +197,8 @@ Server mode takes away what assumed a person at the machine:
   installations on one network are kept apart: give the second its own `MDNS_NAME`. The address
   advertised is the one this machine reaches the local network from, read at startup.
 
+### Behind a proxy, or directly
+
 **It reaches the network one of two ways, and the bind address says which.**
 
 | | Behind a proxy | Directly |
@@ -166,6 +218,12 @@ network: outside server mode the address setting is not read. A start that is gi
 address it will not use — `FRONTEND_HOST` outside server mode, or `BACKEND_HOST`, which belongs to a
 source checkout's scripts — says so on the console, since it would otherwise start normally and simply
 not answer on the network.
+
+**An mDNS name and HTTPS are a pair, not two conveniences.** A LAN address like `192.168.x.x` can never
+host passkeys however it is served, and a name without HTTPS still fails WebAuthn's secure-context
+requirement. Neither alone makes passkeys reachable over the LAN.
+
+### The proxy's certificate
 
 **Each device has to trust the proxy's certificate once, and the server hands it out.** Caddy issues
 the server's certificate from an authority of its own, which no device trusts until its root is
@@ -191,38 +249,21 @@ that stands until they do. In the interface this is one panel in two places: a l
 screen, for a device that trusts nothing yet, and Administration → **Server certificate**, which also
 carries the acceptance. Neither appears on an installation with no proxy certificate to hand out.
 
-**Installing one on Linux.** The proxy's site file and the supervisor's unit are printed by the build
-itself, from its own configuration, because two things in them have to agree with it exactly: the proxy
-issues its certificate for the name in its site file, which has to be the name the server advertises,
-and the unit names an executable and a user. Run as the user the server should run as, from the folder
-the build was unpacked into:
+### The proxy and the service
 
-1. **Configure it**, in `.env` beside the executable: `SESSION_COOKIE_SECURE=true`, and `MDNS_NAME` or
-   `FRONTEND_PORT` if the defaults (`luma`, `8010`) are not wanted. The cookie setting is deliberately
-   not derived from anything — see `security-model.md` → *Considered and rejected*.
-2. **Install Caddy** from the distribution's packages, which also sets it to start at boot.
-3. **Give Caddy its site file** — this replaces the placeholder one the package installs:
+**The sequences are not repeated here.** Help → *Running Luma as a server* has the Linux one and the
+Windows one, and the README has the Docker one. What follows is what they depend on.
 
-   ```sh
-   ./luma --caddyfile | sudo tee /etc/caddy/Caddyfile
-   sudo systemctl reload caddy
-   ```
-
-4. **Install the unit and start it:**
-
-   ```sh
-   ./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now luma
-   ```
-
-5. **Read the address** from `journalctl -u luma`, which carries the same line a terminal start prints,
-   and open it from another device. That device's first stop is the certificate link on the page.
-
-A firewall on the server has to admit TCP 443 for the proxy and UDP 5353 for the name. Changing
-`MDNS_NAME` or `FRONTEND_PORT` later means repeating step 3, and moving the folder means repeating step
-4. `--systemd-unit` refuses to run under `sudo`, since the unit would name root and the databases would
-be created as root's.
+**On Linux, the proxy's site file and the supervisor's unit are printed by the build itself**
+(`--caddyfile`, `--systemd-unit`), from its own configuration, because two things in them have to agree
+with it exactly: the proxy issues its certificate for the name in its site file, which has to be the
+name the server advertises, and the unit names an executable and a user. So a change to `MDNS_NAME` or
+`FRONTEND_PORT` means printing the site file again, and moving the folder means printing the unit again.
+`--systemd-unit` refuses to run under `sudo`, since the unit would name root and the databases would be
+created as root's. `SESSION_COOKIE_SECURE=true` is set by hand in `.env` and deliberately not derived
+from anything — see `security-model.md` → *Considered and rejected*. A firewall on the server has to
+admit TCP 443 for the proxy and UDP 5353 for the name, and the address a start settled on is in
+`journalctl -u luma`, which carries the same line a terminal start prints.
 
 What the two files rely on, for a proxy or supervisor other than these:
 
@@ -242,16 +283,18 @@ What the two files rely on, for a proxy or supervisor other than these:
 Windows) sits in the folder the build was unpacked into, a server behind a proxy starts it, hands it
 the site file `--caddyfile` would print, and stops it on the way out (`backend/managed_proxy.py`) — one
 program to start instead of two, and no site file to keep in step. Placing it there is the whole
-opt-in: a proxy installed for the machine is never looked for, so the Linux sequence above is
+opt-in: a proxy installed for the machine is never looked for, so the Linux arrangement above is
 unaffected. One already answering on the proxy's admin port is used as it is, neither joined by a second
 nor stopped at exit. What the proxy reports goes to `proxy.log` beside the data, rewritten at each start,
 and a proxy that does not come up refuses the start with that file named. The proxy is told not to
 install its root certificate into the server machine's own trust store, which it otherwise asks about
 at every start; the server's browser gets it from the hand-out like any other device. On Linux this
 needs the proxy able to open ports 80 and 443 as the user the server runs as, which an unprivileged
-user cannot by default — the packaged proxy under systemd is the sequence there for that reason.
+user cannot by default — the packaged proxy under systemd is the arrangement there for that reason.
 
-**Installing one on Windows.** The executable is a console program, because the recovery and setup
+### On Windows
+
+The executable is a console program, because the recovery and setup
 commands need somewhere to print, so a server started from a shortcut is a console window that stops
 the server when it is closed. `--tray` is the way round that: the command starts itself again with no
 console and exits. A window that was opened for it closes; a command prompt it was typed into gets its
@@ -265,20 +308,13 @@ itself first, and a stop waits for open connections — so the icon is up before
 and says which of the two is under way. Its output goes to `luma-desktop.log` beside the data, and a start that fails
 says so in a dialog naming that file, since nothing else would show it.
 
-1. **Configure it** in `.env` beside `luma.exe`, as in step 1 of the Linux sequence.
-2. **Put `caddy.exe` beside `luma.exe`.** Nothing else about the proxy is set up.
-3. **Have it start at sign-in:** `luma --start-at-sign-in`, once, from a command prompt in that folder.
-   It adds this installation to the programs Windows starts for the current user
-   (`--server --tray`), with no administrator rights and no stored password, and Windows lists it under
-   *Startup apps*. `luma --no-start-at-sign-in` removes it, and `luma --server --tray` starts the
-   server without waiting for the next sign-in.
-4. **Answer the firewall.** The first time each runs, Windows asks which kinds of network may reach
-   it — once for the proxy, which other devices connect to on TCP 80 and 443, and once for the server,
-   which answers for its name on UDP 5353. *Private networks* is all a household needs. *Public
-   networks* additionally lets anyone on a network Windows classes as public reach the sign-in page.
-   Windows classes a network as public until told otherwise, a home one included, and devices on a
-   network classed that way are kept out by a private-only answer: the network's own profile, in
-   Windows' network settings, is what to change then.
+`luma --start-at-sign-in` adds this installation to the programs Windows starts for the current user
+(`--server --tray`), with no administrator rights and no stored password, and Windows lists it under
+*Startup apps*; `luma --no-start-at-sign-in` removes it. The proxy is a `caddy.exe` beside `luma.exe`,
+run as described above. Windows asks about the firewall the first time each program runs — once for the
+proxy, which other devices connect to on TCP 80 and 443, and once for the server, which answers for its
+name on UDP 5353. It classes a network as public until told otherwise, a home one included, and devices
+on a network classed that way are kept out by a private-only answer.
 
 **The sign-in entry records where the executable is, under the installation's name.** Replacing
 `luma.exe` in place — an upgrade, after *Exit* — leaves it correct. A copy unpacked or moved somewhere else does not:
@@ -292,25 +328,15 @@ possible but adds complexity, and there is no known need for it. Two *desktop* i
 machine are supported.
 
 A server started this way runs while that user is signed in. **Starting at boot instead, with nobody
-signed in, is a scheduled task** and not something the build sets up: *Create Task* in Task Scheduler,
-set to *Run whether user is logged on or not*, triggered *At startup*, with the action
-`luma.exe --server`. Two of the task's defaults have to be changed for a server — *Stop the task if it
-runs longer than 3 days*, and on a laptop *Start the task only if the computer is on AC power*. Such a
-task has no desktop, so it takes no `--tray`; its start line is in `luma.log`, and ending the task is
-not a graceful stop, which costs what any cut-short stop does (see *Stopping it*).
+signed in, is a scheduled task** and not something the build sets up; Help → *Running Luma as a server*
+has its settings. Such a task has no desktop, so it takes no `--tray`; its start line is in `luma.log`,
+and ending the task is not a graceful stop, which costs what any cut-short stop does (see *Stopping
+it*).
+
+### macOS
 
 macOS can be the server as well — the mode, the name and Caddy are the same there — but the proxy and
 starting at boot are left to the operator.
-
-**A source checkout can serve a network the same way, without the name.** The backend serves the built
-interface (`frontend/dist`) on `BACKEND_PORT` as well as the API, and listens to its own machine unless
-`BACKEND_HOST` widens it. Widened, it is the direct form above run from a checkout: plain HTTP, the same
-refusals, and no advertised name, since that belongs to the launcher. What it serves is the last
-*build* — it does not follow edits to the source the way the development server does.
-
-**An mDNS name and HTTPS are a pair, not two conveniences.** A LAN address like `192.168.x.x` can never
-host passkeys however it is served, and a name without HTTPS still fails WebAuthn's secure-context
-requirement. Neither alone makes passkeys reachable over the LAN.
 
 ## Containers
 
@@ -323,12 +349,16 @@ API on `localhost`. Nothing in the application knows it is in a container, so th
 describes this shape too — the certificate hand-out, the fingerprint, what the proxy has to state.
 
 A third service runs first and exits: it writes the proxy's site file with `--caddyfile`, so the name
-the proxy certifies is the name the application advertises without either being typed twice. `.env` at
-the top of the checkout is honored when present and not required, and `SESSION_COOKIE_SECURE=true`
+the proxy certifies is the name the application advertises without either being typed twice. `.env`
+beside `docker-compose.yml` is honored when present and not required, and `SESSION_COOKIE_SECURE=true`
 belongs in it as it does for any server behind a proxy.
 
+**The compose file is the whole installation kit.** It names the image published for each release
+(`releasing.md` → *The container image*), so a folder holding that one file is enough and no checkout is
+involved; the README has the sequence.
+
 ```sh
-docker compose up -d --build
+docker compose up -d
 docker compose logs app
 docker compose exec app python -m backend.desktop --certificate-fingerprint
 ```
@@ -336,7 +366,12 @@ docker compose exec app python -m backend.desktop --certificate-fingerprint
 The second line carries the address, and the third is the console reading of the fingerprint. After a
 change to `MDNS_NAME` or `FRONTEND_PORT`, `docker compose up -d` again rewrites the site file and
 restarts the proxy on it. The host's firewall has to admit the same two ports as any LAN server, and
-ports 80 and 443 have to be free for the proxy.
+ports 80 and 443 have to be free for the proxy. `docker compose pull` fetches a newer release, which the
+next `up -d` starts.
+
+**A checkout builds its own image with `--build`.** The file carries `build: .` beside the image name,
+so `docker compose up -d --build` at the top of a checkout runs the source that is there. Without the
+flag a checkout pulls the published image like any other folder.
 
 **Where it keeps things.** The databases are in `./data` on the host, bind-mounted as the data
 directory, so backing up that directory is backing up the installation; the files in it belong to root,
@@ -344,9 +379,9 @@ which is who the container runs as. The proxy's certificate authority is in the 
 `docker compose down` keeps it and `docker compose down -v` deletes it, after which the proxy mints a
 new authority and every device needs the new certificate.
 
-**The image is built from the top of the checkout, which is also where a developer's databases and
+**An image is built from the top of a checkout, which is also where a developer's databases and
 `.env` sit.** `.dockerignore` names what the build may read and excludes everything else, so neither
-can reach an image.
+can reach an image, published or local.
 
 **It is for a Linux host.** Under Docker Desktop on Windows and macOS the host's network is that of a
 virtual machine, so neither the advertised name nor another device's address arrives where the
@@ -368,13 +403,19 @@ The databases are not all that lives there:
 | `luma-desktop.log` | startup output where there is no terminal — today, the macOS app started from Finder | no |
 | `luma-desktop.lock` | the port of an instance the launcher (`backend/desktop.py`) started, so a second launch opens a tab on it | no |
 
-Both databases run in WAL mode, so each also has `-wal` and `-shm` files beside it while the app is open;
-committed data can still be sitting in the `-wal`, which is why a copy of a live database is taken with
-SQLite's `.backup` rather than by copying the file. **The last column is the split `DB_PATH` makes.**
+Both databases run in WAL mode, so each also has `-wal` and `-shm` files beside it while the app is open.
+**The last column is the split `DB_PATH` makes.**
 Attached documents and `luma.log` are placed beside the *data database*, so a per-file override takes them
 with it; the launcher's two files are placed in `DATA_DIR` itself and stay there. On an install that
 uses the override, the data directory and the database's directory are two different places, and only
 the second holds the documents.
+
+**A manual copy needs `.backup`, not `cp`.** Both databases run in WAL mode, so copying the `.db` file
+alone leaves behind anything committed but not yet checkpointed and yields a copy quietly missing recent
+rows. Take it with `sqlite3 <source.db> ".backup <target.db>"`, which is correct against a running
+instance; copying by hand means copying the `-wal` alongside the `.db`, with nothing writing meanwhile.
+This applies to a snapshot taken for safety before a restore — the app's own backup is a row-level export
+and is unaffected.
 
 **Administration → Startup configuration is the authority on what is actually in force.** It reports every effective
 value *and the layer it came from*, because an environment override is invisible from inside the app.
@@ -420,7 +461,7 @@ are choosing. `security-model.md` → *Do not couple them* covers the labelling 
 may name one, and the path is resolved by the backend process — so on Desktop it is the user's own
 machine and the distinction never arises, on a LAN server it is a folder on the server, and in a
 container it has to be a **mounted volume** or it names nothing. "The folder on my computer" is the
-natural reading and is wrong in two of the three topologies, which is why the in-app copy says so at the
+natural reading and is wrong on a LAN server and in a container, which is why the in-app copy says so at the
 point the path is typed. The folder is the operator's to choose and lives wherever they want it; it is
 deliberately not inside the data directory, and nothing prunes it unless the source is set to.
 
@@ -494,31 +535,20 @@ concrete confusion it produces is a restore of a pre-perimeter backup that leave
 setting (`disable_auth_mode()`), so deleting both databases to reach it is a far heavier workaround than
 the situation needs.
 
-**A manual copy needs `.backup`, not `cp`.** Both databases run in WAL mode, so copying the `.db` file
-alone leaves behind anything committed but not yet checkpointed and yields a copy quietly missing recent
-rows. Take it with `sqlite3 <source.db> ".backup <target.db>"`, which is correct against a running
-instance; copying by hand means copying the `-wal` alongside the `.db`, with nothing writing meanwhile.
-This applies to a snapshot taken for safety before a restore — the app's own backup is a row-level export
-and is unaffected.
-
 **Nothing checks the database being overwritten.** The backup's own integrity is verified; the target's
 is not. See *Open*.
 
-## Locked out/Lost password
+## Locked out
 
-**A forgotten password can be reset from a terminal window, by anyone who can reach the data directory.** Run the app
-with `--reset-password`, optionally followed by a username:
+**A forgotten password is reset from a terminal, by anyone who can reach the data directory**: the
+launcher run with `--reset-password`, optionally followed by a username (`backend/account_recovery.py`).
+The README → *Locked out* has the command for each kind of installation.
 
-| Topology | Command |
-| --- | --- |
-| Portable or installed (Windows, Linux) | `luma --reset-password` beside the executable |
-| macOS app | `Luma.app/Contents/Resources/server/luma --reset-password` from Terminal |
-| Development | `backend/venv/bin/python -m backend.desktop --reset-password` |
-| Containers | `docker compose exec app python -m backend.desktop --reset-password` |
-
-The name of the control database is displayed. A list of account is displayed for the user to choose from and then the new password is entered. It is safe to run beside a running instance. The
-account selected ends up as an active administrator with two-factor sign-in off and current browser sessions are signed out. The vault passphrase is untouched; why this needs no other credential is described in `security-model.md` →
-*Identity and the network perimeter*.
+It names the control database before changing anything, lists the accounts to choose from, and is safe
+to run beside a running instance. The account selected ends up as an active administrator with
+two-factor sign-in off, and current browser sessions are signed out. The vault passphrase is untouched;
+why this needs no other credential is described in `security-model.md` → *Identity and the network
+perimeter*.
 
 ## Diagnosing a running instance
 
@@ -536,29 +566,18 @@ What exists today, and what each actually tells you:
 
 **"Which database is this?" is a real question on a machine running more than one copy**, and nothing
 else on screen distinguishes a checkout pointed at a restored backup from one pointed at real data. The
-line reports the paths read from the modules that hold them, so it cannot name a file the process never
-opened. It arms itself by default where the question is live — the databases are somewhere other than
-this build's default, or this copy is a checkout, or developer options are on — and the paths are shown
-only to a session that could read them in Settings anyway.
+data-location line is shown by default where the question is live, and only to a session that could
+read the paths in Settings anyway.
 
 **"Which build is this?" is the other question a report has to answer**, and the version does not: it
 is set by hand at release time, so every build made between two releases claims the same one. The
-**Build** row in Settings → About names the commit instead — `v0.3.0-14-ga1b2c3d`, fourteen commits past
-the 0.3.0 tag — which is what says whether a fix landed before or after the copy in front of someone was
-built. Both log files repeat it on their startup line, so a report that arrives as a log answers it too.
-A copy run from source has no such row: its commit is a `git` command away. See
-`docs/releasing.md` → *What identifies a build*.
+**Build** row in Settings → About names the commit instead, and both log files repeat it on their
+startup line, so a report that arrives as a log answers it too. A copy run from source has no such row:
+its commit is a `git` command away. See `releasing.md` → *What identifies a build*.
 
-**Every open browser learns that the backend stopped, without polling.** A request to a port nothing is
-listening on is refused immediately, so every call the app makes is already its own liveness check. One
-failure is not proof — a graceful shutdown closes idle connections under requests that would retry fine
-— so a failure probes `/api/health` and only a failure of *that* is reported. Route chunks are a third
-source of the same news and easy to miss, since a lazily loaded page uses dynamic `import()` rather
-than the api layer.
-
-**The state latches, and coming back is a reload rather than an unlatching**, because every piece of
-state on screen belongs to a process that no longer exists — a restart may be on a different port,
-under a different session, against a different database.
+**A browser left open is told when the server stops**, and reloads when it is back, since everything on
+screen belonged to a process that no longer exists. `architecture.md` → *Cross-platform approach* has
+how that is detected without polling.
 
 **There is no integrity check of either database.** No health check, no startup check, and none before
 a destructive restore. See *Open*.
@@ -572,15 +591,6 @@ a destructive restore. See *Open*.
   narrower guarantee than WebAuthn itself; a launcher into the user's own browser is the only option
   whose engine is one they keep updated. It also avoids owning a webview dependency or a second heavy
   runtime. Losing the "real window" is the whole cost.
-- **A universal2 macOS binary.** It needs universal2 wheels for two native dependencies that are not
-  dependably published, and the failure is an obscure link error rather than a clear one. Two
-  architecture-specific builds instead, at the cost of a "which one?" line in the README.
-- **A onefile build inside a macOS `.app`.** It re-unpacks to a temporary directory on every launch —
-  slow, and the same vanishing-path problem that rules out "beside the executable" on macOS.
-- **pyobjc inside the Python process**, instead of a native wrapper. A large macOS-only dependency plus
-  moving uvicorn off the main thread — where it sits precisely so Ctrl+C is clean — and it would fork
-  the one launcher all three platforms share. The wrapper confines every macOS-specific concern to the
-  macOS artifact.
 - **The containers on a network of their own, with the proxy's port published.** It would run under
   Docker Desktop as well, and the proxy can still be a loopback peer there, by giving the application
   the proxy's network namespace. What it cannot do is the name: an advertisement made inside does not
@@ -590,32 +600,14 @@ a destructive restore. See *Open*.
 - **A separate nginx container serving the interface.** It was the first container shape, from before
   the backend served the interface itself. It forwarded neither the scheme nor the client address and
   added no TLS, so every request read as cleartext from the network.
-- **Caddy inside the kit.** It would remove the one download a Windows server still needs, and roughly
-  doubles the size of every kit for a way of running that most installations never use.
-- **A second, windowless Windows executable** beside the console one. It avoids the console window that
-  appears and closes when `--tray` hands over, at the cost of a second copy of the whole program in the
-  kit.
 - **Starting again inside the same process**, when *Start* is chosen on the Windows icon. It would be
   quick, since nothing unpacks, and whatever the process holds in memory — an unlocked vault above all —
   would then survive a stop.
-- **A Windows kit that is a folder, not a single file**, so that no launch has to unpack. Every start
-  would be faster, and the download would be a folder of many files with the program among them.
 - **The server terminating TLS itself**, to need no proxy at all. The backend speaks plain HTTP and TLS
   belongs to the edge (`security-model.md` → *Transport security*); that is not up for trade against
   setup steps.
-- **A pinned CA bundle shipped in the artifact.** Certificate verification goes through the OS trust
-  store instead. A shipped snapshot ages, ignores roots the user installed, and keeps trusting roots
-  the OS has since distrusted.
-- **A blanket request timeout in the api layer.** It catches a stalled connection rather than a refused
-  one, and would need a carve-out for every legitimately long request — sync, import, backup, demo load
-  — a list that breaks a feature whenever it is wrong.
-- **Probing the repository to decide which license link to show.** One outbound request per render,
-  contradicting the promise that the app reaches the network only for actions the user asked for.
 - **Chunked commits during a restore.** No memory argument for it (an open SQLite write transaction
   spills to the WAL, which is disk), and it would give up the all-or-nothing property above.
-- **`%APPDATA%` for the Windows user-data directory.** A roaming profile synchronises at logon and
-  logoff, and a SQLite database diverged across two machines resolves last-writer-wins on a binary file
-  — silent loss, not a visible conflict. `%LOCALAPPDATA%` instead.
 - **Making `LUMA_USE_LOG_FILES` an in-app setting.** Its only consumer is the shell launcher, which
   reads it before Python starts; moving it into the database would mean teaching two launcher dialects
   to query SQLite in order to preserve a toggle that takes effect on the next restart anyway.
@@ -638,29 +630,12 @@ a destructive restore. See *Open*.
 
 ## Obstacles
 
-- **A `.app` bundle cannot hold its own writable data.** Writing inside a notarized bundle invalidates
-  the signature, and App Translocation mounts a quarantined app at a randomized read-only path that
-  disappears afterwards. This is why the distribution form, not the OS, decides where data lives — and
-  why a portable macOS build is refused outright rather than merely discouraged.
-- **A Python process cannot be a macOS application.** Declaring it a console app gives it no Dock icon
-  and nothing to quit; declaring it a regular app makes LaunchServices wait for a window-server check-in
-  that never comes, so the icon bounces for the length of the launch timeout and then offers only Force
-  Quit. There is no setting between the two — hence the native wrapper.
-- **Gatekeeper cannot be exercised in CI.** A locally built bundle is never quarantined, so the refusal
-  and the "Open Anyway" path do not occur at all. Only a browser-downloaded artifact carries the flag —
-  and the quarantine survives unarchiving through Finder but **not** through `unzip`, so testing with
-  the wrong tool tests nothing.
-- **The familiar Gatekeeper gesture is wrong.** Control-click → Open no longer bypasses Gatekeeper for
-  unsigned applications on macOS 15. Documenting it would produce exactly the outcome it is meant to
-  avoid — a tester concluding the build is broken.
 - **`integrity_check` does not check foreign keys.** They are separate passes, and a database can pass
   one with a table full of orphans. Any diagnostic worth having runs both.
 - **A structural check answers "is the file corrupt", never "is the data coherent".** A cursor ahead of
   a restored ledger, a coverage claim disagreeing with the rows it covers, a mapping pointing at a
   merged account — all read as `ok`. A green diagnostic that implies more than it checked is worse than
   no diagnostic.
-- **PyInstaller cannot cross-build**, so each platform's artifact must be produced on that platform.
-  See `releasing.md`.
 
 ## Open
 
@@ -677,8 +652,3 @@ a destructive restore. See *Open*.
   bounce, Quit and Command-Q shutting down cleanly *and* logging it, and the two death-watches in both
   directions. CI cannot reach any of it.
   → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
-- **The release workflow has never run on a real tag.** No `v*` has been cut.
-  → [`pre-release.md`](pre-release.md)
-- **Windows and Linux installers** are out of scope; both platforms ship the portable kit. The Windows
-  user-data directory is therefore unreachable in any released artifact — which stops being true the
-  day an installer ships. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)

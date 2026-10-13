@@ -140,6 +140,28 @@ rebuilding when it changes.
 The URL is printed on startup and is the reliable part; opening a browser is a convenience on top, and
 `--no-browser` skips it for a machine reached over SSH or without a browser installed.
 
+**This serves `frontend/dist`, which is a copy.** After a frontend change it goes on serving the old
+interface until `npm run build` is run again; only the development server follows the source as it is
+edited.
+
+### Running it in Docker
+
+`docker-compose.yml` runs the server arrangement in containers: the application in server mode, with a
+Caddy proxy in front of it for HTTPS. From the top of a checkout, on a Linux host:
+
+```bash
+docker compose up -d --build     # build the image from this checkout and start it
+docker compose logs app          # the address other computers open
+docker compose down              # stop it
+```
+
+`--build` is what makes it run this checkout. Without it the published image for the latest release is
+pulled instead. The image builds its own interface from the source, so `frontend/dist` plays no part.
+The databases land in `./data`, owned by root, and an optional `.env` at the top of the checkout is
+honored. It needs a Linux host: under Docker Desktop the containers' network is a virtual machine's, so
+neither the advertised name nor other computers reach it. `docs/operations.md` → *Containers* has the
+rest.
+
 ## Useful checks
 
 The whole local gate is one command, and it is the one to reach for before committing:
@@ -513,6 +535,8 @@ only staged files:
 - staged `backend/*.py` files run `backend/scripts/check_comments.py` (through
   `scripts/run_backend_comment_check.js`, which finds the right Python on each
   platform), then `scripts/check-backend-timestamps.js`
+- a staged document (`docs/*.md`, `README.md`, `CONTRIBUTING.md`) runs
+  `scripts/check-doc-contents.js` — see the contents guard below
 
 Both Python-backed checks reach their interpreter through `scripts/python-runner.js`, which is where
 the `python3` / `python` / `py -3` fallback order lives. Getting that order wrong fails silently — the
@@ -527,6 +551,20 @@ for a hook that exists to be fast on a handful of staged paths. It reaches its e
 `.py` file, and because `python -m ruff` exits 1 both for "found lint errors" and for "no such module" —
 so each candidate is probed with `--version` before it is trusted, rather than the fallback chain
 reading a real failure as a missing interpreter.
+
+### The contents guard
+
+`scripts/check-doc-contents.js` keeps two generated things in step with the headings they are built
+from: the `## Contents` list in any document that has one, and `docs/README.md`, the index of every
+document in `docs/` and its sections. Renaming, adding or removing a `##` heading makes the check fail
+until they are regenerated:
+
+```bash
+node scripts/check-doc-contents.js --write
+```
+
+A document opts in to a contents list by having a `## Contents` heading; the script fills it in. A list
+that is already correct is left exactly as written. `docs/README.md` is never edited by hand.
 
 ### The timestamp guard
 

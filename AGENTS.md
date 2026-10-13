@@ -170,7 +170,7 @@ When working on the codebase:
 
 A reference doc describes the system as it is, which leaves three kinds of fact with nowhere to live — and they are exactly the facts that stop someone rebuilding a mistake. Where they go depends on which of two shapes the doc is.
 
-**A topic doc answers one question** (`security-model.md`, `operations.md`, `building-a-connector.md`). It ends with all three sections below.
+**A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`). It ends with all three sections below.
 
 **A multi-topic reference doc collects many** (`data-model.md`, `ui-patterns.md`, `architecture.md`). There, a **rejection or an obstacle stays inline, beside the subject it is about** — which is the convention these docs already use and the more findable one, since someone reading about splits meets the rejected split shapes there rather than in a list of twenty unrelated verdicts at the end. Such a doc carries **only an `## Open` section**, because a decision still owed is the one kind with no natural inline home, and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*), not by a tail anchor.
 

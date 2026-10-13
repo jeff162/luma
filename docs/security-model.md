@@ -23,6 +23,25 @@ by accident.
 Where a fact is about *how it works*, this document links to `architecture.md` rather than repeating it:
 two copies of a mechanism drift, and the copy that goes stale is the one nobody runs.
 
+## Contents
+
+- [What is defended, and what is deliberately not](#what-is-defended-and-what-is-deliberately-not)
+- [Reading and deleting outside the data directory](#reading-and-deleting-outside-the-data-directory)
+- [Why provider credentials are the only things encrypted](#why-provider-credentials-are-the-only-things-encrypted)
+- [Revocation, in both directions](#revocation-in-both-directions)
+  - [Responding to an exposure](#responding-to-an-exposure)
+- [Identity and the network perimeter](#identity-and-the-network-perimeter)
+- [Passkeys and the second factor](#passkeys-and-the-second-factor)
+- [Secret custody](#secret-custody)
+- [Enrollment, grant, revocation and rotation](#enrollment-grant-revocation-and-rotation)
+- [Authorizing a change to how the vault opens](#authorizing-a-change-to-how-the-vault-opens)
+- [Transport security](#transport-security)
+- [Secrets in backup and export](#secrets-in-backup-and-export)
+- [Recovery and compromise response](#recovery-and-compromise-response)
+- [Considered and rejected](#considered-and-rejected)
+- [Obstacles](#obstacles)
+- [Open](#open)
+
 ---
 
 ## What is defended, and what is deliberately not

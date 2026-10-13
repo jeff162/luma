@@ -20,6 +20,20 @@ What has no other home is the part below: **which caps exist on purpose, what ea
 what condition it should be revisited.** That question is unfindable when its answers are distributed,
 which is why it is collected.
 
+## Contents
+
+- [Three independent bounds, and the rule they share](#three-independent-bounds-and-the-rule-they-share)
+- [Fetch limits, and the caps that remain on purpose](#fetch-limits-and-the-caps-that-remain-on-purpose)
+- [Render windowing: the one list left unwindowed](#render-windowing-the-one-list-left-unwindowed)
+- [Import history: retention](#import-history-retention)
+- [A watched folder is listed often and read rarely](#a-watched-folder-is-listed-often-and-read-rarely)
+- [Bulk operations must not accumulate](#bulk-operations-must-not-accumulate)
+- [The Tasks list is recomputed on every mutation](#the-tasks-list-is-recomputed-on-every-mutation)
+- [Measuring performance](#measuring-performance)
+- [Considered and rejected](#considered-and-rejected)
+- [Obstacles](#obstacles)
+- [Open](#open)
+
 ---
 
 ## Three independent bounds, and the rule they share

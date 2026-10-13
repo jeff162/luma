@@ -2,8 +2,13 @@
 # it for HTTPS. Both use the host's network, so this is the LAN server of docs/operations.md with the
 # two programs in containers -- the application listens to the host's loopback, the proxy reaches it
 # there, and other devices reach the proxy.
+#
+# This file is the whole of what a server needs: `docker compose up -d` pulls the published image, so it
+# works from a folder holding nothing else. In a checkout, `docker compose up -d --build` builds the
+# image from the source instead.
 services:
   app:
+    image: ghcr.io/jeff162/luma:latest
     build: .
     network_mode: host
     volumes:
@@ -22,6 +27,7 @@ services:
   # Writes the proxy's site file from the application's own configuration, then exits. The proxy issues
   # its certificate for the name in that file, which has to be the name the application advertises.
   proxy-config:
+    image: ghcr.io/jeff162/luma:latest
     build: .
     command: sh -c "python -m backend.desktop --caddyfile > /etc/caddy/Caddyfile"
     volumes:

@@ -7,6 +7,7 @@ FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 FRONTEND_FILES=""
 BACKEND_FILES=""
+DOC_FILES=""
 
 for FILE in $FILES; do
   case "$FILE" in
@@ -15,6 +16,9 @@ for FILE in $FILES; do
       ;;
     backend/*.py)
       BACKEND_FILES="$BACKEND_FILES $FILE"
+      ;;
+    docs/*.md|README.md|CONTRIBUTING.md)
+      DOC_FILES="$DOC_FILES $FILE"
       ;;
   esac
 done
@@ -56,6 +60,14 @@ if [ -n "$BACKEND_FILES" ]; then
 
   echo "Checking backend timestamps..."
   node scripts/check-backend-timestamps.js $BACKEND_FILES
+  if [ $? -ne 0 ]; then STATUS=1; fi
+fi
+
+# Documentation — a renamed heading leaves a contents list or the docs index pointing at nothing. The
+# check reads every document rather than the staged ones, since the index is built from all of them.
+if [ -n "$DOC_FILES" ]; then
+  echo "Checking documentation contents..."
+  node scripts/check-doc-contents.js
   if [ $? -ne 0 ]; then STATUS=1; fi
 fi
 

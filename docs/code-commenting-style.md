@@ -14,15 +14,16 @@ than narrate obvious code.
 
 ## Contents
 
-* [Core Principles](#core-principles)
-* [Two Levels of Comments](#two-levels-of-comments)
-* [Backend vs Frontend Guidance](#backend-vs-frontend-guidance)
-* [When to Add Comments](#when-to-add-comments)
-* [When NOT to Add Comments](#when-not-to-add-comments)
-* [Style Guidelines](#style-guidelines)
-* [Placement Rules](#placement-rules)
-* [Examples](#examples)
-* [Summary](#summary)
+- [Core Principles](#core-principles)
+- [Two Levels of Comments](#two-levels-of-comments)
+- [Backend vs Frontend Guidance](#backend-vs-frontend-guidance)
+- [When to Add Comments](#when-to-add-comments)
+- [When NOT to Add Comments](#when-not-to-add-comments)
+- [Style Guidelines](#style-guidelines)
+- [Placement Rules](#placement-rules)
+- [Examples](#examples)
+- [The automated check (and what it can't do)](#the-automated-check-and-what-it-cant-do)
+- [Summary](#summary)
 
 ---
 

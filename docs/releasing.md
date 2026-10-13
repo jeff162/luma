@@ -7,6 +7,31 @@ nothing here is needed to *use* Luma (see the README) or to *work on* it (see `C
 the data lives, restore, and diagnosing — is [`operations.md`](operations.md). The split falls on *do I
 need a build?*: nothing there does, and nothing here is needed to run one.
 
+## Contents
+
+- [The two distribution forms](#the-two-distribution-forms)
+- [Setting up the build environment](#setting-up-the-build-environment)
+- [Building](#building)
+  - [What the kit carries besides the program](#what-the-kit-carries-besides-the-program)
+  - [Linux specifics](#linux-specifics)
+  - [macOS specifics](#macos-specifics)
+  - [Icons](#icons)
+- [Cutting a release](#cutting-a-release)
+  - [What identifies a build](#what-identifies-a-build)
+  - [What CI does, and the two things it deliberately does not](#what-ci-does-and-the-two-things-it-deliberately-does-not)
+  - [The container image](#the-container-image)
+  - [Smoke tests](#smoke-tests)
+- [Release checklist](#release-checklist)
+- [Configuring the public repository](#configuring-the-public-repository)
+  - [Security features](#security-features)
+  - [Main branch rule](#main-branch-rule)
+  - [Actions supply chain](#actions-supply-chain)
+  - [Container image visibility](#container-image-visibility)
+  - [Repository presentation and collaboration](#repository-presentation-and-collaboration)
+- [Considered and rejected](#considered-and-rejected)
+- [Obstacles](#obstacles)
+- [Open](#open)
+
 ## The two distribution forms
 
 `scripts/build_desktop.py` produces a single executable with the Python runtime, the backend and the
@@ -27,8 +52,8 @@ Each platform's artifact must be built on that platform: PyInstaller cannot cros
 ## Setting up the build environment
 
 The build runs from `backend/venv/`. Launching the app once with a start script creates it; on a
-checkout that has never been started, create it directly. Pin the interpreter to 3.12 — a venv built
-from a newer default Python cannot install the pinned dependencies.
+checkout that has never been started, create it directly. Use Python 3.12: it is what the release workflow
+builds with, so it is the interpreter the downloads carry and the one a local build should match.
 
 macOS / Linux / Raspberry Pi:
 
@@ -274,6 +299,26 @@ Three deliberate omissions, all documented in the workflow header:
   workflow artifacts expire and require a signed-in GitHub account.
 - **No signing.** See the macOS note above.
 
+### The container image
+
+`.github/workflows/image.yml` publishes the image `docker-compose.yml` names, to the GitHub container
+registry as `ghcr.io/<owner>/<repository>`. **It runs when a GitHub Release is published, not on the
+tag**, which keeps the omission above intact: the release workflow still publishes nothing, and the
+image follows the same human decision the downloads do. A tag that never becomes a release leaves
+nothing in the registry.
+
+Each architecture is built on a runner of its own and the two are joined under one name, so one
+`docker pull` serves x86-64 and ARM64 alike. The release is tagged with its version and, unless it is
+marked a pre-release, `latest` — which is the tag the compose file names, so a pre-release never reaches
+an installation that did not ask for it. The per-architecture tags (`<version>-amd64`, `<version>-arm64`)
+stay in the registry as the parts the joined one points at.
+
+The workflow asks for `packages: write` on its own jobs and nothing wider, so the repository's
+read-only default for `GITHUB_TOKEN` stays as it is. It uses no action besides `actions/checkout`.
+
+The image has no smoke test of its own, and no build stamp: `build_stamp()` reports one only for a
+frozen copy, so a container reports its version alone.
+
 ### Smoke tests
 
 Each build smoke-tests what it produced, because the failures packaging introduces are ones no unit
@@ -301,8 +346,10 @@ cheapest runner, so macOS is not the first place it is ever exercised.
    this is a rename rather than a placeholder filled in later — the file is never in a wrong state.
    Update the link definitions at the foot of the file to match.
 5. Tag `vX.Y.Z` and push. CI builds all five artifacts.
-6. Write the GitHub Release and **attach the five artifacts and their `.sha256` files**. Nothing is
-   downloadable until this happens.
+6. Write the GitHub Release and **attach the five artifacts and their `.sha256` files**, along with
+   `docker-compose.yml` from the tagged tree. Nothing is downloadable until this happens.
+7. Publishing the release starts the *Container image* workflow. Check that it finished, since the
+   compose file just attached pulls what it pushes.
 
 ## Configuring the public repository
 
@@ -360,6 +407,14 @@ After that change is merged, open **Settings → Actions → General** and:
 Pinning first makes an Actions compromise unable to silently move a tag to different code. Requiring
 SHAs before the workflow change would instead stop the release and CI workflows from running.
 
+### Container image visibility
+
+A package's visibility is its own setting, separate from the repository's, and GitHub documents private
+as the default for a newly published one. After the first release publishes the image, open the package
+from the repository's **Packages** list and, under **Package settings**, make it public if it is not.
+Until it is, nobody else can pull it. Confirm with a `docker pull` from a machine that is not signed in
+to the registry.
+
 ### Repository presentation and collaboration
 
 Open **Settings → General** and check the repository description, topics, homepage, and social preview.
@@ -374,3 +429,57 @@ different purpose from `docs/`. Preserve the existing signed-commit acknowledgem
 delete-head-branch-on-merge setting. Review the fork setting deliberately: public forks are normal for
 an AGPL project, but disabling them is reasonable if the maintainer does not want to support that
 workflow.
+
+---
+
+## Considered and rejected
+
+- **A universal2 macOS binary.** It needs universal2 wheels for two native dependencies that are not
+  dependably published, and the failure is an obscure link error rather than a clear one. Two
+  architecture-specific builds instead, at the cost of a "which one?" line in the README.
+- **A onefile build inside a macOS `.app`.** It re-unpacks to a temporary directory on every launch —
+  slow, and the same vanishing-path problem that rules out "beside the executable" on macOS.
+- **pyobjc inside the Python process**, instead of a native wrapper. A large macOS-only dependency plus
+  moving uvicorn off the main thread — where it sits precisely so Ctrl+C is clean — and it would fork
+  the one launcher all three platforms share. The wrapper confines every macOS-specific concern to the
+  macOS artifact.
+- **Caddy inside the kit.** It would remove the one download a Windows server still needs, and roughly
+  doubles the size of every kit for a way of running that most installations never use.
+- **A second, windowless Windows executable** beside the console one. It avoids the console window that
+  appears and closes when `--tray` hands over, at the cost of a second copy of the whole program in the
+  kit.
+- **A Windows kit that is a folder, not a single file**, so that no launch has to unpack. Every start
+  would be faster, and the download would be a folder of many files with the program among them.
+- **A pinned CA bundle shipped in the artifact.** Certificate verification goes through the OS trust
+  store instead. A shipped snapshot ages, ignores roots the user installed, and keeps trusting roots
+  the OS has since distrusted.
+- **`%APPDATA%` for the Windows user-data directory.** A roaming profile synchronises at logon and
+  logoff, and a SQLite database diverged across two machines resolves last-writer-wins on a binary file
+  — silent loss, not a visible conflict. `%LOCALAPPDATA%` instead.
+
+## Obstacles
+
+- **A `.app` bundle cannot hold its own writable data.** Writing inside a notarized bundle invalidates
+  the signature, and App Translocation mounts a quarantined app at a randomized read-only path that
+  disappears afterwards. This is why the distribution form, not the OS, decides where data lives — and
+  why a portable macOS build is refused outright rather than merely discouraged.
+- **A Python process cannot be a macOS application.** Declaring it a console app gives it no Dock icon
+  and nothing to quit; declaring it a regular app makes LaunchServices wait for a window-server check-in
+  that never comes, so the icon bounces for the length of the launch timeout and then offers only Force
+  Quit. There is no setting between the two — hence the native wrapper.
+- **Gatekeeper cannot be exercised in CI.** A locally built bundle is never quarantined, so the refusal
+  and the "Open Anyway" path do not occur at all. Only a browser-downloaded artifact carries the flag —
+  and the quarantine survives unarchiving through Finder but **not** through `unzip`, so testing with
+  the wrong tool tests nothing.
+- **The familiar Gatekeeper gesture is wrong.** Control-click → Open no longer bypasses Gatekeeper for
+  unsigned applications on macOS 15. Documenting it would produce exactly the outcome it is meant to
+  avoid — a tester concluding the build is broken.
+- **PyInstaller cannot cross-build**, so each platform's artifact must be produced on that platform.
+
+## Open
+
+- **The release workflow has never run on a real tag.** No `v*` has been cut.
+  → [`pre-release.md`](pre-release.md)
+- **Windows and Linux installers** are out of scope; both platforms ship the portable kit. The Windows
+  user-data directory is therefore unreachable in any released artifact — which stops being true the
+  day an installer ships. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)

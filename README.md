@@ -2,7 +2,27 @@
 
 > Understand where the money actually went.
 
-Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized with a minimal amount of attention, to answer the question: **what was spent, on what, and how does this period compare with others.** Luma exists because Mint is no longer and Monarch has some annoying issues. I had time so I decided to see if I could build a replacement.
+Luma is a local-first personal finance tool. It collects transaction data from banks, cards, various spending and deposit sources and keeps it categorized to answer the question: **what was spent, on what, and how does this period compare with others.** Luma exists because Mint is no longer and Monarch has some annoying issues. I had time so I decided to see if I could build a replacement.
+
+## Contents
+
+- [What Luma is not](#what-luma-is-not)
+- [What Luma is good at](#what-luma-is-good-at)
+- [Quick start](#quick-start)
+- [Features](#features)
+- [Design principles](#design-principles)
+- [Privacy](#privacy)
+- [Security](#security)
+- [Installing Luma](#installing-luma)
+- [Getting started with real data](#getting-started-with-real-data)
+- [Running Luma as a server](#running-luma-as-a-server)
+- [Locked out](#locked-out)
+- [Running from source](#running-from-source)
+- [Platform support](#platform-support)
+- [Tech stack](#tech-stack)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## What Luma is not
 
@@ -16,6 +36,8 @@ Anyone whose main requirement is either of these will be better served by some o
 
 **Investment accounts.** Investment accounts currently are only of interest as far as money moving in or out of them from other accounts. This one may change in the future.
 
+**Phones.** Luma is built for a laptop or desktop sized screen, and its pages do not adapt to a small one. A tablet is about the smallest device it is comfortable on.
+
 ## What Luma is good at
 
 - **Keeping the friction low** — getting data in and keeping it current should not be a project in its own right. An import needs no planning and no arithmetic about which dates are already covered, overlapping files sort themselves out, and a categorization made once is carried forward instead of being made again.
@@ -26,7 +48,14 @@ Anyone whose main requirement is either of these will be better served by some o
 
 - **Staying out of the way** — if something needs changing, it can usually be changed right there: a category, a merchant name, whether a transaction counts towards a total at all. Reports can be useful for cleaning the data as well as actual reporting.
 
-## Feature highlights
+## Quick start
+
+1. Download the build for the machine from the [releases page](https://github.com/jeff162/luma/releases) and run it. Luma opens in the browser. [Installing Luma](#installing-luma) has the detail for each platform.
+2. Enter a user name and choose **Load demo data**.
+3. Look around. Nothing done to the demo data matters.
+4. When ready, choose **Clear demo data** in the banner at the top and bring in real data — see [Getting started with real data](#getting-started-with-real-data).
+
+## Features
 
 - **Showing where money went** — spending by category, merchant, account or owner, with drill-down to the individual transactions, editable in place. Tags allow for custom ‘views’ of the data along any axis the user might want.
 
@@ -34,7 +63,9 @@ Anyone whose main requirement is either of these will be better served by some o
 
 - **Analyzing cash flow** — a cash-flow view sits alongside the spending and income views and nets the two. A single period is drawn as a flow diagram, from where the money came in through to the categories it went out to; a run of months is drawn as money in against money out with the net over the top. Anything on either can be drilled into to reach the transactions behind it.
 
-- **Getting data in without ceremony** — a CSV file or a connected data source (e.g. SimpleFIN Bridge). Amazon order history can be imported via CSV files to itemize Amazon spending down to the individual items in an order. Other input formats can be added as the need arises.
+- **Getting data in without ceremony** — a CSV file exported from a bank or card, or a connected data source (e.g. SimpleFIN Bridge) that brings transactions in on its own. A data source can also watch a folder, so a downloaded export is in the ledger the next time the app is open. Other input formats can be added as the need arises.
+
+- **Filling in what a marketplace charge bought** — an Amazon or PayPal purchase typically arrives with just the marketplace name and an amount and nothing else. The marketplace's own export adds the missing detail: Amazon order history as CSV files and PayPal activity as its monthly statement PDFs or a CSV can enrich the entries with detail information about the transaction. In addition to providing useful information in the transaction register, this also allows the transactions to be categorized as more than just "Amazon Spending".
 
 - **Keeping the paperwork with the transaction** — attach a receipt or invoice to any transaction by dropping in a file or pasting from the clipboard. A PDF invoice or HTML receipt carries its own text, so an attached repair bill still answers *what was actually done* months later, searchable alongside everything else. A photographed receipt can be stored and viewed but is not searchable as there is no OCR support.
 
@@ -50,7 +81,7 @@ Anyone whose main requirement is either of these will be better served by some o
 
 - **Reimbursables** — money that goes out and is expected back but is excluded from spending or income. The part that is owed is held in its own excluded category rather than counted as spending, and the repayment lands there too instead of arriving as income, so each month reports what it really spent and what is still outstanding is a running total. A repayment sometimes does not match the original purchase — tickets bought for one price and sold on for another — and what is left over gets categorized as either a real cost or gain. An expense can also be recorded before any repayment exists. Reimbursables can have reminders to alert if they are not completed within the expected timeframe.
 
-## Also included
+### Also included
 
 - **Multiple owners** — track personal and shared finances across several people in one ledger, with
   owner as a reporting axis rather than a separate set of books.
@@ -63,23 +94,7 @@ Anyone whose main requirement is either of these will be better served by some o
 - **Multiple users** — screen layout and preferences stored on a per-user basis.
 
 - **Runs locally or on the network** — a single-user desktop install, or a machine on the LAN that
-  other devices reach, with a sign-in perimeter for the second case.
-
-## How it works
-
-The first run creates a local user and offers a choice: load the demo data, import a CSV, connect a data provider or do none of the above. Nothing else needs configuring — the initial import is what brings the rest of the application to life.
-
-Two things then drive everything: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags and rules all exist to make those two better, and each can be used or ignored depending on whether it is useful:
-
-- **Categories** group transactions for reporting — start from a curated starter set or build a tree from scratch or from existing transaction data.
-
-- **Tags** are cross-cutting labels (*Essential Expenses*, *Kids*, *Personal Spending*, *Rental expenses*) that span accounts, owners and categories, and drive their own reports.
-
-- **Rules** pair matching criteria with actions: set the merchant name, assign a category or tag, or mark the transaction as part of a recurring series.
-
-- **Recurring** detects transactions that repeat on a schedule, and lists them as series that can be curated.
-
-The same overview is available inside the application under **Help → How Luma works**.
+ other devices reach.
 
 ## Design principles
 
@@ -89,7 +104,7 @@ The same overview is available inside the application under **Help → How Luma 
 
 - **Correctable where it is visible.** Anything wrong on screen should be fixable on that screen, without hunting for the settings page that owns it or the editor which allows modifications.
 
-- **Reversible by default.** Destructive operations are rare, announced, and reversible where they exist at all.
+- **Reversible by default.** Most changes can be undone or adjusted later, and most removals go to a trash or an inactive list that can be restored from. The few that are permanent say so before they happen.
 
 ## Privacy
 
@@ -101,7 +116,7 @@ Luma is local-first by design, and the data stays local:
 
 - **Connections happen only when the user asks** — the app reaches the network only for user-driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
 
-- **Optional check for new releases** — off by default. When enabled Luma asks GitHub for the project's latest version number, at most once a day. The request says nothing about the installation or its data but as with any network request, GitHub sees the address it comes from.
+- **Optional check for new releases** — off by default. When enabled Luma periodically asks GitHub for the project's latest version number. The request says nothing about the installation or its data but as with any network request, GitHub sees the address it comes from.
 
 - **Backups stay local** — exports are saved wherever the user wishes and can be encrypted if desired with a user supplied key.
 
@@ -111,29 +126,29 @@ What comes in, what stays and what leaves are all the user's decision. Luma is b
 
 Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
 
-- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the sensitive artifacts to protect. They should be kept off shared or cloud-synced locations; consider using the **encrypted backup** (protected with a user-supplied key) for anything that leaves the machine if you feel it is sensitive data.
+- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the artifacts to protect. Consider using the **encrypted backup** (protected with a user-supplied key) for anything that leaves the machine if you feel it is sensitive data.
 
-- **The optional sign-in password is network-access control, not disk encryption.** It governs who on the local network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk.
+- **The optional sign-in password is network-access control.** It governs who on the local machine or network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk. It does not prevent someone from examining the database file directly with SQLite.
 
-- **Data-source tokens are one of the secrets Luma encrypts at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — it may or may not be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources — the ledger itself is untouched by it.
+- **Data-source tokens are one of the secrets Luma encrypts at rest.** A connected provider issues a token that grants **ongoing** access to an account's transactions and balances — it may or may not also be able to move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing every way into the vault means re-linking the data sources — the ledger itself is not affected.
 
-- **A household shares one vault, and each person opens it their own way.** A user requests access to the vault by setting a vault passphrase on an install that already has a vault passphrase. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction.
+- **A household shares one vault, and each person has their own access.** A user requests access to the vault by setting a vault passphrase on an install that already has a vault passphrase. Someone who can already open the vault then approves the request. No passphrase is ever revealed to anyone else, in either direction.
 
   - **Vault passphrases** are best kept in a password manager: they are complex, and losing every way in means the vault has to be rebuilt (transactions are not lost, just access to the data providers).
-  - **Vault settings** lists everyone who can open the vault, and access can be removed there.
-  - **Replace vault key** exists for when the concern is that a key was exposed, since removing access alone does not change the key someone could already read.
-  - **A passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need a secure connection. The desktop app's `localhost` address is one; reaching Luma over a network takes HTTPS and a host name. A passphrase works everywhere.)
-  - **A recovery code** can also be generated. It is worth keeping somewhere the vault passphrase is not — stored together in one password manager, losing access to the manager loses both, and while the manager is available the code adds nothing the passphrase does not already do. Printed, or kept in separate secure storage, is what makes it useful to have. It is shown once, and using it issues a replacement.
+  - **A passkey** can be added as a second way in, so a fingerprint or face check replaces retyping a long passphrase — and having two ways in is also the practical safeguard against losing access entirely. (Passkeys need a secure connection. The desktop app's `localhost` address works or reaching Luma over a network uses HTTPS and a host name.)
+  - **A recovery code** can also be generated. It is worth keeping somewhere seperate from the vault passphrase as if stored together in one password manager, losing access to the manager loses both. Printed or kept in separate secure storage is what makes it useful to have. Recovery codes are single-use.
 
-- **If a database or backup is lost or copied by someone else:** The transactions it holds should be treated as exposed. The one action that reaches the copy already taken is revoking Luma's access at each of the connected data sources, which stops the copied credentials, if they can be decrypted, from pulling anything new. Luma revokes the credentials for a Plaid account when the account is disconnected in the app; SimpleFIN tokens need to be revoked using the SimpleFIN Bridge web page. Revoke the access token created for Luma and create a new one. Do this even though the credentials in the lost copy of the database are encrypted. They are protected only by the vault passphrase’s resistance to an offline attack and revoking makes that question moot. Two further steps protect what comes *after*, rather than the copy already gone: change the vault passphrase, then replace the vault key. The reason is that the new credentials created above would otherwise be protected by secrets that now have to be assumed known — an offline attack on the leaked copy may eventually recover the passphrase, and through it the key, and both keep working on anything encrypted with them afterwards. Doing this once, after revoking, is what makes a recovered secret worthless; it is not a routine to repeat. Both steps are needed, because they retire different things — changing the passphrase leaves the underlying key untouched, and replacing the key leaves the passphrase untouched. Closing whatever exposed the file in the first place is a separate job, and the one that decides whether this happens again. `SECURITY.md` states the whole response, in order.
+- **If a database or backup is lost or copied by someone else** and data connections are configured, Luma's access should be revoked at each connected data source so the copied credentials cannot pull anything new or worse, be used to move money around if the credentials support money movement.. The place to start is **Respond to an exposure** in Vault settings (Import → Connections, with the vault unlocked), which replaces the credentials where the provider allows it and lists the steps that remain. `SECURITY.md` has the full response.
 
 - **Revoking works differently per provider, and the app says which applies.** Where a provider supports it (Plaid), **Disconnect** revokes the credential at the provider and the access genuinely ends. Some providers publish no way for another app to revoke a credential (SimpleFIN); there, Disconnect removes only Luma's copy, and revoking means signing in to the provider and doing it there. The disconnect confirmation states which of the two is about to happen, so a connection is never left live while appearing closed.
 
 ## Installing Luma
 
-Luma is distributed as a self-contained download — the Python runtime, the backend and the interface
-are all inside it, so **neither Python nor Node.js needs to be installed**. Get the current build from
-the [releases page](https://github.com/jeff162/luma/releases).
+Luma for a single machine is distributed as a self-contained download. The current build is available at the [releases page](https://github.com/jeff162/luma/releases).
+
+Luma can also be deployed as a server to other computers in a household.
+That can be built around the same download or (for Linux) around a Docker container version — see
+[Running Luma as a server](#running-luma-as-a-server).
 
 | Platform | Download | Shape |
 | --- | --- | --- |
@@ -143,31 +158,26 @@ the [releases page](https://github.com/jeff162/luma/releases).
 | macOS (Apple Silicon) | `luma-<version>-macos-arm64.dmg` | Drag to Applications |
 | macOS (Intel) | `luma-<version>-macos-x64.dmg` | Drag to Applications |
 
-Each download has a matching `.sha256` file for anyone who wants to verify it.
-
-**The builds are unsigned.** Certificates are a recurring cost and a separate decision from being able
-to build, so Windows and macOS both object on first run. The steps below are what gets past that; the
-macOS one in particular is not the gesture most people know.
+**The builds are unsigned.** so Windows and macOS both generate warnings about untrused software on first run.
 
 ### Windows and Linux — portable
 
-Unpack the download anywhere and run the executable inside. That folder *is* the installation: the
+Unpack the download and run the luma executable. The folder *is* the installation: the
 databases are created beside the executable, so moving the folder moves the data with it, and copying
 it to another machine carries everything across.
 
 On Windows, SmartScreen may object to an unsigned executable. Choose **More info**, then **Run anyway**.
 
-On Linux, unpack on the machine that will run it (`tar -xzf luma-<version>-linux-x64.tar.gz`, then
-`./luma/luma`): copying the files across from Windows loses the executable permission. The Linux builds
+On Linux, unpack the downloaded file with `tar -xzf luma-<version>-linux-x64.tar.gz`, then run with
+`./luma/luma`. The Linux builds
 need glibc 2.35 or newer — Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm, or later.
 
 ### macOS
 
-Open the disk image and drag **Luma** onto the Applications shortcut. Pick the download matching the
-machine — Apple menu → **About This Mac** names which one it is. The two are not interchangeable.
+Pick the download matching the
+machine — Apple menu → **About This Mac** names which one it is. The two are not interchangeable. Open the downloaded disk image and drag **Luma** onto the Applications shortcut.
 
-Because the build is neither signed nor notarized, macOS refuses it on first launch. **Control-click →
-Open no longer works around this on macOS 15 and later.** What does:
+Because the build is neither signed nor notarized, macOS refuses it on first launch. To mark the execuatable so it can be run:
 
 1. Double-click **Luma**, and dismiss the warning.
 2. Open **System Settings → Privacy & Security**, and scroll down to **Security**.
@@ -181,23 +191,104 @@ xattr -dr com.apple.quarantine /Applications/Luma.app
 
 Unlike the portable builds, macOS keeps its data in `~/Library/Application Support/Luma`, and **it
 stays there when the application is removed** — an upgrade replaces the bundle wholesale without
-touching the databases. An application started from Finder has no terminal, so the startup messages
-that would otherwise carry the address go to `luma-desktop.log` in that directory.
+touching the databases. An application started from Finder has no terminal, so the startup messages go to `luma-desktop.log` in that directory.
 
 Quit from the Dock, with Command-Q, or with **Shut down Luma** at the bottom of the navigation panel —
 all three perform the same graceful shutdown.
 
-### First run
+### Starting Luma
 
 Luma starts a local server and opens in the default browser. **It listens on loopback only**, so
 nothing off the machine can reach it. Launching it again while it is already running opens a new tab
-against the existing instance rather than starting a second copy.
+against the existing instance rather than starting a second copy. Additional browser windows can be pointed at the same address if desired; it is safe to access from multiple browsers simultaneously.
 
-Nothing needs configuring first. Every setting has a working default, and the values that must persist are generated on first run and kept in the
-control database. Everything relevant to everyday use is configured in the app under **Settings**.
+There is nothing to be configured up front. Every setting has a working default.
 
-From there the first run is as described in *How it works* above. **Administration → Startup configuration** reports
-every effective setting and which layer supplied it.
+## Getting started with real data
+
+The first run asks for a user name and then offers a choice of where the first data comes from. **Skip for now** opens the application empty, and everything below can be done from there.
+
+1. **Load transactions.** Import CSV files on the Import page, connect a data provider, or both. With several files, import them all before moving on. Importing creates the accounts the transactions belong to.
+2. **Set up categories.** Load the starter categories and rules, or have Luma build them from the categories the imported files already carry, or start with none and add them while categorizing.
+3. **Categorize what is left.** The Transactions page can show only the uncategorized rows. Assigning a category offers to create a rule from it, so the same kind of transaction is handled from then on.
+4. **Open the Dashboard** and drill into the categories to see whether the picture looks right.
+
+**Help → How Luma works** in the application covers the same steps in more detail.
+
+## Running Luma as a server
+
+One computer runs Luma and the other computers on the local network open it in a browser. Everyone
+connected sees the same data. Sign-in protection can be enabled to control who can connect.
+
+How to set one up, with HTTPS:
+
+- **Docker on Linux** is the easiest way, and uses Caddy to provide HTTPS. The instructions are [below](#with-docker).
+- **On Windows**, the easiest way is to put the Caddy executable (a free download) in the directory with Luma, which then starts it.
+- **On Linux without Docker**, Caddy is installed from the distribution's packages.
+
+Instructions for the last two, and what each connecting computer does on its first visit, are in the application under **Help → Running Luma as a server**. Starting the download the ordinary way is enough to read them. A Mac can be the server as well, with Caddy and starting at boot set up using that system's own tools.
+
+`luma --server` starts Luma in server mode and creates a name on the network, `luma.local`, to reach the app. It can be
+set up with or without HTTPS, which is what encrypts the connection between the server and the other computers.
+
+| | With HTTPS | Without HTTPS |
+| --- | --- | --- |
+| Address the other computers open | `https://luma.local` | `http://luma.local:8010` |
+| What crosses the network | encrypted | readable by anyone on the network, sign-in passwords and vault passphrase included |
+| Passkeys | work | do not work |
+| Setting up a data provider | from any computer | only from a browser on the server itself |
+| Setup | Caddy runs beside Luma to provide HTTPS. Each computer installs the server's certificate once, so its browser trusts the server | nothing further |
+
+The two restrictions have different causes. The passkey requirement is from the browser and cannot be worked around. The restriction around setting up a data provider comes from Luma, because secrets need to move between the user and the server and these should not pass over a network unencrypted. Syncing is still allowed from any browser, since that does not involve secrets moving over the local network.
+
+**Without HTTPS the vault passphrase travels over the local network unencrypted.** Anyone who captures it and has a copy of either the database or a credentials backup can extract the data provider secrets from that copy. This should be considered before using Luma in a server configuration without HTTPS.
+
+### With Docker
+
+On a Linux host, if Docker wth the Compose plugin is available, this is a straightforward way to get Luma running as a server.
+
+1. Save `docker-compose.yml` from the [releases page](https://github.com/jeff162/luma/releases) into a
+   folder of its own.
+2. Create a file named `.env` in the folder containing: `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then  add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+3. Start it, and read the address other computers use from the log:
+
+   ```sh
+   docker compose up -d
+   docker compose logs app
+   ```
+
+The data lives in a `data` folder beside `docker-compose.yml`, so backing up that folder backs up the
+installation. A firewall on the host has to allow TCP port 443 and UDP port 5353, and ports 80 and 443
+have to be free for Caddy. Each connecting computer installs the server's certificate on its first
+visit, as described in the Help topic above. The fingerprint for comparison is displayed by:
+
+```sh
+docker compose exec app python -m backend.desktop --certificate-fingerprint
+```
+
+Updating to a newer release is `docker compose pull` followed by `docker compose up -d`.
+
+Docker Desktop on Windows and macOS runs containers inside a virtual
+machine which does not work for a Luma server so only works on Linux.
+
+If running from a source checkout, `docker compose up -d --build` builds the image from the source instead of
+pulling the published one.
+
+## Locked out
+
+A forgotten password is reset from a terminal on the computer that holds the data, by running Luma with
+`--reset-password`:
+
+| Installation | Command |
+| --- | --- |
+| Windows or Linux download | `luma --reset-password`, in the folder holding the program |
+| macOS | `/Applications/Luma.app/Contents/Resources/server/luma --reset-password` |
+| Docker | `docker compose exec app python -m backend.desktop --reset-password` |
+| Source checkout | `backend/venv/bin/python -m backend.desktop --reset-password` |
+
+It lists the accounts to choose from and asks for the new password, and is safe to run while Luma is
+running. The account chosen ends up as an active administrator with two-factor sign-in off, and current
+browser sessions are signed out. The vault passphrase is not affected.
 
 ## Running from source
 
@@ -216,11 +307,11 @@ Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux dis
 performance depends on the model, storage speed, and whether it runs directly or through Docker.
 
 Each Linux download carries a minimum glibc, because the build links against the C library of the
-machine that produced it. The ARM64 one is compiled on Ubuntu 22.04 and needs **glibc 2.35 or newer**,
-which covers Raspberry Pi OS bookworm and everything after it; the x86-64 one is compiled on Ubuntu
-24.04 and needs **glibc 2.39 or newer**, so it wants Ubuntu 24.04, Debian 13 or a comparably recent
-distribution. The ARM64 download is also **64-bit only** — a 32-bit Raspberry Pi OS is a different
-architecture and has no build. Running from source has none of these restrictions.
+machine that produced it. Both are compiled on Ubuntu 22.04 and need **glibc 2.35 or newer**, which
+covers Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm and everything after them. The ARM64 download
+is also **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no build.
+Running from source has none of these restrictions, and the Docker image carries its own C library, so
+the glibc minimum does not apply to it.
 
 Python 3.12 is what Luma is built on, and the test suite also runs on 3.14. (This applies to running
 from source; the downloads carry their own runtime.)
@@ -249,6 +340,7 @@ from source; the downloads carry their own runtime.)
 - **[docs/building-a-connector.md](docs/building-a-connector.md)** — adding a data source
 - **[docs/releasing.md](docs/releasing.md)** — building the downloadable artifacts and cutting a release
 - **[docs/backlog/](docs/backlog/)** — deferred and parked work, one file per initiative
+- **[docs/README.md](docs/README.md)** — an index of every document in `docs/` and its sections
 
 In the application itself, **Help → How Luma works** covers the same model from the user's side.
 
