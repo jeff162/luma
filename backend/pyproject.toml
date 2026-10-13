@@ -30,13 +30,13 @@ dependencies = [
 
 # Test-only deps, kept out of `dependencies` (and requirements.txt) so a runtime install stays lean.
 # The backend runs from source rather than as an installed package, so install via the mirror file:
-# `pip install -r requirements-test.txt`. pytest runs the suite; httpx backs FastAPI's TestClient
+# `pip install -r requirements-test.txt`. pytest runs the suite; httpx2 backs FastAPI's TestClient
 # (see backend/tests/_api_client.py).
 [project.optional-dependencies]
 test = [
     "pytest==9.1.1",
     "pytest-xdist==3.8.0",
-    "httpx==0.28.1",
+    "httpx2==2.13.1",
 ]
 # Linting only, kept out of `test` on purpose: a CI job that installs the test extra to run pytest
 # should not drag a linter in as a side effect, and the two are gated separately.

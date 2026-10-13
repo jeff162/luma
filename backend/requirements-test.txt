@@ -5,4 +5,4 @@ pytest==9.1.1
 # safe here: the suite's shared state is module-level (`CONTROL_DB_PATH`, the schema template
 # cache) and every test already builds its own temp database.
 pytest-xdist==3.8.0
-httpx==0.28.1
+httpx2==2.13.1
