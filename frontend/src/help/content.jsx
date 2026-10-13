@@ -4007,9 +4007,48 @@ export const HELP_TOPICS = [
           </li>
         </ol>
         <p>
-          A firewall on the server has to allow TCP port 443 and UDP port 5353. A Windows or Mac
-          computer can be the server as well, with the same <code>.env</code> file and Caddy
-          configuration; starting {APP_NAME} at boot is then set up with that system's own tools.
+          A firewall on the server has to allow TCP port 443 and UDP port 5353. A Mac can be the server
+          as well, with the same <code>.env</code> file and Caddy configuration; starting both is then
+          set up with that system's own tools.
+        </p>
+
+        <HelpHeading anchor="on-windows">On a Windows server</HelpHeading>
+        <p>
+          On Windows {APP_NAME} runs the proxy itself and starts when its user signs in. From the
+          folder the download was unpacked into:
+        </p>
+        <ol>
+          <li>
+            Create the <code>.env</code> file as in the first step above.
+          </li>
+          <li>
+            Download Caddy for Windows and put <code>caddy.exe</code> in the same folder
+            as <code>luma.exe</code>. {APP_NAME} then starts it, configures it and stops it.
+          </li>
+          <li>
+            In a command prompt in that folder, run this once:
+            <pre><code>{'luma --start-at-sign-in'}</code></pre>
+            From the next sign-in on, {APP_NAME} starts as a server with no window, and an icon in the
+            notification area shows the address, opens {APP_NAME}, and stops and starts it.{' '}
+            <code>luma --server --tray</code> starts it straight away,
+            and <code>luma --no-start-at-sign-in</code> undoes the step. Replacing{' '}
+            <code>luma.exe</code> with a newer version in the same folder, after
+            choosing <strong>Exit</strong> on the icon, needs nothing further; after
+            moving the folder, or unpacking a newer version into a different one, run the command
+            again from there.
+          </li>
+          <li>
+            The first time each one runs, Windows Firewall asks which networks may reach Caddy and
+            which may reach {APP_NAME}. <strong>Private networks</strong> covers the other computers
+            in a household. <strong>Public networks</strong> also lets anyone on a public network the
+            server joins reach the sign-in page. If the other computers still cannot connect, Windows
+            may be treating the home network as public; its profile is set under the network's
+            properties in Windows Settings.
+          </li>
+        </ol>
+        <p>
+          The server runs while that user is signed in. If it does not start, a message names the log
+          file holding the reason.
         </p>
 
         <HelpHeading anchor="each-device">On each computer that connects</HelpHeading>

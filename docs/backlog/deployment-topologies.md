@@ -59,7 +59,9 @@ been seen working yet.
 - **Sign-in protection is steered, not required.** An operator who trusts their network may leave it
   off; the existing recommendation and task do the steering.
 - **Windows and macOS can be the server.** The mode, the responder and Caddy are all cross-platform.
-  What differs per OS is starting at boot, and systemd is the one recipe shipped and tested.
+  What differs per OS is how it is started. Linux has the systemd unit; Windows starts at sign-in with a
+  notification-area icon, and runs a proxy placed beside the executable itself; macOS is left to the
+  operator.
 
 ### Open
 
@@ -84,7 +86,10 @@ been seen working yet.
     journal;
   - the responder beside the operating system's own on Windows and macOS as the server;
   - a server whose host name equals `MDNS_NAME`, which is meant to pass as the same machine rather than
-    be refused as a conflict.
+    be refused as a conflict;
+  - Windows as the server from a real build: the proxy beside the executable started and stopped by it,
+    the notification-area icon's *Open*, *Stop*, *Start* and *Exit*, the dialog when a start fails, and the entry
+    actually firing at sign-in. The proxy as a child has run on Linux only.
 
 ## Shape B — desktop: step 3's remainder
 

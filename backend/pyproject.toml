@@ -24,6 +24,8 @@ dependencies = [
     "pypdf==6.7.0",
     # The mDNS responder behind a server-mode installation's network name.
     "zeroconf==0.151.5",
+    # The notification-area icon of a Windows server started without a console.
+    'pystray==0.19.5; sys_platform == "win32"',
 ]
 
 # Test-only deps, kept out of `dependencies` (and requirements.txt) so a runtime install stays lean.

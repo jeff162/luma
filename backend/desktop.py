@@ -50,6 +50,15 @@ Three decisions carry the design:
   LaunchServices start redirects both streams to a log beside the data. Detected by the environment
   variable LaunchServices sets rather than by asking whether stdout is a terminal, since that question
   also answers "yes, a pipe" for anything running the binary and capturing its output.
+- **On Windows the console can be given up for a notification-area icon.** The executable is a console
+  program, because the recovery and setup commands need somewhere to print, so a start from a shortcut
+  or at sign-in is a console window that stops the server when someone closes it. `--tray` starts the
+  same command again with no console and exits, which closes a window that was opened for it and frees
+  a prompt it was typed into; the second process writes to
+  the log and is seen and stopped through the icon (`backend/tray.py`). Declared to that process by an
+  environment variable rather than inferred, for the reason the parent pipe is.
+- **A proxy kept beside the executable is started and stopped with the server** (`backend/managed_proxy.py`),
+  so a server behind one is a single program to run.
 
 The lockfile records a port, not a claim of liveness. It survives a crash or a kill, so a stale one is
 expected rather than exceptional, and `/api/health` is what settles whether the recorded instance is
@@ -57,13 +66,16 @@ really there.
 """
 
 import argparse
+import contextlib
 import ipaddress
 import os
+import queue
 import signal
 import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -75,7 +87,10 @@ import uvicorn
 
 # First, before anything that can reach the database modules (see the module). `app_config` below does.
 import backend.load_env_file  # noqa: F401
-from backend import account_recovery, app_config, app_log_file, mdns, runtime_config, server_setup, spa, transport
+from backend import (
+    account_recovery, app_config, app_log_file, managed_proxy, mdns, runtime_config, server_setup, spa,
+    transport, tray,
+)
 from backend.main import app, spa_mounted
 from backend.routers import app_control
 from backend.services import proxy_certificate
@@ -91,6 +106,11 @@ LOG_FILENAME = "luma-desktop.log"
 # already at EOF, and inferring from the file descriptor alone would exit instantly on startup for no
 # visible reason.
 PARENT_PIPE_ENV = "LUMA_PARENT_PIPE"
+# Set on the process `--tray` starts in its own place, to say it was started with no console to print to.
+NO_CONSOLE_ENV = "LUMA_NO_CONSOLE"
+# Names a file the process deletes once it is about to serve, set by the process whose icon has been
+# standing in for it until then (`_start_successor`).
+SUCCESSOR_SIGNAL_ENV = "LUMA_SUCCESSOR_SIGNAL"
 HEALTH_TIMEOUT_SECONDS = 1.0
 STARTUP_TIMEOUT_SECONDS = 60.0
 # Appended to across runs, so a failure that happened yesterday is still readable, but not without
@@ -151,11 +171,78 @@ def _has_console() -> bool:
     """Whether anything printed here reaches a person as it happens, rather than a log file nobody is
     watching.
 
-    Named for the console rather than for the platform, because that is what the two callers actually
-    depend on and the set can grow: today it is only the macOS bundle, but a Windows build made
-    windowless would join it. Both the decision to redirect the streams and the decision to mention
+    Named for the console rather than for the platform, because that is what the callers actually
+    depend on: the macOS bundle has none, and neither does a Windows start that gave its own up for a
+    notification-area icon. Both the decision to redirect the streams and the decision to mention
     Ctrl+C have to come from the same answer, or a build ends up advising a keystroke into a log."""
-    return not _started_by_launch_services()
+    return not _started_by_launch_services() and not runtime_config.truthy(os.environ.get(NO_CONSOLE_ENV))
+
+
+def _spawn_without_console(arguments: list[str], **environment: str) -> subprocess.Popen | None:
+    """Start this same command again with no console window, or return None having said why not.
+
+    `PYINSTALLER_RESET_ENVIRONMENT` makes a packaged copy unpack for itself rather than borrow this
+    process's files, which are deleted when this one exits."""
+    try:
+        return subprocess.Popen(
+            [*server_setup.launcher_command(), *arguments],
+            env={**os.environ, NO_CONSOLE_ENV: "1", "PYINSTALLER_RESET_ENVIRONMENT": "1", **environment},
+            # Something to write to until the log takes over: with no console there are no streams at all.
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except OSError as exc:
+        print(f"Could not start {runtime_config.app_name()} without a console: {exc}", file=sys.stderr)
+        return None
+
+
+def _relaunch_without_console(arguments: list[str]) -> int:
+    """Hand over to a copy of this command that has no console window, for the caller to exit behind.
+
+    A console program cannot close its own window while anything is still attached to it, and in a
+    packaged build something always is: the executable is a loader with this process as its child. A
+    second copy started without a window, and this one exiting, is what works whichever program is
+    drawing the console."""
+    return 0 if _spawn_without_console(arguments) is not None else 1
+
+
+def _start_successor(arguments: list[str]) -> bool:
+    """Start the server again as a new process, returning once it is about to serve and has an icon of
+    its own — at which point this process, whose icon has been saying so, can go. False if it stopped
+    before getting that far, which it has reported itself, and this icon is then still here to try again
+    from.
+
+    A new process rather than a second run in this one, so that nothing held in memory — an unlocked
+    vault above all — outlives a stop. It is the start a sign-in gives. The signal is a file because it
+    has to cross the packaged build's loader, which passes the environment on and nothing else."""
+    handle, name = tempfile.mkstemp(prefix="successor-")
+    os.close(handle)
+    signal_file = Path(name)
+    try:
+        successor = _spawn_without_console(arguments, **{SUCCESSOR_SIGNAL_ENV: name})
+        if successor is None:
+            return False
+        deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
+        while signal_file.exists() and time.monotonic() < deadline:
+            if successor.poll() is not None:
+                return False
+            time.sleep(0.1)
+        return True
+    finally:
+        signal_file.unlink(missing_ok=True)
+
+
+def _release_predecessor() -> None:
+    signal_file = os.environ.pop(SUCCESSOR_SIGNAL_ENV, None)
+    if signal_file:
+        Path(signal_file).unlink(missing_ok=True)
+
+
+def _show_icon(on_exit: contextlib.ExitStack) -> "tray.TrayIcon | None":
+    icon = tray.show()
+    if icon is not None:
+        on_exit.callback(icon.close)
+    return icon
 
 
 def _redirect_output_to_log() -> Path | None:
@@ -479,6 +566,13 @@ def _print_setup_file(write) -> int:
     return 0
 
 
+def _help_on(platform: str, text: str) -> str:
+    """Help for an option that belongs to one operating system: listed there, and left out of the list
+    everywhere else. The option is still accepted everywhere, so that following another platform's
+    instructions is answered by the option itself, which says where it applies."""
+    return text if sys.platform.startswith(platform) else argparse.SUPPRESS
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="luma",
@@ -511,8 +605,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--systemd-unit",
         action="store_true",
-        help="Print a systemd unit that runs this installation as a server, as the current user, then "
-             "exit without starting the server.",
+        help=_help_on(
+            "linux",
+            "Print a systemd unit that runs this installation as a server, as the current user, then "
+            "exit without starting the server.",
+        ),
+    )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help=_help_on("win32", "Run with no console window and a notification-area icon to open and stop it."),
+    )
+    parser.add_argument(
+        "--start-at-sign-in",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=_help_on(
+            "win32",
+            "Start this installation as a server, with the notification-area icon, whenever the current "
+            "user signs in; --no-start-at-sign-in undoes it. Exits without starting the server.",
+        ),
     )
     parser.add_argument(
         "--reset-password",
@@ -535,12 +647,43 @@ def main(argv: list[str] | None = None) -> int:
         return _print_setup_file(server_setup.caddyfile)
     if args.systemd_unit:
         return _print_setup_file(server_setup.systemd_unit)
+    if args.start_at_sign_in is not None:
+        return _print_setup_file(lambda: server_setup.start_at_sign_in(args.start_at_sign_in) + "\n")
+
+    if args.tray:
+        if not tray.supported():
+            print("--tray is for Windows, where the notification-area icon is.", file=sys.stderr)
+            return 1
+        if _has_console():
+            return _relaunch_without_console(sys.argv[1:] if argv is None else argv)
 
     # Before anything that can fail, so that what fails is written down somewhere.
+    log = None
     if not _has_console():
-        _redirect_output_to_log()
+        log = _redirect_output_to_log()
     else:
         _write_lines_as_they_are_printed()
+
+    status = _serve(args, sys.argv[1:] if argv is None else argv)
+    if status and args.tray:
+        tray.report_failed_start(log)
+    return status
+
+
+def _serve(args: argparse.Namespace, arguments: list[str]) -> int:
+    """Run the server until it is stopped, or return nonzero having printed why it did not start.
+    `arguments` is the command line as given, for starting again from the notification-area icon."""
+    with contextlib.ExitStack() as on_exit:
+        return _run_server(args, arguments, on_exit)
+
+
+def _run_server(args: argparse.Namespace, arguments: list[str], on_exit: contextlib.ExitStack) -> int:
+    # The icon goes up first, saying the server is starting: what follows — the check for a name already
+    # answered, the proxy — takes seconds, on top of the seconds a packaged build spent unpacking. Unless
+    # this start was asked for from a stopped server's icon, which is still on screen saying the same
+    # thing and stays until this one is ready to replace it.
+    succeeding = SUCCESSOR_SIGNAL_ENV in os.environ
+    icon = _show_icon(on_exit) if args.tray and not succeeding else None
 
     if not spa_mounted:
         print(
@@ -585,6 +728,21 @@ def main(argv: list[str] | None = None) -> int:
             print(exc, file=sys.stderr)
             return 1
 
+    proxy = None
+    if server_mode and behind_proxy and managed_proxy.executable() is not None:
+        if managed_proxy.another_is_running():
+            print(
+                "A reverse proxy is already running on this machine, so the one beside "
+                f"{runtime_config.app_name()} was not started."
+            )
+        else:
+            try:
+                proxy = managed_proxy.start()
+            except managed_proxy.ManagedProxyError as exc:
+                print(exc, file=sys.stderr)
+                advertisement.close()
+                return 1
+
     transport.declare_reachable_from_network(server_mode)
     for notice in _unused_address_notices(server_mode):
         print(notice)
@@ -620,12 +778,38 @@ def main(argv: list[str] | None = None) -> int:
     # the address is the whole of what the line is for, and how to stop a windowless build is documented
     # beside it (`READ_ME_MACOS` in `scripts/build_desktop.py`) and offered inside the app.
     running = f"{runtime_config.app_name()} (v{runtime_config.APP_VERSION}) is running at {url}"
+    reached_at = url
     if server_mode:
-        running += " in server mode; other devices reach it at " + (
-            f"https://{advertisement.hostname} through the reverse proxy on this machine"
-            if behind_proxy else
-            f"http://{advertisement.hostname}:{port}, over plain HTTP"
+        reached_at = (
+            f"https://{advertisement.hostname}" if behind_proxy else f"http://{advertisement.hostname}:{port}"
         )
+        running += f" in server mode; other devices reach it at {reached_at}" + (
+            " through the reverse proxy on this machine" if behind_proxy else ", over plain HTTP"
+        )
+    # Opens the address this machine reaches it at, which needs no certificate; names the one to give
+    # everybody else.
+    #
+    # The icon's *Stop* differs from every other stop in one way: the process stays, as the icon, until
+    # *Start* or *Exit* is chosen there. A start that fails comes back to that choice.
+    held_by_icon = threading.Event()
+    start_again: queue.SimpleQueue[bool] = queue.SimpleQueue()
+
+    def stop_from_icon(*, held: bool) -> None:
+        if held:
+            held_by_icon.set()
+        icon.show_stopping()
+        server.should_exit = True
+
+    if args.tray and succeeding:
+        icon = _show_icon(on_exit)
+    if icon is not None:
+        icon.show_running(
+            reached_at,
+            on_open=lambda: _open_browser(url),
+            on_stop=lambda: stop_from_icon(held=True),
+            on_exit=lambda: stop_from_icon(held=False),
+        )
+    _release_predecessor()
     # A server's output is usually a supervisor's journal, where the keystroke is as unusable as it is in
     # a log file; the advice is kept for a server someone started by hand.
     if _has_console() and (sys.stdout.isatty() or not server_mode):
@@ -641,8 +825,17 @@ def main(argv: list[str] | None = None) -> int:
         lock.unlink(missing_ok=True)
         if advertisement is not None:
             advertisement.close()
+        if proxy is not None:
+            proxy.stop()
 
     print(f"{runtime_config.app_name()} has stopped.")
+    while held_by_icon.is_set():
+        icon.show_stopped(on_start=lambda: start_again.put(True), on_exit=lambda: start_again.put(False))
+        if not start_again.get():
+            break
+        icon.show_starting()
+        if _start_successor(arguments):
+            break
     return 0
 
 

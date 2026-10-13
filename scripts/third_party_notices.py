@@ -165,8 +165,12 @@ def _read_requirements(path: Path) -> list[Requirement]:
     lines = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
-        if line:
-            lines.append(Requirement(line))
+        if not line:
+            continue
+        requirement = Requirement(line)
+        # A requirement for another platform is not installed here and is not in this platform's kit.
+        if requirement.marker is None or requirement.marker.evaluate():
+            lines.append(requirement)
     return lines
 
 

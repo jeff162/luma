@@ -29,3 +29,7 @@ pypdf==6.7.0
 # system's own responder only publishes the machine's host name, and this is what makes a second name
 # work the same way on Windows, macOS and Linux. Imported only when a server starts.
 zeroconf==0.151.5
+# The notification-area icon a Windows server is seen and stopped through once it has given up its
+# console window (backend/tray.py). Windows only: nothing else imports it, and elsewhere it would pull in
+# a display toolkit.
+pystray==0.19.5; sys_platform == "win32"

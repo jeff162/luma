@@ -93,7 +93,8 @@ take the service from everyone else.
 redirected to `luma-desktop.log` beside the data. That is detected from the environment LaunchServices
 sets rather than by asking whether stdout is a terminal — that question also answers "no" for a pipe,
 and diverting output whenever something captures it would take the diagnostics away from the smoke
-harness, which captures them precisely to explain a failed launch.
+harness, which captures them precisely to explain a failed launch. A Windows start with `--tray` has
+none either, by its own doing, and writes to the same file (see *Installing one on Windows*).
 
 **The server also keeps its own log, in every topology.** `luma.log` beside the data database is a *copy*
 of what the server logs (`backend/app_log_file.py`): a handler added next to uvicorn's rather than a
@@ -174,7 +175,7 @@ safely be typed. The fingerprint is for the first visit only — the one time th
 a connection nothing vouches for — and the place to read it without going through that connection is
 the server's own console:
 
-```
+```sh
 luma --certificate-fingerprint
 ```
 
@@ -202,14 +203,14 @@ the build was unpacked into:
 2. **Install Caddy** from the distribution's packages, which also sets it to start at boot.
 3. **Give Caddy its site file** — this replaces the placeholder one the package installs:
 
-   ```
+   ```sh
    ./luma --caddyfile | sudo tee /etc/caddy/Caddyfile
    sudo systemctl reload caddy
    ```
 
 4. **Install the unit and start it:**
 
-   ```
+   ```sh
    ./luma --systemd-unit | sudo tee /etc/systemd/system/luma.service
    sudo systemctl daemon-reload
    sudo systemctl enable --now luma
@@ -237,8 +238,69 @@ What the two files rely on, for a proxy or supervisor other than these:
 - **The unit passes `--server`**, so the service is a server whatever `.env` says.
 - **SQLite is adequate at household concurrency.** No database change is needed for this shape.
 
-Windows and macOS can be the server as well — the mode, the name and Caddy are the same there — but
-starting at boot is left to the operator on both.
+**A proxy kept beside the executable is run by the server.** Where a `caddy` executable (`caddy.exe` on
+Windows) sits in the folder the build was unpacked into, a server behind a proxy starts it, hands it
+the site file `--caddyfile` would print, and stops it on the way out (`backend/managed_proxy.py`) — one
+program to start instead of two, and no site file to keep in step. Placing it there is the whole
+opt-in: a proxy installed for the machine is never looked for, so the Linux sequence above is
+unaffected. One already answering on the proxy's admin port is used as it is, neither joined by a second
+nor stopped at exit. What the proxy reports goes to `proxy.log` beside the data, rewritten at each start,
+and a proxy that does not come up refuses the start with that file named. The proxy is told not to
+install its root certificate into the server machine's own trust store, which it otherwise asks about
+at every start; the server's browser gets it from the hand-out like any other device. On Linux this
+needs the proxy able to open ports 80 and 443 as the user the server runs as, which an unprivileged
+user cannot by default — the packaged proxy under systemd is the sequence there for that reason.
+
+**Installing one on Windows.** The executable is a console program, because the recovery and setup
+commands need somewhere to print, so a server started from a shortcut is a console window that stops
+the server when it is closed. `--tray` is the way round that: the command starts itself again with no
+console and exits. A window that was opened for it closes; a command prompt it was typed into gets its
+prompt back and stays open. The server is then seen and controlled through an icon in the notification
+area: the address other devices use, *Open*, *Stop* and *Exit*. *Stop* is the same graceful stop as
+everywhere else and leaves the icon in place offering *Start*, since at a sign-in start there is nowhere
+else to start it again from. *Start* is a new process, exactly as a sign-in gives, so nothing held in
+memory — an unlocked vault above all — survives a stop. *Exit* ends the process, which is what
+replacing the executable needs. A start and a stop each take some seconds — a packaged build unpacks
+itself first, and a stop waits for open connections — so the icon is up before the slow part of a start
+and says which of the two is under way. Its output goes to `luma-desktop.log` beside the data, and a start that fails
+says so in a dialog naming that file, since nothing else would show it.
+
+1. **Configure it** in `.env` beside `luma.exe`, as in step 1 of the Linux sequence.
+2. **Put `caddy.exe` beside `luma.exe`.** Nothing else about the proxy is set up.
+3. **Have it start at sign-in:** `luma --start-at-sign-in`, once, from a command prompt in that folder.
+   It adds this installation to the programs Windows starts for the current user
+   (`--server --tray`), with no administrator rights and no stored password, and Windows lists it under
+   *Startup apps*. `luma --no-start-at-sign-in` removes it, and `luma --server --tray` starts the
+   server without waiting for the next sign-in.
+4. **Answer the firewall.** The first time each runs, Windows asks which kinds of network may reach
+   it — once for the proxy, which other devices connect to on TCP 80 and 443, and once for the server,
+   which answers for its name on UDP 5353. *Private networks* is all a household needs. *Public
+   networks* additionally lets anyone on a network Windows classes as public reach the sign-in page.
+   Windows classes a network as public until told otherwise, a home one included, and devices on a
+   network classed that way are kept out by a private-only answer: the network's own profile, in
+   Windows' network settings, is what to change then.
+
+**The sign-in entry records where the executable is, under the installation's name.** Replacing
+`luma.exe` in place — an upgrade, after *Exit* — leaves it correct. A copy unpacked or moved somewhere else does not:
+the entry goes on starting the old location, which for a portable build is also the old location's
+data, until `luma --start-at-sign-in` is run again from the new one. That replaces the entry; nothing
+has to be removed first. The entry is named for `APP_NAME`, so a change of name leaves the old entry
+behind unless it was removed beforehand.
+
+**Two servers behind a proxy on one machine is not supported.** Sharing one proxy between them is
+possible but adds complexity, and there is no known need for it. Two *desktop* installations on one
+machine are supported.
+
+A server started this way runs while that user is signed in. **Starting at boot instead, with nobody
+signed in, is a scheduled task** and not something the build sets up: *Create Task* in Task Scheduler,
+set to *Run whether user is logged on or not*, triggered *At startup*, with the action
+`luma.exe --server`. Two of the task's defaults have to be changed for a server — *Stop the task if it
+runs longer than 3 days*, and on a laptop *Start the task only if the computer is on AC power*. Such a
+task has no desktop, so it takes no `--tray`; its start line is in `luma.log`, and ending the task is
+not a graceful stop, which costs what any cut-short stop does (see *Stopping it*).
+
+macOS can be the server as well — the mode, the name and Caddy are the same there — but the proxy and
+starting at boot are left to the operator.
 
 **A source checkout can serve a network the same way, without the name.** The backend serves the built
 interface (`frontend/dist`) on `BACKEND_PORT` as well as the API, and listens to its own machine unless
@@ -265,7 +327,7 @@ the proxy certifies is the name the application advertises without either being 
 the top of the checkout is honored when present and not required, and `SESSION_COOKIE_SECURE=true`
 belongs in it as it does for any server behind a proxy.
 
-```
+```sh
 docker compose up -d --build
 docker compose logs app
 docker compose exec app python -m backend.desktop --certificate-fingerprint
@@ -528,6 +590,14 @@ a destructive restore. See *Open*.
 - **A separate nginx container serving the interface.** It was the first container shape, from before
   the backend served the interface itself. It forwarded neither the scheme nor the client address and
   added no TLS, so every request read as cleartext from the network.
+- **Caddy inside the kit.** It would remove the one download a Windows server still needs, and roughly
+  doubles the size of every kit for a way of running that most installations never use.
+- **A second, windowless Windows executable** beside the console one. It avoids the console window that
+  appears and closes when `--tray` hands over, at the cost of a second copy of the whole program in the
+  kit.
+- **The server terminating TLS itself**, to need no proxy at all. The backend speaks plain HTTP and TLS
+  belongs to the edge (`security-model.md` → *Transport security*); that is not up for trade against
+  setup steps.
 - **A pinned CA bundle shipped in the artifact.** Certificate verification goes through the OS trust
   store instead. A shipped snapshot ages, ignores roots the user installed, and keeps trusting roots
   the OS has since distrusted.

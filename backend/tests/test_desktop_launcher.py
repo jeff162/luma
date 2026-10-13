@@ -165,11 +165,13 @@ def test_server_mode_refuses_a_busy_port_instead_of_moving_off_it():
             assert desktop._choose_port(fixed=True) is None
 
 
-def _launch(argv: list[str], *, env_server_mode: str | None, running_on: int | None = None, advertise=None):
+def _launch(argv: list[str], *, env_server_mode: str | None, running_on: int | None = None, advertise=None,
+            proxy_beside=None, during_run=None):
     """Run `main` to completion against a server that returns at once, reporting its exit status, whether
     the in-app stop was registered and whether a browser was asked for. `SERVER_MODE` is pinned either
     way, since the developer's own `.env` is in the environment by the time this runs."""
     stopped = mock.Mock()
+    stopped.run.side_effect = during_run
     stopped.run.return_value = None
     advertise = advertise or mock.Mock(return_value=mock.Mock(hostname="ledger.local"))
     env = {} if env_server_mode is None else {"SERVER_MODE": env_server_mode}
@@ -185,6 +187,7 @@ def _launch(argv: list[str], *, env_server_mode: str | None, running_on: int | N
              mock.patch.object(desktop, "_open_browser") as opened, \
              mock.patch.object(desktop.threading, "Thread") as thread, \
              mock.patch.object(desktop.mdns, "advertise", advertise), \
+             mock.patch.object(desktop.managed_proxy, "executable", return_value=proxy_beside), \
              mock.patch.object(desktop.app_control, "register_shutdown_handler") as registered:
             status = desktop.main(argv)
             _launch.server_ran = stopped.run.called
@@ -665,3 +668,150 @@ def test_the_unit_is_not_written_for_root(capsys):
         assert desktop.main(["--systemd-unit"]) == 1
     printed = capsys.readouterr()
     assert printed.out == "" and "without sudo" in printed.err
+
+
+def _launch_with_proxy(argv, *, already_running=False, start=None, bind_host=None):
+    start = start or mock.Mock()
+    with mock.patch.object(desktop.managed_proxy, "another_is_running", return_value=already_running), \
+         mock.patch.object(desktop.managed_proxy, "start", start), \
+         mock.patch.object(desktop, "_server_bind_host", return_value=bind_host or desktop.BIND_HOST):
+        status = _launch(argv, env_server_mode=None, proxy_beside=Path("caddy"))[0]
+    return status, start
+
+
+def test_a_proxy_beside_the_executable_runs_for_as_long_as_the_server_does():
+    """Placing it there is what asks for it, and only a server behind a proxy has a use for one: a
+    desktop start is never on the network, and a server put there directly is its own front door."""
+    status, start = _launch_with_proxy(["--server"])
+    assert status == 0 and start.return_value.stop.called
+
+    assert not _launch_with_proxy([])[1].called
+    assert not _launch_with_proxy(["--server"], bind_host="0.0.0.0")[1].called
+
+
+def test_a_proxy_already_answering_is_used_rather_than_joined_by_a_second():
+    """A second one would fail on the ports the first holds, and the one running may be a supervisor's:
+    it is neither started over nor stopped on the way out."""
+    status, start = _launch_with_proxy(["--server"], already_running=True)
+    assert status == 0 and not start.called
+
+
+def test_a_proxy_that_will_not_start_refuses_the_start():
+    """Without it the server is up and nothing on the network can reach it, which from its own console
+    looks like success."""
+    advertise = mock.Mock(return_value=mock.Mock(hostname="ledger.local"))
+    failing = mock.Mock(side_effect=desktop.managed_proxy.ManagedProxyError("port 443 is in use"))
+    with mock.patch.object(desktop.managed_proxy, "another_is_running", return_value=False), \
+         mock.patch.object(desktop.managed_proxy, "start", failing):
+        status = _launch(["--server"], env_server_mode=None, advertise=advertise, proxy_beside=Path("caddy"))[0]
+    assert status == 1 and _launch.server_ran is False
+    assert advertise.return_value.close.called
+
+
+def test_only_the_proxy_this_process_starts_is_kept_from_the_trust_store():
+    """Caddy asks whoever is at the machine before installing its root certificate, and a proxy started
+    by the server may have nobody there. The printed file is for a proxy someone installs themselves."""
+    values = {"mdns_name": "ledger", "frontend_port": "8123"}
+    with mock.patch.object(desktop.app_config, "value_of", side_effect=values.__getitem__):
+        assert "skip_install_trust" in desktop.server_setup.caddyfile(managed=True)
+        assert "skip_install_trust" not in desktop.server_setup.caddyfile()
+
+
+def test_tray_gives_up_the_console_by_starting_again_without_one():
+    """The window cannot be closed from inside while anything is attached to it, so the command is
+    started a second time with none and this one exits. The marker is what stops the second from doing
+    the same thing forever."""
+    with mock.patch.object(desktop.tray, "supported", return_value=True), \
+         mock.patch.dict(os.environ, {}), \
+         mock.patch.object(desktop.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+         mock.patch("backend.desktop.subprocess.Popen") as popen, \
+         mock.patch.object(desktop, "_serve") as serve:
+        os.environ.pop(desktop.NO_CONSOLE_ENV, None)
+        assert desktop.main(["--server", "--tray"]) == 0
+
+    assert not serve.called
+    assert popen.call_args.args[0][-2:] == ["--server", "--tray"]
+    assert popen.call_args.kwargs["env"][desktop.NO_CONSOLE_ENV] == "1"
+    assert popen.call_args.kwargs["creationflags"] == 0x08000000
+
+
+def test_a_start_with_no_console_shows_the_icon_and_says_so_when_it_fails():
+    """With no console a refused start is a line in a log nobody is reading, and at sign-in the only
+    symptom would be an icon that never appeared."""
+    with mock.patch.object(desktop.tray, "supported", return_value=True), \
+         mock.patch.dict(os.environ, {desktop.NO_CONSOLE_ENV: "1"}), \
+         mock.patch.object(desktop, "_redirect_output_to_log", return_value=Path("luma-desktop.log")), \
+         mock.patch.object(desktop.tray, "show") as show, \
+         mock.patch.object(desktop.tray, "report_failed_start") as reported:
+        icon = show.return_value
+        assert _launch(["--server", "--tray"], env_server_mode=None)[0] == 0
+        assert icon.show_running.call_args.args == ("https://ledger.local",)
+        assert icon.close.called and not reported.called
+
+        assert _launch(["--server", "--tray"], env_server_mode=None, running_on=8123)[0] == 1
+        assert reported.call_args.args == (Path("luma-desktop.log"),)
+
+
+def test_tray_is_refused_where_there_is_no_notification_area():
+    with mock.patch.object(desktop.tray, "supported", return_value=False), \
+         mock.patch.object(desktop, "_serve") as serve:
+        assert desktop.main(["--tray"]) == 1
+    assert not serve.called
+
+
+def test_the_sign_in_entry_starts_this_executable_as_a_server_with_the_icon(capsys):
+    """The entry is a bare command line, so a path with a space in it has to arrive quoted."""
+    registry = mock.MagicMock()
+    with mock.patch.object(sys, "platform", "win32"), \
+         mock.patch.object(desktop.runtime_config, "is_frozen", return_value=True), \
+         mock.patch.object(sys, "executable", r"C:\Program Files\ledger\luma.exe"), \
+         mock.patch.dict(sys.modules, {"winreg": registry}):
+        assert desktop.main(["--start-at-sign-in"]) == 0
+        assert registry.SetValueEx.call_args.args[-1] == r'"C:\Program Files\ledger\luma.exe" --server --tray'
+
+        assert desktop.main(["--no-start-at-sign-in"]) == 0
+        assert registry.DeleteValue.called
+    capsys.readouterr()
+
+
+def test_the_sign_in_entry_is_not_written_for_a_checkout(capsys):
+    """It has no working folder to run a module from, so it would be an entry that fails at every sign-in."""
+    registry = mock.MagicMock()
+    with mock.patch.object(sys, "platform", "win32"), \
+         mock.patch.object(desktop.runtime_config, "is_frozen", return_value=False), \
+         mock.patch.dict(sys.modules, {"winreg": registry}):
+        assert desktop.main(["--start-at-sign-in"]) == 1
+    assert not registry.SetValueEx.called
+    capsys.readouterr()
+
+
+def test_the_icon_outlives_a_stop_and_starts_the_server_again_as_a_new_process():
+    """Started at sign-in, the icon is the only place to start it again from, so *Stop* keeps the
+    process as an icon. *Start* is a new process and not a second run in this one, so that nothing held
+    in memory outlives the stop; a start that fails leaves the icon to try again from; *Exit* ends it
+    from either state."""
+    def run(*, during, then, successor_starts=(True,)):
+        """One launch: `during` is chosen while the server runs, `then` each time it is offered stopped."""
+        choices = iter(then)
+        with mock.patch.object(desktop.tray, "supported", return_value=True), \
+             mock.patch.dict(os.environ, {desktop.NO_CONSOLE_ENV: "1"}), \
+             mock.patch.object(desktop, "_redirect_output_to_log", return_value=None), \
+             mock.patch.object(desktop.tray, "show") as show, \
+             mock.patch.object(desktop, "_start_successor", side_effect=successor_starts) as successor:
+            icon = show.return_value
+            icon.show_stopped.side_effect = lambda **offered: offered[next(choices)]()
+            _launch(
+                ["--server", "--tray"], env_server_mode=None,
+                during_run=lambda: icon.show_running.call_args.kwargs[during](),
+            )
+        return icon, successor
+
+    icon, successor = run(during="on_stop", then=["on_start"])
+    assert icon.show_stopping.called and successor.call_args.args == (["--server", "--tray"],)
+
+    icon, successor = run(during="on_stop", then=["on_start", "on_exit"], successor_starts=(False,))
+    assert icon.show_stopped.call_count == 2 and successor.call_count == 1
+
+    for stopped_choices in (["on_exit"], []):
+        icon, successor = run(during="on_stop" if stopped_choices else "on_exit", then=stopped_choices)
+        assert not successor.called and icon.close.called
