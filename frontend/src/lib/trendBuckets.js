@@ -35,31 +35,72 @@ export function lastDayOfMonthISO(ym) {
   return `${ym}-${String(last).padStart(2, '0')}`
 }
 
-// The window the Trends tab's monthly charts and averages cover: `'last12'` is the trailing twelve months
-// ending with `currentMonth`, anything else a calendar year ('YYYY'). Returned both as month codes, which
-// the charts slice their rows by, and as inclusive ISO dates, which a report opened from one of those
-// figures lists by — one definition, so a report can never cover different months than the figure did.
-export function trendsWindowRange(windowKey, currentMonth) {
-  if (windowKey === 'last12') {
-    const startMonth = shiftMonth(currentMonth, -11)
-    return {
-      key: 'last12',
-      startMonth,
-      endMonth: currentMonth,
-      start: `${startMonth}-01`,
-      end: lastDayOfMonthISO(currentMonth),
-      label: 'Last 12 months',
-    }
+// --- The Trends windows ---------------------------------------------------------------------------
+//
+// What the Trends forms' monthly charts and averages cover, in one vocabulary for all three frames: a
+// trailing run of whole months, everything, or a calendar year ('YYYY'). The rolling entries are counted
+// in months so that "Last 2 years" is the same twenty-four bars whichever month it is read in.
+
+export const TRENDS_WINDOW_LAST_12 = 'last12'
+export const TRENDS_WINDOW_ALL = 'all'
+
+const ROLLING_TRENDS_WINDOWS = [
+  { value: TRENDS_WINDOW_LAST_12, label: 'Last 12 months', months: 12 },
+  { value: 'last24', label: 'Last 2 years', months: 24 },
+  { value: 'last36', label: 'Last 3 years', months: 36 },
+  { value: 'last60', label: 'Last 5 years', months: 60 },
+]
+
+// The chooser's entries: the rolling windows, all data, then every year given — newest first, as the
+// app's other year pickers list them.
+export function trendsWindowOptions(years = []) {
+  return [
+    ...ROLLING_TRENDS_WINDOWS.map(({ value, label }) => ({ value, label })),
+    { value: TRENDS_WINDOW_ALL, label: 'All data' },
+    ...[...new Set(years.map(String))].sort().reverse().map(year => ({ value: year, label: year })),
+  ]
+}
+
+// How many months a rolling window reaches back, or null for a key that is not one.
+export function trendsWindowRollingMonths(windowKey) {
+  return ROLLING_TRENDS_WINDOWS.find(w => w.value === windowKey)?.months ?? null
+}
+
+export function isTrendsYearWindow(windowKey) {
+  return /^\d{4}$/.test(String(windowKey))
+}
+
+// The first and last month a set of monthly rows (`{ month: 'YYYY-MM', … }`) reaches, or null for none.
+export function rowsMonthSpan(rows) {
+  const months = (rows || [])
+    .map(r => r?.month)
+    .filter(month => typeof month === 'string' && /^\d{4}-\d{2}$/.test(month))
+  if (months.length === 0) return null
+  return months.reduce(
+    (span, month) => ({ first: month < span.first ? month : span.first, last: month > span.last ? month : span.last }),
+    { first: months[0], last: months[0] },
+  )
+}
+
+// One window as a range. A rolling window ends with `currentMonth`; all data runs across `dataSpan`
+// (`rowsMonthSpan`), which is the only window that needs it — with no data it is the current month
+// alone, and draws nothing. Returned both as month codes, which the charts slice their rows by, and as
+// inclusive ISO dates, which a report opened from one of those figures lists by — one definition, so a
+// report can never cover different months than the figure did.
+export function trendsWindowRange(windowKey, currentMonth, dataSpan = null) {
+  const range = (key, startMonth, endMonth, label) => ({
+    key, startMonth, endMonth, start: `${startMonth}-01`, end: lastDayOfMonthISO(endMonth), label,
+  })
+  const rollingMonths = trendsWindowRollingMonths(windowKey)
+  if (rollingMonths != null) {
+    const label = ROLLING_TRENDS_WINDOWS.find(w => w.value === windowKey).label
+    return range(windowKey, shiftMonth(currentMonth, -(rollingMonths - 1)), currentMonth, label)
+  }
+  if (windowKey === TRENDS_WINDOW_ALL) {
+    return range(TRENDS_WINDOW_ALL, dataSpan?.first || currentMonth, dataSpan?.last || currentMonth, 'All data')
   }
   const year = String(windowKey)
-  return {
-    key: year,
-    startMonth: `${year}-01`,
-    endMonth: `${year}-12`,
-    start: `${year}-01-01`,
-    end: `${year}-12-31`,
-    label: year,
-  }
+  return range(year, `${year}-01`, `${year}-12`, year)
 }
 
 // The months a Trends window's charts and averages run across: every month of the window, so a month with
@@ -75,18 +116,18 @@ export function trendsWindowMonths(window, currentMonth, firstDataMonth) {
   return start <= end ? monthsInRange(start, end) : []
 }
 
-// Which window the Trends tab shows. An explicit pick from its year picker always wins; with none
-// (`selectedYear` null) it is the trailing twelve months when they hold any data, otherwise the most
+// Which window the Trends tab shows. An explicit pick from its window chooser always wins; with none
+// (`selectedWindow` null) it is the trailing twelve months when they hold any data, otherwise the most
 // recent year that does, so a stale or imported ledger does not open on empty charts. `rows` are the
 // tab's monthly series rows (`{ month: 'YYYY-MM', … }`).
-export function resolveTrendsWindowKey(rows, selectedYear, currentMonth) {
-  if (selectedYear != null) return String(selectedYear)
+export function resolveTrendsWindowKey(rows, selectedWindow, currentMonth) {
+  if (selectedWindow != null) return String(selectedWindow)
   const months = rows
     .map(r => r?.month)
     .filter(month => typeof month === 'string' && /^\d{4}-\d{2}$/.test(month))
-  const last12 = trendsWindowRange('last12', currentMonth)
+  const last12 = trendsWindowRange(TRENDS_WINDOW_LAST_12, currentMonth)
   if (months.length === 0 || months.some(month => month >= last12.startMonth && month <= last12.endMonth)) {
-    return 'last12'
+    return TRENDS_WINDOW_LAST_12
   }
   return months.reduce((latest, month) => (month > latest ? month : latest)).slice(0, 4)
 }

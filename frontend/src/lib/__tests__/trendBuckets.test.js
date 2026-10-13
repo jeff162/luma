@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  shiftMonth, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
+  shiftMonth, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey, rowsMonthSpan,
   shiftDateByMonths, defaultTrendGrain, sameSpanStepMonths, trendGrainOptions, effectiveTrendGrain,
   calendarTrendBuckets, sameSpanTrendBuckets, SAME_SPAN_MAX_BUCKETS, TREND_GRAIN_SAME_SPAN,
 } from '../trendBuckets.js'
@@ -31,6 +31,19 @@ describe('trendsWindowRange', () => {
     expect(trendsWindowRange('2024', '2026-09')).toEqual({
       key: '2024', startMonth: '2024-01', endMonth: '2024-12', start: '2024-01-01', end: '2024-12-31', label: '2024',
     })
+  })
+  it('counts a multi-year window in whole months ending with the current one', () => {
+    expect(trendsWindowRange('last36', '2026-09')).toEqual({
+      key: 'last36', startMonth: '2023-10', endMonth: '2026-09', start: '2023-10-01', end: '2026-09-30', label: 'Last 3 years',
+    })
+  })
+  it('runs all data across the months the rows reach, and is the current month alone with none', () => {
+    const span = rowsMonthSpan([{ month: '2021-03' }, { month: '2019-11' }, { month: 'bad' }, { month: '2026-02' }])
+    expect(trendsWindowRange('all', '2026-09', span)).toEqual({
+      key: 'all', startMonth: '2019-11', endMonth: '2026-02', start: '2019-11-01', end: '2026-02-28', label: 'All data',
+    })
+    expect(rowsMonthSpan([])).toBeNull()
+    expect(trendsWindowRange('all', '2026-09', null).startMonth).toBe('2026-09')
   })
 })
 

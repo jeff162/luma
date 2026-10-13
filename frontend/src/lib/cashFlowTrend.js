@@ -3,7 +3,10 @@
 
 import { monthLabel } from './utils.js'
 import { periodAverage, seriesDateRange } from './periodAverage.js'
-import { monthsInRange, shiftMonth } from './trendBuckets.js'
+import {
+  TRENDS_WINDOW_ALL, TRENDS_WINDOW_LAST_12,
+  monthsInRange, shiftMonth, trendsWindowOptions, trendsWindowRollingMonths,
+} from './trendBuckets.js'
 
 /*
  * The month-by-month series behind the cash-flow frame's Trends form.
@@ -24,37 +27,30 @@ import { monthsInRange, shiftMonth } from './trendBuckets.js'
  * non-adjacent months side by side as though nothing had happened between them.
  */
 
-export const CASH_FLOW_TREND_LAST_12 = 'last12'
-const LAST_12_MONTHS = 12
-
 /*
- * The window options the year picker offers: a rolling last-12-months view plus every calendar year the
- * data reaches, newest first.
+ * The window options the monthly chart's chooser offers — the Trends windows every frame shares
+ * (`trendsWindowOptions`): the rolling windows, all data, and every calendar year the data reaches.
  */
-export function cashFlowTrendYearOptions(rows) {
-  const years = [...new Set(normalizeRows(rows).map(r => r.month.slice(0, 4)))].sort().reverse()
-  return [
-    { value: CASH_FLOW_TREND_LAST_12, label: 'Last 12 months' },
-    ...years.map(y => ({ value: y, label: y })),
-  ]
+export function cashFlowTrendWindowOptions(rows) {
+  return trendsWindowOptions(normalizeRows(rows).map(r => r.month.slice(0, 4)))
 }
 
 /*
  * Build the chart series for one window.
  *
- * `selectedYear` is whatever the picker last held, which may name a year the current filters no longer
- * reach — the shared year state survives switching frames and filters. An unreachable selection falls
- * back to the rolling window rather than rendering an empty chart, and the resolved value is returned so
- * the picker can show what is actually being displayed.
+ * `selectedWindow` is whatever the chooser last held, which may name a year the current filters no
+ * longer reach — the shared window state survives switching frames and filters. An unreachable
+ * selection falls back to the last twelve months rather than rendering an empty chart, and the resolved
+ * value is returned so the chooser can show what is actually being displayed.
  */
-export function buildCashFlowTrendSeries(rows, selectedYear) {
+export function buildCashFlowTrendSeries(rows, selectedWindow) {
   const normalized = normalizeRows(rows)
-  const yearOptions = cashFlowTrendYearOptions(normalized)
-  const effectiveYear = yearOptions.some(o => o.value === selectedYear)
-    ? selectedYear
-    : CASH_FLOW_TREND_LAST_12
+  const windowOptions = cashFlowTrendWindowOptions(normalized)
+  const effectiveWindow = windowOptions.some(o => o.value === selectedWindow)
+    ? selectedWindow
+    : TRENDS_WINDOW_LAST_12
 
-  const months = windowMonths(normalized, effectiveYear)
+  const months = windowMonths(normalized, effectiveWindow)
   const byMonth = new Map(normalized.map(r => [r.month, r]))
   const chartData = months.map(month => {
     const row = byMonth.get(month)
@@ -80,7 +76,7 @@ export function buildCashFlowTrendSeries(rows, selectedYear) {
   const total = chartData.reduce((sum, r) => sum + r.net, 0)
   const avgNet = periodAverage(total, firstDate, lastDate, 'month')
 
-  return { yearOptions, effectiveYear, chartData, avgNet }
+  return { windowOptions, effectiveWindow, chartData, avgNet }
 }
 
 /*
@@ -134,20 +130,22 @@ function finite(value) {
 /*
  * The month codes the window covers, gaps included.
  *
- * The rolling window is twelve *calendar* months back from the latest month holding data — not the
- * latest twelve rows. Those differ exactly when the ledger skips a month, and taking rows would then
- * span thirteen or more months under a label that says twelve.
+ * A rolling window is that many *calendar* months back from the latest month holding data — not that
+ * many rows. Those differ exactly when the ledger skips a month, and taking rows would then span more
+ * months than the label says.
  */
-function windowMonths(rows, effectiveYear) {
+function windowMonths(rows, effectiveWindow) {
   if (rows.length === 0) return []
-  if (effectiveYear !== CASH_FLOW_TREND_LAST_12) {
-    const inYear = rows.filter(r => r.month.slice(0, 4) === effectiveYear)
+  const firstMonth = rows[0].month
+  const end = rows[rows.length - 1].month
+  if (effectiveWindow === TRENDS_WINDOW_ALL) return monthsInRange(firstMonth, end)
+  const rollingMonths = trendsWindowRollingMonths(effectiveWindow)
+  if (rollingMonths == null) {
+    const inYear = rows.filter(r => r.month.slice(0, 4) === effectiveWindow)
     return inYear.length > 0 ? monthsInRange(inYear[0].month, inYear[inYear.length - 1].month) : []
   }
-  const end = rows[rows.length - 1].month
-  const start = shiftMonth(end, -(LAST_12_MONTHS - 1))
+  const start = shiftMonth(end, -(rollingMonths - 1))
   // A ledger shorter than the window starts where the data does, so a new install is not padded with
   // empty months it never had.
-  const firstMonth = rows[0].month
   return monthsInRange(start > firstMonth ? start : firstMonth, end)
 }

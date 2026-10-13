@@ -21,6 +21,7 @@ import { useAfterLedgerSync } from '../contexts/SyncStatusContext.jsx'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
 import {
   shiftMonth, monthsInRange, lastDayOfMonthISO, trendsWindowRange, trendsWindowMonths, resolveTrendsWindowKey,
+  trendsWindowOptions, isTrendsYearWindow, rowsMonthSpan,
   TREND_GRAIN_SAME_SPAN, calendarTrendBuckets, sameSpanTrendBuckets, trendGrainOptions, effectiveTrendGrain, trendGrainNoun,
 } from '../lib/trendBuckets.js'
 import {
@@ -28,6 +29,8 @@ import {
   describeTrendSpan, trendSpanFloorMonth, trendSpanFloorYear,
 } from '../lib/trendSpan.js'
 import TrendSpanSelect from '../components/TrendSpanSelect.jsx'
+import TrendsWindowSelect from '../components/TrendsWindowSelect.jsx'
+import PanningChartFrame from '../components/PanningChartFrame.jsx'
 import { periodReportKey } from '../lib/periodReportScope.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
@@ -52,7 +55,7 @@ import { useTags } from '../lib/useTags.js'
 import { OTHER_SLICE_COLOR, OTHER_SLICE_KEY, computeSlicePages } from '../lib/longTailSlices.js'
 import CashFlowSankey from '../components/CashFlowSankey.jsx'
 import { INFLOW, OUTFLOW, buildCashFlowGraph } from '../lib/cashFlowGraph.js'
-import { CASH_FLOW_TREND_LAST_12, buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
+import { buildCashFlowAnnualSeries, buildCashFlowTrendSeries } from '../lib/cashFlowTrend.js'
 import { clampBarValue, computeClampedDomain } from '../lib/chartOutliers.js'
 import ClippedBar from '../components/ClippedBar.jsx'
 import PanningChartTooltip from '../components/PanningChartTooltip.jsx'
@@ -379,6 +382,14 @@ const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m)
 // its slightly rounder radius (8 vs the helper's 6) so the look is unchanged; SM is the compact
 // month-range select that stretches to fill its row.
 const DASH_SELECT_MD = { ...getFormControlStyle({ size: 'md', clickable: true }), borderRadius: 8 }
+
+// The Trends forms' monthly bar charts fit their card up to a window's worth of months and pan past it
+// (`PanningChartFrame`), each bar then keeping the width given here. The half-width Total per month
+// card holds a year of staggered month labels; the full-width cash-flow chart holds three.
+const TOTAL_PER_MONTH_FIT = 12
+const TOTAL_PER_MONTH_BAR_WIDTH = 30
+const CASH_FLOW_MONTHS_FIT = 36
+const CASH_FLOW_MONTH_BAR_WIDTH = 24
 const DASH_SELECT_SM = { ...getFormControlStyle({ size: 'sm', clickable: true }), flex: 1 }
 
 async function fetchPeriodGroupTotals(period, accountId, tagIds, ownerIds, filters) {
@@ -461,71 +472,62 @@ function AvgReferenceLabel({ viewBox, value, align = 'left' }) {
   return <AvgPill x={pillX} centerY={labelY} text={text} />
 }
 
-// Annual totals can span many years. Each bar keeps a fixed width and the row scrolls horizontally
-// (with the app's styled scrollbar) once the bars exceed the card — so the card width is the natural
-// cap rather than squashing every year in. Start the scroll at the right edge so the most recent
-// years are in view and older ones are a scroll to the left; re-pin to the right whenever the data
-// changes (e.g. switching spending/income or drilling a group).
+// Annual totals can span many years, so the row pans (`PanningChartFrame`) rather than squashing every
+// year in, re-pinned to its newest end whenever the data changes (e.g. switching spending/income or
+// drilling a group).
 function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
-  const scrollRef = useRef(null)
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollLeft = el.scrollWidth
-  }, [data])
-  // Clicking a year's column focuses the monthly charts on that year (drives the year picker). The active
-  // year's bar is highlighted so it's clear which one the charts above are showing.
+  // Clicking a year's column focuses the monthly charts on that year (drives the window chooser). The
+  // active year's bar is highlighted so it's clear which one the charts above are showing.
   const selectable = typeof onSelectYear === 'function'
   return (
-    <div ref={scrollRef} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-      <div style={{ minWidth: Math.max(260, data.length * 46), height: 180 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={data}
-            {...CLICKABLE_CHART_EVENTS}
-            onClick={selectable ? (state => {
-              const year = data[clickedDataIndex(state)]?.year
-              if (year) onSelectYear(year)
-            }) : undefined}
-            style={selectable ? { cursor: 'pointer' } : undefined}
+    <PanningChartFrame minWidth={Math.max(260, data.length * 46)} height={180} pinKey={data}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={data}
+          {...CLICKABLE_CHART_EVENTS}
+          onClick={selectable ? (state => {
+            const year = data[clickedDataIndex(state)]?.year
+            if (year) onSelectYear(year)
+          }) : undefined}
+          style={selectable ? { cursor: 'pointer' } : undefined}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 11 }} interval={0} />
+          {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
+              view; with a left axis it scrolls off-screen until the user drags back to the start. */}
+          <YAxis orientation="right" tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+          {/* This row pans, so the card is placed against what is visible — see PanningChartTooltip. */}
+          <Tooltip
+            content={<PanningChartTooltip />}
+            isAnimationActive={false}
+            formatter={v => formatSignedMoneyAmount(v)}
+            contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+            labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+            itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+          />
+          <Bar
+            dataKey="total"
+            radius={[3, 3, 0, 0]}
+            name="Total"
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 11 }} interval={0} />
-            {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
-                view; with a left axis it scrolls off-screen until the user drags back to the start. */}
-            <YAxis orientation="right" tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-            {/* This row pans, so the card is placed against what is visible — see PanningChartTooltip. */}
-            <Tooltip
-              content={<PanningChartTooltip />}
-              isAnimationActive={false}
-              formatter={v => formatSignedMoneyAmount(v)}
-              contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-              labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-              itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-            />
-            <Bar
-              dataKey="total"
-              radius={[3, 3, 0, 0]}
-              name="Total"
-            >
-              {data.map(d => (
-                <Cell
-                  key={d.year}
-                  fill={String(d.year) === String(selectedYear) ? 'var(--accent2)' : 'var(--accent)'}
-                />
-              ))}
-            </Bar>
-            {data.length > 1 && avg != null && (
-              <ReferenceLine
-                y={avg}
-                stroke="var(--accent2)"
-                strokeDasharray="4 4"
-                label={<AvgReferenceLabel value={avg} align="right" />}
+            {data.map(d => (
+              <Cell
+                key={d.year}
+                fill={String(d.year) === String(selectedYear) ? 'var(--accent2)' : 'var(--accent)'}
               />
-            )}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+            ))}
+          </Bar>
+          {data.length > 1 && avg != null && (
+            <ReferenceLine
+              y={avg}
+              stroke="var(--accent2)"
+              strokeDasharray="4 4"
+              label={<AvgReferenceLabel value={avg} align="right" />}
+            />
+          )}
+        </BarChart>
+      </ResponsiveContainer>
+    </PanningChartFrame>
   )
 }
 
@@ -1077,7 +1079,9 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
  *
  * The two charts are stacked rather than set side by side as the other frames' monthly and annual charts
  * are: nothing else shares this page, so each gets the full width. The yearly chart is the way into the
- * monthly one — clicking a year sets the year picker, and that year's bars are the highlighted ones.
+ * monthly one — clicking a year sets the monthly chart's window to it, and that year's bars are the
+ * highlighted ones. The window chooser sits on the monthly chart's card, since that chart is all it
+ * moves; the yearly chart's span chooser sits on its own for the same reason.
  *
  * The bars come pre-netted per category from `/summary/monthly-cash-flow` (per month, and per year at
  * `granularity=year`), which is what makes a period's two halves the same figures as that period's
@@ -1087,8 +1091,8 @@ function SortHeader({ label, sortKey, activeKey, activeDir, onSort, align = 'lef
 function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, span, onSpanChange, loading, onOpenMonth, onOpenSinglePeriod }) {
   // Window selection and row shaping are pure and live in lib/cashFlowTrend.js, where they can be
   // exercised without a chart — the diverging-bar sign contract below depends on them.
-  const { yearOptions, effectiveYear, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
-  // The yearly chart is bounded by the shared trend span, the monthly one by the year picker above it.
+  const { windowOptions, effectiveWindow, chartData, avgNet } = buildCashFlowTrendSeries(rows, selectedYear)
+  // The yearly chart is bounded by the shared trend span, the monthly one by its own window chooser.
   const annualMonths = (rows || []).map(r => r?.month).filter(Boolean).sort()
   const annual = buildCashFlowAnnualSeries(
     annualRows,
@@ -1123,12 +1127,6 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select value={effectiveYear} onChange={e => onYearChange(e.target.value)} style={DASH_SELECT_MD}>
-          {yearOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </div>
-
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Yearly trend</div>
@@ -1154,15 +1152,18 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
             xKey="year"
             height={220}
             avgNet={annual.avgNet}
-            // The rolling window is not a year, so it highlights none and dims none.
-            isHighlighted={effectiveYear === CASH_FLOW_TREND_LAST_12 ? undefined : d => d.year === effectiveYear}
+            // A window that is not a year highlights none and dims none.
+            isHighlighted={isTrendsYearWindow(effectiveWindow) ? d => d.year === effectiveWindow : undefined}
             onSelect={idx => onYearChange(annual.chartData[idx].year)}
           />
         )}
       </Card>
 
       <Card>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Monthly trend</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Monthly trend</div>
+          <TrendsWindowSelect value={effectiveWindow} options={windowOptions} onChange={onYearChange} compact />
+        </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
           {avgNet == null ? null : (
             <>Avg net: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(avgNet)}/mo</span>{' · '}</>
@@ -1178,6 +1179,7 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
             height={320}
             avgNet={avgNet}
             onSelect={handleMonthClick}
+            panMinWidth={chartData.length > CASH_FLOW_MONTHS_FIT ? chartData.length * CASH_FLOW_MONTH_BAR_WIDTH : null}
           />
         )}
       </Card>
@@ -1186,25 +1188,28 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
 }
 
 // One cash-flow period chart: money in above zero, money out below, the net across them and the average
-// net as a reference line. `isHighlighted` (optional) dims every other period's bars.
-function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onSelect }) {
+// net as a reference line. `isHighlighted` (optional) dims every other period's bars. `panMinWidth`
+// (optional) is the width the bars need when there are too many to fit the card: the chart then pans.
+function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onSelect, panMinWidth = null }) {
   function handleClick(state) {
     const idx = clickedDataIndex(state)
     if (idx == null || !data[idx]) return
     onSelect(idx)
   }
   const dimmed = d => (isHighlighted ? !isHighlighted(d) : false)
-  return (
-    <ResponsiveContainer width="100%" height={height}>
+  const pans = panMinWidth != null
+  const chart = (
+    <ResponsiveContainer width="100%" height={pans ? '100%' : height}>
       <ComposedChart data={data} {...CLICKABLE_CHART_EVENTS} onClick={handleClick} style={{ cursor: 'pointer' }}
-        stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: 0 }}>
+        stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: pans ? 24 : 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         {/* Every period gets a label up to a dozen; past that, thin them out rather than letting them
-            overlap. */}
+            overlap. A panning chart's bars have a fixed width, so it labels every third. */}
         <XAxis dataKey={xKey} tick={{ fill: 'var(--muted)', fontSize: 10 }}
-          interval={data.length <= 12 ? 0 : Math.floor(data.length / 12)} />
-        <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+          interval={pans ? 2 : data.length <= 12 ? 0 : Math.floor(data.length / 12)} />
+        <YAxis orientation={pans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
         <Tooltip
+          {...(pans ? { content: <PanningChartTooltip />, isAnimationActive: false } : {})}
           formatter={(value, name, item) => {
             if (name === 'Money out') return [formatSignedMoneyAmount(-(item?.payload?.outflowMagnitude ?? 0)), name]
             return [formatSignedMoneyAmount(value), name]
@@ -1234,10 +1239,16 @@ function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onS
         <Line type="monotone" dataKey="net" name="Net" stroke="var(--accent)" strokeWidth={2} dot={false} />
         {avgNet == null ? null : (
           <ReferenceLine y={avgNet} stroke="var(--accent2)" strokeDasharray="4 4"
-            label={<AvgReferenceLabel value={avgNet} />} />
+            label={<AvgReferenceLabel value={avgNet} align={pans ? 'right' : 'left'} />} />
         )}
       </ComposedChart>
     </ResponsiveContainer>
+  )
+  if (!pans) return chart
+  return (
+    <PanningChartFrame minWidth={panMinWidth} height={height} pinKey={`${data.length}:${data[0]?.[xKey]}`}>
+      {chart}
+    </PanningChartFrame>
   )
 }
 
@@ -1303,9 +1314,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     /^\d{4}-\d{2}$/.test(r.month)
   )
 
-  // The window — Last 12 months or a year, see resolveTrendsWindowKey — is resolved by the page, which
-  // also fetches the group picker's options for it. The multi-year picture lives in the Annual totals
-  // chart, so there is no unbounded "all time" option here to compress the monthly bars.
+  // The window — a rolling run of months, all data or a year, see `trendsWindowRange` — is resolved by
+  // the page, which also fetches the group picker's options for it. A window longer than a year does not
+  // compress the monthly bars: Total per month pans instead.
   const effectiveYear = trendWindow.key
   // Also the range a report opened from one of this window's figures lists, so the two cannot disagree.
   const reportWindow = trendWindow
@@ -1373,7 +1384,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     return { ...s, avg, total }
   }).sort((a, b) => b.total - a.total)
 
-  // Annual totals cover every year in the dataset the span reaches, independent of the Year dropdown up
+  // Annual totals cover every year in the dataset the span reaches, independent of the window chooser up
   // top. Drilling into one year shouldn't collapse this chart down to a single bar, and the span is the
   // only thing that narrows it — set on the chart itself, since it is the chart it governs here.
   // Whole years: a span starting mid-year draws the year containing it (`lib/trendSpan.js`), and the
@@ -1457,11 +1468,8 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     }
   }
 
-  const availableYears = [...new Set(normalizedRows.map(r => r.month.slice(0, 4)))].sort().reverse()
-  const yearOptions = [
-    { value: 'last12', label: 'Last 12 months' },
-    ...availableYears.map(y => ({ value: y, label: y })),
-  ]
+  const windowOptions = trendsWindowOptions(normalizedRows.map(r => r.month.slice(0, 4)))
+  const monthlyTotalPans = monthlyTotal.length > TOTAL_PER_MONTH_FIT
 
   // The averages table's trailing column carries the group rows' drill chevron.
   const averagesColumns = '1fr 100px 100px 100px 20px'
@@ -1484,13 +1492,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
   return (
     <StaleWhileRefreshing refreshing={loading} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select
-          value={effectiveYear}
-          onChange={e => onYearChange(e.target.value)}
-          style={DASH_SELECT_MD}
-        >
-          {yearOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <TrendsWindowSelect value={effectiveYear} options={windowOptions} onChange={onYearChange} />
         <select
           value={pickedGroup?.series_id || ''}
           onChange={e => {
@@ -1574,13 +1576,19 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
               : overallAvg == null ? null : <>Avg: {formatSignedMoneyAmount(overallAvg)}/mo</>}
             {' · double-click a bar to open that month'}
           </div>
-          {/* Fit the panel (no oversized horizontal scroll) so the tooltip's built-in edge-flip happens at
-              the visible panel edge instead of the off-screen far edge of a wider chart. */}
-          <div style={{ width: '100%', height: 180 }}>
+          {/* Up to a year of bars fits the panel, with no scroll, so the tooltip's built-in edge-flip
+              happens at the visible panel edge. A longer window pans instead of squashing its bars, and
+              then takes the panning tooltip and a right-hand axis — see PanningChartFrame. */}
+          <PanningChartFrame
+            minWidth={monthlyTotalPans ? monthlyTotal.length * TOTAL_PER_MONTH_BAR_WIDTH : 0}
+            height={180}
+            pinKey={`${effectiveYear}:${monthlyTotal.length}:${drillGroup?.series_id || ''}:${viewIsIncome}`}
+          >
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={monthlyTotal}
-                margin={{ top: 6, right: 12, bottom: 6, left: 0 }}
+                // With the axis on the right there is nothing on the left to hold the first label's overhang.
+                margin={{ top: 6, right: 12, bottom: 6, left: monthlyTotalPans ? 24 : 0 }}
                 {...CLICKABLE_CHART_EVENTS}
                 onClick={onOpenMonth ? (state => handleMonthBarClick(monthlyTotal[clickedDataIndex(state)])) : undefined}
                 style={onOpenMonth ? { cursor: 'pointer' } : undefined}
@@ -1593,8 +1601,9 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
                   height={monthlyTotal.length > 8 ? 40 : 22}
                   tick={<StaggeredMonthTick />}
                 />
-                <YAxis tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
+                <YAxis orientation={monthlyTotalPans ? 'right' : 'left'} tickFormatter={formatSignedAxisTick} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
                 <Tooltip
+                  {...(monthlyTotalPans ? { content: <PanningChartTooltip />, isAnimationActive: false } : {})}
                   formatter={v => formatSignedMoneyAmount(v)}
                   allowEscapeViewBox={{ x: false, y: false }}
                   contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
@@ -1620,7 +1629,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
                 />
               </ComposedChart>
             </ResponsiveContainer>
-          </div>
+          </PanningChartFrame>
         </Card>
 
         <div
@@ -1661,7 +1670,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
       <Card style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
-          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{effectiveYear === 'last12' ? 'last 12 months' : effectiveYear}</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{trendWindow.label.toLowerCase()}</span>
           {!drillGroup && (
             <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>· click a group to see its categories</span>
           )}
@@ -2198,7 +2207,9 @@ export default function Dashboard() {
   // The window the Trends tab shows, resolved here rather than inside TrendsPanel because the group picker's
   // options are fetched for it. Null until the series first arrives, since the default depends on the data.
   const trendWindow = useMemo(
-    () => (trendRows ? trendsWindowRange(resolveTrendsWindowKey(trendRows, trendYear, thisM), thisM) : null),
+    () => (trendRows
+      ? trendsWindowRange(resolveTrendsWindowKey(trendRows, trendYear, thisM), thisM, rowsMonthSpan(trendRows))
+      : null),
     [trendRows, trendYear],
   )
   const trendWindowStart = trendWindow?.start
@@ -2453,8 +2464,8 @@ export default function Dashboard() {
   }, [periodA, periodB, accountId, tagIds, ownerIds, summaryFilters])
 
   const loadTrendSeries = useCallback(async () => {
-    // Fetch the full visible history (20-year bound) so the year picker and Annual totals can reach
-    // every year in the data; the per-window monthly charts then slice this down via the year picker.
+    // Fetch the full visible history (20-year bound) so the window chooser and Annual totals can reach
+    // every year in the data; the per-window monthly charts then slice this down via the window chooser.
     const request = ++trendSeriesRequestRef.current
     const group = trendGroup
     const rows = await api.getMonthlyByGroup(240, accountId || undefined, group?.series_id || undefined, tagIds, ownerIds, summaryFilters)
@@ -2463,7 +2474,7 @@ export default function Dashboard() {
 
   // The cash-flow trends form reads its own endpoint rather than the by-group series: its bars are the
   // per-category nets re-bucketed by direction, which is not something the group series can be summed
-  // into. Same 20-year window as the other trends, so the year picker reaches every year in the data. The
+  // into. Same 20-year window as the other trends, so the window chooser reaches every year in the data. The
   // yearly rows are a second call rather than a sum of the monthly ones — see buildCashFlowAnnualSeries.
   const loadCashFlowTrend = useCallback(async () => {
     const [rows, yearRows] = await Promise.all([
@@ -2878,7 +2889,7 @@ export default function Dashboard() {
       </div>
 
       {/* Small top padding so a focusable control sitting at the very top of this scroll area (e.g. the
-          Trends year picker) isn't clipped at the overflow edge — its focus outline needs room above the
+          Trends window chooser) isn't clipped at the overflow edge — its focus outline needs room above the
           border box. */}
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 32px 32px' }}>
 

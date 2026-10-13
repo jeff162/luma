@@ -549,7 +549,8 @@ export const HELP_TOPICS = [
           <li>
             The <strong>period</strong> selector at the top of the page sets the time frame for the{' '}
             <strong>Single period</strong> report. <strong>Compare</strong> chooses its two periods with its own
-            selectors, and <strong>Trends</strong> chooses its year with its own selector.
+            selectors, and <strong>Trends</strong> chooses the months it covers with its own selector: the
+            last 12 months, the last 2, 3 or 5 years, all of the data, or a single year.
           </li>
           <li>
             In the single period report, the <strong>Trend</strong> chart at the bottom of the page shows
@@ -612,8 +613,9 @@ export const HELP_TOPICS = [
         <p>
           <strong>Trends</strong> displays cash flow as bars around a zero line &mdash; money in
           above it, money out below, with the net drawn across them and the average net marked. The
-          top chart has a bar per year and the bottom chart a bar per month. Clicking a year shows its
-          months in the bottom chart. Clicking a month opens its transactions; double-clicking switches
+          top chart has a bar per year and the bottom chart a bar per month. The selector on the bottom
+          chart chooses the months it covers, and clicking a year in the top chart shows that year's
+          months. Clicking a month opens its transactions; double-clicking switches
           to the single-period view for that month.
         </p>
         <p>
