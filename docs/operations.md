@@ -593,10 +593,6 @@ a destructive restore. See *Open*.
 
 ## Open
 
-- **The containers have never run on a Linux host on a real network.** They were built and exercised
-  under Docker Desktop, where the host's network is a virtual machine's: the proxy, the readings of
-  where a request came from and the certificate hand-out were all seen working there, and the name
-  resolving from another device could not be. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
 - **The advertised address does not follow the machine.** It is read once at startup, so a server whose
   address changes while it runs goes on answering with the old one until it is restarted.
 - **Database diagnostics are not built.** The structural half is small and unambiguous — both pragmas

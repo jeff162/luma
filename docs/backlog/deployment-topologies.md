@@ -84,9 +84,7 @@ been seen working yet.
     journal;
   - the responder beside the operating system's own on Windows and macOS as the server;
   - a server whose host name equals `MDNS_NAME`, which is meant to pass as the same machine rather than
-    be refused as a conflict;
-  - the containers on a Linux host, reached from another device by the advertised name. They have run
-    under Docker Desktop only, whose host network is a virtual machine's.
+    be refused as a conflict.
 
 ## Shape B — desktop: step 3's remainder
 
