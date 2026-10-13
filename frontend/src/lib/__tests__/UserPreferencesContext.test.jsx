@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 // Guards the referential-stability contract of useUserPreference: the value it returns must keep a stable
 // identity across renders and change only when the preference's *content* changes. Consumers routinely read
 // the value into a useEffect/useMemo dependency array (e.g. a pill-table column config that re-syncs local
@@ -7,17 +9,12 @@
 // depth exceeded"). These tests pin the fix at the hook so the whole class of bug can't come back; the
 // unset-key case below fails against the pre-fix hook (each render saw a different [] reference).
 
-import { describe, it, expect, beforeAll } from 'vitest'
-import TestRenderer, { act } from 'react-test-renderer'
+import { describe, it, expect } from 'vitest'
+import { render } from '@testing-library/react'
 import { UserPreferencesProvider, useUserPreference } from '../UserPreferencesContext.jsx'
 
-beforeAll(() => {
-  // react-test-renderer's act() requires this flag in React 18 to suppress environment warnings.
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
-})
-
 // A stable initialPreferences keeps the provider from churning on re-render, isolating the hook's own
-// stability. With initialPreferences set, the provider skips its async fetch, so this runs in plain node.
+// stability. With initialPreferences set, the provider skips its async fetch.
 function renderHookAcrossRenders(useHook, { initialPreferences = {} } = {}) {
   const observed = []
   function Probe() {
@@ -31,12 +28,11 @@ function renderHookAcrossRenders(useHook, { initialPreferences = {} } = {}) {
       </UserPreferencesProvider>
     )
   }
-  let renderer
-  act(() => { renderer = TestRenderer.create(<Tree />) })
+  const view = render(<Tree />)
   return {
     observed,
-    rerender: () => act(() => { renderer.update(<Tree />) }),
-    unmount: () => act(() => { renderer.unmount() }),
+    rerender: () => view.rerender(<Tree />),
+    unmount: () => view.unmount(),
   }
 }
 
