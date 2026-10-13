@@ -55,10 +55,10 @@ test('the cash flow trends form opens a year into its months', async ({ page }) 
   await expect(picker).toHaveValue('last12')
 
   // The newest year: the demo ledger's earlier year holds too little to draw a bar worth clicking.
-  const year = await yearCard.locator('.recharts-xAxis .recharts-cartesian-axis-tick text').last().textContent()
+  const year = await yearCard.locator('.recharts-xAxis-tick-labels text').last().textContent()
   await yearCard.locator('.recharts-bar-rectangle').last().click()
   await expect(picker).toHaveValue(year)
-  const monthTicks = await monthCard.locator('.recharts-xAxis .recharts-cartesian-axis-tick text').allTextContents()
+  const monthTicks = await monthCard.locator('.recharts-xAxis-tick-labels text').allTextContents()
   expect(monthTicks.length).toBeGreaterThan(0)
   expect(monthTicks.every(label => label.endsWith(year))).toBe(true)
 })

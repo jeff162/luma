@@ -52,6 +52,10 @@
          padding and radius. */
       .ui-search-input { -webkit-appearance: none; appearance: none; }
       .ui-search-input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+      /* recharts makes a chart and the layers inside it focusable, so a chart can be read from the keyboard,
+         and a browser rings any focused SVG element — one focused by a click included. Keyboard focus keeps
+         its ring; a click leaves none. */
+      .recharts-wrapper :focus:not(:focus-visible) { outline: none; }
       @keyframes ui-refresh-turn { to { transform: rotate(360deg); } }
       @keyframes ui-refresh-pulse { 50% { opacity: 0.35; } }
       .ui-refresh-icon { display: block; }

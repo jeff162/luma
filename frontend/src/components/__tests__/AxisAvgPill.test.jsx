@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
-import { BarChart, Bar, XAxis, YAxis, ReferenceLine, CartesianGrid, Customized } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, ReferenceLine, CartesianGrid, useYAxisTicks } from 'recharts'
 import AxisAvgPill from '../AxisAvgPill.jsx'
 import { AVG_PILL_HEIGHT, AXIS_TICK_TEXT_HEIGHT } from '../../lib/axisLabelPlacement.js'
 import { formatSignedAxisTick } from '../../lib/moneyDisplay.js'
@@ -73,9 +73,7 @@ function axisColumn({ values, domain, clamped }) {
         tick={{ fontSize: 11 }} domain={domain} allowDataOverflow={clamped} />
       <XAxis dataKey="label" height={XAXIS_HEIGHT} tick={false} axisLine={false} />
       <Bar dataKey="plotted" fillOpacity={0} isAnimationActive={false} />
-      <Customized component={
-        <AxisAvgPill value={averageOf(values)} columnWidth={AXIS_COLUMN_WIDTH} />
-      } />
+      <AxisAvgPill value={averageOf(values)} columnWidth={AXIS_COLUMN_WIDTH} />
     </BarChart>
   )
 }
@@ -95,10 +93,10 @@ function scrollingPlot({ values, domain, clamped }, width = 600) {
 }
 
 function pillIn(container) {
-  const rect = container.querySelector('.recharts-customized-wrapper rect')
+  const rect = container.querySelector('.axis-avg-pill rect')
   if (!rect) return null
   const y = Number(rect.getAttribute('y'))
-  const text = container.querySelector('.recharts-customized-wrapper text')
+  const text = container.querySelector('.axis-avg-pill text')
   return {
     x: Number(rect.getAttribute('x')),
     width: Number(rect.getAttribute('width')),
@@ -166,28 +164,26 @@ describe('the average pill in the sticky axis column', () => {
   })
 
   it('is placed around the ticks the axis actually drew', () => {
-    // `niceTicks` is what the pill dodges. The scale's own `ticks()` looks like the same thing and is
-    // not: on an auto-scaled axis it returns a denser set, and placing the pill around those would step
-    // aside from labels that were never drawn while sitting on ones that were.
+    // `useYAxisTicks` is what the pill dodges, and it has to be the set the axis drew: placing the pill
+    // around any other would step aside from labels that were never drawn while sitting on ones that
+    // were.
     cleanup()
-    let nice = null
-    let scale = null
+    let ticks = null
+    function Probe() {
+      ticks = useYAxisTicks()
+      return null
+    }
     render(
       <BarChart width={AXIS_COLUMN_WIDTH} height={HEIGHT} data={dataFor(SHAPES['monthly spend, auto scale'].values)}
         margin={{ top: MARGIN_Y, right: 0, bottom: MARGIN_Y, left: 0 }}>
         <YAxis width={AXIS_LABEL_WIDTH} />
         <XAxis dataKey="label" height={XAXIS_HEIGHT} tick={false} axisLine={false} />
         <Bar dataKey="plotted" fillOpacity={0} isAnimationActive={false} />
-        <Customized component={props => {
-          const axis = props.yAxisMap[Object.keys(props.yAxisMap)[0]]
-          nice = axis.niceTicks
-          scale = axis.scale
-          return null
-        }} />
+        <Probe />
       </BarChart>,
     )
     const drawn = tickYsIn(document.body)
-    expect(nice.map(t => scale(t))).toEqual(drawn)
-    expect(scale.ticks(5).length).not.toBe(nice.length)
+    expect(drawn.length).toBeGreaterThan(2)
+    expect(ticks.map(t => t.coordinate)).toEqual(drawn)
   })
 })

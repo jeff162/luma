@@ -5,9 +5,9 @@ import { useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } fr
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
-  Customized,
 } from 'recharts'
 import { api } from '../lib/api.js'
+import { CLICKABLE_CHART_EVENTS, clickedDataIndex } from '../lib/chartInteraction.js'
 import { selectionsOfType, selectionsToParams } from '../lib/filterParams.js'
 import { applyCategoryChange } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
@@ -481,8 +481,9 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
+            {...CLICKABLE_CHART_EVENTS}
             onClick={selectable ? (state => {
-              const year = data[state?.activeTooltipIndex]?.year
+              const year = data[clickedDataIndex(state)]?.year
               if (year) onSelectYear(year)
             }) : undefined}
             style={selectable ? { cursor: 'pointer' } : undefined}
@@ -1188,14 +1189,14 @@ function CashFlowTrendsPanel({ rows, annualRows, selectedYear, onYearChange, spa
 // net as a reference line. `isHighlighted` (optional) dims every other period's bars.
 function CashFlowDivergingChart({ data, xKey, height, avgNet, isHighlighted, onSelect }) {
   function handleClick(state) {
-    const idx = state?.activeTooltipIndex
-    if (idx == null || idx < 0 || !data[idx]) return
+    const idx = clickedDataIndex(state)
+    if (idx == null || !data[idx]) return
     onSelect(idx)
   }
   const dimmed = d => (isHighlighted ? !isHighlighted(d) : false)
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} onClick={handleClick} style={{ cursor: 'pointer' }}
+      <ComposedChart data={data} {...CLICKABLE_CHART_EVENTS} onClick={handleClick} style={{ cursor: 'pointer' }}
         stackOffset="sign" margin={{ top: 8, right: 12, bottom: 6, left: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         {/* Every period gets a label up to a dozen; past that, thin them out rather than letting them
@@ -1439,11 +1440,11 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
     }
   }
 
-  // Same double-click trick on the top area chart, where Recharts gives us an
-  // `activeTooltipIndex` we can use to map back to the month under the cursor.
+  // Same double-click trick on the top area chart, where Recharts gives us the index of the point
+  // under the cursor, which maps back to its month.
   function handleAreaClick(state) {
-    if (!state || typeof state.activeTooltipIndex !== 'number' || !onOpenSinglePeriod) return
-    const idx = state.activeTooltipIndex
+    const idx = clickedDataIndex(state)
+    if (idx == null || !onOpenSinglePeriod) return
     const monthKey = chartData[idx]?.monthKey
     if (!monthKey) return
     const now = Date.now()
@@ -1526,6 +1527,7 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart
               data={chartData}
+              {...CLICKABLE_CHART_EVENTS}
               onClick={onOpenSinglePeriod ? handleAreaClick : undefined}
               style={onOpenSinglePeriod ? { cursor: 'pointer' } : undefined}
             >
@@ -1579,7 +1581,8 @@ function TrendsPanel({ rows, groups, onYearChange, trendWindow, span, onSpanChan
               <ComposedChart
                 data={monthlyTotal}
                 margin={{ top: 6, right: 12, bottom: 6, left: 0 }}
-                onClick={onOpenMonth ? (state => handleMonthBarClick(monthlyTotal[state?.activeTooltipIndex])) : undefined}
+                {...CLICKABLE_CHART_EVENTS}
+                onClick={onOpenMonth ? (state => handleMonthBarClick(monthlyTotal[clickedDataIndex(state)])) : undefined}
                 style={onOpenMonth ? { cursor: 'pointer' } : undefined}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -3098,8 +3101,11 @@ export default function Dashboard() {
                             ) : (
                               <ResponsiveContainer width="100%" height={220}>
                                 <PieChart>
+                                  {/* Static: the sweep-in runs for a second and a half, and it would
+                                      replay on every filter, period and drill-down step. */}
                                   <Pie data={pieData} dataKey="pieValue" nameKey={rowName}
                                     cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
+                                    isAnimationActive={false}
                                     onClick={d => d && handleSliceClick(d)} style={{ cursor: 'pointer' }}>
                                     {pieData.map((r, i) => <Cell key={i} fill={r[rowColor]} />)}
                                   </Pie>
@@ -3195,6 +3201,7 @@ export default function Dashboard() {
                               <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
                                 dataKey="pieValue" nameKey="category_name"
                                 cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
+                                isAnimationActive={false}
                                 onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
                                 {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
                               </Pie>
@@ -3417,9 +3424,7 @@ export default function Dashboard() {
                                 reads the same scale the ticks were drawn from, and steps aside from
                                 any tick label it would otherwise sit on. */}
                             {trend.length > 1 && trendAvg != null && (
-                              <Customized component={
-                                <AxisAvgPill value={trendAvg} columnWidth={TREND_AXIS_COLUMN_WIDTH} />
-                              } />
+                              <AxisAvgPill value={trendAvg} columnWidth={TREND_AXIS_COLUMN_WIDTH} />
                             )}
                           </BarChart>
                         </div>
@@ -3443,7 +3448,8 @@ export default function Dashboard() {
                               margin={{ top: TREND_CHART_MARGIN_Y, right: 12, bottom: TREND_CHART_MARGIN_Y, left: 0 }}
                               // On the chart, not the bar: the target is the whole hovered column, so a
                               // short bar is as easy to pick as a tall one.
-                              onClick={state => handleTrendBarClick(trendData[state?.activeTooltipIndex])}
+                              {...CLICKABLE_CHART_EVENTS}
+                              onClick={state => handleTrendBarClick(trendData[clickedDataIndex(state)])}
                               style={{ cursor: 'pointer' }}
                             >
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />

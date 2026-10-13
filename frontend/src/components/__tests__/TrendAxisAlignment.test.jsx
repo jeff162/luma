@@ -53,14 +53,13 @@ function scrollingPlot(domain, allowDataOverflow, width = 600) {
   )
 }
 
-// Where the axis says a value sits: the y of each tick mark, by its label.
+// Where the axis says a value sits: the y of each tick mark, by its label. recharts draws the marks and
+// the label text in separate layers, in the same order, so the two are paired by position.
 function tickPositions(container) {
-  return Object.fromEntries(
-    [...container.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick')].map(tick => [
-      tick.querySelector('text')?.textContent,
-      Number(tick.querySelector('line')?.getAttribute('y1')),
-    ]),
-  )
+  const marks = [...container.querySelectorAll('.recharts-yAxis-tick-lines .recharts-cartesian-axis-tick line')]
+  const labels = [...container.querySelectorAll('.recharts-yAxis-tick-labels text')]
+  expect(labels.length).toBe(marks.length)
+  return Object.fromEntries(marks.map((mark, i) => [labels[i].textContent, Number(mark.getAttribute('y1'))]))
 }
 
 // Where the plot actually draws zero: the baseline every bar starts from.

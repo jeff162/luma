@@ -27,6 +27,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
+import { CLICKABLE_CHART_EVENTS } from '../lib/chartInteraction.js'
 import { monthLabel } from '../lib/utils.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
@@ -783,6 +784,7 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth, isMonthA
             data={visible}
             margin={{ top: 28, right: 8, bottom: 8, left: 8 }}
             style={{ cursor: 'pointer' }}
+            {...CLICKABLE_CHART_EVENTS}
             onClick={state => { if (state?.activeLabel) onSelectMonth?.(state.activeLabel) }}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />

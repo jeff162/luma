@@ -145,10 +145,10 @@ test('trends averages drill from a group to its categories and open a category r
   // A group's charts run at a smaller scale than the whole ledger's, which is where a value axis that
   // rounds to whole thousands repeats itself ("$0k, $1k, $1k, $2k"). Every Trends axis has to tell its
   // own ticks apart.
-  const repeatedTicks = await page.evaluate(() => [...document.querySelectorAll('.recharts-yAxis')]
-    .map(axis => [...axis.querySelectorAll('.recharts-cartesian-axis-tick text')].map(tick => tick.textContent))
-    .filter(labels => new Set(labels).size !== labels.length))
-  expect(repeatedTicks).toEqual([])
+  const axisLabels = await page.evaluate(() => [...document.querySelectorAll('.recharts-yAxis-tick-labels')]
+    .map(axis => [...axis.querySelectorAll('text')].map(tick => tick.textContent)))
+  expect(axisLabels.flat().length).toBeGreaterThan(0)
+  expect(axisLabels.filter(labels => new Set(labels).size !== labels.length)).toEqual([])
   const categoryName = (await reportArrow.getAttribute('aria-label')).replace('Open the transactions behind ', '')
   await reportArrow.click()
   const reportTitle = page.getByText(new RegExp(`^${categoryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · (Last 12 months|\\d{4}) · Spending$`))
