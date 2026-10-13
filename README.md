@@ -321,7 +321,7 @@ from source; the downloads carry their own runtime.)
 | Layer | Technology |
 | --- | --- |
 | Backend | Python 3.12 / FastAPI / SQLite |
-| Frontend | React 18 / Vite / Recharts |
+| Frontend | React 19 / Vite / Recharts |
 | Bank data | Plaid or SimpleFIN (both optional) |
 
 ## Documentation
