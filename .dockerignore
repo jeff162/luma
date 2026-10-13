@@ -1,0 +1,21 @@
+# The image is built from the top of the checkout, which also holds the databases and the override
+# file. Nothing reaches the build unless it is named here.
+*
+!LICENSE
+!backend
+!frontend
+
+backend/venv
+backend/tests
+frontend/node_modules
+frontend/dist
+frontend/tests
+frontend/data
+frontend/playwright-report
+frontend/test-results
+**/__pycache__
+**/.env*
+**/*.db
+**/*.db-*
+**/*.log
+**/Dockerfile

@@ -317,8 +317,8 @@ app.add_middleware(
 )
 
 # Empty by default, which disables cross-origin access entirely: every shipped topology serves the SPA
-# and the API on one origin — dev proxies `/api` through Vite, Docker through nginx, and the standalone
-# build serves `dist/` from this very process (see `spa.py`) — so the browser never makes a cross-origin
+# and the API on one origin — dev proxies `/api` through Vite, and a downloaded build or a
+# container serves `dist/` from this very process (see `spa.py`) — so the browser never makes a cross-origin
 # call. Since the grant is credentialed, a standing default would let any page on a listed origin call
 # this API with the session cookie attached and read the response — a surface bought for nothing.
 # `CORS_ORIGINS` is the escape hatch for a split-origin deployment.

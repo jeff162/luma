@@ -71,8 +71,8 @@ def reachable_from_network() -> bool:
         return True
     if _declared_reachable is not None:
         return _declared_reachable
-    # No launcher: a source checkout or a container, where the start script passes these two settings
-    # to the servers it starts. The interface's own server counts, since it forwards to this one.
+    # No launcher: a source checkout, where the start scripts pass these two settings to the servers
+    # they start. The interface's own server counts, since it forwards to this one.
     return any(
         host.strip().lower() != "localhost" and not _is_loopback_address(host.strip())
         for host in (app_config.value_of("backend_host"), app_config.value_of("frontend_host"))

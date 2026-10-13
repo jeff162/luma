@@ -18,9 +18,9 @@ only what is genuinely unbuilt:
 
 **Designed 2026-10-12.** The shape is the downloaded kit run as a server, not a new artifact: the one
 process already serves the interface and the API, so the proxy in front of it has nothing to do but
-terminate TLS. What is built is described in [`../operations.md`](../operations.md) → *LAN server*; this
-section holds what is not built yet, and the decisions behind all of it until the last piece lands and
-they move there.
+terminate TLS. What is built is described in [`../operations.md`](../operations.md) → *LAN server* and
+*Containers*, and nothing is left to build; this section holds the decisions behind it and what has not
+been seen working yet.
 
 ### Decisions
 
@@ -61,14 +61,6 @@ they move there.
 - **Windows and macOS can be the server.** The mode, the responder and Caddy are all cross-platform.
   What differs per OS is starting at boot, and systemd is the one recipe shipped and tested.
 
-### To build
-
-1. **Containers** — the compose file publishes the backend port directly and its nginx forwards neither
-   the scheme nor the client address, so every request there reads as cleartext from the network and
-   the provider-secret operations are refused, from the same machine included. Accepted until this
-   lands; separate from the rest. The compose file states `BACKEND_HOST=0.0.0.0`, which is what the image
-   binds, so the installation already reports itself as reachable from the network.
-
 ### Open
 
 - **The per-device install steps are checked for Windows only.** Those were followed on a real machine
@@ -92,7 +84,9 @@ they move there.
     journal;
   - the responder beside the operating system's own on Windows and macOS as the server;
   - a server whose host name equals `MDNS_NAME`, which is meant to pass as the same machine rather than
-    be refused as a conflict.
+    be refused as a conflict;
+  - the containers on a Linux host, reached from another device by the advertised name. They have run
+    under Docker Desktop only, whose host network is a virtual machine's.
 
 ## Shape B — desktop: step 3's remainder
 

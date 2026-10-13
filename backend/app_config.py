@@ -40,7 +40,6 @@ from backend.runtime_config import (
     DEFAULT_BACKEND_HOST,
     DEFAULT_BACKEND_PORT,
     DEFAULT_BACKEND_READY_TIMEOUT,
-    DEFAULT_FRONTEND_DOCKER_PORT,
     DEFAULT_FRONTEND_HOST,
     DEFAULT_FRONTEND_PORT,
     anchor_relative,
@@ -159,7 +158,7 @@ SETTINGS: tuple[Setting, ...] = (
         key="cors_origins",
         env_var="CORS_ORIGINS",
         label="Allowed cross-origin callers",
-        help="Other web origins whose pages may call this API from a browser with cookies. Empty by default: the SPA and the API are served on one origin (the dev server and the Docker frontend both proxy /api), so nothing needs a grant.",
+        help="Other web origins whose pages may call this API from a browser with cookies. Empty by default: the SPA and the API are served on one origin (the dev server proxies /api, and everywhere else one process serves both), so nothing needs a grant.",
         default="",
         advanced=True,
     ),
@@ -195,10 +194,10 @@ SETTINGS: tuple[Setting, ...] = (
         key="backend_port",
         env_var="BACKEND_PORT",
         label="Backend port",
-        help="Port the backend listens on when the interface is served separately (running from source, or under Docker), which passes API requests on to it. A downloaded build does not use it.",
+        help="Port the backend listens on when the interface is served separately (running from source), which passes API requests on to it. A downloaded build does not use it, and neither does a container.",
         default=DEFAULT_BACKEND_PORT,
-        # Advanced since downloads stopped reading it: only a source or Docker install has the internal
-        # hop it names, and the port a person actually looks for is the frontend's.
+        # Advanced since downloads stopped reading it: only a source install has the internal hop it
+        # names, and the port a person actually looks for is the frontend's.
         advanced=True,
     ),
     Setting(
@@ -216,7 +215,7 @@ SETTINGS: tuple[Setting, ...] = (
         # the only one. The variable keeps its FRONTEND_ name, which pairs it with FRONTEND_HOST and would
         # break every existing .env to rename.
         label="Port",
-        help="Port the browser connects to. A downloaded build serves everything on this one port, and starts on a free port instead if it is busy (in server mode it refuses to start). Under Docker the browser port is Port (Docker).",
+        help="Port the browser connects to. A downloaded build serves everything on this one port, and starts on a free port instead if it is busy (in server mode it refuses to start).",
         default=DEFAULT_FRONTEND_PORT,
     ),
     Setting(
@@ -225,14 +224,6 @@ SETTINGS: tuple[Setting, ...] = (
         label="Bind address",
         help="Address the browser-facing server listens on: the development server when run from source, and a downloaded build in server mode. This computer only by default; set to 0.0.0.0 to reach it from another device on the network, over plain HTTP. A downloaded build outside server mode always listens to this computer only.",
         default=DEFAULT_FRONTEND_HOST,
-    ),
-    Setting(
-        key="frontend_docker_port",
-        env_var="FRONTEND_DOCKER_PORT",
-        label="Port (Docker)",
-        help="Published frontend port when running under Docker.",
-        default=DEFAULT_FRONTEND_DOCKER_PORT,
-        advanced=True,
     ),
     Setting(
         key="server_mode",

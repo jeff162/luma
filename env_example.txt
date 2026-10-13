@@ -36,15 +36,16 @@
 # 2. Ports
 # ------------------------------------------------------------------------------
 #
-# The browser always connects to the frontend port. A downloaded build is one program on that one port.
-# Running from source or under Docker adds a separate frontend server, which passes API requests on to
-# the backend port behind it.
+# The browser always connects to the frontend port. A downloaded build is one program on that one port,
+# and so is the application under Docker, where it is the port the proxy beside it passes requests to.
+# Running from source adds a separate frontend server, which passes API requests on to the backend port
+# behind it.
 
-# FRONTEND_PORT [download] [source]
-# The port the browser connects to (under Docker, FRONTEND_DOCKER_PORT plays this part). If it is busy, a
-# downloaded build starts on a free port and reports which: in the terminal, or in luma-desktop.log beside
-# the data for the macOS app. The start scripts refuse to start instead, naming the busy port, and so
-# does a downloaded build in server mode.
+# FRONTEND_PORT [all]
+# The port the browser connects to. If it is busy, a downloaded build starts on a free port and reports
+# which: in the terminal, or in luma-desktop.log beside the data for the macOS app. The start scripts
+# refuse to start instead, naming the busy port, and so does a downloaded build in server mode or the
+# application under Docker.
 # Default: 8010
 # FRONTEND_PORT=8010
 
@@ -55,9 +56,8 @@
 # Default: 127.0.0.1
 # BACKEND_HOST=0.0.0.0
 
-# BACKEND_PORT [source] [docker]
-# The port the backend listens on behind the frontend server. Under Docker, the port the backend is also
-# published on. A downloaded build does not use it.
+# BACKEND_PORT [source]
+# The port the backend listens on behind the frontend server. A downloaded build does not use it.
 # Default: 8011
 # BACKEND_PORT=8011
 
@@ -68,10 +68,6 @@
 # mode is otherwise meant to sit behind a reverse proxy that provides HTTPS. Outside server mode a
 # downloaded build always accepts connections from this computer only. Default: localhost
 # FRONTEND_HOST=0.0.0.0
-
-# FRONTEND_DOCKER_PORT [docker]
-# The port the browser connects to under Docker. Default: 3000
-# FRONTEND_DOCKER_PORT=3000
 
 # ------------------------------------------------------------------------------
 # 3. Sessions and deployment
@@ -95,7 +91,7 @@
 # Starting the program with --server or --no-server overrides this. Default: false
 # SERVER_MODE=true
 
-# MDNS_NAME [download]
+# MDNS_NAME [download] [docker]
 # The name a server-mode installation answers to on the local network, without the .local ending, so
 # other devices reach it at <name>.local. A reverse proxy in front has to be configured with the same
 # name. Two installations on one network need different names: one already in use refuses to start.

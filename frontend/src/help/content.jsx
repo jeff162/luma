@@ -4084,14 +4084,13 @@ export const HELP_TOPICS = [
           <li>
             <strong>Port</strong> is the port the browser connects to, 8010 unless changed. A
             downloaded copy of {APP_NAME} uses this one port for everything, and if another program already
-            holds it, starts on a free port instead and reports the address it chose. Under Docker the
-            browser port is <strong>Port (Docker)</strong> instead.
+            holds it, starts on a free port instead and reports the address it chose.
           </li>
         </ul>
         <p>
           Most users do not need to touch the settings under <strong>Advanced</strong>. One of them,
-          {' '}<strong>Backend port</strong>, only matters when {APP_NAME} runs from source code or under
-          Docker, where the interface is served separately and passes requests on to the backend on that
+          {' '}<strong>Backend port</strong>, only matters when {APP_NAME} runs from source code,
+          where the interface is served separately and passes requests on to the backend on that
           port. A downloaded copy does not use it.
         </p>
         <p>

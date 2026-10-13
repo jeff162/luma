@@ -4,9 +4,9 @@
 """
 Serving the built SPA from the API process, so one process is a whole application.
 
-Nothing in the app served `frontend/dist` before this: the Vite dev server does it in development and
-nginx does it in the Docker image, which is why both of those topologies need two processes. A packaged
-single-user build has neither, so the backend serves the bundle itself and the SPA and the API share one
+Nothing in the app served `frontend/dist` before this: the Vite dev server does it in development,
+which is why that topology needs two processes. A packaged build has no such server, and neither does
+the container image, so the backend serves the bundle itself and the SPA and the API share one
 origin by construction rather than by proxy configuration.
 
 Two rules make that work, and both are about what a *client route* is:

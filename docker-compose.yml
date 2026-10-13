@@ -1,8 +1,11 @@
+# A server installation on a Linux host: the application in server mode, and a Caddy proxy in front of
+# it for HTTPS. Both use the host's network, so this is the LAN server of docs/operations.md with the
+# two programs in containers -- the application listens to the host's loopback, the proxy reaches it
+# there, and other devices reach the proxy.
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "${BACKEND_PORT:-8011}:8000"
+  app:
+    build: .
+    network_mode: host
     volumes:
       - ./data:/data
     # Optional: an override file is honored when present, but the app runs on defaults without one.
@@ -11,14 +14,39 @@ services:
         required: false
     environment:
       DATA_DIR: /data
-      # What the image's command binds, stated so the app can report it.
-      BACKEND_HOST: 0.0.0.0
+    depends_on:
+      proxy-config:
+        condition: service_completed_successfully
     restart: unless-stopped
 
-  frontend:
-    build: ./frontend
-    ports:
-      - "${FRONTEND_DOCKER_PORT:-3000}:80"
+  # Writes the proxy's site file from the application's own configuration, then exits. The proxy issues
+  # its certificate for the name in that file, which has to be the name the application advertises.
+  proxy-config:
+    build: .
+    command: sh -c "python -m backend.desktop --caddyfile > /etc/caddy/Caddyfile"
+    volumes:
+      - ./data:/data
+      - proxy-site:/etc/caddy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+
+  proxy:
+    image: caddy:2
+    network_mode: host
+    volumes:
+      - proxy-site:/etc/caddy:ro
+      # The proxy's certificate authority lives here. Losing it mints a new one, and every device then
+      # needs the new root certificate.
+      - proxy-data:/data
     depends_on:
-      - backend
+      proxy-config:
+        condition: service_completed_successfully
+        restart: true
     restart: unless-stopped
+
+volumes:
+  proxy-site:
+  proxy-data:

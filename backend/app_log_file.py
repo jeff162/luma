@@ -100,8 +100,8 @@ _attached: list[logging.Logger] = []
 # the address a user reaches is not generally this process's to state. Only the desktop launcher knows one:
 # it picks the port, and falls back off the configured one when that is busy, so the log is the only record
 # of where a given run actually landed. Running from source the browser is on Vite's port with this server
-# as an internal hop behind it, and in a container the published port is a mapping made outside it — in
-# both the marker omits the address rather than naming one nothing can be reached at.
+# as an internal hop behind it, so the marker omits the address rather than naming one nothing can be
+# reached at.
 _reachable_url: str | None = None
 
 # Errors logged but not yet in the control database's count. Taken whole by one flush at a time; a flush

@@ -25,7 +25,7 @@ Two other boundaries, so nothing is stated twice:
 | --- | --- | --- | --- | --- |
 | **Desktop** | one machine | the backend itself | loopback | usually off |
 | **LAN server** | several devices | the backend, behind a TLS-terminating proxy or directly | loopback behind the proxy, or the network | on |
-| **Containers** | one machine or a LAN | an nginx container proxying `/api` | the published ports | either |
+| **Containers** | several devices, on a Linux host | the backend, behind a proxy container | loopback on the host, behind the proxy | on |
 
 They are the **same application**. What differs is only how uvicorn is launched and whether something
 wraps it.
@@ -46,7 +46,7 @@ vault slot with nothing on screen to explain why. Use the printed URL.
 
 **The port is `FRONTEND_PORT`, and it is preferred, not guaranteed.** The browser's port has that one
 name in every topology; here the single process *is* the frontend, so `BACKEND_PORT` — the internal hop
-behind Vite or nginx elsewhere — is not read. A busy configured port falls back to an ephemeral one, and
+behind Vite when running from source — is not read. A busy configured port falls back to an ephemeral one, and
 says so rather than doing it silently — a separately started `uvicorn` on the same databases is usually
 what that means. Nothing durable is keyed to the port: cookies are not port-scoped and an RP id is the
 host alone, so a passkey registered on one port still works on the next.
@@ -104,11 +104,10 @@ database created, a migration applied, the database location adopted after a mov
 access lines only for requests that failed; successful requests stay out, or routine polling would soon
 rotate a failure out of the file. So does what a client can cause without signing in (a 401, a 404, and
 uvicorn's warnings about malformed traffic), since on a networked install a flood of those would push
-genuine failures out the same way. **The start line names the version**, and in the desktop shape the
-address that launch settled on — a busy configured port falls back to an ephemeral one, and nothing else
-records which one a given run ended up on. The other topologies omit the address rather than guess at it:
-running from source the browser is on the frontend's port with this server as an internal hop behind it,
-and a container's published port is a mapping made outside the process. It rotates at 1 MB and keeps one
+genuine failures out the same way. **The start line names the version**, and wherever the launcher
+started the server the address that launch settled on — a busy configured port falls back to an ephemeral
+one, and nothing else records which one a given run ended up on. Running from source omits the address
+rather than guess at it: the browser is on the frontend's port with this server as an internal hop behind it. It rotates at 1 MB and keeps one
 previous file (`luma.log.1`).
 What it cannot hold is anything before the application starts, such as a missing dependency or a crash
 during import: that stays in the output alone, which on macOS means `luma-desktop.log`. A start that fails later,
@@ -253,18 +252,43 @@ requirement. Neither alone makes passkeys reachable over the LAN.
 
 ## Containers
 
-`docker-compose.yml` runs two services: the backend with `DATA_DIR=/data` over a bind-mounted `./data`,
-and an nginx container that serves the built interface and proxies `/api/` to `backend:8000`. `.env` is
-honored when present and not required.
+`docker-compose.yml` runs the LAN server above with its two programs in containers: the application,
+started in server mode from an image that carries the built interface, and Caddy in front of it for
+HTTPS. **Both use the host's network, and everything else follows from that.** The application listens
+on the host's loopback, where the proxy reaches it; a browser on the host is a loopback client; the
+name is advertised at the host's own address; and the proxy's root certificate is fetched from its admin
+API on `localhost`. Nothing in the application knows it is in a container, so the *LAN server* section
+describes this shape too — the certificate hand-out, the fingerprint, what the proxy has to state.
 
-This is a **third** topology rather than a variant of the other two, and it is the one where the
-data-directory question has an answer that is not the default: the databases live in the mounted
-volume, so backing up the host directory is backing up the installation.
+A third service runs first and exits: it writes the proxy's site file with `--caddyfile`, so the name
+the proxy certifies is the name the application advertises without either being typed twice. `.env` at
+the top of the checkout is honored when present and not required, and `SESSION_COOKIE_SECURE=true`
+belongs in it as it does for any server behind a proxy.
 
-**Every request to a container reads as coming from the network, including one from the same machine.**
-The backend sees the nginx container as its peer, never a loopback client, and the compose file gives it
-no proxy to trust and no scheme to read. So the provider-secret operations are refused there outright
-until this shape gets a TLS path of its own — see *Open*.
+```
+docker compose up -d --build
+docker compose logs app
+docker compose exec app python -m backend.desktop --certificate-fingerprint
+```
+
+The second line carries the address, and the third is the console reading of the fingerprint. After a
+change to `MDNS_NAME` or `FRONTEND_PORT`, `docker compose up -d` again rewrites the site file and
+restarts the proxy on it. The host's firewall has to admit the same two ports as any LAN server, and
+ports 80 and 443 have to be free for the proxy.
+
+**Where it keeps things.** The databases are in `./data` on the host, bind-mounted as the data
+directory, so backing up that directory is backing up the installation; the files in it belong to root,
+which is who the container runs as. The proxy's certificate authority is in the `proxy-data` volume.
+`docker compose down` keeps it and `docker compose down -v` deletes it, after which the proxy mints a
+new authority and every device needs the new certificate.
+
+**The image is built from the top of the checkout, which is also where a developer's databases and
+`.env` sit.** `.dockerignore` names what the build may read and excludes everything else, so neither
+can reach an image.
+
+**It is for a Linux host.** Under Docker Desktop on Windows and macOS the host's network is that of a
+virtual machine, so neither the advertised name nor another device's address arrives where the
+containers are.
 
 ## Where the data lives, and how the app decides
 
@@ -306,7 +330,7 @@ nowhere earlier to read them from:
 | | |
 | --- | --- |
 | **Data location** | `DATA_DIR`, with `DB_PATH` / `CONTROL_DB_PATH` honored per file |
-| **Ports and addresses** | `BACKEND_PORT`, `BACKEND_HOST`, `FRONTEND_PORT`, `FRONTEND_HOST`, `FRONTEND_DOCKER_PORT`, `VITE_API_PROXY_TARGET` |
+| **Ports and addresses** | `BACKEND_PORT`, `BACKEND_HOST`, `FRONTEND_PORT`, `FRONTEND_HOST`, `VITE_API_PROXY_TARGET` |
 | **Launcher knobs** | `SERVER_MODE`, `MDNS_NAME`, `LUMA_USE_LOG_FILES`, `LUMA_BACKEND_READY_TIMEOUT` |
 | **Deployment gates** | `SESSION_COOKIE_SECURE`, `LUMA_DEVELOPER_OPTIONS` |
 
@@ -428,7 +452,7 @@ with `--reset-password`, optionally followed by a username:
 | Portable or installed (Windows, Linux) | `luma --reset-password` beside the executable |
 | macOS app | `Luma.app/Contents/Resources/server/luma --reset-password` from Terminal |
 | Development | `backend/venv/bin/python -m backend.desktop --reset-password` |
-| Containers | `docker compose exec backend python -m backend.desktop --reset-password` |
+| Containers | `docker compose exec app python -m backend.desktop --reset-password` |
 
 The name of the control database is displayed. A list of account is displayed for the user to choose from and then the new password is entered. It is safe to run beside a running instance. The
 account selected ends up as an active administrator with two-factor sign-in off and current browser sessions are signed out. The vault passphrase is untouched; why this needs no other credential is described in `security-model.md` →
@@ -495,6 +519,15 @@ a destructive restore. See *Open*.
   moving uvicorn off the main thread — where it sits precisely so Ctrl+C is clean — and it would fork
   the one launcher all three platforms share. The wrapper confines every macOS-specific concern to the
   macOS artifact.
+- **The containers on a network of their own, with the proxy's port published.** It would run under
+  Docker Desktop as well, and costs most of what the shape is for. The proxy is then not a loopback
+  peer, so the server would have to be told which address to believe forwarded headers from; a browser
+  on the host arrives from the bridge's gateway, and under Docker Desktop so does every other device,
+  so nothing can be read as this machine; and the name cannot be advertised from inside. The host's
+  network makes all three the LAN server's own answers.
+- **A separate nginx container serving the interface.** It was the first container shape, from before
+  the backend served the interface itself. It forwarded neither the scheme nor the client address and
+  added no TLS, so every request read as cleartext from the network.
 - **A pinned CA bundle shipped in the artifact.** Certificate verification goes through the OS trust
   store instead. A shipped snapshot ages, ignores roots the user installed, and keeps trusting roots
   the OS has since distrusted.
@@ -560,9 +593,10 @@ a destructive restore. See *Open*.
 
 ## Open
 
-- **Containers cannot connect a data source.** The compose file publishes the backend port directly and
-  its nginx forwards neither the scheme nor the client address, so no request there can be read as
-  protected. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
+- **The containers have never run on a Linux host on a real network.** They were built and exercised
+  under Docker Desktop, where the host's network is a virtual machine's: the proxy, the readings of
+  where a request came from and the certificate hand-out were all seen working there, and the name
+  resolving from another device could not be. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)
 - **The advertised address does not follow the machine.** It is read once at startup, so a server whose
   address changes while it runs goes on answering with the old one until it is restarted.
 - **Database diagnostics are not built.** The structural half is small and unambiguous — both pragmas

@@ -57,7 +57,6 @@ DEFAULT_FRONTEND_HOST = "localhost"
 # whole application on the network over plain HTTP. That is a configuration someone may want, and it is
 # one they should have chosen.
 DEFAULT_BACKEND_HOST = "127.0.0.1"
-DEFAULT_FRONTEND_DOCKER_PORT = "3000"
 DEFAULT_BACKEND_READY_TIMEOUT = "180"
 
 # Session secrets that mean "no secret". Two were shipped as placeholders in earlier `.env` templates

@@ -36,7 +36,7 @@ Luma is a local-first web application with:
 
 The browser talks only to the local backend API. Core application data and persistence are local; external network dependencies are limited to optional integrations such as Plaid and SimpleFIN Bridge.
 
-**Three topologies, one origin in each.** The SPA and the API always share an origin, but what puts them there differs: the Vite dev server proxies `/api` in development, nginx does it in the Docker image, and the standalone build has the backend serve `frontend/dist` itself (`backend/spa.py`) so one process is a whole application. That third shape is what makes a packaged single-user build possible, and it is also why `CORS_ORIGINS` can default to empty — no shipped topology makes a cross-origin call at all.
+**One origin in every topology.** The SPA and the API always share an origin, but what puts them there differs: the Vite dev server proxies `/api` in development, and a downloaded build or the container image has the backend serve `frontend/dist` itself (`backend/spa.py`) so one process is a whole application. That second shape is what makes a packaged single-user build possible, and it is also why `CORS_ORIGINS` can default to empty — no shipped topology makes a cross-origin call at all.
 
 Serving the bundle has one wrinkle worth stating, because the obvious implementation gets it wrong in a way that surfaces only as a confusing frontend error. Client routes such as `/transactions` are React Router inventions with no file behind them, so any path that does not resolve to a real file returns `index.html` — *except* under `/api`, which stays a JSON 404. Letting the fallback swallow unmatched API paths would hand `api.js` an HTML body where it parses a `detail`, turning every genuine 404 into a parse error.
 
@@ -466,7 +466,7 @@ are consumed before the server binds or before the app process exists. The launc
 `SESSION_COOKIE_SECURE`, a transport guarantee set at the deployment edge and deliberately not derived
 from app state. `CORS_ORIGINS` names other web origins allowed to call the API from a browser *with
 cookies*; it defaults to empty because every topology serves the app and the API on one origin (the dev
-server and the Docker frontend both proxy `/api`), so a standing grant would be credentialed access
+server proxies `/api`, and everywhere else one process serves both), so a standing grant would be credentialed access
 bought for nothing. And `LUMA_DEVELOPER_OPTIONS`, which gates destructive reset tooling — a gate, not a
 preference, so it is intentionally not something the UI invites anyone to flip.
 
