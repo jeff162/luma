@@ -185,11 +185,14 @@ would need a `chmod` fails there.
 
 **The runner's glibc is the artifact's floor.** PyInstaller bundles the Python runtime but not the C
 library, so the binary links against whatever the build machine has and refuses to start anywhere older.
-That is why both Linux jobs run on Ubuntu 22.04 (`ubuntu-22.04`, `ubuntu-22.04-arm`) rather than 24.04:
-22.04 carries glibc 2.35, which Ubuntu 22.04, Debian 12 and Raspberry Pi OS bookworm (2.36) satisfy,
-where 24.04's 2.39 would not. The failure mode is a link error at launch that names a `GLIBC_` version,
-and nothing in the build notices it — the 0.3.0 x64 kit, built on `ubuntu-latest`, would not start under
-WSL's Ubuntu 22.04. The labels are pinned rather than `-latest` so the floor cannot move with an alias.
+Both Linux jobs run on Ubuntu 24.04 (`ubuntu-24.04`, `ubuntu-24.04-arm`), which carries glibc 2.39:
+Ubuntu 24.04, Debian 13 and Raspberry Pi OS trixie satisfy it, and Debian 12 and Raspberry Pi OS
+bookworm (2.36) do not. The builds ran on 22.04, for a 2.35 floor that covered those two, until GitHub
+scheduled its 22.04 images for retirement (April 2027). Holding that floor past then would mean building
+inside a 22.04 container, which was not done: running from source and the Docker image both remain open
+to those systems. The failure mode is a link error at launch that names a `GLIBC_` version, and nothing
+in the build notices it — the 0.3.0 x64 kit, built on `ubuntu-latest`, would not start under WSL's
+Ubuntu 22.04. The labels are pinned rather than `-latest` so the floor cannot move with an alias.
 
 ### macOS specifics
 

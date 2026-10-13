@@ -15,13 +15,14 @@
 #   the user allows them explicitly. The README inside the disk image says how; certificates are a
 #   recurring cost and a separate decision from being able to build.
 #
-# Linux builds both architectures too, both on **Ubuntu 22.04 rather than 24.04**, on purpose.
+# Linux builds both architectures too, both on **Ubuntu 24.04, named rather than `-latest`**.
 # PyInstaller does not bundle glibc — the artifact links against whatever the build machine has — so the
 # runner's glibc becomes the *floor* every target machine must meet. 24.04 carries glibc 2.39, and the
 # failure on anything older is a link error at launch rather than anything the build notices: the 0.3.0
-# x64 kit, built on `ubuntu-latest`, would not start on Ubuntu 22.04 under WSL. 22.04's 2.35 clears
-# Raspberry Pi OS bookworm (2.36), Debian 12 and everything newer. The labels are pinned rather than
-# `-latest` so the floor cannot rise with an image alias. 64-bit only: a 32-bit Pi OS is a different
+# x64 kit, built on `ubuntu-latest`, would not start on Ubuntu 22.04 under WSL. 2.39 clears Ubuntu
+# 24.04, Debian 13 and Raspberry Pi OS trixie; it leaves out Debian 12 and Raspberry Pi OS bookworm,
+# which the 22.04 images covered until GitHub scheduled them for retirement (April 2027). The labels are
+# pinned so the floor cannot rise with an image alias. 64-bit only: a 32-bit Pi OS is a different
 # architecture again and is not built.
 #
 # macOS builds both architectures. `macos-13`, the last Intel image under that name, was retired in
@@ -61,8 +62,8 @@ on:
         default: all
         options:
           - all
-          - ubuntu-22.04
-          - ubuntu-22.04-arm
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
           - windows-latest
           - macos-latest
           - macos-15-intel
@@ -96,14 +97,14 @@ jobs:
           #
           # `slug` is what the upload is named, and it exists because the runner label is a poor name for
           # something a person downloads. The labels describe build infrastructure rather than targets:
-          # `ubuntu-22.04` does not say x64, `macos-latest` and `macos-15-intel` are an arm64 and an x64
+          # `ubuntu-24.04` does not say x64, `macos-latest` and `macos-15-intel` are an arm64 and an x64
           # build named by image vintage, and the "latest" in two of them reads as a version while meaning
           # only that the image alias floats. The slugs are the `<system>-<arch>` vocabulary
           # `build_desktop.py::_platform_tag` already stamps into the archive inside, so the wrapper and
           # its contents agree.
           targets = [
-              {"os": "ubuntu-22.04", "slug": "linux-x64", "form": "portable"},
-              {"os": "ubuntu-22.04-arm", "slug": "linux-arm64", "form": "portable"},
+              {"os": "ubuntu-24.04", "slug": "linux-x64", "form": "portable"},
+              {"os": "ubuntu-24.04-arm", "slug": "linux-arm64", "form": "portable"},
               {"os": "windows-latest", "slug": "windows-x64", "form": "portable"},
               {"os": "macos-latest", "slug": "macos-arm64", "form": "installed"},
               {"os": "macos-15-intel", "slug": "macos-x64", "form": "installed"},

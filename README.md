@@ -170,7 +170,7 @@ On Windows, SmartScreen may object to an unsigned executable. Choose **More info
 
 On Linux, unpack the downloaded file with `tar -xzf luma-<version>-linux-x64.tar.gz`, then run with
 `./luma/luma`. The Linux builds
-need glibc 2.35 or newer — Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm, or later.
+need glibc 2.39 or newer — Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie, or later.
 
 ### macOS
 
@@ -307,8 +307,8 @@ Windows, macOS, Linux, and Raspberry Pi (Raspberry Pi OS and other ARM Linux dis
 performance depends on the model, storage speed, and whether it runs directly or through Docker.
 
 Each Linux download carries a minimum glibc, because the build links against the C library of the
-machine that produced it. Both are compiled on Ubuntu 22.04 and need **glibc 2.35 or newer**, which
-covers Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm and everything after them. The ARM64 download
+machine that produced it. Both are compiled on Ubuntu 24.04 and need **glibc 2.39 or newer**, which
+covers Ubuntu 24.04, Debian 13, Raspberry Pi OS trixie and everything after them. The ARM64 download
 is also **64-bit only** — a 32-bit Raspberry Pi OS is a different architecture and has no build.
 Running from source has none of these restrictions, and the Docker image carries its own C library, so
 the glibc minimum does not apply to it.
