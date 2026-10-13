@@ -15,7 +15,8 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 //
 // `load(params, prevData) => data` is the caller's fetch. It receives the prior data on a reload so a
 // loader that derives from it (e.g. a version counter the page watches) can; on a fresh open prevData
-// is null.
+// is null. Such a counter must number the first load 1, not 0: the watching page reads 0 as "no report
+// has loaded", so a first load numbered 0 is the one load that refreshes none of the page's counts.
 export function useDetachedReportViewer(load) {
   const [viewer, setViewer] = useState(null)
   // Through refs so open/reload keep a stable identity even when the caller passes an inline `load`,

@@ -16,8 +16,10 @@
  * the class rather than the instance.
  *
  * Nothing here measures the chart. The width is computed from the bucket count and the viewport, which
- * is what lets the chart be handed an explicit size instead of discovering one after it has drawn —
- * see the note on `<ResponsiveContainer>` in `docs/ui-patterns.md`.
+ * is what lets the chart be handed an explicit size instead of discovering one after it has drawn.
+ * `<ResponsiveContainer>` measures its box with a ResizeObserver and corrects after paint, so a change of
+ * grain, which replaces the series and the width in one commit, would draw the new buckets at the old
+ * width for a frame.
  *
  * The second half of the module is the other direction: which bucket the reader is looking at, and
  * which bucket in a *different* set covers the same time. Changing the grain rebuilds the bucket set

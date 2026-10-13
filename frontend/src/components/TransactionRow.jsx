@@ -798,7 +798,7 @@ export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, onUpda
             {onMarkReviewed ? (
               // Clicking marks the row reviewed, through the same action as the row menu (which also
               // raises the undo toast). Only offered where the host wires the row actions; elsewhere the
-              // marker stays informational. The row stays where it is — see ui-patterns → lingers.
+              // marker stays informational. The row stays where it is — see ui-patterns.md → Transaction lists.
               <button
                 type="button"
                 aria-label="Needs review — mark reviewed"

@@ -39,7 +39,7 @@ Before any non-trivial change, read `docs/collaboration-notes.md` for project de
 
 For workflow changes that touch generated state, persisted review state, imports, rules, categorization, or undo/return paths, follow the design-pass guidance in `docs/collaboration-notes.md` before implementation: map affected surfaces and lifecycle states first, then code.
 
-Before working on shared UI behavior — whether changing it, investigating it, debugging it, or designing against it — read `docs/ui-patterns.md` first. The docs are the authoritative high-level map; treat the code as the implementation to verify against, not the source of truth for intent.
+Before building or changing shared UI, read `docs/ui-patterns.md` for the conventions that apply across surfaces. It does not specify any one surface: what a page, dialog or card looks like is the code's to say and is free to change, so the document is never a reason not to change one. Update it only when a convention itself changes.
 
 Before working on anything that touches provider credentials, the login perimeter, transport, or backups — including adding a data source — read `docs/security-model.md` first. It carries the assumptions the design rests on and the conditions under which one has to be reopened; `architecture.md` carries only the mechanism, which is not enough to tell whether a change is safe.
 
@@ -140,7 +140,7 @@ When working on the codebase:
 
   - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer): the capability declarations, and the checklist of traits that turned out to be one provider's rather than universal
 
-  - `docs/ui-patterns.md` — shared UI behavior and interaction models
+  - `docs/ui-patterns.md` — UI conventions shared across surfaces (not a description of any one surface)
 
   - `docs/import-reconciliation-playbook.md` — the user-facing "when situation X arises, reach for tool Y" guide, and the content source of truth for the in-app help topics. Changing an import or reconciliation tool means updating the situation here first, then reconciling the matching help topic so the in-app copy does not drift
 
@@ -172,7 +172,9 @@ A reference doc describes the system as it is, which leaves three kinds of fact 
 
 **A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`). It ends with all three sections below.
 
-**A multi-topic reference doc collects many** (`data-model.md`, `ui-patterns.md`, `architecture.md`). There, a **rejection or an obstacle stays inline, beside the subject it is about** — which is the convention these docs already use and the more findable one, since someone reading about splits meets the rejected split shapes there rather than in a list of twenty unrelated verdicts at the end. Such a doc carries **only an `## Open` section**, because a decision still owed is the one kind with no natural inline home, and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*), not by a tail anchor.
+**A multi-topic reference doc collects many** (`data-model.md`, `architecture.md`). There, a **rejection or an obstacle stays inline, beside the subject it is about** — which is the convention these docs already use and the more findable one, since someone reading about splits meets the rejected split shapes there rather than in a list of twenty unrelated verdicts at the end. Such a doc carries **only an `## Open` section**, because a decision still owed is the one kind with no natural inline home, and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*), not by a tail anchor.
+
+`ui-patterns.md` is neither shape. It holds conventions only: no rejections, no history and no `## Open` section. Its closing section, *What belongs here*, is the test for adding to it.
 
 The three sections, in a topic doc:
 

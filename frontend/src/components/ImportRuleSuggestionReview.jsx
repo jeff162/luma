@@ -3,7 +3,7 @@
 
 /*
  * **This list is deliberately not windowed, and adding `WindowedRows` here is not a drop-in.** Every
- * other long list in the app renders through it (see `ui-patterns.md` → windowing), so the absence is
+ * other long list in the app renders through it (see `ui-patterns.md` → *Tables and lists*), so the absence is
  * a decision rather than an oversight: this is a grouped, heterogeneous card list whose items range
  * from ~80px to 1500px+, it scrolls with the *page* rather than owning a bounded viewport, it reads
  * its own rows back out of the DOM for scroll restoration, and its cards change height in place as
@@ -1437,8 +1437,7 @@ export default function ImportRuleSuggestionReview({
     return actions
   }
 
-  // Invariant (see docs/ui-patterns.md "Rule suggestion review — bulk select alongside per-card
-  // actions"): a card's own row buttons ALWAYS act on just that card, even while it is part of a bulk
+  // Invariant: a card's own row buttons ALWAYS act on just that card, even while it is part of a bulk
   // selection. Bulk dispositions live solely in the sticky bulk-actions bar; row buttons never operate
   // on the selection. This is what lets the user build a batch and pick off outliers individually at
   // the same time. Do not reintroduce a "selected scope" branch here that makes a selected card's

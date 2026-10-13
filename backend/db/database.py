@@ -2089,7 +2089,7 @@ def _restore_trashed_accounts(conn):
     The account trash was retired once removing an account moved behind the row's overflow menu: it
     could only ever *defer* the move of a child's transactions to its parent, never undo one, and
     deferring left the removal dialog promising a reassignment the ledger went on contradicting (see
-    `routers/accounts.py` and `docs/ui-patterns.md`). With its Settings view and its endpoints gone, a
+    `routers/accounts.py`). With its Settings view and its endpoints gone, a
     row still carrying `trashed_at` would be unreachable forever while its transactions stayed live —
     so the rows come back rather than being cleaned up, and the user removes them deliberately or not
     at all.

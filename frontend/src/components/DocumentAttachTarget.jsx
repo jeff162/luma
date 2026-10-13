@@ -13,7 +13,7 @@ import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
  * transaction's panel, so two full-width targets were a lot of standing space for it. They combine because a
  * textarea can take a dropped file as well as a paste — while the reverse cannot hold: a paste reaches only a
  * focused editable element, and browsers offer right-click Paste only on one, so the box has to be a real
- * textarea (`ui-patterns.md` → *Drop zones and file inputs*). What a textarea cannot do is open the file
+ * textarea (`ui-patterns.md` → *Dropping and pasting files*). What a textarea cannot do is open the file
  * picker on click, since a click there has to place the caret; that is why Browse… is its own button. The
  * shared `DropZone` is not used for the same reason: its whole surface is a click-to-browse button.
  *

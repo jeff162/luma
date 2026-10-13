@@ -170,7 +170,7 @@ export function SuggestionActionButton({ children, onClick, active = false, disa
 
 // The per-row disposition action cluster, shared so a suggestion's status buttons read and behave the
 // same whether it renders as a full card or as a row in a settled-view conflict table. Row buttons act
-// on this one suggestion only (the bulk-actions bar owns the selection) — see ui-patterns.md. The
+// on this one suggestion only (the bulk-actions bar owns the selection). The
 // handlers and `editingSuggestionId` are owned by the parent; this component is pure layout.
 export function SuggestionDispositionActions({
   suggestion,

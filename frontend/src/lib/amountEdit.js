@@ -21,8 +21,8 @@
  * re-checks either afterwards, so an amount moved out from under one leaves a split that no longer sums
  * and a reimbursement report whose headline quietly stops being true.
  *
- * This governs **rendering only** — `ui-patterns.md` → *A control that is disabled by an unmet
- * condition says which one, on hover*. The backend refuses the same three cases independently, since
+ * This governs **rendering only** — `ui-patterns.md` → *Loading and feedback* (a disabled control
+ * says why). The backend refuses the same three cases independently, since
  * that is what holds across every entry point; this exists so the screen agrees with it, and so the
  * reason on the hover and the condition that greys the control come from one expression rather than two
  * that can drift apart.

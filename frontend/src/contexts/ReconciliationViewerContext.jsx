@@ -33,7 +33,7 @@ export function useReconciliationViewer() {
 
 // The whole report payload — the dialog derives its buckets from this. `version` advances on every load,
 // the first included, so a page watching it refreshes its file cards' "N to resolve" counts whenever the
-// report is opened or reloaded (docs/ui-patterns.md → a detached report's version counter).
+// report is opened or reloaded (see `lib/useDetachedReportViewer.js`).
 const loadReport = async (params, prev) => ({
   ...(await RECONCILIATION_REPORTS[params.vendor].load(params)),
   version: (prev?.version ?? 0) + 1,

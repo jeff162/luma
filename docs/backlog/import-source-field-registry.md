@@ -3,8 +3,8 @@
 **Status: the registry and both features built on it have shipped.** Captured import-source detail is
 surfaced on the origin hover card and in the transaction detail's Origin block, and a rule can opt in to
 matching it (`match_source_text`). What is described here is the unstarted remainder only; the shipped
-model lives in `data-model.md` (`import_evidence_json`, and the rule action list) and `ui-patterns.md`
-(the origin hover card, and the registry as the single seam).
+model lives in `data-model.md` (`import_evidence_json`, and the rule action list) and
+`frontend/src/lib/importSourceFields.js` (the registry as the single seam).
 
 ## The seam this builds on
 

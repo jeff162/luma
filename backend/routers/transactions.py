@@ -337,7 +337,7 @@ def _append_require_all_attributes_filter(clauses, params, *, require_all_attrib
 # - a `<field>:<value>` prefix (merchant/raw/category/account/date/amount/doc) restricts the search to that one field;
 #   when the prefix is explicit we also drop the account-term exclusion list because the user has asked specifically.
 #   The prefix is recognized only at the start and its value is the whole rest of the box, so there is no way to
-#   combine two — a precise combination belongs to a page-local control like the amount filter (ui-patterns.md)
+#   combine two — a precise combination belongs to a page-local control like the amount filter
 # - the result stays additive with the normal ledger filters instead of replacing them
 def _split_quick_filter_field(value: str):
     match = re.match(r"^([A-Za-z]+)\s*:\s*(.*)$", value)
@@ -1518,8 +1518,7 @@ def _amount_edit_refusal(conn, row) -> Optional[str]:
 
     Phrased as sentences for the user because they are what the panel shows: the invariants live on this
     side, and a second phrasing of them in the client is the thing that drifts. The order is deliberate —
-    a row can fail more than one of these, and the first is the one worth saying (`ui-patterns.md` → the
-    disabled-control rule).
+    a row can fail more than one of these, and the first is the one worth saying.
 
     The two refusals are the expensive cases, and both fail *silently*: a split's parts are checked
     against the transaction's amount only when the split is saved, and a reimbursement's claims against

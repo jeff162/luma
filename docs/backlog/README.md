@@ -26,6 +26,11 @@ load-bearing: the **code carries the decision at the site** — the header comme
 `ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed",
 which no document could.
 
+**UI material goes to `ui-patterns.md` only as a convention.** A rule that applies across surfaces and
+tells someone how to build the next one belongs there. How one surface works, and what was tried on the
+way to it, does not: the code states the first, and the second is kept only as a comment at the site
+where the code would otherwise look wrong.
+
 **A rejected shape is not a work log, and only one of them belongs anywhere.** A *rejected shape*
 answers a question someone is about to ask again — what was considered, why it fails, what it would
 cost to revisit. An *obstacle* is a trap that would bite a second attempt. Both earn their space. What
@@ -83,7 +88,7 @@ scale — rather than by feature.
   decisions owed.
 - [import-source-field-registry.md](import-source-field-registry.md) — **shipped; deferred remainder
   only.** The registry, the origin surfacing built on it, and opt-in source-text rule matching all landed
-  and are folded into `data-model.md` / `ui-patterns.md`. What remains: selectable report columns drawn
+  and are folded into `data-model.md`. What remains: selectable report columns drawn
   from the registry, and structured `(field, op, value)` matchers in place of the shipped
   "anywhere in the source text" form.
 - [online-categorizer.md](online-categorizer.md) — **parked design.** An opt-in online (LLM) merchant
@@ -155,7 +160,7 @@ scale — rather than by feature.
 - [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **reduced 2026-09-03 to the parked
   include case.** The exclude note shipped 2026-07-28 and its behavior — `FilterConflictNote`, the
   like-for-like and view/totals-aware boundaries, and both symmetric tag-report cases — is in
-  [`../ui-patterns.md`](../ui-patterns.md) → *General principles*. What stays: whether an **include** chip
+  the header comment of `frontend/src/lib/reportFilterConflicts.js`. What stays: whether an **include** chip
   on a group/category report deserves the same note. It is deliberately not flagged today (a transaction
   has one category, so an include is ordinary focusing) and the behavior is correct without it; it is held
   for a larger tag-report pass rather than a one-off.
@@ -165,7 +170,7 @@ scale — rather than by feature.
   `LIMIT 50` that hid older imports and let one active source crowd out another, why the display query
   is unbounded, and why the writing reconcile pass on the same endpoint stays capped — is in
   [`../scale-and-limits.md`](../scale-and-limits.md); the window and archive as built are in
-  [`../ui-patterns.md`](../ui-patterns.md) and [`../data-model.md`](../data-model.md). What stays: the
+  [`../data-model.md`](../data-model.md). What stays: the
   fetch re-bound, now blocked on the five
   consumers that read the batch list as an aggregate rather than as a page.
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
@@ -193,7 +198,7 @@ scale — rather than by feature.
   (a real `tag_report` table), and a richer (drag/NL) report builder.
 - [dashboard-reporting.md](dashboard-reporting.md) — **reduced 2026-09-02 to what has not started.**
   The cash-flow work shipped 2026-08-25 and its durable half is now in the topic docs: chart behaviour in
-  [`../ui-patterns.md`](../ui-patterns.md) → *Charts and overlays*, reporting semantics (including
+  the comments beside the chart code, reporting semantics (including
   `exclude_from_totals` as the *only* exclusion axis and the three richer schemes rejected in its favour)
   in [`../data-model.md`](../data-model.md) → *Reporting assumptions* → *Cash flow*, and the endpoints in
   `architecture.md`. What stays: the **`cash_date`** phase for cash-basis timing, a cash-flow form for

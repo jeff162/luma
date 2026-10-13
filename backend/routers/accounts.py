@@ -8,7 +8,7 @@ Account records serve two related lifecycle models.
 - Child accounts keep historical account numbers visible on the Accounts page while sharing a parent display name elsewhere.
 - Removing an account is irreversible and says so; what it asks instead is where its transactions go (`delete_account`).
   `account.trashed_at` survives as a column — old backups carry it and the read paths still honour it — but nothing
-  sets it any more: the account trash was retired once removal moved behind a deliberate menu (`ui-patterns.md`).
+  sets it any more: the account trash was retired once removal moved behind a deliberate menu.
 
 Attach / detach also coordinates with dedupe state — see
 `backend/services/duplicate_detection.py`:

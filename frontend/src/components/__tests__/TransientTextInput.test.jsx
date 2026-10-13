@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-// Interaction contract for the shared inline-edit primitive (ui-patterns.md "Inline edit commit
-// behavior"). Every in-place rename funnels through it, so Enter-commits / Escape-reverts /
+// Interaction contract for the shared inline-edit primitive (ui-patterns.md "Editing in
+// place"). Every in-place rename funnels through it, so Enter-commits / Escape-reverts /
 // blur-commit must mean the same thing everywhere — and the create-vs-rename distinction rides on
 // `onBlurCommit`, exactly the kind of behavior a refactor can silently flip. Real DOM events
 // (keydown/blur/focus) need a DOM, so this runs under jsdom rather than the node helper suite.

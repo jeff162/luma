@@ -524,7 +524,7 @@ those dimensions in the account or category tree.
 ## In-app surfacing
 
 The situations above are surfaced inside the app through the Help/FeatureExplainer registry
-(`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help and contextual explainers* for
+(`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help* for
 the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
 pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
 reconciliation and import-detail report headers, the PayPal reconciliation header, the amount-convention picker, the Group Imported

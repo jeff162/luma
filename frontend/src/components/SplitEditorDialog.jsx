@@ -4,7 +4,7 @@
 // The split editor: allocating one transaction's amount across several categories.
 //
 // A split is a multi-field form, so it follows the explicit-submit half of the inline-edit contract
-// (ui-patterns.md → Inline edit commit behavior) rather than committing on blur — a click-away must
+// (ui-patterns.md → Editing in place) rather than committing on blur — a click-away must
 // not persist a half-built allocation. The running total is the whole interaction model: Save stays
 // unavailable until the amounts account for the transaction exactly, so "is this finished?" is
 // answered on screen rather than by a rejected save.
@@ -281,7 +281,7 @@ export default function SplitEditorDialog({ txn, categories, onAddCategory, onCl
           ) : null}
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
           {/* A disabled button takes no pointer events, so the reason hangs off a wrapper (ui-patterns.md
-              → a control disabled by an unmet condition says which one). */}
+              → Loading and feedback). */}
           <Tooltip content={saveBlocker} align="right">
             <Button small onClick={save} disabled={!complete || saving}>Save split</Button>
           </Tooltip>

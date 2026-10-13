@@ -198,8 +198,8 @@ they pass. Do not add an authorization check at the data layer expecting it to m
 no scoping model behind it for it to enforce.
 
 **The gate is also what sorts the interface.** Everything a member may do is on Settings and everything
-behind `require_admin_or_local` is on Administration, whose navigation entry is absent for anyone else
-(`ui-patterns.md` → *Section lists and collapsible cards*). The update check under Settings → About is
+behind `require_admin_or_local` is on Administration, whose navigation entry is absent for anyone else.
+The update check under Settings → About is
 the one item that straddles the line, and its admin half is hidden in place.
 
 **"Password optional" is a workspace property, never per-user.** The data is shared, so if one identity

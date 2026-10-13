@@ -5,8 +5,7 @@ decimal/thousands separators, date order — and explicitly **not** language tra
 currency setting and the reasoning behind where it lives are in [`../data-model.md`](../data-model.md)
 → *the ledger holds one currency at a time* (including why currency is tenant-wide shared state while a
 date format is per-user `ui_preference` — opposite sides of the same dividing line), with the adapter
-contract in [`../building-a-connector.md`](../building-a-connector.md) → *Currency* and the
-section-naming decision in [`../ui-patterns.md`](../ui-patterns.md) → *General principles*.
+contract in [`../building-a-connector.md`](../building-a-connector.md) → *Currency*.
 
 What remains splits into two buckets that must stay distinct, because only one of them can be wrong
 about a number.

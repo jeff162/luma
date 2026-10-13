@@ -169,8 +169,7 @@ trigger), gaining optional count badges.
 because `maxWidth` sat on the elements that also carried the page padding, which measures the column
 *inside* the padding and leaves a centred header a padding's width in from a centred list. Fixed to one
 named column per page, applied inside the padding; the Tasks page had the same latent mismatch (hidden
-only because it is left-aligned) and was harmonized too. All three lessons are generalized into
-`ui-patterns.md`.
+only because it is left-aligned) and was harmonized too.
 
 **Second real-app pass, 2026-08-27 — a stale membership cache, found by using the feature to do real
 work.** Recategorizing a charge so it would join the series it belonged to changed nothing: the row's
@@ -240,8 +239,7 @@ Labels now fold onto one line where two will not fit, and the shared slicing gai
 the cash-flow sides pass at 1%. The third was the Trends chart drawing the wrong thing entirely: the
 diverging bars were missing `stackOffset="sign"`, so money out was stacked down from the top of the
 money-in bar rather than from zero, putting the net on screen twice and money out not at all — with
-correct tooltips the whole time. All three are in [`ui-patterns.md`](ui-patterns.md) → *Charts and
-overlays* as don't-re-impose.
+correct tooltips the whole time.
 
 **Second real-app pass, 2026-08-25** — three more, all on the *shared* single-period trend chart rather
 than on anything cash-flow specific: one outlier period owning the whole Y axis (no chart in the app set
@@ -252,8 +250,7 @@ layout effect that re-centres the selected bucket, and a bounded date history in
 "← Back to …" control that names its destination. That history records **chart pins only** — an explicit
 FilterBar pick resets it rather than becoming a step, so the control never offers to step back over a
 period the user chose themselves. The clamping is applied to the single-period trend
-chart only so far; the other charts are noted in [`ui-patterns.md`](ui-patterns.md) → *Charts and
-overlays*. Two follow-ons from the same pass:
+chart only so far. Two follow-ons from the same pass:
 that chart's value axis was pulled out of the horizontal scroll so it stays readable at any pan
 position, and the average pill moved into that column, where it steps aside from any tick label it
 would otherwise bury.
@@ -264,8 +261,7 @@ that measures its own box after the fact, so a re-bucket painted at the previous
 one behavioural: the re-centring rule targets the *selected* bucket, and the grain selector only appears
 when nothing is selected, so every grain change fell through to "scroll to the newest bucket". Both
 charts are now handed explicit sizes, and the month under the middle of the viewport is carried across a
-re-cut. Details and the don't-re-impose notes are in [`ui-patterns.md`](ui-patterns.md) → *Charts and
-overlays*.
+re-cut.
 
 **Fourth real-app pass, 2026-08-25 — one data-correctness bug, found by using the ledger rather than the
 dashboard.** "Needs review" + select-all + Mark reviewed reported 18,278 rows changed against a filter

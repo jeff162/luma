@@ -1,8 +1,7 @@
 # Report filter-conflict note — the include case
 
-**Parked; the exclude case shipped 2026-07-28.** The shipped behavior is documented as durable
-behavior in [`../ui-patterns.md`](../ui-patterns.md) → *General principles* ("Warn when a filter
-leaves out what a report is showing"): the shared `FilterConflictNote`, the client-side overlap
+**Parked; the exclude case shipped 2026-07-28.** The shipped behavior is described in the header
+comment of `frontend/src/lib/reportFilterConflicts.js`: the shared `FilterConflictNote`, the client-side overlap
 computed by `lib/reportFilterConflicts.js`, the like-for-like and view/totals-aware boundaries that
 keep it from crying wolf, and both symmetric tag-report cases (a report tag `≠`-excluded, or missing
 from an active include set). This file keeps only what was not built.

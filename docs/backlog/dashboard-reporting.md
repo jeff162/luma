@@ -9,8 +9,8 @@ Where the shipped half went:
   pinned value axis and the average pill's tick collision, `stackOffset="sign"` and the negation it
   depends on, explicit sizing instead of `<ResponsiveContainer>`, scroll anchoring and re-centring, the
   named-slice floor, the Sankey's node labels and balancing terminal — is in
-  [`../ui-patterns.md`](../ui-patterns.md) → *Charts and overlays*, which already carried it in more
-  detail than this file did.
+  the comments beside the chart code (`pages/Dashboard.jsx`, `lib/trendPlotLayout.js`,
+  `lib/chartOutliers.js`, `components/CashFlowSankey.jsx`).
 - **Reporting semantics** — `exclude_from_totals` as the entire exclusion mechanism and the three
   richer schemes rejected in its favour, sides decided by net direction, the netted-per-category atom,
   the calendar-month rolling window, and why a tag report has no cash-flow reading — is in

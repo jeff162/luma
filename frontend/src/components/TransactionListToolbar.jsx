@@ -16,8 +16,8 @@ import { Button, RefreshButton } from './ui.jsx'
  * host that needs different spacing (the dashboard drill uses card padding instead of a bottom margin).
  *
  * `onRefresh` / `refreshing` are the paged list's `reload` / `reloading`. Every list here lets an edited
- * row linger when it no longer matches the scope (ui-patterns: an edited transaction lingers where it was
- * found), and that model owes the user an explicit way to re-query — without it a row edited out of the
+ * row linger when it no longer matches the scope (`ui-patterns.md` → *Transaction
+ * lists*), and that model owes the user an explicit way to re-query — without it a row edited out of the
  * scope has no way back off the screen, and the figures the panel header reads from the server stay behind
  * the ledger. A host that genuinely has nothing to re-query passes neither and the button is absent.
  */

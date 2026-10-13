@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pure helpers for import-draft persistence and the snapshot/profile-body shapes
-// it round-trips through. Two layers coexist (see ui-patterns.md "Import mapping
-// persistence"):
+// it round-trips through. Two layers coexist:
 //   - a saved import profile is the source of truth for reusable mapping state;
 //   - a browser-local draft is the fallback that lets a no-profile manual import
 //     resume later, and it is header-compatible rather than file-specific so the

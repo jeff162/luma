@@ -172,7 +172,7 @@ describe('saving a split', () => {
  * Reviewing is usually settled on the spot, but not always — a charge may need checking on another site
  * first — so the press is reversible for a few seconds. The row itself never moves: the flag is patched
  * onto it in place both ways, so a list filtered to "Needs review" does not reshuffle under repeated
- * clicks (see ui-patterns → "An edited transaction lingers where it was found").
+ * clicks (see ui-patterns.md → "Transaction lists").
  */
 describe('marking reviewed', () => {
   function ReviewHarness({ reconcileRow }) {

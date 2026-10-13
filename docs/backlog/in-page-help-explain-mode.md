@@ -35,7 +35,7 @@ mode would declare in code, so it is the natural page for a first prototype.
   opened from the mode behaves exactly like one opened from a `?`: rendered above floating panels, with
   the back trail and the link to the index.
 - **Launched from the page header**, beside the page's `?` in `PageHeader`'s `help` slot, following the
-  placement convention in `ui-patterns.md` → *Help and contextual explainers*.
+  placement convention in `ui-patterns.md` → *Help*.
 - **Guarded like cross-links.** A test that every declared topic id exists, as `content.test.jsx` already
   does for `HelpLink` targets — a declaration naming a renamed topic would otherwise fail silently.
 
@@ -60,7 +60,7 @@ mode would declare in code, so it is the natural page for a first prototype.
 ## Post-data guided tour
 
 Deferred from the onboarding rework, whose first run is data-first — import a file, connect a data
-provider, load demo data, or skip (`ui-patterns.md` → *First-run onboarding*). It was recorded only as a
+provider, load demo data, or skip. It was recorded only as a
 "next step" tour offered once data has arrived; its scope has not been designed.
 
 If picked up, it would most likely be a sequence over the same declarations: step through a chosen set

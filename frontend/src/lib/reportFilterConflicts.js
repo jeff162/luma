@@ -19,8 +19,7 @@
  * is active — a report tag **missing** from that include set. Including only tag A on a report built on
  * {A,B} drops every non-A row, so B's rows vanish exactly as if B were excluded. For group/category
  * reports the include case is deliberately NOT flagged (a category has one group, so an include chip is
- * ordinary focusing, not the same distortion) — see docs/ui-patterns.md → General principles ("Warn
- * when a filter leaves out what a report is showing").
+ * ordinary focusing, not the same distortion).
  */
 
 // Groups are the parent categories (parent_id === null) in the flat category list; leaves carry

@@ -124,9 +124,8 @@ flight.
 
 The guard counts **calls** rather than queries: `loadSeqRef` is incremented per call and compared after
 the await, so any newer call wins whether or not the filters changed. It subsumes what the key was for and
-cannot collide. The durable version of the rule is in
-[`ui-patterns.md`](ui-patterns.md) → *An edited transaction lingers where it was found*; delete this entry
-and keep that.
+cannot collide. The durable version of the rule is the comment on that guard in
+`frontend/src/pages/Transactions.jsx`; delete this entry and keep that.
 
 `src/pages/__tests__/TransactionsLoadRace.test.jsx` pins it deterministically: the page is rendered inside
 `StrictMode`, every load is held open, the newest resolves first and the older ones after, and the newest

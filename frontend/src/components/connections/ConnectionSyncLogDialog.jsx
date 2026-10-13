@@ -8,7 +8,7 @@
 //
 // **It lives with the connections it describes, not in Settings.** It sat there because a read-only
 // diagnostic looks administrative, and the cost was that seeing what a sync had just done meant leaving
-// the page the sync was started from. The rule that moved it is in `docs/ui-patterns.md`: what an action
+// the page the sync was started from. The rule that moved it: what an action
 // produces belongs where the action is taken. Settings keeps what genuinely describes the install; a log
 // about one subsystem owes itself back to that subsystem's own surface.
 //

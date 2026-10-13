@@ -544,8 +544,8 @@ export function usePagedTransactions({ activeKey, loadPage, exportParams = null 
   const [sumAmount, setSumAmount] = useState(0)
   const [sortState, setSortState] = useState(DETAIL_SORT_DEFAULT)
   // `reload()` bumps this to re-run the first-page fetch for the query already on screen — the Refresh
-  // affordance every list that lets rows linger owes the user (ui-patterns: an edited transaction lingers
-  // where it was found). It is separate from `activeKey` because the query has not changed: what changed
+  // affordance every list that lets rows linger owes the user (`ui-patterns.md` →
+  // *Transaction lists*). It is separate from `activeKey` because the query has not changed: what changed
   // is the ledger under it.
   const [reloadNonce, setReloadNonce] = useState(0)
   const [reloading, setReloading] = useState(false)

@@ -4,8 +4,7 @@
 the rule-backed path, the ended/canceled lifecycle, the four anomaly/forecast signals (2026-08-27), and
 amount identity with the user-pinned expectation band (2026-09-01, schema v46). All of it, including
 every shape that was tried and rejected on the way, is in [`../data-model.md`](../data-model.md) →
-*Recurring series* and `architecture.md` → *Recurring series*, with the page's own interaction rules in
-[`../ui-patterns.md`](../ui-patterns.md).
+*Recurring series* and `architecture.md` → *Recurring series*.
 
 One deferred item remains, and it is a cost question rather than a design one.
 

@@ -1,4 +1,4 @@
-// Import-draft serialization + file-compatibility contracts (ui-patterns "Import mapping persistence").
+// Import-draft serialization + file-compatibility contracts.
 // Two of these encode invariants a refactor can silently break: a draft only carries forward when the
 // next file still looks like the same provider shape (hash-first, header-fallback), and the
 // snapshot→profile-body conversion must nest the account mapping + imported-category settings into the

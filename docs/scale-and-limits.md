@@ -126,8 +126,7 @@ asymmetry is deliberate: it *writes* on every load, so running it over all histo
 batch on each call and worsen lock contention.
 
 **The list is windowed per source rather than globally**: an expanded data source shows its recent
-cards and files the rest into a reachable by-year archive (`docs/ui-patterns.md` → the recency-window
-pattern). That is what bounds the *rendered* history; the fetch is still unbounded behind it.
+cards and files the rest into a reachable by-year archive (`lib/importExport/importHistoryWindow.js`). That is what bounds the *rendered* history; the fetch is still unbounded behind it.
 
 **The largest thing the history stores is the duplicate reports**, not the cards: one row per refused
 row, each holding the raw values, the matched transaction and the payload that would have been inserted.

@@ -3,7 +3,7 @@
 
 // The account-mapping step for a data-source connection — the counterpart to the CSV import's
 // "Account from file → Maps To → Skip" grid, and deliberately the *same interaction model*, not merely
-// a similar-looking one (see ui-patterns.md → Import-specific patterns).
+// a similar-looking one.
 //
 // That means the primary question is "which account?" — one select of existing accounts, a `+New`
 // beside it, and a Skip checkbox — with *grouping* treated as a refinement behind

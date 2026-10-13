@@ -6,8 +6,7 @@ fetch re-bound the archive unblocks. The
 retention story — what the global `LIMIT 50` cost, why the display query is unbounded, and why the
 best-effort reconcile pass on the same endpoint stays capped — is in
 [`../scale-and-limits.md`](../scale-and-limits.md) → *Import history: retention*; the window and
-archive as built, and the rules that make an archive different from a cap, are in
-[`../ui-patterns.md`](../ui-patterns.md); what a card's recorded span means is in
+archive as built are in `frontend/src/lib/importExport/importHistoryWindow.js`; what a card's recorded span means is in
 [`../data-model.md`](../data-model.md) → *Import batches and profiles*, which also owns what clearing a
 card's stored detail keeps and why each survivor has to survive.
 

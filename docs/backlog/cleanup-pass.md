@@ -40,7 +40,7 @@ stragglers:
 
 Migration is mechanical (`title="x"` → wrap with `<Tooltip content="x">`), in batches, highest-visibility
 first — and each batch owes the accessibility parity the shared `Tooltip` does not give for free (see
-[`../ui-patterns.md`](../ui-patterns.md) → *General principles*), which is what keeps it from being a
+[`../ui-patterns.md`](../ui-patterns.md) → *Loading and feedback*), which is what keeps it from being a
 find-and-replace. Leave alone: the Recharts `CustomTooltip` (`detailShared.jsx`), and
 remember `NoteCell` (`title={txn.notes}` / "Add note") is **dead code** — handle it in the dead-code
 sweep below, not here. Native `title` is also a *legitimate* choice where its viewport-escaping edge
@@ -79,7 +79,7 @@ renders a `↻ Refresh` next to the bar only when a host passes one (shared half
   `activeKey` (ImportBatchDetail also re-fetches its count).
 - Dashboard: re-invoke its drill fn.
 
-Nothing structural — a prop plus per-host one-liners. See the bulk-select section of `ui-patterns.md`
+Nothing structural — a prop plus per-host one-liners. See `ui-patterns.md` → *Transaction lists*
 for the in-place reconcile contract this complements.
 
 ## 5. `category_owner_ids` — the client half
@@ -127,8 +127,8 @@ and the queue only works if something is checked when the next migration is writ
 **Unstarted, and deliberately not sweepable.** The 2026-08-19 sweep converted the busy indicators driven
 by a **load** and the spinners that replaced content on reload; it left the ~61 labels driven by a
 **press** (`Saving…`, `Deleting…`, `Applying…`, `Importing…`). Why they are a different judgement — and
-the one question each site has to answer — is in [`../ui-patterns.md`](../ui-patterns.md) → *General
-principles*. What is left here is the pass itself: visit each site, answer the question, and convert only
+the one question each site has to answer — is in [`../ui-patterns.md`](../ui-patterns.md) → *Loading and
+feedback*. What is left here is the pass itself: visit each site, answer the question, and convert only
 the ones where something else on screen already reports success.
 
 Find them with `grep -rn "? '[A-Z][a-z]*…'" frontend/src --include=*.jsx`.

@@ -16,8 +16,7 @@ import { AppConfirmDialog, AppDialog, Button, Input, Spinner } from './ui.jsx'
  * The multi-payment purchase editor: its payments, its figures, and the repairs — drop a payment that
  * was linked by mistake, or ungroup the lot.
  *
- * **One editor, two ways in**, the same rule the split editor follows (ui-patterns.md → Transaction
- * rows): the ledger row's `🔗` marker opens it, and so does the transaction detail panel's purchase
+ * **One editor, two ways in**, the same rule the split editor follows: the ledger row's `🔗` marker opens it, and so does the transaction detail panel's purchase
  * summary. Making it a dialog rather than an inline section in the panel is what allows that — the row
  * has nowhere to inline an editor, and two implementations of one editor is the drift this repo keeps
  * finding in its own history.

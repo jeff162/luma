@@ -24,7 +24,7 @@ Where the shipped design is documented:
 - **Wallet funding-leg suppression** (`kind='wallet_funding'`) and the PayPal **`Type`-rule money-movement**
   recognition → `data-model.md` (wallet funding-leg suppression section).
 - **Import UI** (capture panel, the reconciliation / import-detail detached report viewers, marketplace
-  routing) → `ui-patterns.md`.
+  routing) → the components' own comments.
 
 ## Deferred
 

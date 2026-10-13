@@ -18,11 +18,11 @@ import { amountEditState } from '../lib/amountEdit.js'
  * of what people enter while looking entirely plausible on the way in. The derivation is
  * `lib/manualTransaction.js` — the same function the entry form uses, not a second copy — and the
  * derived figure is echoed back before saving, so an inference that came out wrong is visible rather
- * than silent (`ui-patterns.md` → *A stored convention is never a question for the user*).
+ * than silent (`ui-patterns.md` → *Editing in place*).
  *
  * **Explicit submit, no commit-on-blur.** Two controls decide one value, so a click-away would save a
  * figure whose direction the user had not finished choosing — the multi-field case in `ui-patterns.md` →
- * *Inline edit commit behavior*. Enter submits, gated on the same expression the Save button is disabled
+ * *Editing in place*. Enter submits, gated on the same expression the Save button is disabled
  * by, so Enter can never accept what the button refuses.
  *
  * **Where the edit is refused, the reason hangs off a `Tooltip` rather than a `title`.** Which rows are

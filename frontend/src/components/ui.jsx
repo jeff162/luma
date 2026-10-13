@@ -1374,7 +1374,7 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
  * frame and the analysis mode) and the Recurring page once (series / findings / forward view).
  *
  * Prefer this over an in-page tab row when the options are peer views of one subject rather than
- * several separate management surfaces — see `ui-patterns.md` → Page structure for that distinction.
+ * several separate management surfaces — see `ui-patterns.md` → Page layout for that distinction.
  *
  * An option may carry a `badge` (a count, usually), with `badgeTone: 'warning'` where the number is
  * the reason to look. The badge belongs on the control rather than the view it names: a count that is

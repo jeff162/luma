@@ -89,9 +89,8 @@ file **by phase number** (`db/database.py` migrations v18/v20, `services/provide
    **Registration asks for PRF `eval` at `create()`, not only at the follow-up `get()`.** Requesting it
    costs nothing where unsupported — the field is ignored and the salt is still evaluated in the `get()`
    the fallback needs — and it keeps the ordinary case to one authenticator prompt. Two prompts is not a
-   cosmetic problem here: see *Confirmation and completion flows* in [`ui-patterns.md`](../ui-patterns.md)
-   for why an indistinguishable second prompt gets dismissed, and why every non-success outcome of this
-   ceremony has to be reported.
+   cosmetic problem here: a second prompt is indistinguishable from the first, so it reads as a repeat and
+   gets dismissed, taking the result with it.
 5. **[DONE 2026-08-13]** **Enrollment, grant, revocation and rotation.** Built on keypair slots (see
    `../security-model.md` → "Secret custody"), which replaced the invite ceremony rather than
    implementing it: setting a passphrase as a user the vault does not know enrols them

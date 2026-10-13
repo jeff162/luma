@@ -6,7 +6,7 @@ operational footguns, and verification preferences that should survive across ag
 
 Use it for **how to work on this repo**, not for the product's architecture or current feature
 state. The source of truth for system behavior stays in `architecture.md`, `data-model.md`,
-`ui-patterns.md`, and `docs/backlog/`.
+and `docs/backlog/`; `ui-patterns.md` holds the UI conventions shared across surfaces.
 
 If a point here conflicts with `AGENTS.md`, `CLAUDE.md`, or the topic docs, follow the stricter
 instruction and fix the drift rather than silently choosing the looser version.
