@@ -9,12 +9,11 @@ export default function PillTableHeader({
   gridTemplateColumns,
   sortState = null,
   onSort,
-  onDropColumn,
-  onDragStartColumn,
-  onDragEndColumn,
+  onStartReorder,
   onStartResize,
   edgeWidth = 8,
   style,
+  overlay = null,
 }) {
   // The resize grip lives on a column's right edge. Shared by the plain and custom-render branches so a
   // custom-rendered column (e.g. one with an action button in its header) is resizable like any other.
@@ -42,6 +41,8 @@ export default function PillTableHeader({
 
   return (
     <div style={{
+      // Positions `overlay` (the reorder drop marker); a sticky `style` overrides it and positions it too.
+      position: 'relative',
       display: 'grid',
       gridTemplateColumns,
       padding: '8px 14px',
@@ -94,7 +95,7 @@ export default function PillTableHeader({
         const sortGlyph = isSorted ? (sortState.dir === 'asc' ? '↑' : '↓') : null
         const canSort = col.sortable !== false && typeof onSort === 'function'
         const canResize = col.resizable !== false && typeof onStartResize === 'function'
-        const canReorder = col.draggable !== false && typeof onDragStartColumn === 'function'
+        const canReorder = col.draggable !== false && typeof onStartReorder === 'function'
         const alignment = col.align === 'end'
           ? 'flex-end'
           : col.align === 'center'
@@ -110,19 +111,7 @@ export default function PillTableHeader({
         return (
           <div
             key={col.key}
-            onDragOver={event => {
-              if (!onDropColumn) return
-              event.preventDefault()
-            }}
-            onDrop={event => {
-              if (!onDropColumn) return
-              // Which half of the target cell the cursor is over decides whether the dragged
-              // column lands before or after it, so dropping "in the gap" between two columns
-              // resolves the same way regardless of drag direction.
-              const rect = event.currentTarget.getBoundingClientRect()
-              const dropAfter = event.clientX > rect.left + rect.width / 2
-              onDropColumn(col.key, dropAfter)
-            }}
+            data-pill-column={col.key}
             style={{
               minWidth: 0,
               padding: col.cellPadding ?? '0 6px',
@@ -145,9 +134,7 @@ export default function PillTableHeader({
                 type="button"
                 onClick={() => { if (canSort) onSort(col.key) }}
                 onContextMenu={event => col.onContextMenu?.(event, col)}
-                draggable={canReorder}
-                onDragStart={() => onDragStartColumn?.(col.key)}
-                onDragEnd={() => onDragEndColumn?.(col.key)}
+                onMouseDown={canReorder ? event => onStartReorder(event, col.key) : undefined}
                 title={col.title}
                 style={{
                   background: isSorted
@@ -201,6 +188,7 @@ export default function PillTableHeader({
           </div>
         )
       })}
+      {overlay}
     </div>
   )
 }
