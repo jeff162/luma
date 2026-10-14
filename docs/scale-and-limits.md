@@ -58,8 +58,9 @@ Each cap below truncates something on purpose.
 ## Render windowing: the one list left unwindowed
 
 The transaction lists, the Rules page and the match reports render through `WindowedRows`. The lists
-that do not are capped or small, except `ImportRuleSuggestionReview`. Windowing it is a restructure and
-not a drop-in, for four reasons:
+that do not are capped or small, with two exceptions. `MatchingTransactionsReport` renders every
+imported transaction one rule suggestion matches, which has no cap. `ImportRuleSuggestionReview` is the
+other, and windowing it is a restructure and not a drop-in, for four reasons:
 
 - its items are grouped and heterogeneous, and range from about 80px to over 1500px
 - it scrolls with the page and has no bounded viewport of its own, which is the structural blocker

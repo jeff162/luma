@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /*
- * **This list is deliberately not windowed, and adding `WindowedRows` here is not a drop-in.** Every
- * other long list in the app renders through it (see `ui-patterns.md` → *Tables and lists*), so the absence is
- * a decision rather than an oversight: this is a grouped, heterogeneous card list whose items range
+ * **This list is deliberately not windowed, and adding `WindowedRows` here is not a drop-in.** The
+ * transaction lists and reports render through it (see `ui-patterns.md` → *Tables and lists*), so the
+ * absence is a decision rather than an oversight: this is a grouped, heterogeneous card list whose items range
  * from ~80px to 1500px+, it scrolls with the *page* rather than owning a bounded viewport, it reads
  * its own rows back out of the DOM for scroll restoration, and its cards change height in place as
  * their primary interaction. The structural blocker is the second one — windowing presupposes a real
