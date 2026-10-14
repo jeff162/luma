@@ -43,41 +43,6 @@ redundancy verdict costs nothing and makes the dismissal mean what it says. The 
 too: editing a rule's *rename* changes no key and re-raises nothing, because it changes nothing about the
 finding.
 
-## Rejected — do not re-propose
-
-- **A one-click fix for an overlap.** The obvious action is *cap the broader rule at the narrower one's
-  floor*, mirroring the recurring **Widen to include** action in reverse, and an earlier draft of this
-  file proposed exactly that. The user's call is that it should not exist: the check identifies, the
-  user decides. Two reasons it does not survive contact. "Broader" has no robust definition here —
-  `[300, 4000]` against `[3000, inf)` has the *bigger* span on the second rule once its open end takes
-  the sentinel, so span picks the wrong one; the workable rule is "the range that starts lower yields
-  the overlap", which is a guess about intent dressed as arithmetic. And the app would be resolving an
-  ambiguity it just finished arguing it cannot resolve. **Deleting one of the two is the same mistake in
-  a different coat**, and was tried and removed for that reason — see above.
-
-- **An always-current badge on the button.** It is cheap enough to compute alongside the rules list, but
-  a count that nags about a modelling choice someone made deliberately is worse than one they ask for.
-  The button is unconditional; only the check is on demand.
-
-- **Reporting containment as a conflict.** Precedence answers it correctly, and the contained-range
-  split is the *recommended* way to model several bills from one biller — flagging it would cry wolf on
-  the fix.
-
-- **Treating "same category" as enough to call the narrow rule redundant.** It is the tempting version
-  of `narrower_is_redundant` and it is wrong: text nesting does not make the broad rule a superset. An
-  owner-scoped `aji` rule never reaches another owner's rows, so a global `aji restaurant` rule is what
-  categorizes those, and deleting it strands them. Scope and direction have to match too. The flag is
-  also deliberately about the *category* alone — a rename or tag carried by one rule and not the other
-  changes hands on removal, which the panel states as a sentence rather than folding into the flag,
-  since a flag that meant "identical in every respect" would almost never be true and the delete would
-  never appear.
-
-- **A minimum keyword length for the nesting finding.** `bp` nests into `bpost` and `chase` into
-  `purchase`, which looks like noise and is not: a "bpost" transaction really does match the `bp` rule,
-  and that is exactly the surprising interaction the finding exists to show. The volume concern is
-  handled by ordering instead — the broadest matcher sorts first, so the rules reaching furthest are the
-  ones read first.
-
 ## Deferred: two equal-length keywords that both match
 
 The overlap finding requires an **identical** merchant matcher, because that is what leaves the ordering

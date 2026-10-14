@@ -36,25 +36,24 @@ out to be about *sources*, not about connections, and the other two shapes hit s
 
 ## Contents
 
-* [The adapter interface](#the-adapter-interface)
-* [Capability declarations](#capability-declarations)
-* [Where the connection handle comes from](#where-the-connection-handle-comes-from)
-* [Adding a file importer](#adding-a-file-importer)
-* [Adding a marketplace importer](#adding-a-marketplace-importer)
-* [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
-* [Zero-amount rows](#zero-amount-rows)
-* [Dates a source does not have](#dates-a-source-does-not-have)
-* [Currency](#currency)
-* [The published guide is not the contract](#the-published-guide-is-not-the-contract)
-* [Request budgets and pausing](#request-budgets-and-pausing)
-* [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
-* [Coverage claims](#coverage-claims)
-* [Reporting what was refused](#reporting-what-was-refused)
-* [What a failure says](#what-a-failure-says)
-* [Where requests may go](#where-requests-may-go)
-* [Considered and rejected](#considered-and-rejected)
-* [Obstacles](#obstacles)
-* [Open](#open)
+- [The adapter interface](#the-adapter-interface)
+- [Capability declarations](#capability-declarations)
+- [Where the connection handle comes from](#where-the-connection-handle-comes-from)
+- [Adding a file importer](#adding-a-file-importer)
+- [Adding a marketplace importer](#adding-a-marketplace-importer)
+- [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
+- [Zero-amount rows](#zero-amount-rows)
+- [Dates a source does not have](#dates-a-source-does-not-have)
+- [Currency](#currency)
+- [The published guide is not the contract](#the-published-guide-is-not-the-contract)
+- [Request budgets and pausing](#request-budgets-and-pausing)
+- [Pages, commits, and what a failure may cost](#pages-commits-and-what-a-failure-may-cost)
+- [Coverage claims](#coverage-claims)
+- [Reporting what was refused](#reporting-what-was-refused)
+- [What a failure says](#what-a-failure-says)
+- [Where requests may go](#where-requests-may-go)
+- [Obstacles](#obstacles)
+- [Open](#open)
 
 ---
 
@@ -269,10 +268,36 @@ dispatch on, so the parser is bespoke rather than a format registered behind the
 reusable `rows → orders` core, so a later paste path or combined-file export is another front end rather
 than a second parser.
 
-The five pieces a new vendor needs, in build order — the account-type marker, the parser and its
-client-side sniff, the shared `txn_link` ledger substrate, the dedicated import UI, and the
-funding-source map — are in [`architecture.md`](architecture.md) → *Marketplace accounts — the extension
-pattern*, which is the implementation contract; this section is the design questions to settle first.
+**The five pieces a new vendor needs, in build order.** Amazon is the reference implementation of each;
+[`architecture.md`](architecture.md) → *Amazon order import contract* describes it as built.
+
+1. **An account-type marker.** An `ACCOUNT_TYPES` entry with `kind: 'marketplace'` (frontend
+   `lib/accountTypes.js`) makes the type selectable on the Accounts page and keeps it, and any account
+   of it, out of the generic CSV importer's type dropdown and account-mapping picker (which consume
+   `GENERIC_IMPORT_ACCOUNT_TYPES` / `isMarketplaceAccountType`), because those accounts are filled by
+   their own flow. `kind` is a UI convention only: the account is ordinary in the database.
+2. **A vendor-specific parser and detector.** The reference is `services/amazon_import.py`. It ships
+   with a header sniff mirrored client-side (`lib/amazonDetect.js`), so a file dropped on the generic
+   importer is recognized and routed to the vendor's flow instead of column mapping.
+3. **The shared ledger substrate.** The `txn_link` primitive and the order engine
+   (`routers/import_export/amazon.py`): one spending transaction per order; match, exclude and link the
+   funding card charge; a reconciliation report over the result; reversal through the batch-undo hook. A
+   vendor that fits "one row per order, link the funding charge" reuses it. The engine carries
+   Amazon-specific names (`apply_amazon_order`, `LINK_KIND = 'amazon_order'`), to be generalized when a
+   second vendor shows what the neutral shape is.
+4. **A dedicated import form** — a dialog the Data Import drop zone opens when it recognizes the
+   vendor's files, and a row in the File Sources tab's data-source list, which is the home for the
+   vendor's setup help. The importer stamps each batch with `import_batch.source_kind =
+   'marketplace:<vendor>'`, so the import history groups the batches under the vendor; they have no CSV
+   profile.
+5. **A funding-source → account map**, only if the export names the paying card rather than which of the
+   user's accounts it hit. `amazon_funding_map` + `services/amazon_funding.py` key each payment
+   instrument (card last-4 + network) to the account it charges, so the importer can constrain its
+   charge search to that account; imported ledgers rarely carry masks, so this map is the real signal.
+   It is user-maintained, global by default with an optional per-account override
+   (`AmazonFundingSourcesSection`), and it accrues instruments as imports discover them. Resolution
+   order in `find_matching_charge` is override → global → last-4 → no match; see `data-model.md` →
+   *Transaction links and Amazon order import*.
 
 ## Transaction ids must be globally unique
 
@@ -410,8 +435,10 @@ Three kinds to look for, all of them present in SimpleFIN's list:
   risk is usually **volume** rather than markup, and the bound belongs at the adapter boundary rather than
   at each consumer.
 
-Deviating from an item is allowed; deviating silently is not. `architecture.md` → *Provider connections
-(the aggregator seam)* records the one deliberate deviation here and the reason for it.
+Deviating from an item is allowed; deviating silently is not. The one deliberate deviation here: "display
+error messages from `/accounts` to the user" is applied to bank-level codes only, and request advisories
+go to the log, because a note about the app's own date range beside "your bank needs re-authentication"
+trains the user to ignore both.
 
 **Where a live call and the provider's documentation disagree, the call is right.** Two of SimpleFIN's
 load-bearing facts appear nowhere in its developer guide, and both were invisible to a suite that mocks
@@ -631,27 +658,6 @@ list removes — while the text itself has been the only evidence of a cause (th
 
 A provider whose addresses come only from its SDK's own environment settings, as Plaid's do, takes no
 address from outside and needs no list.
-
-## Considered and rejected
-
-- **A `read_only` capability declaration**, alongside the others, so a source could state what its
-  credential reaches. There is nothing to state: what a credential is authorized for is the provider's
-  to define and is not visible from here, and the passphrase floor is unconditional precisely because
-  the reach is unknowable — every credential is already protected as though it carried full account and
-  identity access. A declaration would therefore gate nothing, and asking an adapter author to
-  investigate the scope produces a finding that changes no code path.
-  See [`security-model.md`](security-model.md) → *Why provider credentials are the only things encrypted*.
-- **Per-item rows for a marketplace order** — one ledger row per line item instead of one per order.
-  Tried and abandoned; it brings a visible parent/child hierarchy, a double-count risk, and tree
-  handling in editing, undo and import, to solve what is really a reporting problem. An order that spans
-  categories is one row with `txn_split` allocations instead.
-  See [`data-model.md`](data-model.md) → *Transaction links and Amazon order import*.
-- **A vendor-neutral marketplace abstraction before a second vendor exists.** The order engine's names
-  are deliberately still the first vendor's. Generalizing from one instance guesses at the shape; the
-  second vendor is what reveals which parts were the pattern and which were that vendor's export.
-- **Per-account scoping of the `external_transaction_id` lookups**, as the fix for a provider whose ids
-  are unique only within an account. That trades a ledger invariant for one provider's convenience.
-  Namespace at the adapter boundary, which is the layer that knows.
 
 ## Obstacles
 

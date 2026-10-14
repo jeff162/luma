@@ -35,7 +35,6 @@ what the sequence depends on.
 - [Restore is a destructive operation](#restore-is-a-destructive-operation)
 - [Locked out](#locked-out)
 - [Diagnosing a running instance](#diagnosing-a-running-instance)
-- [Considered and rejected](#considered-and-rejected)
 - [Obstacles](#obstacles)
 - [Open](#open)
 
@@ -261,7 +260,7 @@ name the server advertises, and the unit names an executable and a user. So a ch
 `FRONTEND_PORT` means printing the site file again, and moving the folder means printing the unit again.
 `--systemd-unit` refuses to run under `sudo`, since the unit would name root and the databases would be
 created as root's. `SESSION_COOKIE_SECURE=true` is set by hand in `.env` and deliberately not derived
-from anything — see `security-model.md` → *Considered and rejected*. A firewall on the server has to
+from anything. A firewall on the server has to
 admit TCP 443 for the proxy and UDP 5353 for the name, and the address a start settled on is in
 `journalctl -u luma`, which carries the same line a terminal start prints.
 
@@ -583,50 +582,6 @@ how that is detected without polling.
 a destructive restore. See *Open*.
 
 ---
-
-## Considered and rejected
-
-- **A native window (pywebview, Tauri, Electron).** The decision was made on passkeys, not on
-  packaging. A vault passkey slot needs not just WebAuthn but the `prf` extension, which is a much
-  narrower guarantee than WebAuthn itself; a launcher into the user's own browser is the only option
-  whose engine is one they keep updated. It also avoids owning a webview dependency or a second heavy
-  runtime. Losing the "real window" is the whole cost.
-- **The containers on a network of their own, with the proxy's port published.** It would run under
-  Docker Desktop as well, and the proxy can still be a loopback peer there, by giving the application
-  the proxy's network namespace. What it cannot do is the name: an advertisement made inside does not
-  reach the network, so the name would have to be one the host already answers for. And a browser on
-  the host does not arrive as a loopback client, so nothing reads as this machine. Not pursued; the host's network makes both the LAN server's own
-  answers, for a Linux host.
-- **A separate nginx container serving the interface.** It was the first container shape, from before
-  the backend served the interface itself. It forwarded neither the scheme nor the client address and
-  added no TLS, so every request read as cleartext from the network.
-- **Starting again inside the same process**, when *Start* is chosen on the Windows icon. It would be
-  quick, since nothing unpacks, and whatever the process holds in memory — an unlocked vault above all —
-  would then survive a stop.
-- **The server terminating TLS itself**, to need no proxy at all. The backend speaks plain HTTP and TLS
-  belongs to the edge (`security-model.md` → *Transport security*); that is not up for trade against
-  setup steps.
-- **Chunked commits during a restore.** No memory argument for it (an open SQLite write transaction
-  spills to the WAL, which is disk), and it would give up the all-or-nothing property above.
-- **Making `LUMA_USE_LOG_FILES` an in-app setting.** Its only consumer is the shell launcher, which
-  reads it before Python starts; moving it into the database would mean teaching two launcher dialects
-  to query SQLite in order to preserve a toggle that takes effect on the next restart anyway.
-- **Making `LUMA_DEVELOPER_OPTIONS` a preference.** It is a *gate* on destructive tooling, not a user
-  choice. The one legitimate in-app need that appeared was met by taking that read-only surface out
-  from behind the gate, not by softening the gate.
-- **Editing stored settings, rather than resetting them.** The only two stored values derive or
-  generate themselves, so there is nothing worth typing; and everything here is consumed at startup, so
-  a field that accepts input and changes nothing until a restart reads as broken.
-- **A default `CORS_ORIGINS`.** Every shipped topology serves the app and the API on one origin, so the
-  previous default was a standing credentialed grant bought for nothing. It survives as the escape
-  hatch for a split-origin deployment.
-- **Renaming or removing `LUMA_ENV_FILE`.** Nothing else defeats `load_dotenv(override=True)`, which is
-  what the Playwright harness needs defeated to run against throwaway databases. Renaming it to
-  something test-prefixed would misdescribe it: it selects an override file, and being test-only is a
-  fact about its current caller rather than about the variable.
-- **Offering `quick_check` alongside `integrity_check`, or backgrounding the check.** `quick_check`
-  exists because the full check is slow on multi-gigabyte databases; at this scale it is around 100 ms.
-  Run the real one.
 
 ## Obstacles
 

@@ -11,7 +11,7 @@ Settings → About, and it stays off until they do (`docs/architecture.md` → *
 
 - **Install-wide, held in the control database.** The server makes the request, so there is one answer
   per install rather than one per user; only putting the reminder away is per user, as with every task.
-- **Request-driven, on a watermark.** There is no scheduler (`docs/architecture.md` rules one out), so
+- **Request-driven, on a watermark.** There is no scheduler (`docs/architecture.md` → *Watched import folders*), so
   the app asks on load and the watermark turns every call inside `MIN_INTERVAL_HOURS` into a no-op. The
   interval is a ceiling on how often a request is made, never a promise that one is.
 - **The watermark is written before the request**, and advances whether or not it succeeds. An install

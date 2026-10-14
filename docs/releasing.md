@@ -28,7 +28,6 @@ need a build?*: nothing there does, and nothing here is needed to run one.
   - [Actions supply chain](#actions-supply-chain)
   - [Container image visibility](#container-image-visibility)
   - [Repository presentation and collaboration](#repository-presentation-and-collaboration)
-- [Considered and rejected](#considered-and-rejected)
 - [Obstacles](#obstacles)
 - [Open](#open)
 
@@ -434,31 +433,6 @@ an AGPL project, but disabling them is reasonable if the maintainer does not wan
 workflow.
 
 ---
-
-## Considered and rejected
-
-- **A universal2 macOS binary.** It needs universal2 wheels for two native dependencies that are not
-  dependably published, and the failure is an obscure link error rather than a clear one. Two
-  architecture-specific builds instead, at the cost of a "which one?" line in the README.
-- **A onefile build inside a macOS `.app`.** It re-unpacks to a temporary directory on every launch —
-  slow, and the same vanishing-path problem that rules out "beside the executable" on macOS.
-- **pyobjc inside the Python process**, instead of a native wrapper. A large macOS-only dependency plus
-  moving uvicorn off the main thread — where it sits precisely so Ctrl+C is clean — and it would fork
-  the one launcher all three platforms share. The wrapper confines every macOS-specific concern to the
-  macOS artifact.
-- **Caddy inside the kit.** It would remove the one download a Windows server still needs, and roughly
-  doubles the size of every kit for a way of running that most installations never use.
-- **A second, windowless Windows executable** beside the console one. It avoids the console window that
-  appears and closes when `--tray` hands over, at the cost of a second copy of the whole program in the
-  kit.
-- **A Windows kit that is a folder, not a single file**, so that no launch has to unpack. Every start
-  would be faster, and the download would be a folder of many files with the program among them.
-- **A pinned CA bundle shipped in the artifact.** Certificate verification goes through the OS trust
-  store instead. A shipped snapshot ages, ignores roots the user installed, and keeps trusting roots
-  the OS has since distrusted.
-- **`%APPDATA%` for the Windows user-data directory.** A roaming profile synchronises at logon and
-  logoff, and a SQLite database diverged across two machines resolves last-writer-wins on a binary file
-  — silent loss, not a visible conflict. `%LOCALAPPDATA%` instead.
 
 ## Obstacles
 

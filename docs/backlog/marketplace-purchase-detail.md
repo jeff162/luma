@@ -223,7 +223,7 @@ A vendor is a data source rather than a tab: eBay gets a **row in the File Sourc
 "how to get the export" help; its files are dropped on the ordinary drop zone; and its imports land on
 their cards in the Import History. eBay needs no setup, so it may need no form at all where Amazon has
 one, and the list of rows is the list of supported vendors. That also means an eBay row would have no marketplace
-account type — the account-type marker in `architecture.md`'s five-piece pattern is Amazon-model only,
+account type — the account-type marker in `building-a-connector.md`'s five-piece pattern is Amazon-model only,
 and the pattern's description needs saying so once a vendor exists without it.
 
 **Drop routing extends to HTML.** The main import page already sniffs an AZAD CSV header and hands the
@@ -239,21 +239,6 @@ and ignores the rest.
 - **Selling history — not planned.** eBay pays sellers in batched payouts with fees already deducted,
   and the report lists neither fees nor payouts, so a sale has nothing reliable to be matched against. A
   seller would get a list, not a reconciliation.
-
-## Considered and rejected
-
-- **Amazon's order-row model for eBay** — see above; without the paying instrument every order
-  double-counts until excluded by hand.
-- **Matching on the order number** — the descriptor carries it; the export does not.
-- **A configurable, no-code vendor definition** — the matching semantics differ per vendor (order rows
-  and exclusion for Amazon, enrichment for eBay; totals exact for one, tax-banded for the other), so a
-  configuration would be a second programming language. The generic CSV mapper remains the no-code path.
-- **The item title in evidence only** — searchable and on hover, but a charge still reads "eBay" in the
-  ledger, which is the problem the feature exists to fix.
-- **The item title in the notes** — notes are the user's own field, and nothing automatic writes them.
-- **A separate detail line on enriched ledger rows** — a ledger layout change for one feature, where the
-  display name already is the row's readable description.
-- **A split offer for eBay** — one item per charge; see *Split offers are a per-vendor capability*.
 
 ## Open
 

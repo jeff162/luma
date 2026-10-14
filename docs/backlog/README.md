@@ -12,17 +12,14 @@ not started.
 This replaced a keep-and-link policy, and the reason is worth stating because the old one looked
 safer: **a link to a project filename decays.** Two code comments already cited a backlog file that no
 longer existed. Project filenames are transient by construction; topic docs are stable, so a code
-comment cites `docs/<topic>.md#considered-and-rejected` — or, for a multi-topic reference doc,
-`docs/<doc>.md` → *Section name* — and never a path under here. When a file is disposed of, repoint its
+comment cites `docs/<doc>.md` → *Section name* and never a path under here. When a file is disposed of, repoint its
 citations in the same change.
 
-**What the topic docs should not carry is the record of what was deliberately *not* done** — the
-obstacles, the rejected shapes, the "don't redo this" notes. Those answer a question nobody asks until
-they are already proposing the thing, so a doc read never surfaces them. They now have somewhere to go:
-see `AGENTS.md` → *Where rejections, obstacles and owed decisions go*, which says a single-question
-topic doc ends with **Considered and rejected / Obstacles / Open**, while a multi-topic reference doc
-keeps rejections inline beside their subject and carries only **Open**. The other half stays
-load-bearing: the **code carries the decision at the site** — the header comment on
+**What was considered and rejected is not carried forward.** When a file is disposed of, its rejected
+shapes and "don't redo this" notes are deleted rather than folded into a topic doc: such a note is
+rarely in front of anyone when it would help, and git history keeps it. An obstacle or a decision still
+owed goes where `AGENTS.md` → *Obstacles and owed decisions* says. Where a decision has to be met at the
+moment of acting, the **code carries it at the site** — the header comment on
 `ImportRuleSuggestionReview.jsx` fires exactly when someone thinks "this list should be windowed",
 which no document could.
 
@@ -31,16 +28,12 @@ tells someone how to build the next one belongs there. How one surface works, an
 way to it, does not: the code states the first, and the second is kept only as a comment at the site
 where the code would otherwise look wrong.
 
-**A rejected shape is not a work log, and only one of them belongs anywhere.** A *rejected shape*
-answers a question someone is about to ask again — what was considered, why it fails, what it would
-cost to revisit. An *obstacle* is a trap that would bite a second attempt. Both earn their space. What
-does not is the narrative of arriving at the current state: an expectation that turned out wrong, the
-order in which things were discovered, what a testing pass revealed, which symptom looked like a
-different bug first. Nothing follows from any of it once the work has landed, and it buries the notes
-that do matter. Four tests, all cheap to apply:
+**An obstacle earns its space; the work log does not.** An *obstacle* is a trap that would bite a
+second attempt. The narrative of arriving at the current state — an expectation that turned out wrong,
+the order in which things were discovered, what a testing pass revealed, which symptom looked like a
+different bug first — is cut, because nothing follows from it once the work has landed and it buries
+the notes that do matter. Three tests, all cheap to apply:
 
-- **Could a reader re-propose this?** If yes, keep the rejection and its reason. If it could not occur
-  to anyone, cut it.
 - **Would this bite a second attempt?** If yes, keep the obstacle. Being interesting is not the same as
   being load-bearing.
 - **Does a topic doc already say it, better?** Then delete the copy — and check first, because it
@@ -115,8 +108,7 @@ scale — rather than by feature.
   on the Rules page reports two things: amount ranges that overlap without containment (a warning —
   nothing decides which rule claims the charge) and merchant matchers that nest (information — the
   winner is not always the one a reader predicts). The mechanism is in `data-model.md` → Category rules;
-  the file keeps the rejected shapes (a one-click fix, a badge, a keyword-length floor) and the one
-  deferred case, two equal-length keywords matching one row.
+  the file keeps the one deferred case, two equal-length keywords matching one row.
 - [button-consolidation.md](button-consolidation.md) — **design-system task, deferred.** Audit the app's
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the

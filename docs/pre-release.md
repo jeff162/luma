@@ -280,7 +280,7 @@ This one is worth a pass before screenshots.
 ### 4. Vault recovery  ✅ *done 2026-08-31; second pass 2026-09-01*
 
 The settled record is [`security-model.md`](security-model.md) → *Recovery and compromise response* and
-*Authorizing a change to how the vault opens*, with the rejected shapes in its tail sections.
+*Authorizing a change to how the vault opens*.
 
 A forgotten vault passphrase was an unhandled dead end with no endpoint and no UI — **the sharpest gap on
 this list**, since the first public user who sets a passphrase and forgets it had no path at all and the
@@ -299,9 +299,8 @@ refuses for exactly that user because their slot still holds the DEK. And a pass
 cannot set a new passphrase, so a passkey holder who forgets it must lock themselves out to reach the
 recovery code. Behind both: `set_passphrase`, `register_passkey_slot` and `issue_recovery_code` each mint
 a **durable** unlock method from a DEK merely found in the 8-hour unlock cache, turning transient access
-to an unlocked session into permanent independent access. Scope, decisions and rejected alternatives are
-in [`security-model.md`](security-model.md) → *Authorizing a change to how the vault opens* and
-*Considered and rejected*. Not a regression from the 2026-08-31 work — the mint-from-cache behaviour predates it. Shipped
+to an unlocked session into permanent independent access. Scope and decisions are
+in [`security-model.md`](security-model.md) → *Authorizing a change to how the vault opens*. Not a regression from the 2026-08-31 work — the mint-from-cache behaviour predates it. Shipped
 as a five-minute proof window on all three doors, `POST /auth/vault/passkey/set-passphrase`, and a
 re-enrollment rung that submits from inside the recovery dialog and is marked as replacing existing access
 where the approver can see it.
@@ -362,9 +361,8 @@ the digest at ingest.
 
 ### 6. Transaction splits  ✅ *built; exercised in the running app 2026-08-24*
 
-The mechanism is in [`data-model.md`](data-model.md) → *Transaction splits*; the rejected shapes and
-the neighbouring mechanisms it is not are in [`mechanism-index.md`](mechanism-index.md). Its decisions
-were settled 2026-08-23 and the project file was disposed of 2026-09-02.
+The mechanism is in [`data-model.md`](data-model.md) → *Transaction splits*; the neighbouring mechanisms
+it is not are in [`mechanism-index.md`](mechanism-index.md). Its decisions were settled 2026-08-23 and the project file was disposed of 2026-09-02.
 
 Allocating one transaction's amount across several categories: the `txn_split` table, the
 effective-category-rows expansion seam that every summary and category-scoped list reads through, the

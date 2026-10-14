@@ -30,7 +30,6 @@ which is why it is collected.
 - [Bulk operations must not accumulate](#bulk-operations-must-not-accumulate)
 - [The Tasks list is recomputed on every mutation](#the-tasks-list-is-recomputed-on-every-mutation)
 - [Measuring performance](#measuring-performance)
-- [Considered and rejected](#considered-and-rejected)
 - [Obstacles](#obstacles)
 - [Open](#open)
 
@@ -303,37 +302,6 @@ reports the *viewport's* height, which would make one row appear to fill the scr
 every assertion.
 
 ---
-
-## Considered and rejected
-
-- **An unbounded default page size.** The default is the safety rail; unbounded is the opt-in. A list
-  endpoint with no bound fails worse than one whose `total` reports the real size.
-- **A periodic audit for silent truncation.** The development-time warning on a truncated page *is* the
-  audit, and it fires while the offending call is being written rather than months later.
-- **`content-visibility: auto` on a windowed row.** Redundant — windowing already keeps unmounted rows
-  out of layout — and actively harmful, because the intrinsic-size placeholder feeds the virtualizer a
-  wrong height. Do not reintroduce it.
-- **A hand-rolled windowing hook.** The hard part is scroll anchoring — correcting the viewport when a
-  row above it measures taller than its estimate — plus a measurement cache that survives unmount. The
-  chosen library was already a dependency and already proven on the first surface.
-- **A document-scroller mode in the shared windowing component**, to accommodate the one list that
-  scrolls with the page. New surface area for a single consumer; the honest fix is to give that page a
-  bounded viewport.
-- **Windowing the last list at all, for now.** It is realistically dozens to low hundreds of top-level
-  groups — the surface least likely to stall — against four obstacles, one of them structural.
-- **Chunked commits during a restore.** No memory argument (an open SQLite write transaction spills to
-  the WAL, which is disk), and it forfeits the all-or-nothing property that makes a failed restore leave
-  the target untouched. Also in `operations.md`.
-- **Date-windowed backups as a basis for incremental backup.** There is no change tracking: `txn` has no
-  `updated_at`, so a "past year" backup slices by *transaction date*, not by when a row changed. A 2019
-  charge recategorized this morning is absent from it, so full-plus-incremental restores the stale
-  categorization — and an additive incremental cannot express a deletion at all. Date-windowed is a
-  useful *slice* for export or sharing and is not disaster recovery.
-- **Dependency-based query-cache invalidation**, replacing the hand-wired refresh map. Parked rather
-  than rejected, but recorded here because it looks like an obvious win: the existing write seam already
-  removed the real pain (a caller forgetting to announce a mutation is now impossible, enforced by lint),
-  and what remains is only the cost of hand-maintaining a small set. Swapping it in is a real
-  architectural shift — a new dependency and every data-loading screen migrated onto it.
 
 ## Obstacles
 

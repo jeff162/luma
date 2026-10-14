@@ -5,7 +5,7 @@
 // which runs the import's own `parse_amount`. The client deliberately owns no amount parsing: it used
 // to, and the two implementations disagreed on `single_unsigned` rows (the direction column was
 // ignored, so every row rendered as a credit), on `DR`/`CR` suffixes, and on blank two-column cells —
-// a preview that was wrong precisely where a preview matters. See `docs/architecture.md` (import flow).
+// a preview that was wrong precisely where a preview matters. See `docs/architecture.md` → *Preview contract*.
 //
 // What lives here is the plumbing around that call: build the request from the current mapping, fetch
 // it debounced as the mapping is edited, and merge the answer back onto the rendered rows by position.

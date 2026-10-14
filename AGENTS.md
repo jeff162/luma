@@ -127,7 +127,7 @@ When working on the codebase:
 
   - `docs/shared-components.md` — the "what shared component do I use for X?" index; consult **before building any UI element** (reuse is the default; a new one-off requires explicit justification)
 
-- Document the **why** (the design decision and the constraints it's responding to) and the **how at a high level** (the shape of the solution, the contracts it depends on, the alternatives that were rejected and the reason). Do **not** narrate the change itself — phrases like "we now do X", "added Y", "changed Z to W" belong in commit messages and PR descriptions, not in `docs/`. A reader picking up the file a year from now should see the system as it is, not as a sequence of edits.
+- Document the **why** (the design decision and the constraints it's responding to) and the **how at a high level** (the shape of the solution and the contracts it depends on). Do **not** record the alternatives that were turned down or the bug that led to a rule, and do **not** narrate the change itself — phrases like "we now do X", "added Y", "changed Z to W" belong in commit messages and PR descriptions, not in `docs/`. A reader picking up the file a year from now should see the system as it is, not as a sequence of edits.
 
 - After any substantive piece of work — including investigations that produce conclusions — pause and ask: *did this shape the design, settle an open question, or reveal an invariant that wasn't written down?* If yes, update the docs. The check is "did the model shift," not "did the diff touch a particular file."
 
@@ -145,33 +145,33 @@ When working on the codebase:
 
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
 
-### Where rejections, obstacles and owed decisions go
+### Obstacles and owed decisions
 
-A reference doc describes the system as it is, which leaves three kinds of fact with nowhere to live — and they are exactly the facts that stop someone rebuilding a mistake. Where they go depends on which of two shapes the doc is.
+A reference doc describes the system as it is and the reason for each design choice. **It does not record what was considered and rejected** — not inline, and not in a section of its own — because such an entry is rarely in front of anyone when it would help, the few useful ones are buried by the rest, and git history keeps them all. State the reason beside the design instead ("scanning is request-driven because there is no tenant for a timer to run as"), and where code would look wrong without the explanation, put a comment at that site.
 
-**A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`). It ends with all three sections below.
+Two kinds of fact still need a home, and where they go depends on which of two shapes the doc is.
 
-**A multi-topic reference doc collects many** (`data-model.md`, `architecture.md`). There, a **rejection or an obstacle stays inline, beside the subject it is about** — which is the convention these docs already use and the more findable one, since someone reading about splits meets the rejected split shapes there rather than in a list of twenty unrelated verdicts at the end. Such a doc carries **only an `## Open` section**, because a decision still owed is the one kind with no natural inline home, and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*), not by a tail anchor.
+**A topic doc answers one question** (`security-model.md`, `operations.md`, `releasing.md`, `building-a-connector.md`). It ends with both sections below.
 
-`ui-patterns.md` is neither shape. It holds conventions only: no rejections, no history and no `## Open` section. Its closing section, *What belongs here*, is the test for adding to it.
+**A multi-topic reference doc collects many** (`data-model.md`, `architecture.md`). There, an **obstacle stays inline, beside the subject it is about**, and the doc carries **only an `## Open` section**, because a decision still owed has no natural inline home and it is the link that keeps a pending backlog item reachable. Code cites these by section name (`docs/data-model.md` → *Reporting assumptions*).
 
-The three sections, in a topic doc:
+`ui-patterns.md` is neither shape. It holds conventions only: no history and no `## Open` section. Its closing section, *What belongs here*, is the test for adding to it.
 
-- **`## Considered and rejected`** — shapes that were tried, designed, or seriously proposed and turned down, each **with the reason**, so the verdict is re-derivable rather than merely recorded. The filter is *could a reader plausibly re-propose this?* — not *was it interesting?* A rejected alternative belongs here; an argument that the chosen design was correct does not, because nothing follows from it once the work has landed.
+The two sections, in a topic doc:
+
 - **`## Obstacles`** — what a second attempt actually hits: a constraint that makes the obvious approach fail, an ordering that cannot be violated, a seam with no atomicity. These apply whether or not the work is planned, which is why they are separated from *Open*.
 - **`## Open`** — decisions still owed, each naming the **live backlog item** that will feed this topic when it is picked up. This is the link from the stable doc to the transient one: a pending project stays a project file, and its slot here is what keeps it reachable.
 
-**Audience decides whether a topic doc takes the tail at all.** The three sections serve a *developer*
-deciding whether to rebuild something. A topic doc written for the person **using** the app —
+**Audience decides whether a topic doc takes the tail at all.** The two sections serve a *developer*
+changing the code. A topic doc written for the person **using** the app —
 `import-reconciliation-playbook.md`, whose prose is also the source for the in-app help copy — takes
-none of them, and the rejections and owed decisions about its subject live in the developer doc that
-owns the mechanism. Do not add empty sections to such a file to make it match the shape; the shape
+neither, and the owed decisions about its subject live in the developer doc that owns the mechanism. Do not add empty sections to such a file to make it match the shape; the shape
 follows from who is reading.
 
 Two rules make these load-bearing rather than decorative:
 
 - **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
-- **Code comments cite a stable doc location, never a project filename.** `docs/<topic>.md#considered-and-rejected` for a topic doc; `docs/<doc>.md` → *Section name* for a multi-topic one. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
+- **Code comments cite a stable doc location, never a project filename:** `docs/<doc>.md` → *Section name*. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
 
 ## Work in progress
 

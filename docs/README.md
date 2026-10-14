@@ -49,6 +49,7 @@ index in [`backlog/README.md`](backlog/README.md).
 - [High-level shape](architecture.md#high-level-shape)
 - [Backend structure](architecture.md#backend-structure)
 - [Frontend structure](architecture.md#frontend-structure)
+- [First run and demo data](architecture.md#first-run-and-demo-data)
 - [Data flow](architecture.md#data-flow)
 - [Major subsystems](architecture.md#major-subsystems)
 - [Cross-platform approach](architecture.md#cross-platform-approach)
@@ -90,7 +91,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Transport security](security-model.md#transport-security)
 - [Secrets in backup and export](security-model.md#secrets-in-backup-and-export)
 - [Recovery and compromise response](security-model.md#recovery-and-compromise-response)
-- [Considered and rejected](security-model.md#considered-and-rejected)
 - [Obstacles](security-model.md#obstacles)
 - [Open](security-model.md#open)
 
@@ -99,7 +99,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [The mechanisms](mechanism-index.md#the-mechanisms)
 - [The pairs that actually get confused](mechanism-index.md#the-pairs-that-actually-get-confused)
 - [Deliberately not rows here](mechanism-index.md#deliberately-not-rows-here)
-- [Considered and rejected](mechanism-index.md#considered-and-rejected)
 - [Obstacles](mechanism-index.md#obstacles)
 - [Open](mechanism-index.md#open)
 
@@ -152,7 +151,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Reporting what was refused](building-a-connector.md#reporting-what-was-refused)
 - [What a failure says](building-a-connector.md#what-a-failure-says)
 - [Where requests may go](building-a-connector.md#where-requests-may-go)
-- [Considered and rejected](building-a-connector.md#considered-and-rejected)
 - [Obstacles](building-a-connector.md#obstacles)
 - [Open](building-a-connector.md#open)
 
@@ -166,7 +164,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Bulk operations must not accumulate](scale-and-limits.md#bulk-operations-must-not-accumulate)
 - [The Tasks list is recomputed on every mutation](scale-and-limits.md#the-tasks-list-is-recomputed-on-every-mutation)
 - [Measuring performance](scale-and-limits.md#measuring-performance)
-- [Considered and rejected](scale-and-limits.md#considered-and-rejected)
 - [Obstacles](scale-and-limits.md#obstacles)
 - [Open](scale-and-limits.md#open)
 
@@ -197,7 +194,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Restore is a destructive operation](operations.md#restore-is-a-destructive-operation)
 - [Locked out](operations.md#locked-out)
 - [Diagnosing a running instance](operations.md#diagnosing-a-running-instance)
-- [Considered and rejected](operations.md#considered-and-rejected)
 - [Obstacles](operations.md#obstacles)
 - [Open](operations.md#open)
 
@@ -209,7 +205,6 @@ index in [`backlog/README.md`](backlog/README.md).
 - [Cutting a release](releasing.md#cutting-a-release)
 - [Release checklist](releasing.md#release-checklist)
 - [Configuring the public repository](releasing.md#configuring-the-public-repository)
-- [Considered and rejected](releasing.md#considered-and-rejected)
 - [Obstacles](releasing.md#obstacles)
 - [Open](releasing.md#open)
 

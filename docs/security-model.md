@@ -38,7 +38,6 @@ two copies of a mechanism drift, and the copy that goes stale is the one nobody 
 - [Transport security](#transport-security)
 - [Secrets in backup and export](#secrets-in-backup-and-export)
 - [Recovery and compromise response](#recovery-and-compromise-response)
-- [Considered and rejected](#considered-and-rejected)
 - [Obstacles](#obstacles)
 - [Open](#open)
 
@@ -498,9 +497,8 @@ which converts **transient** access (someone at an unlocked machine, or holding 
 **durable, independent** access that survives lock, relock, and the owner's own attempts to get back in.
 The DEK is unchanged, so every stored credential opens under the new secret.
 
-**The safe/unsafe line is not the state of the passphrase slot.** Two narrower rules were tried and both
-are wrong — see *Considered and rejected*. The line is whether authority is being **derived from a cached
-DEK** rather than proven.
+**The safe/unsafe line is not the state of the passphrase slot.** The line is whether authority is being
+**derived from a cached DEK** rather than proven.
 
 Two further findings generalize past the vault:
 
@@ -722,84 +720,6 @@ artifacts, and after a leaked file both are needed. `SECURITY.md` → *What a co
 statement of record; do not paraphrase it into a second copy.
 
 ---
-
-## Considered and rejected
-
-Recorded so they are not re-proposed. Each names the reason, not just the verdict.
-
-- **Multi-tenant hosting.** Dropped as a target, and the drop is what licenses the trusted-server
-  assumption everything else rests on. Reintroducing it invalidates server-side crypto, not just the
-  provisioning UI.
-- **Whole-database file encryption** (SQLCipher and the like). Not redundant — it genuinely would protect
-  the ledger at rest — but the key has to be available *before* anyone can be asked for it: the app serves
-  its own sign-in screen out of the control database, so the file must be readable before there is a user
-  to prompt. That leaves two shapes and both are worse than what exists. A key sitting on the same disk
-  protects nothing against the theft-of-files case this model is built around, and a passphrase typed at
-  every process start makes unattended running impossible — which is exactly what a LAN box or a
-  double-clicked desktop launcher is for. The field-level vault sits where the trade works: its unlock
-  secret comes from a person who is already present, and only for the operations that need it.
-- **A `server_managed` custody mode, and a plaintext `off` mode.** `server_managed` let the server decrypt
-  at rest, so it never delivered leaked-DB-≠-leaked-credentials. `off` had no legitimate case — plaintext
-  live credentials are unacceptable, plaintext sandbox ones are pointless when a passphrase costs nothing
-  — and it carried a footgun where an install flips sandbox→live with custody off and silently writes a
-  real credential in the clear.
-- **A relaxed passphrase for sandbox or test use.** See *Secret custody*. It would have introduced a
-  plaintext credential path plus an encrypt-on-first-vault sweep to make it safe; neither is needed once
-  nothing weak can exist.
-- **Keeping app-level provider credentials in a `.env` file**, with a bootstrap fallback that read one
-  from there. The only things anyone *does* with an app credential are connect and
-  sync, and both already require an unlocked vault because the per-connection credential is under the
-  DEK — so vaulting it costs nothing in practice, while a file leaves a real secret plaintext on disk.
-  The bootstrap fallback was worse than the original arrangement: it also handed a **locked** vault an
-  unlock-free path to a secret, since the reveal deliberately skips the gate for a value that is not
-  encrypted at all. Re-entering a credential once is the whole of the setup.
-- **A "choose your security level" question.** With a sensible fixed floor there is nothing meaningful to
-  dial, and it cuts against detecting facts rather than asking about them.
-- **The invite ceremony** (a 128-bit bearer code, expiry, single-use, revocable, the AEAD tag as
-  verifier). It was a well-formed answer to a question keypair slots stop asking: **every part of it was
-  machinery for limiting the damage of a secret in transit**, and no secret is now in transit. Return to
-  it only if a future provider genuinely requires out-of-band hand-over — not merely to have an "invite"
-  affordance, since approve-a-request covers the same journeys with fewer moving parts.
-- **Browser-side crypto as an escape hatch from TLS.** Two independent reasons it is not one. The backend
-  is the provider's API client and must hold the plaintext credential to make the call, so cleartext key
-  material is on the wire wherever the unwrap happens — any scheme that avoids it ends up reinventing a
-  secure channel. And the ledger itself crosses the wire in every API response, which browser-side
-  *credential* crypto does not touch.
-- **Client-side password hashing, and PAKE, as a rescue for plain HTTP.** A client-computed hash *is* a
-  replayable password-equivalent, and even a real PAKE leaves the session cookie exposed.
-- **Deriving the cookie `Secure` flag from a declared topology.** A declaration is not a transport
-  guarantee; deriving from one locks out a networked install that runs plain HTTP. Hardcoding it breaks
-  the other topology. It stays an explicit environment value set at the deployment
-  edge.
-- **Verifying the WebAuthn assertion for a vault ceremony.** The vault is not an authentication decision.
-  A wrong PRF output fails at the AEAD tag exactly as a wrong passphrase does, so the slot is
-  self-verifying; checking a signature would mean storing credential public keys and running challenge
-  state to prove what is already proven. **This is scoped to the vault and always was.** Passkey *sign-in*
-  is an authentication decision with no such backstop — nothing downstream would notice a forged assertion
-  — so it verifies in full, and the WebAuthn library this entry declined to add for the vault is a
-  dependency now. The rejection still holds where it was made: `crypto_service` imports none of it.
-- **A set of N vault recovery codes.** N codes are N slot rows and therefore N independent
-  offline-attackable paths to the same DEK. The redundancy only helps if the copies are kept in N places,
-  which is not how recovery codes are stored. The 2FA set-of-ten answers a different question: a sign-in
-  code is spent at every login, a vault code once in a disaster.
-- **Two narrower rules for the mint-a-method gate.** *"Refuse only when a passphrase slot that already
-  opens would be replaced"* misses a **pending** slot sitting beside a granted passkey — overwriting it
-  seals the live DEK into a slot of the caller's choosing with nothing "replaced". *"Only the first
-  passphrase is safe"* misses a passkey-only member adding a first passphrase, which takes the same path
-  to the same durable credential.
-- **Admin-gating a setting because it is ledger-wide.** The currency and the review flag apply to every
-  member's view, which reads like a reason to restrict them. Both are instantly reversible, neither
-  touches the perimeter, the host or a secret, and a member who could not change them can still delete
-  the ledger's rows, so the gate would protect nothing.
-- **Refusing the lost-passphrase reset while another member holds a slot.** A slot row cannot prove its
-  holder is reachable, the admin gate already settles who may do this, and the compromise path permits
-  the identical destruction — so a refusal only stops the users who describe their situation accurately.
-  The gate is a **redirect** instead: name the cheaper rungs, and report that a reset also ends every
-  other member's access.
-- **Replace-and-forget as a way to discard a recovery code.** It leaves the "has a recovery code" flag
-  true, so the app goes on offering that rung to somebody who deliberately has none — a phantom rung in a
-  ladder whose whole value is being ordered by what the user can actually do. It also renders a fresh code
-  on screen before abandoning it.
 
 ## Obstacles
 

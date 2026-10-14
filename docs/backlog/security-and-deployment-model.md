@@ -2,9 +2,8 @@
 
 **Ingested 2026-09-02 into [`../security-model.md`](../security-model.md).** Everything this file held
 about *why* the design is shaped as it is — the threat model and credential custody,
-the identity perimeter, secret custody, enrollment/revocation/rotation, the transport policy, and every
-rejected shape — now lives there, organized by the question a reader arrives with rather than by this
-project. The mechanism as built is in [`../architecture.md`](../architecture.md).
+the identity perimeter, secret custody, enrollment/revocation/rotation, the transport policy — now lives there, organized by the question a reader arrives
+with rather than by this project. The mechanism as built is in [`../architecture.md`](../architecture.md).
 
 **What remains below, and why it is still here.** The build-phase log is not purely a work log: migration
 numbers, AAD schemes, endpoint names, payload-format versions and column renames are mixed into it, and
@@ -81,9 +80,8 @@ file **by phase number** (`db/database.py` migrations v18/v20, `services/provide
    a *reason* the UI turns into advice rather than thrown as an error, since the vault has a real
    fallback to offer. The PRF output is read from a follow-up `get()` rather than from `create()`, whose
    results are not reliable across browsers; trusting it would produce a slot nothing could ever open.
-   No WebAuthn assertion is verified and no WebAuthn library is used — see `../security-model.md` →
-   "Considered and rejected" for why that
-   is a decision rather than an omission. The two hard preconditions (secure context, RP id must be a
+   No WebAuthn assertion is verified and no WebAuthn library is used, because a wrong PRF output
+   fails at the AEAD tag as a wrong passphrase does. The two hard preconditions (secure context, RP id must be a
    domain) are detected server-side (`_passkey_context`) and reported as stated reasons.
 
    **Registration asks for PRF `eval` at `create()`, not only at the follow-up `get()`.** Requesting it

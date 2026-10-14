@@ -9,7 +9,7 @@ that the mapping/dedupe/category decisions made on one import stay reconstructab
 endpoint persists a `config_snapshot` per batch so import, undo, the duplicate report, category
 review, and rule-suggestion review can all reopen or replay the original run without drifting from
 it. Those stages share that snapshot and a web of helpers, so they are kept together here on purpose
-(see `docs/architecture.md` — "the module is large … intentional") rather than scattered for the
+(see `docs/architecture.md` → *Module layout*) rather than scattered for the
 sake of smaller files. The cleanly-separable concerns that do NOT share that web — saved-profile
 CRUD, backup/restore, the read-only preview — live in the sibling modules (`profiles`, `backup`,
 `preview`), which import from this module; `core` never imports them, so the package stays a DAG.

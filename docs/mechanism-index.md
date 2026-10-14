@@ -81,38 +81,6 @@ splitting stays a manual act.
 
 ---
 
-## Considered and rejected
-
-- **A parent row with child rows, for splits.** Tried and abandoned for the marketplace importer before
-  splits existed, and reviving it would bring back a visible parent/child hierarchy, a double-count
-  risk, and tree handling in editing, undo and import — to solve what is really a reporting problem.
-- **One part per category, within a split.** Imposed briefly and reversed. The argument was that an
-  expanded bucket's row count would read as allocations rather than transactions; that is a real effect,
-  but it belongs in the query — count `DISTINCT` transactions — not in a constraint on what the user
-  may record. Two records bought in one order are two purchases at two prices, and folding them because
-  they share a category discards exactly the detail a split exists to keep. **Don't re-impose it.**
-- **Mixed-sign splits.** Every part shares the transaction's sign, because a summary needs a bucket's
-  type to be constant. A part representing a refunded item is a coherent later relaxation and is
-  deliberately not built. **It is not a prerequisite for reimbursable expenses** — that reading is
-  expected and should be refused; settling an over-repayment only appears to need a negative part when
-  the residual is forced onto the original expense, which is not where it lands.
-- **Rules authoring splits.** A rule sets one category. See above.
-- **A category mechanism for multi-payment purchases**, by analogy with reimbursements. The numbers are
-  already right; there is nothing to fix.
-- **Automatic suggestion of purchases.** The plausible signals — same payee, a few payments within
-  months, amounts summing to a round figure — are weak individually, and this repo's precedent for the
-  shape is advisory-only, never guessed at. The genuinely strong signal is the invoice, and full-text
-  search over document text already exists; what is missing is extraction, so a photographed invoice
-  yields nothing to match on. **A re-open condition, not pending work:** revisit if OCR lands.
-- **A document attached to a purchase rather than to one payment.** The invoice that motivated purchases
-  covers both payments and can currently hang off only one, arbitrarily. Letting a document key on a
-  link is a real change to that table's contract, and was not worth taking on inside the feature.
-- **A Tasks entry for an unaccounted purchase.** It is exactly the "needs attention" shape, but a
-  purchase legitimately part-paid for months would nag the whole time — the same objection recorded
-  against nagging an open receivable. If it is ever added, age-gate it.
-- **A purchases list page.** Purchases are reached from their payments. A browse surface is worth
-  building only once there are enough to browse, which is a question about use rather than design.
-
 ## Obstacles
 
 - **`unaccounted` cannot tell you which kind of gap it is.** It is `expected_total − linked_total`, and

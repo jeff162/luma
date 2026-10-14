@@ -5,8 +5,8 @@
 
 This is authentication, and that is the whole difference from the vault's passkeys. A vault slot is
 self-verifying — a wrong PRF output fails at the AEAD tag exactly as a wrong passphrase does, so
-`crypto_service` deliberately verifies no assertion and stores no public keys (`security-model.md` →
-*Considered and rejected*). Signing in has no such backstop: nothing downstream would notice a forged
+`crypto_service` deliberately verifies no assertion and stores no public keys (`architecture.md` →
+*Token vault & transport security*). Signing in has no such backstop: nothing downstream would notice a forged
 assertion, so the signature is the only thing standing between a request and a session. Hence stored
 public keys, server-issued challenges, and real verification here.
 

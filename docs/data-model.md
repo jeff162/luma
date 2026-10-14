@@ -2714,9 +2714,7 @@ The mechanisms this one is adjacent to but is *not* — splits, multi-payment pu
 ## Open
 
 Decisions still owed on this document's subjects, each naming the live backlog item that will settle it.
-Rejections and obstacles are **not** here — they sit inline beside the thing they are about, which is
-this doc's convention and the more findable one. See `AGENTS.md` → *Where rejections, obstacles and owed
-decisions go*.
+See `AGENTS.md` → *Obstacles and owed decisions*.
 
 - **Number and date display formatting**, and the free-text parse bucket behind it. The ledger-currency
   half shipped; what remains is cosmetic except for the ledger search's date/amount ambiguity, which is the
