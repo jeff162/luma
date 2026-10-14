@@ -59,10 +59,6 @@ should be able to read one file, not scan a monolith for the paragraph that appl
 splits the topic docs by question — structure, field semantics, UI behavior, security, operations,
 scale — rather than by feature.
 
-> **Before going public:** [`../pre-release.md`](../pre-release.md) holds the committed, blocking
-> plan — six features drawn from the files below, plus the release mechanics. Items named there are
-> scoped: only part of `dashboard-reporting.md` and `recurring-detection.md` is in that scope.
-
 ## Items
 
 - [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The

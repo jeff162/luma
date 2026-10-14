@@ -245,11 +245,11 @@ The two restrictions have different causes. The passkey requirement is from the 
 
 ### With Docker
 
-On a Linux host, if Docker wth the Compose plugin is available, this is a straightforward way to get Luma running as a server.
+On a Linux host, if Docker with the Compose plugin is available, this is a straightforward way to get Luma running as a server.
 
 1. Save `docker-compose.yml` from the [releases page](https://github.com/jeff162/luma/releases) into a
    folder of its own.
-2. Create a file named `.env` in the folder containing: `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then  add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
+2. Create a file named `.env` in the folder containing: `SESSION_COOKIE_SECURE=true`. If a network name other than the default `luma.local` is desired then add `MDNS_NAME=` followed by the desired name, without the `.local` ending.
 3. Start it, and read the address other computers use from the log:
 
    ```sh
@@ -268,8 +268,8 @@ docker compose exec app python -m backend.desktop --certificate-fingerprint
 
 Updating to a newer release is `docker compose pull` followed by `docker compose up -d`.
 
-Docker Desktop on Windows and macOS runs containers inside a virtual
-machine which does not work for a Luma server so only works on Linux.
+Docker Desktop on Windows and macOS runs containers inside a virtual machine, which does not work for a
+Luma server, so this only works on Linux.
 
 If running from a source checkout, `docker compose up -d --build` builds the image from the source instead of
 pulling the published one.

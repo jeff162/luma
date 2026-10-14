@@ -113,7 +113,7 @@ When working on the codebase:
 
   - `docs/security-model.md` — the assumptions the security design rests on: what is defended and what deliberately is not, the conditions under which a decision has to be reopened, transport per topology, and secrets in backup. The mechanism as built stays in `architecture.md`
 
-  - `docs/operations.md` — running an instance: the topologies and what each binds to, where data lives and the irreducible environment core, restore as a destructive operation, and diagnosing. Building the artifacts is `docs/releasing.md`; the mechanism is `architecture.md`
+  - `docs/operations.md` — running an instance: the topologies and what each binds to, where data lives and which settings come only from the environment, restore as a destructive operation, and diagnosing. Building the artifacts is `docs/releasing.md`; the mechanism is `architecture.md`
 
   - `docs/scale-and-limits.md` — what breaks at volume and what was capped on purpose: fetch limits and the accepted tradeoffs, render windowing and the one list left out of it, import-history retention, and why a bulk operation must never accumulate a whole dataset
 
@@ -172,12 +172,7 @@ Two rules make these load-bearing rather than decorative:
 - **Cut the work log.** The narrative of arriving at the current state — an expectation that turned out wrong, discovery order, what a testing pass revealed, which symptom looked like another bug first — goes in neither the body nor the tail. Git history holds it.
 - **Code comments cite a stable doc location, never a project filename:** `docs/<doc>.md` → *Section name*. Backlog filenames are transient by construction and links to them decay. When a project file is disposed of, repoint its code citations in the same change.
 
-## Work in progress
-
-`docs/pre-release.md` is a committed plan sitting outside `docs/backlog/` — what has to land before the
-repository is made public. It deletes itself when that work is done, so an absence means it finished.
-Read it before picking up work, and prefer it over `docs/backlog/` for what to do next: the backlog is
-parked work, that is not.
+## Retiring a shipped backlog item
 
 When a backlog item ships, retire its file rather than keeping it: fold the durable half into the topic
 doc that owns the question, leaving out what a comment at the code site already says, repoint the code citations off the project filename, and record the path in

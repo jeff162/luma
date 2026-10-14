@@ -46,7 +46,7 @@ const AUDIENCES = [
     ],
   },
   { title: 'Maintaining and releasing', files: ['operations.md', 'releasing.md'] },
-  { title: 'Work in progress', files: ['pre-release.md', 'transient-failures.md'] },
+  { title: 'Work in progress', files: ['transient-failures.md'] },
 ]
 
 // GitHub's anchor for a heading: the text with its inline markup dropped, lowercased, everything but

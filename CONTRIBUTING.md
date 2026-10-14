@@ -71,7 +71,7 @@ repo-root `.env` is the override mechanism, and is useful for running against di
 `BACKEND_PORT` and `FRONTEND_PORT` are read by the launcher scripts and by `vite.config.js`,
 and `DATA_DIR` specifies the database location. A hand-run `uvicorn`
 does not read `.env` for its port, so pass the same value `.env` sets or the frontend will call a
-backend that is not there. **Settings → Configuration** lists every effective value and its current source. Most settings can be set via
+backend that is not there. **Administration → Startup configuration** lists every effective value and its current source. Most settings can be set via
 a `.env` file, see `env_example.txt`.
 
 For building test scrpits, the `LUMA_ENV_FILE` environment variable (not a `.env` file setting as it points at the `.env` file to use). It redirects **the backend

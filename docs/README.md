@@ -216,15 +216,6 @@ index in [`backlog/README.md`](backlog/README.md).
 
 ## Work in progress
 
-### [Pre-release plan](pre-release.md)
-
-- [Already done](pre-release.md#already-done)
-- [Features](pre-release.md#features)
-- [Landed alongside, off-plan](pre-release.md#landed-alongside-off-plan)
-- [Release mechanics](pre-release.md#release-mechanics)
-- [Sequencing](pre-release.md#sequencing)
-- [Deliberately not in this release](pre-release.md#deliberately-not-in-this-release)
-
 ### [Transient failures under investigation](transient-failures.md)
 
 - [1. Two documents on one transaction list in the wrong order](transient-failures.md#1-two-documents-on-one-transaction-list-in-the-wrong-order)

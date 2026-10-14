@@ -423,8 +423,7 @@ Open **Settings → General** and check the repository description, topics, home
 The description already states Luma's purpose; add concise discovery topics that accurately describe
 the project, such as `personal-finance`, `local-first`, `self-hosted`, `python`, and `react`. Leave the
 homepage blank unless there is a maintained project site distinct from this repository. Use a real,
-sanitized application screenshot for the social preview after the screenshot work in the release plan
-is complete.
+sanitized application screenshot for the social preview.
 
 Keep **Issues** and **Discussions** enabled, and leave the wiki disabled unless it gains a clearly
 different purpose from `docs/`. Preserve the existing signed-commit acknowledgement requirement and
@@ -456,7 +455,6 @@ workflow.
 ## Open
 
 - **The release workflow has never run on a real tag.** No `v*` has been cut.
-  → [`pre-release.md`](pre-release.md)
 - **Windows and Linux installers** are out of scope; both platforms ship the portable kit. The Windows
   user-data directory is therefore unreachable in any released artifact — which stops being true the
   day an installer ships. → [`backlog/deployment-topologies.md`](backlog/deployment-topologies.md)

@@ -9,8 +9,8 @@
 #   Source checkout                      the top folder of the checkout
 #   Docker                               the folder holding docker-compose.yml
 #
-# Settings -> Configuration shows the exact path (whether or not the file exists yet), every effective
-# value, and where each value came from.
+# Administration -> Startup configuration shows the exact path (whether or not the file exists yet),
+# every effective value, and where each value came from.
 #
 # Not every setting applies to every installation:
 #   [all]       applies to every installation
